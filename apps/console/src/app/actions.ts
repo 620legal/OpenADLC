@@ -290,6 +290,20 @@ export async function acknowledgeNotice(checkId: string, occurrence: string): Pr
   }
 }
 
+/**
+ * "Dismiss" on a design memory supersede's card: for everyone, until a newer
+ * supersede on the issue. Anyone signed in may, as the bridge enforces.
+ */
+export async function dismissDesignMemoryNotice(repo: string, issue: number, occurrence: string): Promise<{ ok: boolean; error?: string }> {
+  try {
+    await call(`/v1/repos/${encodeURIComponent(repo)}/design-memory/notices/dismiss`, 'POST', { issue, occurrence });
+    revalidatePath('/');
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : 'could not dismiss it' };
+  }
+}
+
 /** Stops the board saying something was fixed. */
 export async function dismissNotice(checkId: string): Promise<{ ok: boolean; error?: string }> {
   try {

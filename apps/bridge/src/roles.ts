@@ -157,6 +157,9 @@ export const ROUTE_ROLES: Readonly<Record<string, Role>> = {
   'GET /v1/repos/:name/design-memory': 'admin',
   'PATCH /v1/repos/:name/design-memory': 'admin',
   'POST /v1/repos/:name/design-memory/:id/revert': 'admin',
+  // A supersede's card on Needs you: a notice anyone who saw it may dismiss
+  // for everyone, as the bridge gap's is. Reverting the supersede stays an admin's.
+  'POST /v1/repos/:name/design-memory/notices/dismiss': 'user',
   // A repository's own Postgres servers for its tasks: what runs beside every
   // task there, so a person's, and the read shows their passwords.
   'GET /v1/repos/:name/task-postgres': 'admin',

@@ -478,6 +478,12 @@ export type AttentionAction =
   /** Dismisses a notice with nothing to fix until a newer occurrence arrives. */
   | { kind: 'acknowledge'; label: string; checkId: string; occurrence: string }
   /**
+   * Dismisses a design memory supersede's card for everyone, until a newer
+   * supersede on the issue: `notice` is `design-memory:<repo>#<issue>`, and
+   * `occurrence` the event's time.
+   */
+  | { kind: 'dismiss_notice'; label: string; notice: string; repo: string; issue: number; occurrence: string }
+  /**
    * The signing-key card's buttons about a key OpenADLC did not register:
    * delete it from the bot's GitHub account with the bot's own sign-in, say it
    * is somebody's on purpose so the check stops counting it, or take that back.

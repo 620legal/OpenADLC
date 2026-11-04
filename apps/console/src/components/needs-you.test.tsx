@@ -41,6 +41,10 @@ vi.mock('@/app/actions', () => ({
     pressed.dismissed.push(`${checkId}@${occurrence}`);
     return { ok: true };
   }),
+  dismissDesignMemoryNotice: vi.fn(async (repo: string, issue: number, occurrence: string) => {
+    pressed.dismissed.push(`design-memory:${repo}#${issue}@${occurrence}`);
+    return { ok: true };
+  }),
   recheckHealth: vi.fn(async () => ({ ok: true })),
   decideUnowned: vi.fn(async () => ({ ok: true })),
   dismissSigningKey: vi.fn(async (login: string, keyId: number) => {
@@ -152,6 +156,23 @@ const ITEM: AttentionItem = {
     { kind: 'approve', label: 'Ship it', gateId: 'gate-3', answer: 'ship it' },
     { kind: 'open_thread', label: 'Review', bot: 'tessexampleco' },
     { kind: 'open_url', label: 'Pull request', url: 'https://github.com/janedoe/openadlc/pull/31' },
+  ],
+};
+
+/** A design memory supersede's card, as the bridge draws it. */
+const SUPERSEDED: AttentionItem = {
+  id: 'design-memory:api#12:2026-09-24T10:30:00.000Z',
+  kind: 'design_memory_superseded',
+  group: 'system',
+  headline: 'The design memory of api changed',
+  subject: { repo: 'api', number: 12, title: 'Cost per round', ref: 'api#12', url: null },
+  bot: null,
+  since: '2026-09-24T10:30:00.000Z',
+  detail: '“Never log credentials” was replaced by “Log what helps”, unopposed at the move to build. Nothing waits on this; revert it in Settings if it is wrong.',
+  actions: [
+    { kind: 'dismiss_notice', label: 'Dismiss', notice: 'design-memory:api#12', repo: 'api', issue: 12, occurrence: '2026-09-24T10:30:00.000Z' },
+    { kind: 'open_url', label: 'On GitHub', url: 'https://github.com/acme/api/issues/12#issuecomment-9' },
+    { kind: 'open_page', label: 'Design memory', href: '/settings/repositories/api#api-memory' },
   ],
 };
 
@@ -310,26 +331,21 @@ describe('what needs you', () => {
     expect(html).not.toContain('target="_blank"');
   });
 
-  it('says a design that superseded what a repository had decided, as a notice with the comment and Settings', () => {
-    const superseded: AttentionItem = {
-      id: 'design-memory:api#12:2026-09-24T10:30:00.000Z',
-      kind: 'design_memory_superseded',
-      group: 'work',
-      headline: 'The design memory of api changed',
-      subject: { repo: 'api', number: 12, title: 'Cost per round', ref: 'api#12', url: null },
-      bot: null,
-      since: '2026-09-24T10:30:00.000Z',
-      detail: '“Log what helps” replaces “Never log credentials”. Nothing waits on this; revert it in Settings if it is wrong.',
-      actions: [
-        { kind: 'open_url', label: 'On GitHub', url: 'https://github.com/acme/api/issues/12#issuecomment-9' },
-        { kind: 'open_page', label: 'Design memory', href: '/settings/repositories/api#api-memory' },
-      ],
-    };
-    const html = needs([superseded]);
+  it('says a design that superseded what a repository had decided, as a notice with Dismiss, the comment and Settings', () => {
+    const html = needs([SUPERSEDED]);
     expect(html).toContain('The design memory of api changed');
     expect(html).toContain('href="https://github.com/acme/api/issues/12#issuecomment-9"');
+    expect(html).toMatch(/<button[^>]*>Dismiss<\/button>/);
     // Nothing is stopped by it, so it is not drawn as an alarm.
     expect(html).not.toMatch(/<article[^>]*class="[^"]*border-alarm/);
+  });
+
+  it('dismisses a supersede’s card by its repository, issue and the event it shows, for anyone signed in', async () => {
+    press(buttonsIn(<NeedsYou items={[SUPERSEDED]} now="2026-09-24T12:00:00.000Z" onOpenBot={() => undefined} />), 'Dismiss');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(pressed.dismissed).toEqual(['design-memory:api#12@2026-09-24T10:30:00.000Z']);
+    // The bridge lets a user dismiss it, as it does the bridge gap's report.
+    expect(adminOnly(SUPERSEDED.actions[0]!)).toBe(false);
   });
 
   it('draws nothing at all when nothing is waiting', () => {

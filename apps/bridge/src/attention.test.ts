@@ -2837,35 +2837,85 @@ describe('a stacked change OpenADLC holds', () => {
 });
 
 describe('a design that superseded what a repository had decided', () => {
-  it('is a notice on the issue: what replaced what, links to the comment and to Settings, and nothing to do', async () => {
+  const event = (at: string, replaced: { title: string; byTitle: string | null }[], extra: Record<string, unknown> = {}) => ({
+    at,
+    payload: {
+      repo: 'openadlc-testbed',
+      issue: 11,
+      by: 'system-engineer, unopposed at the move to build',
+      how: 'unopposed',
+      commentUrl: 'https://github.com/janedoe/openadlc-testbed/issues/11#issuecomment-9',
+      replaced: replaced.map((one, n) => ({ id: `old-${n}`, title: one.title, byId: one.byTitle ? `new-${n}` : null, byTitle: one.byTitle })),
+      ...extra,
+    },
+  });
+  const read = async (designMemoryEvents: ReturnType<typeof event>[], acknowledged?: ReadonlyMap<string, ReadonlySet<string>>) => {
     const { attentionItems } = await load();
-    const [item] = attentionItems({
+    return attentionItems({
       now: NOW, gates: [], tasks: [], bots: BOTS, repos: REPOS, issues: ISSUES, requests: [], stallEvents: [],
-      designMemoryEvents: [
-        {
-          at: minutesAgo(5),
-          payload: {
-            repo: 'openadlc-testbed',
-            issue: 11,
-            by: 'system-engineer, unopposed at the move to build',
-            commentUrl: 'https://github.com/janedoe/openadlc-testbed/issues/11#issuecomment-9',
-            replaced: [{ id: 'a', title: 'Never log credentials', byId: 'b', byTitle: 'Log what helps' }],
-          },
-        },
-      ],
-    });
+      designMemoryEvents,
+      ...(acknowledged ? { acknowledged } : {}),
+    }).filter((item) => item.kind === 'design_memory_superseded');
+  };
+
+  it('is a system notice: what was replaced by what, Dismiss, links to the comment and to Settings, and nothing to do', async () => {
+    const at = minutesAgo(5);
+    const [item] = await read([event(at, [{ title: 'Never log credentials', byTitle: 'Log what helps' }])]);
     expect(item).toMatchObject({
       kind: 'design_memory_superseded',
-      group: 'work',
+      group: 'system',
       headline: 'The design memory of openadlc-testbed changed',
       subject: { number: 11 },
       bot: null,
     });
-    expect(item?.detail).toContain('“Log what helps” replaces “Never log credentials”');
+    expect(item?.detail).toBe('“Never log credentials” was replaced by “Log what helps”, unopposed at the move to build. Nothing waits on this; revert it in Settings if it is wrong.');
     expect(item?.actions).toEqual([
+      { kind: 'dismiss_notice', label: 'Dismiss', notice: 'design-memory:openadlc-testbed#11', repo: 'openadlc-testbed', issue: 11, occurrence: at },
       { kind: 'open_url', label: 'On GitHub', url: 'https://github.com/janedoe/openadlc-testbed/issues/11#issuecomment-9' },
       { kind: 'open_page', label: 'Design memory', href: '/settings/repositories/openadlc-testbed#openadlc-testbed-memory' },
     ]);
+  });
+
+  // A card for every rewording read "“X” replaces “X”", with nothing for a person to decide.
+  it('raises nothing for a replacement with the same title, trimmed, spaced and cased aside', async () => {
+    expect(await read([event(minutesAgo(5), [{ title: 'A', byTitle: ' a ' }])])).toEqual([]);
+    expect(await read([event(minutesAgo(5), [{ title: 'Costs are stored per round', byTitle: 'costs are  stored per Round' }])])).toEqual([]);
+  });
+
+  it('lists only the retires and retitles of an event, and never says “replaces”', async () => {
+    const [item, ...rest] = await read([
+      event(minutesAgo(5), [
+        { title: 'A', byTitle: 'A' },
+        { title: 'B', byTitle: 'C' },
+        { title: 'D', byTitle: null },
+      ]),
+    ]);
+    expect(rest).toEqual([]);
+    expect(item?.detail).toContain('“B” was replaced by “C”; “D” was retired');
+    expect(item?.detail).not.toContain('“A”');
+    expect(item?.detail).not.toContain('replaces');
+  });
+
+  it('stays away once dismissed, and a newer supersede on the issue raises a new card', async () => {
+    const seen = minutesAgo(60);
+    const newer = minutesAgo(5);
+    const acknowledged = new Map([['design-memory:openadlc-testbed#11', new Set([seen])]]);
+    expect(await read([event(seen, [{ title: 'B', byTitle: 'C' }])], acknowledged)).toEqual([]);
+    const items = await read([event(seen, [{ title: 'B', byTitle: 'C' }]), event(newer, [{ title: 'E', byTitle: null }])], acknowledged);
+    expect(items.map((item) => item.since)).toEqual([newer]);
+  });
+
+  it('says how it took effect from `how`, never the email in `by`', async () => {
+    const [answered] = await read([event(minutesAgo(5), [{ title: 'B', byTitle: 'C' }], { by: 'person@example.com', how: 'answered' })]);
+    expect(answered?.detail).toContain(', accepted when you answered openadlc-testbed#11’s design question.');
+    expect(answered?.detail).not.toContain('person@example.com');
+
+    const [unopposed] = await read([event(minutesAgo(5), [{ title: 'B', byTitle: 'C' }], { how: 'unopposed' })]);
+    expect(unopposed?.detail).toContain(', unopposed at the move to build.');
+
+    // Recorded before `how` was: no clause, and still no email.
+    const [older] = await read([event(minutesAgo(5), [{ title: 'B', byTitle: 'C' }], { by: 'person@example.com', how: undefined })]);
+    expect(older?.detail).toBe('“B” was replaced by “C”. Nothing waits on this; revert it in Settings if it is wrong.');
   });
 });
 
@@ -2949,6 +2999,8 @@ describe('which group an item is in', () => {
     expect(['check_failed', 'check_fixed', 'engine_update_failed'].map((kind) => groupOf(kind as never))).toEqual(['system', 'system', 'system']);
     expect(groupOf('dependency_abandoned')).toBe('work');
     expect(groupOf('stack_held')).toBe('work');
+    // A notice: nothing about it waits on a person.
+    expect(groupOf('design_memory_superseded')).toBe('system');
 
     const failed = task({ id: 'task-failed', botId: 'bot-builder', kind: 'implement', subjectRef: 'openadlc-testbed#16', state: 'failed', endedAt: minutesAgo(40), exitReason: 'engine exited 1' });
     const items = attentionItems({
