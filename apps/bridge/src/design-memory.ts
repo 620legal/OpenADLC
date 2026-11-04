@@ -1,5 +1,8 @@
-import { audit, bots, designMemory, issues, recordEvent, repos, tasks, threads } from '@openadlc/db';
+import { acknowledgements, audit, bots, designMemory, issues, recordEvent, repos, tasks, threads } from '@openadlc/db';
 import { designMemoryProposals, hasAbandonedLabel, hasShipped, inertMarkup, type ContextDocument, type StageKey } from '@openadlc/shared';
+// A cycle (attention.ts reads DESIGN_MEMORY_SUPERSEDED from here), safe
+// because the window is read only when a notice is dismissed.
+import { ATTENTION_WINDOW_DAYS } from './attention.js';
 import { HttpFailure, type Router } from './router.js';
 import { parseRef } from './work.js';
 
@@ -44,8 +47,15 @@ function pastDesign(issue: { stage: StageKey; labels?: readonly string[] | null 
 /** How long `design-memory.md` may be: enough for a repository's working summary, and no more. */
 export const DESIGN_MEMORY_CHARS = 16_000;
 
-/** The event the board reads for a supersede it says (`attention.ts`): `{ repo, issue, replaced, by, commentUrl }`. */
+/** The event the board reads for a supersede it says (`attention.ts`): `{ repo, issue, replaced, by, how, commentUrl }`. */
 export const DESIGN_MEMORY_SUPERSEDED = 'design_memory.superseded';
+
+/**
+ * How a supersede took effect: a person answered the design task's question,
+ * or nobody objected by the move to build. Recorded apart from the free-text
+ * `by`, which the card used to show as if that person had edited the memory.
+ */
+export type SupersedeHow = 'answered' | 'unopposed';
 
 /** What a comment's signature said, as `Attribution.check` read it. */
 export interface CommentSignature {
@@ -128,16 +138,15 @@ async function acceptFor(
 
   let count = 0;
   for (const [taskId, seat] of byTask) {
-    const decidedBy =
-      only.answeredBy ??
-      gates.filter((gate) => gate.taskId === taskId && gate.state === 'answered' && gate.answeredBy).at(-1)?.answeredBy ??
-      `${seat ?? 'the design'}, unopposed at the move to build`;
+    const answeredBy = only.answeredBy ?? gates.filter((gate) => gate.taskId === taskId && gate.state === 'answered' && gate.answeredBy).at(-1)?.answeredBy;
+    const how: SupersedeHow = answeredBy ? 'answered' : 'unopposed';
+    const decidedBy = answeredBy ?? `${seat ?? 'the design'}, unopposed at the move to build`;
     const { accepted, superseded } = await designMemory.acceptFor(repo.id, [subject], decidedBy, {
       sourceTask: taskId,
       ...(only.ids ? { ids: only.ids } : {}),
     });
     count += accepted.length;
-    if (superseded.length > 0) await announce(repo, issueNumber, accepted, superseded, decidedBy);
+    if (superseded.length > 0) await announce(repo, issueNumber, accepted, superseded, decidedBy, how);
   }
   return count;
 }
@@ -154,6 +163,7 @@ async function announce(
   accepted: readonly designMemory.DesignMemoryEntry[],
   superseded: readonly designMemory.DesignMemoryEntry[],
   decidedBy: string,
+  how: SupersedeHow,
 ): Promise<void> {
   const pairs = superseded.map((old) => ({ old, by: accepted.find((entry) => entry.supersedes === old.id) ?? null }));
   const quoted = (title: string) => `“${inertMarkup(title).replace(/\s+/g, ' ')}”`;
@@ -173,6 +183,7 @@ async function announce(
       repo: repo.name,
       issue: issueNumber,
       by: decidedBy,
+      how,
       commentUrl,
       replaced: pairs.map(({ old, by }) => ({ id: old.id, title: old.title, byId: by?.id ?? null, byTitle: by?.title ?? null })),
     },
@@ -349,7 +360,49 @@ export async function readDesignMemory(repoFullName: string): Promise<ContextDoc
   return designMemoryDocument(await designMemory.listForRepo(repo.id, ['accepted']), repo.fullName);
 }
 
-/** Settings → Repositories → Design memory: read it all, and correct it. Both an admin's (`roles.ts`). */
+/** Where a supersede's card is kept as dismissed in `acknowledgements`: one id per issue, each event's `at` an occurrence. */
+export function designMemoryNoticeId(repoName: string, issueNumber: number): string {
+  return `design-memory:${repoName}#${issueNumber}`;
+}
+
+/**
+ * Takes a supersede's card off Needs you, as a person decided: kept in
+ * `acknowledgements` with the event's `at`, so a newer supersede on the issue
+ * shows again (the rule for any notice a person dismisses), and audited as
+ * `design_memory.notice_dismissed`. The card used to leave only with the
+ * window, counted as work for a week with nothing to do about it.
+ */
+export async function dismissDesignMemoryNotice(
+  repoName: string,
+  input: { issue?: unknown; occurrence?: unknown },
+  actor: string,
+  deps: {
+    getRepoByName: (name: string) => Promise<{ name: string } | null>;
+    acknowledge: typeof acknowledgements.acknowledge;
+    forgetBefore: typeof acknowledgements.forgetBefore;
+    audit: typeof audit;
+  } = { getRepoByName: repos.getRepoByName, acknowledge: acknowledgements.acknowledge, forgetBefore: acknowledgements.forgetBefore, audit },
+): Promise<{ notice: string; dismissed: string }> {
+  const repo = await deps.getRepoByName(repoName);
+  if (!repo) throw new HttpFailure(404, `there is no repository ${repoName} in OpenADLC`);
+  const shape = 'say which notice was seen: { "issue": 243, "occurrence": "<the card’s since>" }';
+  const issue = typeof input.issue === 'number' && Number.isInteger(input.issue) && input.issue > 0 ? input.issue : null;
+  if (issue === null) throw new HttpFailure(400, `the body names no issue; ${shape}`);
+  const occurrence = typeof input.occurrence === 'string' ? input.occurrence.trim().slice(0, 64) : '';
+  if (!occurrence) throw new HttpFailure(400, `the body names no occurrence; ${shape}`);
+  const notice = designMemoryNoticeId(repo.name, issue);
+  await deps.acknowledge(notice, occurrence, actor);
+  // An event is at least as old as its dismissal, so one dismissed before the
+  // window began covers only events the board no longer reads (`dismissTask`).
+  await deps.forgetBefore('design-memory:', new Date(Date.now() - ATTENTION_WINDOW_DAYS * 24 * 60 * 60 * 1000)).catch(() => undefined);
+  await deps.audit({ actor, action: 'design_memory.notice_dismissed', target: `${repo.name}#${issue}`, payload: { occurrence } });
+  return { notice, dismissed: occurrence };
+}
+
+/**
+ * Settings → Repositories → Design memory: read it all, and correct it. Both
+ * an admin's (`roles.ts`); dismissing a supersede's card is anyone's who saw it.
+ */
 export function registerDesignMemoryRoutes(router: Router): void {
   router.get('/v1/repos/:name/design-memory', async ({ params }) => {
     const repo = await repos.getRepoByName(params.name ?? '');
@@ -411,6 +464,10 @@ export function registerDesignMemoryRoutes(router: Router): void {
     });
     return { entry: after };
   });
+
+  router.post('/v1/repos/:name/design-memory/notices/dismiss', async ({ params, body, identity }) =>
+    dismissDesignMemoryNotice(params.name ?? '', await body<{ issue?: unknown; occurrence?: unknown }>(), identity),
+  );
 
   /**
    * Undoes a supersede the design made: the entry it replaced is in effect

@@ -59,7 +59,7 @@ export function faceActions(item: AttentionItem): AttentionAction[] {
   const revoke = item.actions.find((action) => action.kind === 'signing_key_revoke');
   const dismissKey = item.actions.find((action) => action.kind === 'signing_key_dismiss');
   if (revoke || dismissKey) return [revoke, dismissKey].filter((action): action is AttentionAction => Boolean(action));
-  const dismiss = item.actions.find((action) => action.kind === 'acknowledge');
+  const dismiss = item.actions.find((action) => action.kind === 'acknowledge' || action.kind === 'dismiss_notice');
   const incident = item.actions.find((action) => action.kind === 'incident');
   const question = item.kind === 'question' && (item.question?.options.length ?? 0) > 0;
   // A plan change's other ways to settle it sit beside Approve and Refuse:
@@ -139,7 +139,8 @@ const GROUP: Record<AttentionItem['kind'], AttentionGroup> = {
   merge_waiting: 'work',
   unowned_issues: 'work',
   promote_held: 'work',
-  design_memory_superseded: 'work',
+  // A notice: nothing waits on a person, and a week of them was counted as work.
+  design_memory_superseded: 'system',
   dependency_abandoned: 'work',
   resume_waiting: 'work',
   plan_change_waiting: 'work',

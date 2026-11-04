@@ -22,6 +22,9 @@ const world = vi.hoisted(() => ({
   gates: [] as { taskId: string | null; state: string; answeredBy: string | null }[],
   audit: [] as Record<string, unknown>[],
   events: [] as { type: string; payload: Record<string, unknown> }[],
+  /** What a person dismissed: `acknowledgements.acknowledge`'s calls, and `forgetBefore`'s. */
+  acknowledged: [] as { id: string; occurrence: string; by: string }[],
+  forgotten: [] as { prefix: string; before: Date }[],
 }));
 
 vi.mock('@openadlc/db', () => {
@@ -46,6 +49,10 @@ vi.mock('@openadlc/db', () => {
   });
   return {
     audit: vi.fn(async (entry: Record<string, unknown>) => void world.audit.push(entry)),
+    acknowledgements: {
+      acknowledge: vi.fn(async (id: string, occurrence: string, by: string) => void world.acknowledged.push({ id, occurrence, by })),
+      forgetBefore: vi.fn(async (prefix: string, before: Date) => void world.forgotten.push({ prefix, before })),
+    },
     recordEvent: vi.fn(async (event: { type: string; payload: Record<string, unknown> }) => {
       world.events.push(event);
       return 'event-1';
@@ -131,6 +138,8 @@ beforeEach(() => {
   world.gates = [];
   world.audit = [];
   world.events = [];
+  world.acknowledged = [];
+  world.forgotten = [];
 });
 
 describe('what a design proposes', () => {
@@ -264,9 +273,41 @@ describe('what a design proposes', () => {
     expect(world.events).toEqual([
       expect.objectContaining({
         type: 'design_memory.superseded',
-        payload: expect.objectContaining({ repo: 'api', issue: 12, commentUrl: 'https://github.com/acme/api/issues/12#issuecomment-9' }),
+        payload: expect.objectContaining({ repo: 'api', issue: 12, how: 'unopposed', commentUrl: 'https://github.com/acme/api/issues/12#issuecomment-9' }),
       }),
     ]);
+  });
+
+  // The card read the free-text `by`, and showed the email of whoever
+  // answered as if they had edited the memory.
+  it('records how the supersede took effect: answered, by the design’s question either way it is found, or unopposed', async () => {
+    const { recordDesignMemory, acceptOnAnswer, acceptOnStage } = await import('./design-memory.js');
+    const old = (id: string, title: string): store.DesignMemoryEntry => ({
+      id, repoId: 'repo-1', kind: 'constraint', title, body: 'b', state: 'accepted', supersedes: null,
+      sourceSubject: 'api#3', sourceUrl: null, sourceTask: 'task-old', adrPath: null, proposedBy: 'system-engineer', decidedBy: 'jane', decidedAt: '2026-09-01T00:00:00Z',
+      createdAt: '2026-09-01T00:00:00Z', updatedAt: '2026-09-01T00:00:00Z',
+    });
+    const supersede = async (id: string) => {
+      world.entries.push(old(id, `Old ${id}`));
+      await recordDesignMemory(design([{ kind: 'constraint', title: `New ${id}`, body: 'b', supersedes: id }]));
+    };
+    const how = () => world.events.map((event) => [event.payload.by, event.payload.how]);
+
+    await supersede('00000000-0000-4000-8000-000000000981');
+    await acceptOnAnswer(SPEC.id, 'person@example.com');
+    expect(how()).toEqual([['person@example.com', 'answered']]);
+
+    world.events = [];
+    await supersede('00000000-0000-4000-8000-000000000982');
+    world.gates = [{ taskId: SPEC.id, state: 'answered', answeredBy: 'ada@example.com' }];
+    await acceptOnStage('api', 12, 'build');
+    expect(how()).toEqual([['ada@example.com', 'answered']]);
+
+    world.events = [];
+    await supersede('00000000-0000-4000-8000-000000000983');
+    world.gates = [];
+    await acceptOnStage('api', 12, 'build');
+    expect(how()).toEqual([['system-engineer, unopposed at the move to build', 'unopposed']]);
   });
 });
 
@@ -397,5 +438,42 @@ describe('correcting it in Settings', () => {
       expect.objectContaining({ actor: 'admin@acme.test', action: 'design_memory.reverted', payload: expect.objectContaining({ restored: 'Never log credentials' }) }),
     );
     expect((await revert(replacer!.id)).status).toBe(409);
+  });
+
+  const dismiss = (body: Record<string, unknown>, repo = 'api') =>
+    fetch(`${url}/v1/repos/${repo}/design-memory/notices/dismiss`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-openadlc-identity': 'ada@acme.test' },
+      body: JSON.stringify(body),
+    });
+
+  it('dismisses a supersede’s card for everyone, by the event it showed, forgets what the window no longer reads, and audits it', async () => {
+    const before = Date.now();
+    const response = await dismiss({ issue: 12, occurrence: '2026-11-04T10:00:00.000Z' });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ notice: 'design-memory:api#12', dismissed: '2026-11-04T10:00:00.000Z' });
+    expect(world.acknowledged).toEqual([{ id: 'design-memory:api#12', occurrence: '2026-11-04T10:00:00.000Z', by: 'ada@acme.test' }]);
+    expect(world.forgotten).toHaveLength(1);
+    expect(world.forgotten[0]?.prefix).toBe('design-memory:');
+    expect(before - world.forgotten[0]!.before.getTime()).toBeGreaterThanOrEqual(7 * 24 * 60 * 60 * 1000 - 1000);
+    expect(world.audit).toEqual([
+      expect.objectContaining({ actor: 'ada@acme.test', action: 'design_memory.notice_dismissed', target: 'api#12', payload: { occurrence: '2026-11-04T10:00:00.000Z' } }),
+    ]);
+  });
+
+  it('refuses a repository it does not have, and a body that does not say which notice, saying the shape', async () => {
+    expect((await dismiss({ issue: 12, occurrence: '2026-11-04T10:00:00.000Z' }, 'nowhere')).status).toBe(404);
+
+    const noIssue = await dismiss({ occurrence: '2026-11-04T10:00:00.000Z' });
+    expect(noIssue.status).toBe(400);
+    expect(JSON.stringify(await noIssue.json())).toContain('the body names no issue; say which notice was seen');
+
+    const noOccurrence = await dismiss({ issue: 12, occurrence: '  ' });
+    expect(noOccurrence.status).toBe(400);
+    expect(JSON.stringify(await noOccurrence.json())).toContain('the body names no occurrence');
+
+    expect(world.acknowledged).toEqual([]);
+    expect(world.audit).toEqual([]);
   });
 });

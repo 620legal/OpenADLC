@@ -13,6 +13,7 @@ import {
   decideUnowned,
   dismissNotice,
   dismissSigningKey,
+  dismissDesignMemoryNotice,
   dismissTasks,
   recheckHealth,
   releasePromote,
@@ -922,6 +923,7 @@ export function keyOf(action: AttentionAction): string {
   if ('sha' in action) return `${action.kind}:${action.repo}@${action.sha}`;
   if ('keyId' in action) return `${action.kind}:${action.login}:${action.keyId}`;
   if (action.kind === 'abandon_request') return `${action.kind}:${action.requestId}`;
+  if (action.kind === 'dismiss_notice') return `${action.kind}:${action.notice}@${action.occurrence}`;
   if (action.kind === 'start_work' || action.kind === 'resume_item') return `${action.kind}:${action.subject}`;
   if ('gateId' in action) return `${action.kind}:${action.gateId}`;
   return 'taskId' in action ? `${action.kind}:${action.taskId}` : action.kind;
@@ -1077,6 +1079,17 @@ function ActionButton({
     case 'acknowledge':
       return (
         <button type="button" className={style} disabled={pending} onClick={() => press(() => acknowledgeNotice(action.checkId, action.occurrence))}>
+          {busy ? 'Dismissing…' : action.label}
+        </button>
+      );
+    case 'dismiss_notice':
+      return (
+        <button
+          type="button"
+          className={style}
+          disabled={pending}
+          onClick={() => press(() => dismissDesignMemoryNotice(action.repo, action.issue, action.occurrence), said('Dismissed.'))}
+        >
           {busy ? 'Dismissing…' : action.label}
         </button>
       );

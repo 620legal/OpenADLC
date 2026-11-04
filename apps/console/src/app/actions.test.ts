@@ -17,6 +17,7 @@ import {
   resumeWork,
   retryTriage,
   abandonRequest,
+  dismissDesignMemoryNotice,
   revertDesignMemory,
   sendMessage,
   setCrewColor,
@@ -407,5 +408,25 @@ describe('linking, unlinking and merging work items', () => {
     expect(await mergeItem('acme-128', 'W-131')).toEqual({ ok: true, into: 'acme-131' });
     recording(403, { error: 'this needs an admin' });
     expect(await mergeItem('acme-128', 'W-131')).toEqual({ ok: false, error: 'this needs an admin' });
+  });
+});
+
+describe('dismissing a design memory supersede’s card', () => {
+  it('posts the issue and the event it showed to the repository’s route, and says why when the bridge will not', async () => {
+    const calls: { url: string; method: string; body: unknown }[] = [];
+    let status = 200;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init: RequestInit) => {
+        calls.push({ url: String(url), method: init.method ?? 'GET', body: init.body ? JSON.parse(String(init.body)) : undefined });
+        return new Response(JSON.stringify(status === 200 ? { notice: 'design-memory:api#12' } : { error: 'there is no repository api in OpenADLC' }), { status });
+      }),
+    );
+    expect(await dismissDesignMemoryNotice('api', 12, '2026-09-24T10:30:00.000Z')).toEqual({ ok: true });
+    expect(calls).toEqual([
+      { url: expect.stringMatching(/\/v1\/repos\/api\/design-memory\/notices\/dismiss$/), method: 'POST', body: { issue: 12, occurrence: '2026-09-24T10:30:00.000Z' } },
+    ]);
+    status = 404;
+    expect(await dismissDesignMemoryNotice('api', 12, '2026-09-24T10:30:00.000Z')).toEqual({ ok: false, error: 'there is no repository api in OpenADLC' });
   });
 });

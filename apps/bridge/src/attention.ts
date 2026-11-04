@@ -3,7 +3,7 @@ import { rulesFileEditUrl } from './deploy-routes.js';
 import { REQUIRED_CHECKS } from './merge-line.js';
 import { readUnowned } from './unowned-issues.js';
 import { INTAKE_STALLED } from './intake-events.js';
-import { DESIGN_MEMORY_SUPERSEDED } from './design-memory.js';
+import { DESIGN_MEMORY_SUPERSEDED, designMemoryNoticeId } from './design-memory.js';
 import {
   botInWords,
   hasAbandonedLabel,
@@ -89,6 +89,12 @@ import {
 
 /** How far back a failure is still news. A week-old failure nobody retried is a decision, not a surprise. */
 export const ATTENTION_WINDOW_DAYS = 7;
+
+/** Whether two design memory titles are the same words: trimmed, spaces collapsed, case aside. */
+export function sameTitle(a: string, b: string): boolean {
+  const words = (title: string): string => title.trim().replace(/\s+/g, ' ').toLowerCase();
+  return words(a) === words(b);
+}
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** How long work that landed after it failed is said under "recovered", as a check that passes again is. */
 const RECOVERED_FOR_MS = DAY_MS;
@@ -118,7 +124,10 @@ export type AttentionKind =
   | 'unowned_issues'
   /** A production promote the bridge holds for a person, where GitHub's plan cannot hold a reviewer. */
   | 'promote_held'
-  /** A design took an accepted design memory entry out of effect: a notice, holding nothing, revertible in Settings. */
+  /**
+   * A design retired an accepted design memory entry, or replaced it with one
+   * of another title: a notice, holding nothing, dismissible, revertible in Settings.
+   */
   | 'design_memory_superseded'
   /** A blocked issue waits on one closed without merging, which will never ship: a person drops the dependency or reopens it. */
   | 'dependency_abandoned'
@@ -189,6 +198,13 @@ export type AttentionAction =
   | { kind: 'dismiss_task'; label: string; tasks: { taskId: string; occurrence: string }[] }
   /** Dismisses a notice with nothing to fix until a newer occurrence arrives. */
   | { kind: 'acknowledge'; label: string; checkId: string; occurrence: string }
+  /**
+   * Dismisses a design memory supersede's card for everyone
+   * (`POST /v1/repos/:name/design-memory/notices/dismiss`): kept under
+   * `notice`, `design-memory:<repo>#<issue>`, with the event's `at` as
+   * `occurrence`, so a newer supersede on the issue shows again.
+   */
+  | { kind: 'dismiss_notice'; label: string; notice: string; repo: string; issue: number; occurrence: string }
   /**
    * The signing-key card's buttons about a key OpenADLC did not register
    * (`signing-key-routes.ts`): delete it from the bot's GitHub account with
@@ -295,7 +311,8 @@ const GROUP: Record<AttentionKind, AttentionGroup> = {
   merge_waiting: 'work',
   unowned_issues: 'work',
   promote_held: 'work',
-  design_memory_superseded: 'work',
+  // A notice: nothing waits on a person, and a week of them was counted as work.
+  design_memory_superseded: 'system',
   dependency_abandoned: 'work',
   resume_waiting: 'work',
   plan_change_waiting: 'work',
@@ -542,8 +559,9 @@ export interface AttentionInput extends WaitFacts {
   /** The standing approvals of plan changes that are on (`standingApprovals.listActive`). Absent, none. */
   standing?: readonly { repoId: string; issueNumber: number; setBy: string; setAt: string }[];
   /**
-   * What a person has dismissed, by health row id, or `task:<id>` for a
-   * dismissed task card: every occurrence covered so far.
+   * What a person has dismissed, by health row id, `task:<id>` for a
+   * dismissed task card, or `design-memory:<repo>#<issue>` for a supersede's
+   * (by event `at`): every occurrence covered so far.
    */
   acknowledged?: ReadonlyMap<string, ReadonlySet<string>>;
   /** The model accounts, so a failure on one names it. */
@@ -1478,16 +1496,33 @@ export function attentionItems(given: AttentionInput): AttentionItem[] {
 
   // A design superseded what the repository had decided. Accepted with nobody
   // asked, so it is said here as well as on the issue, with where to revert
-  // it. A notice: it holds nothing, and leaves with the window.
+  // it, when it retired an entry or put one of another title in its place. A
+  // same-title replacement is a rewording, said on the issue only: a card for
+  // each read "“X” replaces “X”", with nothing to decide. A notice: it holds
+  // nothing, and leaves when dismissed or with the window.
   for (const event of input.designMemoryEvents ?? []) {
     const payload = (event.payload ?? {}) as Record<string, unknown>;
     if (typeof payload.repo !== 'string' || typeof payload.issue !== 'number') continue;
     const key = `${payload.repo}#${payload.issue}`;
+    const notice = designMemoryNoticeId(payload.repo, payload.issue);
+    if (input.acknowledged?.get(notice)?.has(event.at)) continue;
     const replaced = (Array.isArray(payload.replaced) ? payload.replaced : []) as { title?: unknown; byTitle?: unknown }[];
     const said = replaced
-      .filter((one) => typeof one.title === 'string')
-      .map((one) => (typeof one.byTitle === 'string' ? `“${one.byTitle}” replaces “${one.title}”` : `“${one.title}” was replaced`));
-    const actions: AttentionAction[] = [];
+      .filter((one): one is { title: string; byTitle?: unknown } => typeof one.title === 'string')
+      .filter((one) => typeof one.byTitle !== 'string' || !sameTitle(one.title, one.byTitle))
+      .map((one) => (typeof one.byTitle === 'string' ? `“${one.title}” was replaced by “${one.byTitle}”` : `“${one.title}” was retired`));
+    if (said.length === 0) continue;
+    // Read from `how` only: `by` is the comment's free text, and showed the
+    // email of whoever answered as if they had edited the memory.
+    const how =
+      payload.how === 'answered'
+        ? `, accepted when you answered ${key}’s design question`
+        : payload.how === 'unopposed'
+          ? ', unopposed at the move to build'
+          : '';
+    const actions: AttentionAction[] = [
+      { kind: 'dismiss_notice', label: 'Dismiss', notice, repo: payload.repo, issue: payload.issue, occurrence: event.at },
+    ];
     if (typeof payload.commentUrl === 'string' && payload.commentUrl) actions.push({ kind: 'open_url', label: 'On GitHub', url: payload.commentUrl });
     actions.push({ kind: 'open_page', label: 'Design memory', href: `/settings/repositories/${encodeURIComponent(payload.repo)}#${payload.repo}-memory` });
     items.push({
@@ -1497,7 +1532,7 @@ export function attentionItems(given: AttentionInput): AttentionItem[] {
       subject: subjectOf(key).subject,
       bot: null,
       since: event.at,
-      detail: `${said.join('; ') || 'An entry was replaced'}${typeof payload.by === 'string' ? `, as ${payload.by}` : ''}. Nothing waits on this; revert it in Settings if it is wrong.`,
+      detail: `${said.join('; ')}${how}. Nothing waits on this; revert it in Settings if it is wrong.`,
       actions,
     });
   }

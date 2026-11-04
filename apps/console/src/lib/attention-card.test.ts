@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AttentionItem } from './api';
-import { alarming, faceActions, groupOf, hasMore, plainDetail, unblockedOf, unblocksLine } from './attention-card';
+import { alarming, faceActions, groupCounts, groupOf, hasMore, plainDetail, unblockedOf, unblocksLine } from './attention-card';
 
 const ITEM: AttentionItem = {
   id: 'task:t-1',
@@ -112,6 +112,35 @@ describe('a blocked issue waiting on one closed without merging', () => {
     expect(groupOf(waiting)).toBe('work');
     // From a bridge that sends no group, by its kind.
     expect(groupOf({ kind: 'dependency_abandoned' })).toBe('work');
+  });
+});
+
+// A week of these was counted in the header's badge as work waiting on a
+// person, with nothing for anyone to do about them.
+describe('a design memory supersede', () => {
+  const SUPERSEDED: AttentionItem = {
+    id: 'design-memory:api#12:2026-09-24T10:30:00.000Z',
+    kind: 'design_memory_superseded',
+    headline: 'The design memory of api changed',
+    subject: { repo: 'api', number: 12, title: 'Cost per round', ref: 'api#12', url: null },
+    bot: null,
+    since: '2026-09-24T10:30:00.000Z',
+    detail: '“B” was replaced by “C”, unopposed at the move to build. Nothing waits on this; revert it in Settings if it is wrong.',
+    actions: [
+      { kind: 'open_url', label: 'On GitHub', url: 'https://github.com/acme/api/issues/12#issuecomment-9' },
+      { kind: 'dismiss_notice', label: 'Dismiss', notice: 'design-memory:api#12', repo: 'api', issue: 12, occurrence: '2026-09-24T10:30:00.000Z' },
+      { kind: 'open_page', label: 'Design memory', href: '/settings/repositories/api#api-memory' },
+    ],
+  };
+
+  it('is a system notice, from a bridge that sends no group too, and is not counted as work', () => {
+    expect(groupOf(SUPERSEDED)).toBe('system');
+    expect(groupOf({ ...SUPERSEDED, group: 'system' })).toBe('system');
+    expect(groupCounts([SUPERSEDED, ITEM])).toEqual({ work: 1, system: 1 });
+  });
+
+  it('offers its Dismiss on the face, beside the link to its comment', () => {
+    expect(faceActions(SUPERSEDED).map((action) => action.kind)).toEqual(['dismiss_notice', 'open_url']);
   });
 });
 
