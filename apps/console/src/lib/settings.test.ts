@@ -120,6 +120,7 @@ describe('the sections of settings', () => {
       'backup',
       'pause',
       'users',
+      'roles',
       'appearance',
     ]);
     expect(hashSection('engine-updates')).toBe('system');

@@ -40,6 +40,8 @@ export const SETTINGS_SECTIONS = [
   { id: 'backup', label: 'Backup' },
   { id: 'pause', label: 'Pause work' },
   { id: 'users', label: 'Users' },
+  // Left out when the bridge could not be asked for them.
+  { id: 'roles', label: 'Roles' },
   { id: 'appearance', label: 'Appearance' },
 ] as const;
 

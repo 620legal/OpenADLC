@@ -7,6 +7,7 @@ import {
   type NotificationSettingsUpdate,
   type NotificationSettingsView,
   type NotificationTestResult,
+  type PersonRolesView,
   type RemovalChoices,
   type RemovalPreview,
   type RemovalReport,
@@ -913,6 +914,23 @@ export async function saveEgressHosts(hosts: string[]): Promise<{ ok: boolean; e
     const kept = error instanceof BridgeRefusal && error.status === 502;
     if (kept) revalidatePath('/settings');
     return { ok: false, error: error instanceof Error ? error.message : 'the list was not saved', ...(kept ? { hosts } : {}) };
+  }
+}
+
+/**
+ * Every person role and who holds it, saved whole: the bridge checks each
+ * name and member, audits what changed, and answers with the roles as stored.
+ * An admin's. A role left out of `roles` is deleted; one with no `id` is added.
+ */
+export async function savePersonRoles(
+  roles: { id?: string; name: string; members: string[] }[],
+): Promise<{ ok: boolean; error?: string; view?: PersonRolesView }> {
+  try {
+    const view = await call<PersonRolesView>('/v1/people-roles', 'PUT', { roles });
+    revalidatePath('/settings');
+    return { ok: true, view };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : 'the roles were not saved' };
   }
 }
 

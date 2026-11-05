@@ -123,6 +123,7 @@ const SETTING_LABELS: Record<string, string> = {
   keepAwake: 'Whether the bridge keeps its Mac awake while work is in flight',
   notifyTransport: 'Where notifications go',
   notifyKinds: 'Which notifications are switched off',
+  personRoles: 'The roles the install’s people hold',
 };
 
 /** Labelled, but a JSON value nobody reads by eye, so only said to differ. */
@@ -140,6 +141,7 @@ const STRUCTURED_SETTINGS = new Set([
   'consoleLogo',
   'notifyTransport',
   'notifyKinds',
+  'personRoles',
 ]);
 
 /** The App's parts, which are taken or kept together: one app's client id with another's key is neither. */

@@ -132,6 +132,11 @@ export const SETTING_KEYS = [
   'notifyTransport',
   // Each notification kind a person switched off, as JSON `{[kind]: false}`; absent is on.
   'notifyKinds',
+  // The roles the install's people hold (Product, Legal, Engineering and the
+  // custom ones), as JSON `{roles: [{id, name?, members}]}`. Only PUT
+  // /v1/people-roles and the prune when `humans` is saved write it. See the
+  // bridge's `people-roles-routes.ts`.
+  'personRoles',
 ] as const;
 
 export type SettingKey = (typeof SETTING_KEYS)[number];

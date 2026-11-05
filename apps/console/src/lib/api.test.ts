@@ -55,6 +55,13 @@ describe('a settings section read on the server', () => {
     expect(took).toBeGreaterThanOrEqual(SECTION_READ_MS - 50);
     expect(took).toBeLessThan(SECTION_READ_MS + 1_000);
   });
+
+  it('gives up on the roles after SECTION_READ_MS too, so the page leaves Roles out rather than waiting', async () => {
+    const { api, SECTION_READ_MS } = await import('./api');
+    const started = Date.now();
+    await expect(api.peopleRoles()).rejects.toThrow();
+    expect(Date.now() - started).toBeLessThan(SECTION_READ_MS + 1_000);
+  });
 });
 
 describe('who is asking, read for the layout', () => {
