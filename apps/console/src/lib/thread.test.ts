@@ -424,6 +424,10 @@ describe('the conversation', () => {
     expect(asked({ consequences: ['one', 2] })).not.toHaveProperty('consequences');
     // The open gate is the record when it carries them.
     expect(asked({}, { ...gate, decision, consequences: ['A', 'B'] })).toMatchObject({ open: true, decision, consequences: ['A', 'B'] });
+    // Also when the gate has consequences and no decision: its message's copy is not read.
+    const fromGate = asked({ decision, consequences: ['X', 'Y'] }, { ...gate, decision: null, consequences: ['A', 'B'] });
+    expect(fromGate).toMatchObject({ open: true, consequences: ['A', 'B'] });
+    expect(fromGate).not.toHaveProperty('decision');
   });
 
   it('carries them for a question it is waiting on whose own line is not in the thread', () => {
