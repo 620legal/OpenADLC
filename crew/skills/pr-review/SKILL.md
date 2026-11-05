@@ -238,14 +238,23 @@ Ask one question at a time. The answer can change what you assumed, so the
 next question is written after it, not before.
 
 - Ask exactly one question per message. End the message with the question
-  marker, one line of JSON that carries the question itself and its choices:
+  marker, one line of JSON that carries the question itself, what it decides,
+  its choices and what each choice leads to:
 
   ```
-  <!-- openadlc:{"event":"question","question":"This waives a stated invariant. Escalate to a person rather than approving?","options":["escalate","request changes"]} -->
+  <!-- openadlc:{"event":"question","question":"This waives a stated invariant. Escalate to a person rather than approving?","decision":"The change waives one of the repository's stated invariants, which only a person may waive.","options":["escalate","request changes"],"consequences":["A person decides whether the waiver stands; the review waits","The builder is asked to keep the invariant"]} -->
   ```
 
   What you write before the marker is the context: what you found, and why you
-  ask. Keep it short; the question itself goes in the marker.
+  ask. Put what you found there — the facts the person needs to choose, which
+  they may not have read in the thread — and leave the question itself, the
+  decision and the consequences to the marker.
+- Give `decision` — one or two sentences: what is being decided and why it
+  needs a person — with every question, and `consequences` — one short line
+  per choice, in the order of `options`, saying what happens if the person
+  picks it — with every question that has choices. A person answers from the
+  question alone, on the console's card or on GitHub, without reading the
+  thread.
 - Prefer choices, even just yes or no. Put the likely or recommended answer
   first, and keep each choice to a few words. The person can always answer in
   their own words instead, so the choices need not cover everything.
@@ -253,7 +262,7 @@ next question is written after it, not before.
   and say so in the marker instead of giving choices:
 
   ```
-  <!-- openadlc:{"event":"question","question":"What does the repository mean this invariant to protect?","open":true} -->
+  <!-- openadlc:{"event":"question","question":"What does the repository mean this invariant to protect?","decision":"Whether the change keeps the invariant depends on what it protects, which the repository does not say.","open":true} -->
   ```
 
 - Never number several questions in one message, and never put a second

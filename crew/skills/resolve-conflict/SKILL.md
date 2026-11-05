@@ -51,21 +51,28 @@ Ask one question at a time. The answer can change what you assumed, so the
 next question is written after it, not before.
 
 - Ask exactly one question per message. End the message with the question
-  marker, one line of JSON that carries the question itself and its choices:
+  marker, one line of JSON that carries the question itself, what it decides,
+  its choices and what each choice leads to:
 
   ```
-  <!-- openadlc:{"event":"question","question":"Keeping both sides needs src/app.js, outside the conflict. Leave it to a person?","options":["leave it to a person","resolve within the conflicted files only"]} -->
+  <!-- openadlc:{"event":"question","question":"Keeping both sides needs src/app.js, outside the conflict. Leave it to a person?","decision":"Keeping both sides needs a file outside the conflict, which this task does not change on its own.","options":["leave it to a person","resolve within the conflicted files only"],"consequences":["The pull request waits for a person to resolve it","Only the conflicted files change, and one side may be lost"]} -->
   ```
 
   What you write before the marker is the context: which files conflict, and
   why keeping both sides does not settle it.
+- Give `decision` — one or two sentences: what is being decided and why it
+  needs a person — with every question, and `consequences` — one short line
+  per choice, in the order of `options`, saying what happens if the person
+  picks it — with every question that has choices. A person answers from the
+  question alone, on the console's card or on GitHub, without reading the
+  thread.
 - Prefer choices, even just yes or no. Put the likely or recommended answer
   first, and keep each choice to a few words.
 - Ask an open question only when no set of choices could cover the answers,
   and say so in the marker instead of giving choices:
 
   ```
-  <!-- openadlc:{"event":"question","question":"Which of the two test targets should stay?","open":true} -->
+  <!-- openadlc:{"event":"question","question":"Which of the two test targets should stay?","decision":"Only one of the two test targets can stay, and which depends on what the repository means to run.","open":true} -->
   ```
 
 - Never number several questions in one message, and never put a second

@@ -398,6 +398,46 @@ describe('the conversation', () => {
     expect(entries[0]).toMatchObject({ kind: 'bubble', text: gate.question, question: { open: true, options: ['per round', 'per call'] } });
   });
 
+  it('carries what a question decides and what each choice leads to, from its message, paired with its options', () => {
+    const asked = (payload: Record<string, unknown>, openGate: Gate | null = null) => {
+      const entries = timeline(
+        [message({ id: 'm1', kind: 'gate', author: 'irisexampleco', text: gate.question, payload: { gateId: 'gate-1', options: gate.options, ...payload }, at: minutesAgo(5) })],
+        { now: NOW, openGate, topics: [], botName: 'irisexampleco', showSubjects: false, timeZone: 'UTC' },
+      );
+      const entry = entries.at(-1);
+      return entry?.kind === 'bubble' ? entry.question : undefined;
+    };
+    const decision = 'What the review record keeps, which the cost report reads.';
+
+    expect(asked({ decision, consequences: ['One model per round', 'Every call’s model'] })).toEqual({
+      gateId: 'gate-1',
+      options: ['per round', 'per call'],
+      open: false,
+      githubUrl: null,
+      decision,
+      consequences: ['One model per round', 'Every call’s model'],
+    });
+    // Without them, exactly as before.
+    expect(asked({})).toEqual({ gateId: 'gate-1', options: ['per round', 'per call'], open: false, githubUrl: null });
+    // A list that does not pair one to one is shown nowhere; the decision still is.
+    expect(asked({ decision, consequences: ['only one'] })).toEqual({ gateId: 'gate-1', options: ['per round', 'per call'], open: false, githubUrl: null, decision });
+    expect(asked({ consequences: ['one', 2] })).not.toHaveProperty('consequences');
+    // The open gate is the record when it carries them.
+    expect(asked({}, { ...gate, decision, consequences: ['A', 'B'] })).toMatchObject({ open: true, decision, consequences: ['A', 'B'] });
+  });
+
+  it('carries them for a question it is waiting on whose own line is not in the thread', () => {
+    const entries = timeline([], {
+      now: NOW,
+      openGate: { ...gate, decision: 'D', consequences: ['A', 'B'] },
+      topics: [],
+      botName: 'ottoexampleco',
+      showSubjects: false,
+      timeZone: 'UTC',
+    });
+    expect(entries[0]).toMatchObject({ question: { open: true, decision: 'D', consequences: ['A', 'B'] } });
+  });
+
   it('says which subject a run of messages is about, with everything on screen', () => {
     const entries = timeline(
       [

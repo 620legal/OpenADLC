@@ -154,6 +154,8 @@ describe('the question a message asks', () => {
       addressedTo: null,
       ignored: 0,
       planChange: null,
+      decision: '',
+      consequences: [],
     });
   });
 
@@ -181,6 +183,8 @@ describe('the question a message asks', () => {
       addressedTo: null,
       ignored: 0,
       planChange: null,
+      decision: '',
+      consequences: [],
     });
     expect(parseQuestion('Which one? <!-- openadlc:{"event":"question"} -->')).toMatchObject({ question: 'Which one?', open: true, context: '' });
     // A question that is not words is no question: the message is.
@@ -236,6 +240,142 @@ describe('answers', () => {
   });
 });
 
+/**
+ * A person answers from the question alone: what is being decided, and what
+ * each choice leads to. A question that gave only its choices sent people
+ * into the thread to find out what "Approve" would do.
+ */
+describe('what a question decides, and what each choice leads to', () => {
+  const marker = (fields: object) => `I found two web roots.\n<!-- openadlc:${JSON.stringify({ event: 'question', ...fields })} -->`;
+
+  it('is read from the marker, trimmed, each consequence beside its option', () => {
+    const asked = parseQuestion(
+      marker({
+        question: 'Where should the page go?',
+        options: ['the root', 'docs/'],
+        decision: '  Where the site is served from, which the deploy reads.  ',
+        consequences: [' The page is served at / ', 'The page is served at /docs'],
+      }),
+    );
+    expect(asked).toMatchObject({
+      question: 'Where should the page go?',
+      options: ['the root', 'docs/'],
+      decision: 'Where the site is served from, which the deploy reads.',
+      consequences: ['The page is served at /', 'The page is served at /docs'],
+    });
+  });
+
+  it('is nothing when the marker gives neither, and the question is as it was', () => {
+    const asked = parseQuestion(marker({ question: 'Where should the page go?', options: ['the root', 'docs/'] }));
+    expect(asked).toEqual({
+      question: 'Where should the page go?',
+      options: ['the root', 'docs/'],
+      open: false,
+      context: 'I found two web roots.',
+      addressedTo: null,
+      ignored: 0,
+      planChange: null,
+      decision: '',
+      consequences: [],
+    });
+  });
+
+  it('shows no consequence at all when the list does not pair one to one with the options', () => {
+    const ask = (consequences: unknown) => parseQuestion(marker({ question: 'Q?', options: ['a', 'b'], decision: 'D', consequences }))!;
+    expect(ask(['only one']).consequences).toEqual([]);
+    expect(ask(['one', 'two', 'three']).consequences).toEqual([]);
+    expect(ask('one and two').consequences).toEqual([]);
+    expect(ask(['one', 2]).consequences).toEqual([]);
+    // The decision does not depend on them.
+    expect(ask(['only one']).decision).toBe('D');
+  });
+
+  it('drops the consequence of an option it drops, so the rest stay with their own', () => {
+    const asked = parseQuestion(
+      marker({ question: 'Q?', options: ['keep', '', 'Keep', 'other'], consequences: ['kept', 'empty', 'repeated', 'other one'] }),
+    )!;
+    expect(asked.options).toEqual(['keep', 'other']);
+    expect(asked.consequences).toEqual(['kept', 'other one']);
+  });
+
+  it('keeps an empty consequence as no consequence for that choice, and none when every one is empty', () => {
+    expect(parseQuestion(marker({ question: 'Q?', options: ['a', 'b'], consequences: ['', 'B happens'] }))!.consequences).toEqual(['', 'B happens']);
+    expect(parseQuestion(marker({ question: 'Q?', options: ['a', 'b'], consequences: [' ', ''] }))!.consequences).toEqual([]);
+  });
+
+  it('keeps the decision of an open question, which has no choices to lead anywhere', () => {
+    const asked = parseQuestion(marker({ question: 'What should it say?', open: true, decision: 'The page text.', consequences: ['x'] }))!;
+    expect(asked).toMatchObject({ open: true, options: [], decision: 'The page text.', consequences: [] });
+  });
+
+  it('is never a plan change’s: its choices and what they do are the bridge’s', () => {
+    const asked = parseQuestion(
+      `<!-- openadlc:${JSON.stringify({ event: 'plan_change', paths: ['a.ts'], reason: 'r', decision: 'D', consequences: ['x', 'y'] })} -->`,
+    )!;
+    expect(asked).toMatchObject({ decision: '', consequences: [], options: [PLAN_CHANGE_APPROVE, PLAN_CHANGE_REFUSE] });
+  });
+
+  it('is said in the gate comment: the decision above the question, each consequence under its choice', () => {
+    const body = renderGateComment({
+      bot: 'ottoexampleco',
+      taskId: 'task-1',
+      question: 'Where should the page go?',
+      options: ['the root', 'docs/'],
+      context: 'I found two web roots.',
+      decision: 'Where the site is served from.',
+      consequences: ['Served at /', ''],
+    });
+    expect(body).toBe(
+      [
+        '**ottoexampleco needs a decision.**',
+        '',
+        'I found two web roots.',
+        '',
+        '**Deciding:** Where the site is served from.',
+        '',
+        '**Where should the page go?**',
+        '',
+        '1. the root',
+        '   - Served at /',
+        '2. docs/',
+        '',
+        'Reply with a number, or in your own words. This task is paused until you do.',
+        renderMarker({ event: 'question', taskId: 'task-1', bot: 'ottoexampleco', options: ['the root', 'docs/'] }),
+      ].join('\n'),
+    );
+    // What GitHub's answer is read against is the options alone.
+    expect(parseMarker(body)).toEqual({ event: 'question', taskId: 'task-1', bot: 'ottoexampleco', options: ['the root', 'docs/'] });
+  });
+
+  it('leaves the gate comment exactly as it was without them, or with consequences that do not pair', () => {
+    const input = { bot: 'ottoexampleco', taskId: 'task-1', question: 'Where?', options: ['a', 'b'], context: 'Found.' };
+    const before = renderGateComment(input);
+    expect(before).toBe(
+      [
+        '**ottoexampleco needs a decision.**',
+        '',
+        'Found.',
+        '',
+        '**Where?**',
+        '',
+        '1. a\n2. b',
+        '',
+        'Reply with a number, or in your own words. This task is paused until you do.',
+        renderMarker({ event: 'question', taskId: 'task-1', bot: 'ottoexampleco', options: ['a', 'b'] }),
+      ].join('\n'),
+    );
+    expect(renderGateComment({ ...input, decision: '  ', consequences: ['only one'] })).toBe(before);
+    expect(renderGateComment({ ...input, decision: null, consequences: [] })).toBe(before);
+  });
+
+  it('answers with the option, by number or words, and never takes a consequence’s words for its option', () => {
+    const asked = parseQuestion(marker({ question: 'Q?', options: ['the root', 'docs/'], consequences: ['Served at /', 'Served at /docs'] }))!;
+    expect(resolveAnswer('2', asked.options)).toBe('docs/');
+    expect(resolveAnswer('The Root', asked.options)).toBe('the root');
+    expect(resolveAnswer('Served at /docs', asked.options)).toBe('Served at /docs');
+  });
+});
+
 describe('a plan change a task asks for', () => {
   const marker = (fields: object) => `<!-- openadlc:${JSON.stringify({ event: 'plan_change', ...fields })} -->`;
 
@@ -250,6 +390,8 @@ describe('a plan change a task asks for', () => {
       addressedTo: null,
       ignored: 0,
       planChange: { paths: ['apps/hostd/src/skill-runner.ts', 'docs/'], reason: 'it forwards nothing' },
+      decision: '',
+      consequences: [],
     });
   });
 

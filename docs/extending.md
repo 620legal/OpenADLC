@@ -104,6 +104,14 @@ that asks a person anything must carry the `## Asking a person` rules word for
 word — one question per message, choices first, an open question only when no
 choices fit — with one question marker that offers choices and one that is
 `"open":true`: an intake bot once asked four numbered questions in one message.
+Every example question marker gives `decision`, one or two sentences on what
+is being decided and why it needs a person, and one with choices gives
+`consequences`, one line per choice in the order of `options`, saying what
+picking it leads to. Both are shown with the question in Needs you, the
+thread and the gate comment on GitHub, so a person can answer without reading
+the thread. A list of consequences that does not pair one to one with the
+options is not shown at all, and an answer is only ever matched against the
+options (`docs/adr/0033-a-gate-stores-its-decision-and-consequences.md`).
 A scenario proves the scenario, not the model; whether a real engine stops where
 it says is still open in `docs/unverified.md`.
 `apps/hostd/src/skill-runner.test.ts` covers the brief.

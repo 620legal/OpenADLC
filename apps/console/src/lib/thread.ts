@@ -521,9 +521,39 @@ export type TimelineEntry =
       text: string;
       note: string | null;
       url: string | null;
-      /** A question the bot asked: its options, and whether it is still waiting. */
-      question?: { gateId: string | null; options: string[]; open: boolean; githubUrl: string | null };
+      /**
+       * A question the bot asked: its options, and whether it is still
+       * waiting. With what is being decided and what each option leads to,
+       * in their order, when the bot said them.
+       */
+      question?: {
+        gateId: string | null;
+        options: string[];
+        open: boolean;
+        githubUrl: string | null;
+        decision?: string;
+        consequences?: string[];
+      };
     };
+
+/**
+ * What a question says it decides, and what each of `options` leads to, as
+ * far as it said them. A list of consequences of another length than the
+ * options is left out: shown beside them, a choice would read with another
+ * one's outcome.
+ */
+export function questionFraming(
+  said: { decision?: unknown; consequences?: unknown } | null | undefined,
+  options: readonly string[],
+): { decision?: string; consequences?: string[] } {
+  const decision = typeof said?.decision === 'string' ? said.decision.trim() : '';
+  const list = Array.isArray(said?.consequences) ? (said.consequences as unknown[]) : [];
+  const consequences =
+    list.length === options.length && list.every((entry) => typeof entry === 'string') && list.some((entry) => (entry as string).trim())
+      ? (list as string[]).map((entry) => entry.trim())
+      : [];
+  return { ...(decision ? { decision } : {}), ...(consequences.length > 0 ? { consequences } : {}) };
+}
 
 /** The markers a bot's structured comment carries are for the bridge, not for reading. */
 function readable(text: string): string {
@@ -733,6 +763,10 @@ export function timeline(
       const open = Boolean(input.openGate && gateId === input.openGate.id);
       if (open) openShown = true;
       const options = Array.isArray(message.payload?.options) ? (message.payload.options as unknown[]).map(String) : [];
+      const shown = open ? (input.openGate?.options ?? options) : options;
+      // The open gate is the record; its message's payload is a copy, and an
+      // older bridge's gate carries neither field.
+      const framing = questionFraming(open && input.openGate?.decision != null ? input.openGate : message.payload, shown);
       entries.push({
         kind: 'bubble',
         key: message.id,
@@ -744,9 +778,10 @@ export function timeline(
         url: message.githubUrl,
         question: {
           gateId,
-          options: open ? (input.openGate?.options ?? options) : options,
+          options: shown,
           open,
           githubUrl: open ? (input.openGate?.githubCommentUrl ?? message.githubUrl) : message.githubUrl,
+          ...framing,
         },
       });
       continue;
@@ -776,7 +811,13 @@ export function timeline(
       text: input.openGate.question,
       note: 'waiting for your answer',
       url: null,
-      question: { gateId: input.openGate.id, options: input.openGate.options, open: true, githubUrl: input.openGate.githubCommentUrl },
+      question: {
+        gateId: input.openGate.id,
+        options: input.openGate.options,
+        open: true,
+        githubUrl: input.openGate.githubCommentUrl,
+        ...questionFraming(input.openGate, input.openGate.options),
+      },
     });
   }
 

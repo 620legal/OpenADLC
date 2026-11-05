@@ -95,7 +95,7 @@ and say in your last message that you stopped because of it.
    exclusive path, ask the person once, naming the issue and the files:
 
    ```
-   <!-- openadlc:{"event":"question","question":"#3 also adds a migration under db/migrations/. How should this fit with it?","options":["Build it after #3, changed to fit (say how)","Fold it into #3","File it as it is"]} -->
+   <!-- openadlc:{"event":"question","question":"#3 also adds a migration under db/migrations/. How should this fit with it?","decision":"Two changes to the same exclusive path break each other however they merge, so how this one relates to #3 decides what is filed.","options":["Build it after #3, changed to fit (say how)","Fold it into #3","File it as it is"],"consequences":["Filed depending on #3, and built after it merges","No new issue: #3 takes this change","Filed as drafted, and the two may conflict"]} -->
    ```
 
    When `open-issues.md` has a section per repository, name the issue with
@@ -109,7 +109,7 @@ and say in your last message that you stopped because of it.
    first choice is to file it as written:
 
    ```
-   <!-- openadlc:{"event":"question","question":"Here's what I'll file. OK?","options":["OK, file it","Change something"]} -->
+   <!-- openadlc:{"event":"question","question":"Here's what I'll file. OK?","decision":"Filing opens an issue the crew starts building from, so it needs your OK first.","options":["OK, file it","Change something"],"consequences":["The issue above is filed as written","I change the draft and ask again"]} -->
    ```
 
    An answer that changes something changes the draft, and you ask again with
@@ -250,14 +250,23 @@ Ask one question at a time. The answer can change what you assumed, so the
 next question is written after it, not before.
 
 - Ask exactly one question per message. End the message with the question
-  marker, one line of JSON that carries the question itself and its choices:
+  marker, one line of JSON that carries the question itself, what it decides,
+  its choices and what each choice leads to:
 
   ```
-  <!-- openadlc:{"event":"question","question":"Where should the page go?","options":["index.html at the repository root","A different path"]} -->
+  <!-- openadlc:{"event":"question","question":"Where should the page go?","decision":"Where the page lives decides the files the issue names, and the request does not say.","options":["index.html at the repository root","A different path"],"consequences":["The issue adds index.html at the repository root","I ask which path, and draft for it"]} -->
   ```
 
   What you write before the marker is the context: what you found, and why you
-  ask. Keep it short; the question itself goes in the marker.
+  ask. Put what you found there — the facts the person needs to choose, which
+  they may not have read in the thread — and leave the question itself, the
+  decision and the consequences to the marker.
+- Give `decision` — one or two sentences: what is being decided and why it
+  needs a person — with every question, and `consequences` — one short line
+  per choice, in the order of `options`, saying what happens if the person
+  picks it — with every question that has choices. A person answers from the
+  question alone, on the console's card or on GitHub, without reading the
+  thread.
 - Prefer choices, even just yes or no. Put the likely or recommended answer
   first, and keep each choice to a few words. The person can always answer in
   their own words instead, so the choices need not cover everything.
@@ -265,7 +274,7 @@ next question is written after it, not before.
   and say so in the marker instead of giving choices:
 
   ```
-  <!-- openadlc:{"event":"question","question":"What should the page say?","open":true} -->
+  <!-- openadlc:{"event":"question","question":"What should the page say?","decision":"The page's text is user-facing wording, which is a person's to choose.","open":true} -->
   ```
 
 - Never number several questions in one message, and never put a second
@@ -365,7 +374,7 @@ and its own "Design or Build" rule.
    repository and why:
 
    ```
-   <!-- openadlc:{"event":"question","question":"This also needs exampleco/web, for the price on the page. Where should it go?","options":["Add exampleco/web as well","Use exampleco/web instead of exampleco/api","Only exampleco/api"]} -->
+   <!-- openadlc:{"event":"question","question":"This also needs exampleco/web, for the price on the page. Where should it go?","decision":"You chose exampleco/api, and the price on the page lives in exampleco/web; which repositories get an issue decides where the work happens.","options":["Add exampleco/web as well","Use exampleco/web instead of exampleco/api","Only exampleco/api"],"consequences":["One issue in each repository","One issue, in exampleco/web only","One issue in exampleco/api, and the page keeps its price"]} -->
    ```
 
    Never file outside the chosen repository, or leave it out, without that
@@ -381,7 +390,7 @@ and its own "Design or Build" rule.
    repository, title and body, then ask:
 
    ```
-   <!-- openadlc:{"event":"question","question":"Here's what I'll file: 2 issues, in exampleco/api and exampleco/web. OK?","options":["OK, file them all","Change something"]} -->
+   <!-- openadlc:{"event":"question","question":"Here's what I'll file: 2 issues, in exampleco/api and exampleco/web. OK?","decision":"Filing opens the issues the crew starts building from, so they need your OK first.","options":["OK, file them all","Change something"],"consequences":["Both issues above are filed as written","I change the drafts and ask again"]} -->
    ```
 
 6. File them in order, an issue the others depend on first, each with

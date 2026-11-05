@@ -401,6 +401,45 @@ describe('a question that needs you', () => {
     );
   });
 
+  it('says what is being decided above the question, and what each choice leads to under it', () => {
+    const html = needs([
+      {
+        ...QUESTION,
+        question: {
+          gateId: 'gate-7',
+          options: ['index.html at the repository root', 'A different path'],
+          decision: 'Where the site is served from, which the deploy reads.',
+          consequences: ['The page is served at /', ''],
+        },
+      },
+    ]);
+    expect(html).toMatch(/<p data-decision[^>]*>Where the site is served from, which the deploy reads\.<\/p>/);
+    expect(html.indexOf('data-decision')).toBeLessThan(html.indexOf('data-clamp="detail"'));
+    // Under its own choice, and none under a choice the bot said nothing about.
+    expect(html).toMatch(/<span>index\.html at the repository root<\/span><span data-consequence[^>]*>The page is served at \/<\/span>/);
+    expect(html).toMatch(/<button type="button"[^>]*>A different path<\/button>/);
+    expect(html.match(/data-consequence/g)).toHaveLength(1);
+  });
+
+  it('is drawn exactly as before without them, or with consequences that do not pair with its choices', () => {
+    const before = needs([QUESTION]);
+    expect(before).not.toContain('data-decision');
+    expect(before).not.toContain('data-consequence');
+    expect(needs([{ ...QUESTION, question: { ...QUESTION.question!, decision: '', consequences: ['only one'] } }])).toBe(before);
+  });
+
+  it('answers with the choice’s own words, never its consequence', async () => {
+    const buttons = buttonsIn(
+      <NeedsYou
+        items={[{ ...QUESTION, question: { ...QUESTION.question!, consequences: ['Served at /', 'Served elsewhere'] } }]}
+        now="2026-09-24T12:00:00.000Z"
+        onOpenBot={() => undefined}
+      />,
+    );
+    press(buttons, 'A different pathServed elsewhere');
+    await vi.waitFor(() => expect(answers).toEqual([{ gateId: 'gate-7', answer: 'A different path' }]));
+  });
+
   it('answers with the choice pressed, through the gate-answer route, and says something else in the thread, ready to type', async () => {
     const opened: unknown[] = [];
     const buttons = buttonsIn(

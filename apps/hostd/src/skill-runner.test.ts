@@ -417,6 +417,38 @@ describe('a real engine asking a person', () => {
     expect(to('message').filter((call) => call.body.kind === 'bot')).toEqual([]);
   }, 30_000);
 
+  it('passes on what the question decides and what each choice leads to, so it can be answered from itself', async () => {
+    const marker = {
+      event: 'question',
+      question: 'Where should the page go?',
+      options: ['the root', 'docs/'],
+      decision: 'Where the site is served from, which the deploy reads.',
+      consequences: ['Served at /', 'Served at /docs'],
+    };
+    const bin = fakeClaude([assistant('msg-1', `I found two web roots.\n\n<!-- openadlc:${JSON.stringify(marker)} -->`, 1500, 120), result(0.2)]);
+
+    expect(await runTriage(bin)).toBe(0);
+
+    expect(to('gate').map((call) => call.body)).toEqual([
+      {
+        question: 'Where should the page go?',
+        options: ['the root', 'docs/'],
+        context: 'I found two web roots.',
+        decision: 'Where the site is served from, which the deploy reads.',
+        consequences: ['Served at /', 'Served at /docs'],
+      },
+    ]);
+  }, 30_000);
+
+  it('leaves out consequences that do not pair with the choices, and keeps the decision', async () => {
+    const marker = { event: 'question', question: 'Where?', options: ['the root', 'docs/'], decision: 'Where it is served.', consequences: ['Served at /'] };
+    const bin = fakeClaude([assistant('msg-1', `<!-- openadlc:${JSON.stringify(marker)} -->`, 1500, 60), result(0.1)]);
+
+    expect(await runTriage(bin)).toBe(0);
+
+    expect(to('gate').map((call) => call.body)).toEqual([{ question: 'Where?', options: ['the root', 'docs/'], decision: 'Where it is served.' }]);
+  }, 30_000);
+
   it('asks only the first of two questions in one message, and says it left the other', async () => {
     const bin = fakeClaude([
       assistant(

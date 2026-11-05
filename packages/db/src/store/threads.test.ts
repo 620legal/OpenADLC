@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../client.js', () => ({
@@ -7,11 +10,13 @@ vi.mock('../client.js', () => ({
 
 import { query, queryOne } from '../client.js';
 import {
+  answerGate,
   claimGateReply,
   createGate,
   ensureThread,
   expireEndedGatesInRepo,
   expireGatesOfTask,
+  getGate,
   listGatesForSubject,
   listGatesForTasks,
   listOpenGates,
@@ -87,6 +92,67 @@ describe('a gate a session asks', () => {
     const params = vi.mocked(queryOne).mock.calls.at(-1)?.[1] as unknown[];
     expect(params[2]).toBe('push failed: ghu_***');
     expect(params[3]).toEqual(['retry with ghu_***', 'stop']);
+  });
+});
+
+/**
+ * What a question decides, and what each of its choices leads to, are the
+ * gate's own, so every read that shows a gate shows them. A select list that
+ * leaves the columns out reads as a gate that said neither, with no error.
+ */
+describe('what a gate decides and what each choice leads to', () => {
+  const migration = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'migrations', '0161_gate_decision.sql'), 'utf8');
+
+  it('are columns a gate asked before them reads as neither', () => {
+    expect(migration).toContain('alter table gates add column if not exists decision text;');
+    expect(migration).toContain("alter table gates add column if not exists consequences text[] not null default '{}';");
+  });
+
+  it('are stored as the bridge gives them, without a token, and as none when it gives none', async () => {
+    const token = `ghu_${'a'.repeat(36)}`;
+    vi.mocked(queryOne).mockResolvedValueOnce({ ...ROW, decision: 'whether ghu_*** is rotated', consequences: ['keep ghu_***', 'rotate it'] });
+    const gate = await createGate({
+      taskId: 'task-1',
+      threadId: 'thread-1',
+      question: 'Rotate it?',
+      options: ['keep', 'rotate'],
+      decision: `whether ${token} is rotated`,
+      consequences: [`keep ${token}`, 'rotate it'],
+    });
+    const [sql, params] = vi.mocked(queryOne).mock.calls.at(-1) ?? [];
+    expect(String(sql)).toMatch(/insert into gates \([^)]*decision, consequences\)/);
+    expect(String(sql)).toMatch(/returning[\s\S]*decision, consequences/);
+    expect((params as unknown[]).slice(7)).toEqual(['whether ghu_*** is rotated', ['keep ghu_***', 'rotate it']]);
+    expect(gate).toMatchObject({ decision: 'whether ghu_*** is rotated', consequences: ['keep ghu_***', 'rotate it'] });
+
+    vi.mocked(queryOne).mockResolvedValueOnce({ ...ROW, decision: null, consequences: [] });
+    const plain = await createGate({ taskId: 'task-1', threadId: 'thread-1', question: 'q', options: ['a', 'b'] });
+    expect((vi.mocked(queryOne).mock.calls.at(-1)?.[1] as unknown[]).slice(7)).toEqual([null, []]);
+    expect(plain).toMatchObject({ decision: null, consequences: [] });
+  });
+
+  it('are read by every read that shows a gate', async () => {
+    vi.mocked(query).mockResolvedValue([{ ...ROW, decision: 'D', consequences: ['A', 'B'], subject_ref: 'openadlc#31' }]);
+    vi.mocked(queryOne).mockResolvedValue({ ...ROW, decision: 'D', consequences: ['A', 'B'] });
+
+    const read = [
+      ...(await listOpenGates()),
+      ...(await listGatesForSubject('openadlc#31')),
+      ...(await listOpenGatesOnSubject('openadlc#31')),
+      ...(await listGatesForTasks(['task-1'])),
+      ...(await listOpenGatesInRepo('repo-1')),
+      await getGate('gate-1'),
+      await answerGate('gate-1', 'A', 'janedoe'),
+    ];
+    for (const gate of read) expect(gate).toMatchObject({ decision: 'D', consequences: ['A', 'B'] });
+    for (const [sql] of [...vi.mocked(query).mock.calls, ...vi.mocked(queryOne).mock.calls]) {
+      expect(String(sql)).toMatch(/decision, (?:g\.)?consequences/);
+    }
+  });
+
+  it('are none on a gate asked before they were kept', async () => {
+    vi.mocked(query).mockResolvedValueOnce([{ ...ROW, decision: null, consequences: [] }]);
+    expect(await listOpenGates()).toEqual([expect.objectContaining({ decision: null, consequences: [] })]);
   });
 });
 

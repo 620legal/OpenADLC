@@ -209,6 +209,29 @@ describe('a task asking for paths', () => {
   });
 });
 
+describe('a question that says what it decides and what each choice leads to', () => {
+  it('has both passed to the gate it opens', async () => {
+    await post('/internal/tasks/task-1/gate', {
+      question: 'Which one?',
+      options: ['a', 'b'],
+      decision: 'Which store keeps it.',
+      consequences: ['A keeps it', 'B keeps it'],
+    });
+
+    expect(open).toHaveBeenCalledWith(
+      expect.objectContaining({ question: 'Which one?', decision: 'Which store keeps it.', consequences: ['A keeps it', 'B keeps it'] }),
+    );
+  });
+
+  it('drops a decision that is not words, and a list that is not all words, whole', async () => {
+    await post('/internal/tasks/task-1/gate', { question: 'Which one?', options: ['a', 'b'], decision: 7, consequences: ['A keeps it', 2] });
+    expect(open).toHaveBeenLastCalledWith(expect.objectContaining({ decision: null, consequences: [] }));
+
+    await post('/internal/tasks/task-1/gate', { question: 'Which one?', options: ['a', 'b'], consequences: 'A or B' });
+    expect(open).toHaveBeenLastCalledWith(expect.objectContaining({ decision: null, consequences: [] }));
+  });
+});
+
 describe('a task ending, which may let go of paths a plan change was waiting for', () => {
   it.each(['done', 'failed', 'stopped'])('resumes the tasks whose paths are free once one is %s', async (state) => {
     applyHeld.mockResolvedValueOnce(['task-7', 'task-8']);

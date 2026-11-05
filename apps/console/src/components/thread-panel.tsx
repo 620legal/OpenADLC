@@ -24,6 +24,7 @@ import {
   NO_ITEM,
   modelInWords,
   pinnedTask,
+  questionFraming,
   roundOf,
   standsOut,
   statusOf,
@@ -828,6 +829,8 @@ function Entry({
           <QuestionCard
             question={entry.text}
             options={question.options}
+            decision={question.decision}
+            consequences={question.consequences}
             githubUrl={question.githubUrl}
             pending={pending}
             onAnswer={onAnswer}
@@ -890,7 +893,9 @@ export function OpenQuestions({
         {onScreen && <span className="font-normal text-muted"> · one is below, in this conversation</span>}
       </p>
       <ul className="flex flex-col gap-2.5">
-        {questions.map((question) => (
+        {questions.map((question) => {
+          const { decision, consequences = [] } = questionFraming(question, question.options);
+          return (
           <li key={question.id} data-question={question.id} className="flex flex-col gap-1.5 border-t border-attention/20 pt-2 first:border-t-0 first:pt-0">
             <div className="flex items-center gap-2 text-[11.5px] text-dim">
               <span className="truncate">{pick ? pick.label(question) : label(question.subjectRef)}</span>
@@ -917,13 +922,18 @@ export function OpenQuestions({
                 </button>
               )}
             </div>
+            {decision && (
+              <p data-decision className="line-clamp-3 text-[12px] leading-snug text-soft">
+                {decision}
+              </p>
+            )}
             {/* As the bot wrote it: `snake_case` and code stay what they are. */}
             <div data-question-text className="line-clamp-3 text-[12.5px] leading-snug text-body">
               <Markdown text={question.question} className={cn(standsOut(question.question) && 'font-semibold')} />
             </div>
             {question.options.length > 0 && (
               <div role="group" aria-label="Choices" className="flex flex-wrap gap-1.5">
-                {question.options.map((option) => (
+                {question.options.map((option, index) => (
                   <button
                     key={option}
                     type="button"
@@ -931,13 +941,14 @@ export function OpenQuestions({
                     onClick={() => onAnswer(question.id, option)}
                     className="inline-flex min-h-11 items-center rounded-md border border-edge-strong bg-panel px-3 py-2 text-left text-[12.5px] leading-snug text-body transition-colors hover:border-attention/60 hover:bg-attention/10 focus-visible:outline-2 focus-visible:outline-link disabled:opacity-50 md:min-h-8 md:px-2.5 md:py-1.5"
                   >
-                    {option}
+                    {choiceLabel(option, consequences[index])}
                   </button>
                 ))}
               </div>
             )}
           </li>
-        ))}
+          );
+        })}
       </ul>
     </section>
   );
@@ -956,6 +967,8 @@ export function OpenQuestions({
 export function QuestionCard({
   question,
   options,
+  decision,
+  consequences = [],
   githubUrl,
   pending,
   onAnswer,
@@ -963,6 +976,10 @@ export function QuestionCard({
 }: {
   question: string;
   options: readonly string[];
+  /** What is being decided, said above the question. */
+  decision?: string;
+  /** What each choice leads to, in the order of `options`; shown only when there is one per choice. */
+  consequences?: readonly string[];
   githubUrl: string | null;
   pending: boolean;
   onAnswer: (answer: string) => void;
@@ -970,11 +987,16 @@ export function QuestionCard({
 }) {
   return (
     <div className="flex flex-col gap-2.5 rounded-lg border border-attention/50 bg-attention/5 px-3 py-2.5 text-[13px] leading-[1.55] text-body">
+      {decision?.trim() && (
+        <p data-decision className="text-[12.5px] leading-normal text-soft">
+          {decision.trim()}
+        </p>
+      )}
       <Markdown text={question} className={cn(standsOut(question) && 'font-semibold')} />
       {options.length > 0 && (
         <>
           <div role="group" aria-label="Choices" className="flex flex-wrap gap-1.5">
-            {options.map((option) => (
+            {options.map((option, index) => (
               <button
                 key={option}
                 type="button"
@@ -982,7 +1004,7 @@ export function QuestionCard({
                 onClick={() => onAnswer(option)}
                 className="inline-flex min-h-11 items-center rounded-md border border-edge-strong bg-panel px-3 py-2 text-left text-[12.5px] leading-snug text-body transition-colors hover:border-attention/60 hover:bg-attention/10 focus-visible:outline-2 focus-visible:outline-link disabled:opacity-50 md:min-h-8 md:px-2.5 md:py-1.5"
               >
-                {option}
+                {choiceLabel(option, consequences.length === options.length ? consequences[index] : undefined)}
               </button>
             ))}
           </div>
@@ -1008,5 +1030,24 @@ export function QuestionCard({
         </a>
       )}
     </div>
+  );
+}
+
+/**
+ * A choice's words on its button, with what it leads to under them when the
+ * bot said. The button answers with the choice alone, never the consequence.
+ * Called rather than rendered as a component, so a choice with nothing more
+ * to say is its words alone, as it was.
+ */
+function choiceLabel(option: string, consequence?: string): ReactNode {
+  const said = consequence?.trim();
+  if (!said) return option;
+  return (
+    <span className="flex flex-col gap-0.5">
+      <span>{option}</span>
+      <span data-consequence className="text-[11.5px] leading-snug text-muted">
+        {said}
+      </span>
+    </span>
   );
 }
