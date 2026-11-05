@@ -569,14 +569,25 @@ describe('the triage skill, which is what makes any of this happen', () => {
     const markers = [...skill.matchAll(/<!--\s*openadlc:\{[^\n]*?\}\s*-->/g)].map((match) => parseMarker(match[0]));
     const questions = markers.filter((marker) => marker?.event === 'question');
 
-    expect(questions).toContainEqual({
-      event: 'question',
-      question: 'Where should the page go?',
-      options: ['index.html at the repository root', 'A different path'],
-    });
-    expect(questions).toContainEqual({ event: 'question', question: 'What should the page say?', open: true });
-    // Every question the skill shows is asked in its marker, not by the message around it.
-    for (const question of questions) expect(typeof question?.question).toBe('string');
+    expect(questions).toContainEqual(
+      expect.objectContaining({
+        event: 'question',
+        question: 'Where should the page go?',
+        options: ['index.html at the repository root', 'A different path'],
+      }),
+    );
+    expect(questions).toContainEqual(
+      expect.objectContaining({ event: 'question', question: 'What should the page say?', open: true }),
+    );
+    // Every question the skill shows is asked in its marker, not by the message around it,
+    // and says what is being decided, with a consequence for each choice it offers.
+    for (const question of questions) {
+      expect(typeof question?.question).toBe('string');
+      expect(typeof question?.decision).toBe('string');
+      if (Array.isArray(question?.options)) {
+        expect(question?.consequences).toHaveLength(question.options.length);
+      }
+    }
   });
 
   it('asks on an issue the way it asks on a console request, and never several questions at once', () => {
