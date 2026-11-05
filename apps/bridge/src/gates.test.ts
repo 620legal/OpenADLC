@@ -481,6 +481,101 @@ describe('a question quoting a token', () => {
   });
 });
 
+/**
+ * A person answers from the question alone: what is being decided, and what
+ * each choice leads to, on the issue, the gate and the thread alike.
+ */
+describe('a question that says what it decides and what each choice leads to', () => {
+  const ask = (extra: Record<string, unknown> = {}) =>
+    gates.open({
+      taskId: 'task-1',
+      question: 'Where should the page go?',
+      options: ['the root', 'docs/'],
+      context: 'I found two web roots.',
+      decision: 'Where the site is served from.',
+      consequences: ['Served at /', 'Served at /docs'],
+      ...extra,
+    });
+
+  it('is said in the issue’s comment, kept on the gate and copied into its message', async () => {
+    store.task.leaseId = null;
+    await ask();
+
+    const body = String((client.comment.mock.calls[0] as unknown[])[2]);
+    expect(body).toContain('I found two web roots.\n\n**Deciding:** Where the site is served from.\n\n**Where should the page go?**');
+    expect(body).toContain('1. the root\n   - Served at /\n2. docs/\n   - Served at /docs');
+    // An answer on GitHub is read against the options alone.
+    expect(parseMarker(body)?.options).toEqual(['the root', 'docs/']);
+    expect(threads.createGate).toHaveBeenCalledWith(
+      expect.objectContaining({ decision: 'Where the site is served from.', consequences: ['Served at /', 'Served at /docs'] }),
+    );
+    expect(store.messages[0]).toMatchObject({
+      kind: 'gate',
+      payload: { gateId: 'gate-1', options: ['the root', 'docs/'], decision: 'Where the site is served from.', consequences: ['Served at /', 'Served at /docs'] },
+    });
+  });
+
+  it('is redacted with the rest of the question', async () => {
+    const token = `ghu_${'b'.repeat(36)}`;
+    store.task.leaseId = null;
+    await ask({ decision: `whether ${token} is rotated`, consequences: [`keep ${token}`, 'rotate it'] });
+
+    expect(String((client.comment.mock.calls[0] as unknown[])[2])).not.toContain(token);
+    expect(threads.createGate).toHaveBeenCalledWith(expect.objectContaining({ decision: 'whether ghu_*** is rotated', consequences: ['keep ghu_***', 'rotate it'] }));
+    expect(JSON.stringify(store.messages)).not.toContain(token);
+  });
+
+  it('shows no consequence that does not pair one to one with the options offered', async () => {
+    store.task.leaseId = null;
+    await ask({ consequences: ['Served at /'] });
+
+    const body = String((client.comment.mock.calls[0] as unknown[])[2]);
+    expect(body).toContain('1. the root\n2. docs/');
+    expect(body).toContain('**Deciding:** Where the site is served from.');
+    expect(threads.createGate).toHaveBeenCalledWith(expect.objectContaining({ decision: 'Where the site is served from.', consequences: [] }));
+    expect(store.messages[0]?.payload).not.toHaveProperty('consequences');
+  });
+
+  it('stores and says nothing new for a question that gives neither', async () => {
+    store.task.leaseId = null;
+    await gates.open({ taskId: 'task-1', question: 'Where should the page go?', options: ['the root', 'docs/'], context: 'I found two web roots.' });
+
+    const body = String((client.comment.mock.calls[0] as unknown[])[2]);
+    expect(body).not.toContain('Deciding');
+    expect(body).toContain('1. the root\n2. docs/\n\nReply with a number');
+    expect(threads.createGate).toHaveBeenCalledWith(expect.objectContaining({ decision: null, consequences: [] }));
+    expect(store.messages[0]?.payload).toEqual({ gateId: 'gate-1', options: ['the root', 'docs/'] });
+  });
+
+  it('drops both from a plan change, whose choices and context are the bridge’s own', async () => {
+    await gates.open({
+      taskId: 'task-1',
+      question: 'q',
+      options: ['Approve', 'Refuse'],
+      planChange: { paths: ['a.ts'], reason: 'r' },
+      decision: 'Something the session made up.',
+      consequences: ['it grants', 'it stops'],
+    });
+
+    const body = String((client.comment.mock.calls[0] as unknown[])[2]);
+    expect(body).not.toContain('Deciding');
+    expect(body).not.toContain('it grants');
+    expect(threads.createGate).toHaveBeenCalledWith(expect.objectContaining({ options: ['Approve', 'Refuse'], decision: null, consequences: [] }));
+    expect(store.messages[0]?.payload).not.toHaveProperty('decision');
+  });
+
+  it('is answered by the option, by number or its words, and a consequence’s words are the person’s own', async () => {
+    store.task.leaseId = null;
+    await ask();
+    await gates.answer({ gateId: 'gate-1', reply: '2', answeredBy: 'janedoe' });
+    expect(threads.answerGate).toHaveBeenLastCalledWith('gate-1', 'docs/', 'janedoe');
+
+    store.gate = { ...store.gate, state: 'open', answer: null };
+    await gates.answer({ gateId: 'gate-1', reply: 'Served at /docs', answeredBy: 'janedoe' });
+    expect(threads.answerGate).toHaveBeenLastCalledWith('gate-1', 'Served at /docs', 'janedoe');
+  });
+});
+
 describe('a question on an issue labelled openadlc:ignore', () => {
   const ask = () => gates.open({ taskId: 'task-1', question: 'What priority should #78 get?', options: ['p1', 'p2'] });
 
@@ -1404,6 +1499,25 @@ describe('answering a task stopped at its cost cap', () => {
     expect(answered).toEqual({ answer: 'go on, but only for $5', taskId: 'task-1' });
     expect(tasks.raiseCostCap).not.toHaveBeenCalled();
     expect(tasks.updateTaskState).not.toHaveBeenCalled();
+  });
+
+  it('drops the consequence of a choice it rewrote to the amount it grants', async () => {
+    vi.mocked(spendingLimits.effectiveTaskCap).mockResolvedValueOnce(5);
+    store.gate = null;
+
+    await gates.open({
+      taskId: 'task-1',
+      question: 'Stopped at the $5 cap on openadlc#78 after $5.10. How should I proceed?',
+      options: ['continue for another $1000', 'hand to a person', 'abandon this task'],
+      consequences: ['Spends up to $1000 more', 'A person takes over', 'The task stops'],
+    });
+
+    expect(threads.createGate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        options: ['continue for another $5', 'hand to a person', 'abandon this task'],
+        consequences: ['', 'A person takes over', 'The task stops'],
+      }),
+    );
   });
 
   it('offers and adds the repository cap when that is lower than the global one', async () => {

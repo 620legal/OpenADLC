@@ -554,7 +554,8 @@ export interface AttentionItem {
   detail: string;
   actions: AttentionAction[];
   /** A question's gate and its choices, the likely answer first; none for an open question. Absent from an older bridge. */
-  question?: { gateId: string; options: string[] };
+  /** With what is being decided, and what each option leads to in their order, when the bot said them. */
+  question?: { gateId: string; options: string[]; decision?: string; consequences?: string[] };
   /** What a question is about: the bot's message just before it. Absent from an older bridge. */
   context?: string;
   /** A failing check's: `blocking` stops work, `warning` lets it go on. */
@@ -731,6 +732,9 @@ export interface Gate {
   options: string[];
   addressedTo: string | null;
   githubCommentUrl: string | null;
+  /** What is being decided, and what each option leads to in their order. Absent from an older bridge. */
+  decision?: string | null;
+  consequences?: string[];
 }
 
 export interface ThreadView {

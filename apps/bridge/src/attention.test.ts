@@ -803,6 +803,33 @@ describe('what needs a person', () => {
 
     expect(item).toMatchObject({ kind: 'question', detail: 'Which window?', question: { gateId: 'gate-3', options: ['tonight', 'tomorrow'] } });
     expect(item?.actions.map((action) => action.kind)).not.toContain('approve');
+    // A gate that says neither carries neither.
+    expect(item?.question).toEqual({ gateId: 'gate-3', options: ['tonight', 'tomorrow'] });
+  });
+
+  it('carries what a question decides and what each choice leads to, only when it said them and they pair with its choices', async () => {
+    const { attentionItems } = await load();
+    const deploying = task({ id: 'task-ship', botId: 'bot-sre', kind: 'deploy', subjectRef: 'openadlc-testbed#31', state: 'paused' });
+    const asked = (extra: { decision?: string | null; consequences?: string[] }) =>
+      attentionItems({
+        now: NOW,
+        gates: [{ id: 'gate-3', taskId: 'task-ship', question: 'Which window?', options: ['tonight', 'tomorrow'], githubCommentUrl: null, createdAt: minutesAgo(14), ...extra }],
+        tasks: [deploying],
+        bots: BOTS,
+        repos: REPOS,
+        issues: ISSUES,
+        requests: [],
+        stallEvents: [],
+      })[0]?.question;
+
+    expect(asked({ decision: 'When the release goes out.', consequences: ['Ships at 22:00', 'Ships at 09:00'] })).toEqual({
+      gateId: 'gate-3',
+      options: ['tonight', 'tomorrow'],
+      decision: 'When the release goes out.',
+      consequences: ['Ships at 22:00', 'Ships at 09:00'],
+    });
+    expect(asked({ decision: null, consequences: [] })).toEqual({ gateId: 'gate-3', options: ['tonight', 'tomorrow'] });
+    expect(asked({ decision: 'When.', consequences: ['Ships at 22:00'] })).toEqual({ gateId: 'gate-3', options: ['tonight', 'tomorrow'], decision: 'When.' });
   });
 
   it('says a failed task’s reason in a sentence, and leaves out one that was tried again', async () => {

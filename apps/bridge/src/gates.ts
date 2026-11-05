@@ -306,6 +306,13 @@ export class Gates {
      * is normalised here, and it grants nothing until a person approves it.
      */
     planChange?: { paths?: unknown; reason?: unknown } | null;
+    /**
+     * What is being decided, and what each option leads to, in their order:
+     * shown with the question so it can be answered from itself, and never
+     * matched as an answer.
+     */
+    decision?: string | null;
+    consequences?: string[];
   }): Promise<{ gateId: string; commentUrl: string | null }> {
     // A question can quote a failing command, token and all, and from here it
     // goes to the issue, the notifier, the gate row and the thread. Redacted
@@ -316,6 +323,8 @@ export class Gates {
       question: redactSecrets(input.question),
       options: input.options.map((option) => redactSecrets(option)),
       context: input.context == null ? input.context : redactSecrets(input.context),
+      decision: input.decision == null ? input.decision : redactSecrets(input.decision),
+      consequences: (input.consequences ?? []).map((consequence) => redactSecrets(consequence)),
     };
     const task = await tasks.getTask(input.taskId);
     if (!task) throw new Error(`unknown task ${input.taskId}`);
@@ -338,6 +347,18 @@ export class Gates {
     // own number is text, and is not what is granted.
     const step = await spendingLimits.effectiveTaskCap(task.repoId, this.perTaskCapUsd);
     const options = request ? [PLAN_CHANGE_APPROVE, PLAN_CHANGE_REFUSE] : this.capOffer(input.options, step);
+    // A plan change's choices and context are the bridge's own, so nothing the
+    // session said about them is shown. Otherwise a consequence is shown only
+    // beside the option it was written for: a list of any other length than
+    // the options offered would pair a choice with another one's outcome. An
+    // option `capOffer` rewrote loses its consequence: the session wrote it for
+    // its own amount, and the person would read that beside the one granted.
+    const decision = request ? '' : (input.decision?.trim() ?? '');
+    const said =
+      request || input.consequences?.length !== options.length
+        ? []
+        : input.consequences.map((consequence, index) => (options[index] === input.options[index] ? consequence.trim() : ''));
+    const consequences = said.some(Boolean) ? said : [];
     // A standing approval on the work settles the request as it is asked,
     // unless a path is under Human review: that one is a person's, always.
     // One that cannot be read is not on, and the person is asked as before.
@@ -393,6 +414,8 @@ export class Gates {
           question: input.question,
           options,
           context,
+          decision,
+          consequences,
           ...(addressedTo ? { addressedTo } : {}),
         });
         // `needs-human` is also how a person holds a pull request, and
@@ -430,6 +453,8 @@ export class Gates {
       addressedTo,
       githubCommentUrl: commentUrl,
       addedNeedsHuman,
+      decision: decision || null,
+      consequences,
     });
 
     // A gate can stay open for a day. Expiring the lease under it would hand
@@ -458,6 +483,10 @@ export class Gates {
       payload: {
         options,
         gateId: gate.id,
+        // A copy for the thread's timeline, which reads the question from
+        // this message; the gate row is the record.
+        ...(decision ? { decision } : {}),
+        ...(consequences.length > 0 ? { consequences } : {}),
         ...(request ? { planChange: request } : {}),
         // What kept a standing approval from settling it, for the card to say.
         ...(standing && !standing.covers

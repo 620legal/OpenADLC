@@ -535,6 +535,9 @@ async function main(): Promise<void> {
             // For the comment on an issue, which is all a person reading it on
             // GitHub sees of the thread.
             ...(asking.context ? { context: asking.context } : {}),
+            // So the question can be answered from itself, without the thread.
+            ...(asking.decision ? { decision: asking.decision } : {}),
+            ...(asking.consequences.length > 0 ? { consequences: asking.consequences } : {}),
             ...(asking.addressedTo ? { addressedTo: asking.addressedTo } : {}),
             ...(asking.planChange ? { planChange: asking.planChange } : {}),
           });

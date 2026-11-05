@@ -350,8 +350,10 @@ export interface AttentionItem {
    * A question's gate and its choices, the likely answer first, which the
    * console offers as buttons that answer it from the card. No choices is an
    * open question, answered in the person's own words in the bot's thread.
+   * With what is being decided, said above the question, and what each
+   * choice leads to, in the order of `options`, when the bot said them.
    */
-  question?: { gateId: string; options: string[] };
+  question?: { gateId: string; options: string[]; decision?: string; consequences?: string[] };
   /**
    * What a question is about: the bot's message just before it, such as the
    * issue intake drafted before "Here's what I'll file. OK?". The card asked
@@ -466,7 +468,7 @@ interface RequestRow {
   updatedAt?: string;
 }
 
-type GateRow = Pick<Gate, 'id' | 'taskId' | 'question' | 'options' | 'githubCommentUrl' | 'createdAt' | 'context'>;
+type GateRow = Pick<Gate, 'id' | 'taskId' | 'question' | 'options' | 'githubCommentUrl' | 'createdAt' | 'context' | 'decision' | 'consequences'>;
 
 /** What a plan-change card says about its request: whether it waits on a lease, the designer's part, a standing approval that could not cover it. */
 type PlanChangeFacts = Pick<leases.PlanChangeRecord, 'paths' | 'held' | 'designer' | 'standing'>;
@@ -1241,6 +1243,8 @@ export function attentionItems(given: AttentionInput): AttentionItem[] {
     if (gate.taskId) actions.push({ kind: 'stop_task', label: 'Stop', taskId: gate.taskId });
     if (plan?.off) actions.push(plan.off);
     const context = [...(plan?.notes ?? []), gate.context?.trim() ?? ''].filter(Boolean).join('\n\n');
+    const decision = gate.decision?.trim() ?? '';
+    const consequences = gate.consequences?.length === gate.options.length && gate.consequences.some(Boolean) ? gate.consequences : [];
     items.push({
       id: `gate:${gate.id}`,
       kind: 'question',
@@ -1253,7 +1257,12 @@ export function attentionItems(given: AttentionInput): AttentionItem[] {
           `${failed.failed}${/[.!?]$/.test(failed.failed ?? '') ? '' : '.'} Approve again to try once more, or Refuse to stop the task.`
         : gate.question,
       actions,
-      question: { gateId: gate.id, options: gate.options },
+      question: {
+        gateId: gate.id,
+        options: gate.options,
+        ...(decision ? { decision } : {}),
+        ...(consequences.length > 0 ? { consequences } : {}),
+      },
       ...(context ? { context } : {}),
     });
   }

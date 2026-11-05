@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import type { CrewMember, ThreadTopic } from '@/lib/api';
 import { RoleProvider } from './app-header';
 import { RepoColorsProvider } from './repo-badge';
-import { QuestionCard, ShowList, ThreadPanel } from './thread-panel';
+import { OpenQuestions, QuestionCard, ShowList, ThreadPanel } from './thread-panel';
 
 const NOW = '2026-09-24T10:53:00.000Z';
 
@@ -331,5 +331,109 @@ describe('the question a bot is waiting on', () => {
       />,
     );
     expect(html).toMatch(/<a href="https:\/\/github.com\/janedoe\/openadlc-testbed\/issues\/15#issuecomment-1"[^>]*>Also asked on GitHub/);
+  });
+
+  const DECISION = 'Where the site is served from, which the deploy reads.';
+
+  it('says what is being decided above the question, and what each choice leads to under it', () => {
+    const html = renderToStaticMarkup(
+      <QuestionCard
+        question={QUESTION}
+        options={CHOICES}
+        decision={DECISION}
+        consequences={['The page is served at /', '']}
+        githubUrl={null}
+        pending={false}
+        onAnswer={() => undefined}
+        onOwnWords={() => undefined}
+      />,
+    );
+    expect(html).toMatch(/<p data-decision[^>]*>Where the site is served from, which the deploy reads\.<\/p>/);
+    expect(html.indexOf('data-decision')).toBeLessThan(html.indexOf(QUESTION));
+    expect(html).toMatch(/<span>index\.html at the repository root<\/span><span data-consequence[^>]*>The page is served at \/<\/span>/);
+    expect(html).toMatch(/<button type="button" class="[^"]*">A different path<\/button>/);
+  });
+
+  it('is drawn as before without them, or with consequences that do not pair with its choices', () => {
+    const before = card(CHOICES);
+    const odd = renderToStaticMarkup(
+      <QuestionCard
+        question={QUESTION}
+        options={CHOICES}
+        decision=""
+        consequences={['only one']}
+        githubUrl={null}
+        pending={false}
+        onAnswer={() => undefined}
+        onOwnWords={() => undefined}
+      />,
+    ).replace(/<!-- -->/g, '');
+    expect(odd).toBe(before);
+    expect(before).not.toContain('data-decision');
+  });
+
+  it('answers with the choice’s own words, never its consequence', () => {
+    const answered: string[] = [];
+    const buttons = buttonsOf(
+      QuestionCard({
+        question: QUESTION,
+        options: CHOICES,
+        consequences: ['Served at /', 'Served elsewhere'],
+        githubUrl: null,
+        pending: false,
+        onAnswer: (answer) => answered.push(answer),
+        onOwnWords: () => undefined,
+      }),
+    );
+    buttons.find((button) => textOf(button) === 'A different pathServed elsewhere')?.props.onClick?.();
+    expect(answered).toEqual(['A different path']);
+  });
+});
+
+/** The questions at the top of a thread, each with what it decides and what its choices lead to. */
+describe('the questions a bot has open', () => {
+  const gate = (extra: object) => ({
+    id: 'gate-9',
+    question: 'Where should the page go?',
+    options: ['the root', 'docs/'],
+    addressedTo: null,
+    githubCommentUrl: null,
+    subjectRef: 'openadlc-testbed#15',
+    ...extra,
+  });
+  const list = (question: ReturnType<typeof gate>, onAnswer: (gateId: string, text: string) => void = () => undefined) => (
+    <OpenQuestions questions={[question]} label={() => '#15'} selected="openadlc-testbed#15" pending={false} onAnswer={onAnswer} onShow={() => undefined} />
+  );
+
+  it('says the decision above the question and each consequence under its choice', () => {
+    const html = renderToStaticMarkup(list(gate({ decision: 'Where the site is served from.', consequences: ['Served at /', 'Served at /docs'] })));
+    expect(html).toMatch(/<p data-decision[^>]*>Where the site is served from\.<\/p>/);
+    expect(html.indexOf('data-decision')).toBeLessThan(html.indexOf('data-question-text'));
+    expect(html).toMatch(/<span>the root<\/span><span data-consequence[^>]*>Served at \/<\/span>/);
+    expect(html).toMatch(/<span>docs\/<\/span><span data-consequence[^>]*>Served at \/docs<\/span>/);
+  });
+
+  it('is drawn as before for a gate without them, an older bridge’s or one whose list does not pair', () => {
+    const before = renderToStaticMarkup(list(gate({})));
+    expect(before).not.toContain('data-decision');
+    expect(before).not.toContain('data-consequence');
+    expect(renderToStaticMarkup(list(gate({ decision: null, consequences: [] })))).toBe(before);
+    expect(renderToStaticMarkup(list(gate({ consequences: ['only one'] })))).toBe(before);
+  });
+
+  it('answers with the option, never its consequence', () => {
+    const answered: [string, string][] = [];
+    const buttons = buttonsOf(
+      OpenQuestions({
+        questions: [gate({ consequences: ['Served at /', 'Served at /docs'] })],
+        label: () => '#15',
+        selected: 'openadlc-testbed#15',
+        pending: false,
+        onAnswer: (gateId, text) => answered.push([gateId, text]),
+        onShow: () => undefined,
+      }),
+    );
+    buttons.find((button) => textOf(button) === 'docs/Served at /docs')?.props.onClick?.();
+    expect(answered).toEqual([['gate-9', 'docs/']]);
   });
 });

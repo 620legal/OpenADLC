@@ -46,6 +46,8 @@ interface GateRow {
   github_comment_url: string | null;
   created_at: Date;
   context?: string | null;
+  decision?: string | null;
+  consequences?: string[];
   added_needs_human?: boolean;
   held?: unknown;
 }
@@ -90,6 +92,8 @@ function toGate(row: GateRow): GateRecord {
     // rather than failing every gate it reads.
     ...(row.created_at ? { createdAt: row.created_at.toISOString() } : {}),
     ...(row.context !== undefined ? { context: row.context } : {}),
+    ...(row.decision !== undefined ? { decision: row.decision } : {}),
+    ...(row.consequences !== undefined ? { consequences: row.consequences } : {}),
     ...(row.added_needs_human !== undefined ? { addedNeedsHuman: row.added_needs_human } : {}),
     ...(row.held !== undefined ? { held: toHold(row.held) } : {}),
   };
@@ -239,12 +243,15 @@ export async function createGate(input: {
   githubCommentUrl?: string | null;
   /** Whether opening it put `needs-human` on its subject; a person's hold it found there is not its own. */
   addedNeedsHuman?: boolean;
+  /** What is being decided, and what each option leads to, in their order: shown with the question, never matched as an answer. */
+  decision?: string | null;
+  consequences?: string[];
 }): Promise<GateRecord> {
   const row = await queryOne<GateRow>(
-    `insert into gates (task_id, thread_id, question, options, addressed_to, github_comment_url, added_needs_human)
-     values ($1,$2,$3,$4,$5,$6,$7)
+    `insert into gates (task_id, thread_id, question, options, addressed_to, github_comment_url, added_needs_human, decision, consequences)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9)
      returning id, task_id, thread_id, question, options, state, answer, answered_by, answered_at, addressed_to, github_comment_url, created_at,
-               added_needs_human`,
+               decision, consequences, added_needs_human`,
     [
       input.taskId,
       input.threadId,
@@ -255,6 +262,8 @@ export async function createGate(input: {
       input.addressedTo ?? null,
       input.githubCommentUrl ?? null,
       input.addedNeedsHuman ?? true,
+      input.decision ? redactSecrets(input.decision) : null,
+      (input.consequences ?? []).map((consequence) => redactSecrets(consequence)),
     ],
   );
   if (!row) throw new Error('failed to create gate');
@@ -281,7 +290,7 @@ export async function listOpenGates(): Promise<GateRecord[]> {
     // With what the card shows the question is about, and the hold its own
     // message carries (`leases.holdPlanChange`).
     `select g.id, g.task_id, g.thread_id, g.question, g.options, g.state, g.answer, g.answered_by, g.answered_at,
-            g.addressed_to, g.github_comment_url, g.created_at,
+            g.addressed_to, g.github_comment_url, g.created_at, g.decision, g.consequences,
             (select q.payload->'held' from messages q
               where q.thread_id = g.thread_id and q.kind = 'gate' and q.payload->>'gateId' = g.id::text
               order by q.at desc limit 1) as held,
@@ -300,7 +309,7 @@ export async function listOpenGates(): Promise<GateRecord[]> {
 export async function listGatesForSubject(subjectRef: string): Promise<Gate[]> {
   const rows = await query<GateRow>(
     `select g.id, g.task_id, g.thread_id, g.question, g.options, g.state, g.answer, g.answered_by, g.answered_at,
-            g.addressed_to, g.github_comment_url, g.created_at,
+            g.addressed_to, g.github_comment_url, g.created_at, g.decision, g.consequences,
             ${GATE_CONTEXT}
        from gates g
        join tasks t on t.id = g.task_id
@@ -318,7 +327,7 @@ export async function listGatesForSubject(subjectRef: string): Promise<Gate[]> {
 export async function listOpenGatesOnSubject(subjectRef: string): Promise<GateRecord[]> {
   const rows = await query<GateRow>(
     `select g.id, g.task_id, g.thread_id, g.question, g.options, g.state, g.answer, g.answered_by, g.answered_at,
-            g.addressed_to, g.github_comment_url, g.created_at, g.added_needs_human
+            g.addressed_to, g.github_comment_url, g.created_at, g.decision, g.consequences, g.added_needs_human
        from gates g
        join tasks t on t.id = g.task_id
       where t.subject_ref = $1 and g.state = 'open'
@@ -340,7 +349,7 @@ export async function listGatesForTasks(taskIds: readonly string[]): Promise<Gat
     // With whether each put `needs-human` on: a Stop leaves a label one of
     // its task's questions recorded to the rule that question's answer keeps.
     `select id, task_id, thread_id, question, options, state, answer, answered_by, answered_at, addressed_to, github_comment_url, created_at,
-            added_needs_human
+            decision, consequences, added_needs_human
        from gates
       where task_id = any($1::uuid[])
       order by created_at`,
@@ -352,7 +361,7 @@ export async function listGatesForTasks(taskIds: readonly string[]): Promise<Gat
 export async function getGate(id: string): Promise<GateRecord | null> {
   const row = await queryOne<GateRow>(
     `select id, task_id, thread_id, question, options, state, answer, answered_by, answered_at, addressed_to, github_comment_url, created_at,
-            added_needs_human
+            decision, consequences, added_needs_human
      from gates where id = $1`,
     [id],
   );
@@ -363,7 +372,8 @@ export async function answerGate(id: string, answer: string, answeredBy: string)
   const row = await queryOne<GateRow>(
     `update gates set state = 'answered', answer = $2, answered_by = $3, answered_at = now(), updated_at = now()
      where id = $1 and state = 'open'
-     returning id, task_id, thread_id, question, options, state, answer, answered_by, answered_at, addressed_to, github_comment_url, created_at`,
+     returning id, task_id, thread_id, question, options, state, answer, answered_by, answered_at, addressed_to, github_comment_url, created_at,
+               decision, consequences`,
     [id, answer, answeredBy],
   );
   return row ? toGate(row) : null;
@@ -410,7 +420,7 @@ export type RepoGate = Gate & { subjectRef: string | null };
 export async function listOpenGatesInRepo(repoId: string): Promise<RepoGate[]> {
   const rows = await query<GateRow & { subject_ref: string | null }>(
     `select g.id, g.task_id, g.thread_id, g.question, g.options, g.state, g.answer, g.answered_by, g.answered_at,
-            g.addressed_to, g.github_comment_url, g.created_at, coalesce(t.subject_ref, th.subject_ref) as subject_ref
+            g.addressed_to, g.github_comment_url, g.created_at, g.decision, g.consequences, coalesce(t.subject_ref, th.subject_ref) as subject_ref
        from gates g
        left join tasks t on t.id = g.task_id
        left join threads th on th.id = g.thread_id

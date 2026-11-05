@@ -32,6 +32,9 @@ export interface Marker {
   options?: string[];
   /** A `question` no set of choices could cover, so it is answered in the person's own words. */
   open?: boolean;
+  /** A `question`'s statement of what is being decided, and what each of its `options` leads to, in their order. */
+  decision?: string;
+  consequences?: string[];
   addressedTo?: string;
   reason?: string;
   /** On `send_back`: the stage the work goes back to, and on the bridge's record, the stage it left. */
@@ -295,6 +298,14 @@ export interface AskedQuestion {
   ignored: number;
   /** Set when the message asks to widen the task's paths rather than a question of its own. */
   planChange: PlanChangeRequest | null;
+  /** What is being decided and why it needs a person, shown above the question. Empty when the marker gives none. */
+  decision: string;
+  /**
+   * What each choice leads to, one per option and in its order (`''` for a
+   * choice the bot said nothing about), or none. Shown only, never matched as
+   * an answer.
+   */
+  consequences: string[];
 }
 
 /**
@@ -340,6 +351,8 @@ export function parseQuestion(body: string): AskedQuestion | null {
         addressedTo: addressedTo || null,
         ignored,
         planChange: null,
+        decision: '',
+        consequences: [],
       };
     }
     return {
@@ -350,11 +363,14 @@ export function parseQuestion(body: string): AskedQuestion | null {
       addressedTo: addressedTo || null,
       ignored,
       planChange: { paths, reason },
+      decision: '',
+      consequences: [],
     };
   }
 
   const asked = typeof marker.question === 'string' ? marker.question.trim() : '';
   const options = markerOptions(marker);
+  const decision = typeof marker.decision === 'string' ? marker.decision.trim() : '';
 
   return {
     question: asked || said,
@@ -364,7 +380,35 @@ export function parseQuestion(body: string): AskedQuestion | null {
     addressedTo: addressedTo || null,
     ignored,
     planChange: null,
+    decision,
+    consequences: markerConsequences(marker),
   };
+}
+
+/**
+ * The consequence of each choice a marker offers, paired with `markerOptions`.
+ *
+ * The list is matched against the options as the marker wrote them, before an
+ * empty or repeated one is dropped, and goes through the same filter, so a
+ * dropped option takes its consequence with it. A list of another length, or
+ * with an entry that is not a string, is none at all: shifted by one, every
+ * choice would be shown with the next one's consequence.
+ */
+function markerConsequences(marker: Marker): string[] {
+  const written = marker.options;
+  const said = marker.consequences;
+  if (!Array.isArray(written) || !Array.isArray(said) || said.length !== written.length) return [];
+  if (!said.every((consequence) => typeof consequence === 'string')) return [];
+  const seen = new Set<string>();
+  const kept: string[] = [];
+  written.forEach((option, index) => {
+    if (typeof option !== 'string') return;
+    const key = option.trim().toLowerCase();
+    if (key.length === 0 || seen.has(key)) return;
+    seen.add(key);
+    kept.push((said[index] as string).trim());
+  });
+  return kept.some(Boolean) ? kept : [];
 }
 
 /** A question of one line, as a question asked in its marker is, stands out; one asked the older way is left as it was written. */
@@ -389,14 +433,26 @@ export function renderGateComment(input: {
   /** What the bot found and why it asks, said before the question. */
   context?: string | null;
   addressedTo?: string;
+  /** What is being decided, said between the context and the question. */
+  decision?: string | null;
+  /** What each choice leads to, in the order of `options`; shown only when there is one per option. */
+  consequences?: readonly string[];
 }): string {
-  const options = input.options.map((option, index) => `${index + 1}. ${option}`).join('\n');
+  const consequences = input.consequences?.length === input.options.length ? input.consequences : [];
+  const options = input.options
+    .map((option, index) => {
+      const consequence = consequences[index]?.trim();
+      return consequence ? `${index + 1}. ${option}\n   - ${consequence}` : `${index + 1}. ${option}`;
+    })
+    .join('\n');
   const to = input.addressedTo ? ` @${input.addressedTo}` : '';
   const context = input.context?.trim();
+  const decision = input.decision?.trim();
   return [
     `**${input.bot} needs a decision.**${to}`,
     '',
     ...(context ? [context, ''] : []),
+    ...(decision ? [`**Deciding:** ${decision}`, ''] : []),
     emphasised(input.question),
     '',
     ...(options ? [options, ''] : []),

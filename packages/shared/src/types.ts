@@ -265,6 +265,14 @@ export interface Gate {
    * `intake.md` show; absent elsewhere.
    */
   context?: string | null;
+  /**
+   * What is being decided and why it needs a person, shown above the
+   * question, and what each choice leads to, one per option in their order.
+   * Display only: an answer resolves against `options` alone. Absent from an
+   * older bridge.
+   */
+  decision?: string | null;
+  consequences?: string[];
 }
 
 export interface Message {

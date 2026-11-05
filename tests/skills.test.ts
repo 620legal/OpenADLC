@@ -323,7 +323,23 @@ describe('a skill that can ask a person asks one question at a time', () => {
       expect(asked?.question).toBe(marker.question);
       expect(asked?.context).toBe('What I found.');
       expect(asked?.open).toBe(marker.open === true);
+      // Answerable from the question alone: what it decides, and with choices,
+      // what each leads to, paired one to one with them.
+      expect(asked?.decision, `${skill}: ${JSON.stringify(marker)} gives no decision`).not.toBe('');
+      if (asked && asked.options.length > 0) {
+        expect(asked.consequences, `${skill}: ${JSON.stringify(marker)} gives no consequence per choice`).toHaveLength(asked.options.length);
+        for (const consequence of asked.consequences) expect(consequence, `${skill}: ${JSON.stringify(marker)}`).not.toBe('');
+      }
     }
+  });
+
+  it.each(asking)('%s asks for a decision with every question and a consequence for every choice', (skill) => {
+    const prose = read(skill).replace(/\s+/g, ' ');
+
+    expect(prose).toContain(
+      'Give `decision` — one or two sentences: what is being decided and why it needs a person — with every question, and `consequences` — one short line per choice, in the order of `options`, saying what happens if the person picks it — with every question that has choices.',
+    );
+    expect(prose).not.toContain('Keep it short; the question itself goes in the marker.');
   });
 
   it('is what the intake playbook says too', () => {

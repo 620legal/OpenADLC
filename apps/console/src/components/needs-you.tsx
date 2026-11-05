@@ -385,6 +385,11 @@ function NeedsCard({
   const { subject } = item;
   const gateId = item.kind === 'question' ? (item.question?.gateId ?? null) : null;
   const choices = gateId ? (item.question?.options ?? []) : [];
+  // What is being decided, above the question, and what each choice leads
+  // to, under it: only when there is one for every choice, so none reads
+  // with another's.
+  const decision = gateId ? (item.question?.decision?.trim() ?? '') : '';
+  const consequences = gateId && item.question?.consequences?.length === choices.length ? item.question.consequences : [];
   // Beside a question's choices, the way to say something else goes with them,
   // set apart, rather than below them where it read as one more choice.
   const somethingElse = choices.length > 0 ? item.actions.find((action) => action.kind === 'answer') : undefined;
@@ -523,6 +528,11 @@ function NeedsCard({
             <span aria-hidden className="pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-t from-surface to-transparent" />
           </button>
         )}
+        {decision && (
+          <p data-decision className="line-clamp-3 text-[12px] leading-normal text-soft">
+            {decision}
+          </p>
+        )}
         {item.detail && (
           <p
             data-clamp="detail"
@@ -557,7 +567,14 @@ function NeedsCard({
           </p>
         )}
         {gateId && choices.length > 0 && (
-          <QuestionChoices options={choices.slice(0, CHOICES_ON_CARD)} pending={pending} chosen={chosen} onChoose={answer} numbered={selected}>
+          <QuestionChoices
+            options={choices.slice(0, CHOICES_ON_CARD)}
+            consequences={consequences.slice(0, CHOICES_ON_CARD)}
+            pending={pending}
+            chosen={chosen}
+            onChoose={answer}
+            numbered={selected}
+          >
             {somethingElseButton(onOpenBot)}
           </QuestionChoices>
         )}
@@ -626,6 +643,11 @@ function NeedsCard({
                 <Markdown text={item.context} />
               </div>
             )}
+            {decision && (
+              <p data-decision className="text-[12.5px] leading-normal text-soft">
+                {decision}
+              </p>
+            )}
             {item.detail && (
               <div className={cn('text-[12.5px] leading-normal', item.kind === 'question' ? 'rounded-md bg-surface px-2.5 py-2 text-body' : 'text-muted')}>
                 <Markdown text={item.detail} className={cn(item.kind === 'question' && standsOut(item.detail) && 'font-semibold')} />
@@ -642,7 +664,7 @@ function NeedsCard({
               </details>
             )}
             {gateId && choices.length > 0 && (
-              <QuestionChoices options={choices} pending={pending} chosen={chosen} onChoose={answer}>
+              <QuestionChoices options={choices} consequences={consequences} pending={pending} chosen={chosen} onChoose={answer}>
                 {somethingElseButton(openFromSheet)}
               </QuestionChoices>
             )}
@@ -794,9 +816,12 @@ function MemberList({
  * A question's choices on its card, in the order the bot gave them, the likely
  * answer first. Pressing one answers the question from here, through the
  * gate-answer route everything else uses, and the card goes once it has.
+ * What a choice leads to is said under it, and answers nothing: the button
+ * still answers with the choice's own words.
  */
 function QuestionChoices({
   options,
+  consequences = [],
   pending,
   chosen,
   onChoose,
@@ -804,6 +829,8 @@ function QuestionChoices({
   children,
 }: {
   options: readonly string[];
+  /** What each choice leads to, in the same order; none, or one per choice. */
+  consequences?: readonly string[];
   pending: boolean;
   /** The choice being sent, while it is. */
   chosen: string | null;
@@ -817,6 +844,7 @@ function QuestionChoices({
     <div role="group" aria-label="Choices" className="flex flex-wrap gap-1.5">
       {options.map((option, index) => {
         const sending = pending && chosen === option;
+        const consequence = consequences.length === options.length ? consequences[index]?.trim() : '';
         return (
           <button
             key={option}
@@ -834,7 +862,16 @@ function QuestionChoices({
                 {index + 1}
               </kbd>
             )}
-            {option}
+            {consequence ? (
+              <span className="flex flex-col gap-0.5">
+                <span>{option}</span>
+                <span data-consequence className="text-[11.5px] leading-snug text-muted">
+                  {consequence}
+                </span>
+              </span>
+            ) : (
+              option
+            )}
           </button>
         );
       })}

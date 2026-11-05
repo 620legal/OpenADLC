@@ -911,12 +911,22 @@ export function registerInternalApi(
       addressedTo?: string;
       /** A task asking to widen its paths, which `Gates.open` reads as data. */
       planChange?: { paths?: unknown; reason?: unknown };
+      decision?: unknown;
+      consequences?: unknown;
     }>();
+    // A list with one entry that is not a string is dropped whole: filtering
+    // the entry out would pair every later choice with the next one's consequence.
+    const consequences =
+      Array.isArray(input.consequences) && input.consequences.every((entry) => typeof entry === 'string')
+        ? (input.consequences as string[])
+        : [];
     return deps.gates.open({
       taskId: params.id ?? '',
       question: input.question,
       options: input.options ?? [],
       context: typeof input.context === 'string' ? input.context : null,
+      decision: typeof input.decision === 'string' ? input.decision : null,
+      consequences,
       addressedTo: input.addressedTo ?? null,
       planChange: input.planChange ?? null,
     });
