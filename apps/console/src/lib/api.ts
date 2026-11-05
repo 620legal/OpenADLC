@@ -1283,6 +1283,24 @@ export interface EgressHostsView {
   reason: string | null;
 }
 
+/** One person role as Settings → Roles shows it: Product, Legal and Engineering are `fixed`. */
+export interface PersonRole {
+  id: string;
+  name: string;
+  fixed: boolean;
+  members: string[];
+}
+
+/**
+ * Settings → Roles, as the bridge answers it (`GET /v1/people-roles`, an
+ * admin's): who among the install's people holds each role, and the people a
+ * role may be given. See the bridge's `people-roles-routes.ts`.
+ */
+export interface PersonRolesView {
+  roles: PersonRole[];
+  humans: string[];
+}
+
 /** A host as Settings → Hosts shows it (`GET /v1/hosts`, `hostsView` in the bridge). */
 export interface HostRow {
   id: string;
@@ -1340,6 +1358,7 @@ export const api = {
   selfUpdate: () => get<SelfUpdateView>('/v1/self-update', { signal: AbortSignal.timeout(SECTION_READ_MS) }),
   backup: () => get<BackupInventory>('/v1/backup', { signal: AbortSignal.timeout(SECTION_READ_MS) }),
   egressHosts: () => get<EgressHostsView>('/v1/egress/hosts', { signal: AbortSignal.timeout(SECTION_READ_MS) }),
+  peopleRoles: () => get<PersonRolesView>('/v1/people-roles', { signal: AbortSignal.timeout(SECTION_READ_MS) }),
   users: () => get<{ users: ConsoleUser[] }>('/v1/users').then((body) => body.users),
   /** How long the bridge was away, and what the start after cost, until a person dismisses it; see `bridge-gap.ts` in the bridge. */
   bridgeGap: () => get<{ gap: BridgeGapReport | null }>('/v1/bridge/gap').then((body) => body.gap ?? null),

@@ -1,0 +1,266 @@
+/**
+ * Person roles: named groups of the install's people (Product, Legal,
+ * Engineering, and any an admin adds) that a Needs-you item may later be
+ * routed to. Not an access role (`admin`/`user`) and not a crew seat's role,
+ * which is why the code never calls one a bare `role`.
+ *
+ * Stored as one install setting, `personRoles`, written only by
+ * `PUT /v1/people-roles` and by the prune when `humans` is saved (ADR 0032).
+ * The fixed roles' names live here and are never stored, so no write can
+ * rename one; a custom role's id is `pr_` and 8 hex characters, assigned when
+ * it is added and kept across renames, because that id is what routing will
+ * refer to.
+ */
+
+export interface FixedPersonRole {
+  id: string;
+  name: string;
+}
+
+export const FIXED_PERSON_ROLES: readonly FixedPersonRole[] = [
+  { id: 'product', name: 'Product' },
+  { id: 'legal', name: 'Legal' },
+  { id: 'engineering', name: 'Engineering' },
+];
+
+export const MAX_PERSON_ROLE_NAME = 40;
+export const MAX_CUSTOM_PERSON_ROLES = 50;
+
+/** One role as stored: a fixed role has no name, a custom one always has one. */
+export interface StoredPersonRole {
+  id: string;
+  name?: string;
+  members: string[];
+}
+
+export interface StoredPersonRoles {
+  roles: StoredPersonRole[];
+}
+
+/** One role as the API and the console see it. */
+export interface PersonRole {
+  id: string;
+  name: string;
+  fixed: boolean;
+  members: string[];
+}
+
+/** What `GET` and `PUT /v1/people-roles` answer: the roles, and the people the console may offer. */
+export interface PersonRolesView {
+  roles: PersonRole[];
+  humans: string[];
+}
+
+const CUSTOM_ID = /^pr_[0-9a-f]{8}$/;
+
+function fixedRole(id: string): FixedPersonRole | undefined {
+  return FIXED_PERSON_ROLES.find((role) => role.id === id);
+}
+
+function stringList(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : [];
+}
+
+/**
+ * The stored setting, read tolerantly: a missing row or one that is not JSON
+ * reads as the three fixed roles with no one in them, and an entry that is
+ * neither a fixed role nor a well-formed custom one is dropped. A read never
+ * throws, so a bad row cannot take Settings down with it.
+ */
+export function parsePersonRoles(raw: string | null): StoredPersonRoles {
+  let parsed: unknown = null;
+  if (raw) {
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      parsed = null;
+    }
+  }
+  const entries = parsed && typeof parsed === 'object' && Array.isArray((parsed as { roles?: unknown }).roles) ? ((parsed as { roles: unknown[] }).roles) : [];
+  const fixed = new Map<string, string[]>();
+  const custom: StoredPersonRole[] = [];
+  for (const entry of entries) {
+    if (!entry || typeof entry !== 'object') continue;
+    const { id, name, members } = entry as Record<string, unknown>;
+    if (typeof id !== 'string') continue;
+    if (fixedRole(id)) {
+      if (!fixed.has(id)) fixed.set(id, stringList(members));
+      continue;
+    }
+    if (!CUSTOM_ID.test(id) || typeof name !== 'string' || !name.trim() || custom.some((role) => role.id === id)) continue;
+    custom.push({ id, name: name.trim(), members: stringList(members) });
+  }
+  return { roles: [...FIXED_PERSON_ROLES.map((role) => ({ id: role.id, members: fixed.get(role.id) ?? [] })), ...custom] };
+}
+
+/** The members of a list that are among `humans`, spelt as `humans` spells them, each once. */
+function amongHumans(members: readonly string[], humans: readonly string[]): string[] {
+  const byLower = new Map(humans.map((login) => [login.toLowerCase(), login]));
+  const out: string[] = [];
+  for (const member of members) {
+    const login = byLower.get(member.trim().toLowerCase());
+    if (login !== undefined && !out.includes(login)) out.push(login);
+  }
+  return out;
+}
+
+function roleName(role: StoredPersonRole): string {
+  return fixedRole(role.id)?.name ?? role.name ?? role.id;
+}
+
+/**
+ * The roles as the API shows them: the fixed ones first in their order, then
+ * the custom ones as stored. A member who is not among the live `humans`
+ * is left out, whichever source `humans` came from, so a role never shows
+ * someone the install no longer counts as one of its people.
+ */
+export function viewPersonRoles(stored: StoredPersonRoles, humans: readonly string[]): PersonRole[] {
+  const normal = parsePersonRoles(JSON.stringify(stored));
+  return normal.roles.map((role) => ({
+    id: role.id,
+    name: roleName(role),
+    fixed: fixedRole(role.id) !== undefined,
+    members: amongHumans(role.members, humans),
+  }));
+}
+
+function newPersonRoleId(): string {
+  const bytes = new Uint8Array(4);
+  globalThis.crypto.getRandomValues(bytes);
+  return `pr_${[...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('')}`;
+}
+
+export type PersonRolesCheck = { ok: true; stored: StoredPersonRoles } | { ok: false; error: string };
+
+/**
+ * Checks a whole list sent by `PUT /v1/people-roles` against what is stored
+ * and the install's people, and gives what to store. Each refusal says what to
+ * change; nothing is half-applied.
+ */
+export function checkPersonRoles(
+  input: unknown,
+  current: StoredPersonRoles,
+  humans: readonly string[],
+  newId: () => string = newPersonRoleId,
+): PersonRolesCheck {
+  const shape = 'roles is a list of {id?, name, members}';
+  if (!input || typeof input !== 'object' || !Array.isArray((input as { roles?: unknown }).roles)) return { ok: false, error: shape };
+  const given = (input as { roles: unknown[] }).roles;
+  for (const entry of given) {
+    if (!entry || typeof entry !== 'object') return { ok: false, error: shape };
+    const { id, name, members } = entry as Record<string, unknown>;
+    if (id !== undefined && typeof id !== 'string') return { ok: false, error: shape };
+    if (typeof name !== 'string') return { ok: false, error: shape };
+    if (!Array.isArray(members) || !members.every((member) => typeof member === 'string')) return { ok: false, error: shape };
+  }
+  const entries = given as { id?: string; name: string; members: string[] }[];
+
+  for (const fixed of FIXED_PERSON_ROLES) {
+    if (!entries.some((entry) => entry.id === fixed.id)) return { ok: false, error: `${fixed.name} cannot be deleted: send it with no members to empty it` };
+  }
+
+  const existing = new Set(current.roles.filter((role) => !fixedRole(role.id)).map((role) => role.id));
+  const seenIds = new Set<string>();
+  // The fixed names are taken whatever order the list comes in, so a custom
+  // "product" is refused by the name the person can see it clashes with.
+  const seenNames = new Map(FIXED_PERSON_ROLES.map((role) => [role.name.toLowerCase(), role.name]));
+  const fixedOut = new Map<string, string[]>();
+  const customOut: StoredPersonRole[] = [];
+  const byLower = new Map(humans.map((login) => [login.toLowerCase(), login]));
+
+  for (const entry of entries) {
+    const fixed = entry.id === undefined ? undefined : fixedRole(entry.id);
+    const name = entry.name.trim();
+    if (fixed) {
+      if (name !== fixed.name) return { ok: false, error: `${fixed.name} cannot be renamed` };
+    } else {
+      if (!name) return { ok: false, error: 'a custom role needs a name' };
+      if (name.length > MAX_PERSON_ROLE_NAME) {
+        return { ok: false, error: `“${name}” is longer than ${MAX_PERSON_ROLE_NAME} characters: shorten the role’s name` };
+      }
+      if (entry.id !== undefined && !existing.has(entry.id)) return { ok: false, error: `there is no role ${entry.id}: leave id out to add a new role` };
+    }
+    if (entry.id !== undefined) {
+      if (seenIds.has(entry.id)) return { ok: false, error: `${fixed?.name ?? entry.id} is sent twice: send each role once` };
+      seenIds.add(entry.id);
+    }
+    if (!fixed) {
+      const lower = name.toLowerCase();
+      if (seenNames.has(lower)) return { ok: false, error: `there is already a role named “${seenNames.get(lower)}”: give this one another name` };
+      seenNames.set(lower, name);
+    }
+
+    const members: string[] = [];
+    for (const member of entry.members) {
+      const login = byLower.get(member.trim().toLowerCase());
+      if (login === undefined) {
+        return { ok: false, error: `“${member.trim()}” is not one of the install’s people: add them under Settings → Install → People first, or take them off ${name}` };
+      }
+      if (!members.includes(login)) members.push(login);
+    }
+    if (fixed) fixedOut.set(fixed.id, members);
+    else customOut.push({ id: entry.id ?? '', name, members });
+  }
+  for (const role of customOut) {
+    if (role.id) continue;
+    let id = newId();
+    while (existing.has(id) || seenIds.has(id)) id = newId();
+    seenIds.add(id);
+    role.id = id;
+  }
+
+  if (customOut.length > MAX_CUSTOM_PERSON_ROLES) return { ok: false, error: `at most ${MAX_CUSTOM_PERSON_ROLES} custom roles` };
+  return {
+    ok: true,
+    stored: { roles: [...FIXED_PERSON_ROLES.map((role) => ({ id: role.id, members: fixedOut.get(role.id) ?? [] })), ...customOut] },
+  };
+}
+
+export interface PersonRoleMember {
+  role: string;
+  login: string;
+}
+
+/** The stored roles without anyone no longer among `humans`, and who was taken off which role. */
+export function pruneMembers(stored: StoredPersonRoles, humans: readonly string[]): { stored: StoredPersonRoles; removed: PersonRoleMember[] } {
+  const lower = new Set(humans.map((login) => login.toLowerCase()));
+  const removed: PersonRoleMember[] = [];
+  const roles = stored.roles.map((role) => {
+    const kept = role.members.filter((member) => lower.has(member.trim().toLowerCase()));
+    for (const member of role.members) if (!kept.includes(member)) removed.push({ role: roleName(role), login: member });
+    return { ...role, members: kept };
+  });
+  return { stored: { roles }, removed };
+}
+
+export interface PersonRolesDiff {
+  rolesAdded: string[];
+  rolesRemoved: string[];
+  rolesRenamed: { from: string; to: string }[];
+  membersAdded: PersonRoleMember[];
+  membersRemoved: PersonRoleMember[];
+}
+
+/** What changed between two lists of roles, by name, for the audit entry. */
+export function diffPersonRoles(before: readonly PersonRole[], after: readonly PersonRole[]): PersonRolesDiff {
+  const diff: PersonRolesDiff = { rolesAdded: [], rolesRemoved: [], rolesRenamed: [], membersAdded: [], membersRemoved: [] };
+  for (const role of after) {
+    const was = before.find((one) => one.id === role.id);
+    if (!was) diff.rolesAdded.push(role.name);
+    else if (was.name !== role.name) diff.rolesRenamed.push({ from: was.name, to: role.name });
+    const had = was?.members ?? [];
+    for (const login of role.members) if (!had.includes(login)) diff.membersAdded.push({ role: role.name, login });
+    for (const login of had) if (!role.members.includes(login)) diff.membersRemoved.push({ role: role.name, login });
+  }
+  for (const role of before) {
+    if (after.some((one) => one.id === role.id)) continue;
+    diff.rolesRemoved.push(role.name);
+    for (const login of role.members) diff.membersRemoved.push({ role: role.name, login });
+  }
+  return diff;
+}
+
+/** Whether a diff says nothing changed. */
+export function personRolesUnchanged(diff: PersonRolesDiff): boolean {
+  return Object.values(diff).every((list) => list.length === 0);
+}

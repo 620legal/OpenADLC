@@ -36,6 +36,18 @@ const egress = vi.hoisted(() => ({
   view: { hosts: [] as string[], proxied: false as boolean | null, settingsList: false as boolean | null, reason: null as string | null },
 }));
 who.me = ADMIN;
+/** Settings → Roles as the bridge answers it; null for a bridge that cannot. */
+const personRoles = vi.hoisted(() => ({
+  view: {
+    humans: ['janedoe', 'ada'],
+    roles: [
+      { id: 'product', name: 'Product', fixed: true, members: ['ada'] },
+      { id: 'legal', name: 'Legal', fixed: true, members: [] as string[] },
+      { id: 'engineering', name: 'Engineering', fixed: true, members: [] as string[] },
+      { id: 'pr_3f9c2a1b', name: 'Finance', fixed: false, members: ['janedoe'] },
+    ],
+  } as unknown,
+}));
 /** What the bridge says of holding its host awake; absent, as an older bridge or a Linux host says. */
 const awake = vi.hoisted(() => ({ view: undefined as { available: boolean; on: boolean; holding: boolean } | undefined }));
 
@@ -203,6 +215,10 @@ vi.mock('@/lib/api', () => ({
     },
     workPauses: async () => ({ paused: null, repos: {} }),
     egressHosts: async () => egress.view,
+    peopleRoles: async () => {
+      if (personRoles.view === null) throw new Error('bridge /v1/people-roles → 404');
+      return personRoles.view;
+    },
   },
 }));
 vi.mock('@/lib/read-header', () => ({
@@ -291,6 +307,7 @@ describe('the settings page', () => {
       ['#backup', 'Backup'],
       ['#pause', 'Pause work'],
       ['#users', 'Users'],
+      ['#roles', 'Roles'],
       ['#appearance', 'Appearance'],
       ['/onboarding', 'Run the setup again'],
     ]);
@@ -534,6 +551,30 @@ describe('the settings page', () => {
     const on = section(await page(), 'pause');
     expect(on).toContain('Work runs.');
     expect(on).not.toContain('dispatcher');
+  });
+
+  it('lists each role and who holds it, with Delete only on a custom one', async () => {
+    const html = await page();
+    expect(html).toContain('href="#roles"');
+    const listed = section(html, 'roles');
+    expect(listed).toContain('Nothing routes by them yet');
+    expect(listed).toMatch(/Product.*ada/s);
+    expect(listed).toMatch(/Legal.*No one yet/s);
+    expect(listed).toContain('Finance');
+    expect(listed).toContain('Finance Delete');
+    expect(listed.match(/Delete/g)).toHaveLength(1);
+  });
+
+  it('leaves out Roles and its link when the bridge cannot be asked for them', async () => {
+    const before = personRoles.view;
+    personRoles.view = null;
+    try {
+      const html = await page();
+      expect(html).not.toContain('id="roles"');
+      expect(html).not.toContain('href="#roles"');
+    } finally {
+      personRoles.view = before;
+    }
   });
 
   it('has no Egress on a laptop, whose tasks leave through no proxy', async () => {

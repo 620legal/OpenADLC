@@ -224,6 +224,9 @@ export const ROUTE_ROLES: Readonly<Record<string, Role>> = {
   // (`egress-routes.ts`).
   'GET /v1/egress/hosts': 'admin',
   'PUT /v1/egress/hosts': 'admin',
+  // Who among the install's people holds each person role (`people-roles-routes.ts`).
+  'GET /v1/people-roles': 'admin',
+  'PUT /v1/people-roles': 'admin',
   'POST /v1/onboarding/bots/:bot/connect': 'admin',
   'POST /v1/onboarding/bots/:bot/cancel': 'admin',
   'POST /v1/engines/updates': 'admin',

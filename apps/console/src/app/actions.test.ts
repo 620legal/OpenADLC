@@ -16,6 +16,7 @@ import {
   restartBot,
   resumeWork,
   retryTriage,
+  savePersonRoles,
   abandonRequest,
   dismissDesignMemoryNotice,
   revertDesignMemory,
@@ -65,6 +66,28 @@ describe('where take-over connects', () => {
     vi.stubEnv('NEXT_PUBLIC_OPENADLC_TERMINAL_URL', 'wss://console.example.com');
     expect(await requestAttachToken('builder', 'shell')).toEqual({ ok: true, token: 't', expiresInSeconds: 60, url: 'wss://console.example.com' });
     vi.unstubAllEnvs();
+  });
+});
+
+describe('saving the roles the install’s people hold', () => {
+  it('puts the whole list to the bridge and gives back the roles it stored', async () => {
+    const calls: { url: string; method: string; body: unknown }[] = [];
+    const view = { humans: ['ada'], roles: [{ id: 'product', name: 'Product', fixed: true, members: ['ada'] }] };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init: RequestInit) => {
+        calls.push({ url, method: init.method ?? 'GET', body: JSON.parse(String(init.body)) });
+        return Response.json(view);
+      }),
+    );
+    const roles = [{ id: 'product', name: 'Product', members: ['ada'] }, { name: 'Finance', members: [] }];
+    expect(await savePersonRoles(roles)).toEqual({ ok: true, view });
+    expect(calls).toEqual([{ url: expect.stringMatching(/\/v1\/people-roles$/), method: 'PUT', body: { roles } }]);
+  });
+
+  it('passes on the bridge’s refusal in its own words', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: 'Product cannot be renamed' }), { status: 400 })));
+    expect(await savePersonRoles([])).toEqual({ ok: false, error: 'Product cannot be renamed' });
   });
 });
 

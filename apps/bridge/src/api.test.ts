@@ -2015,6 +2015,64 @@ describe('the names a cloud host’s tasks may reach, written through PATCH /v1/
   });
 });
 
+describe('the roles the install’s people hold, and PATCH /v1/install', () => {
+  const patch = (body: Record<string, unknown>) =>
+    fetch(`${bridgeUrl}/v1/install`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json', 'x-openadlc-identity': 'admin@exampleco.test' },
+      body: JSON.stringify(body),
+    });
+  const ROLES = {
+    roles: [
+      { id: 'product', members: [] },
+      { id: 'legal', members: ['grace', 'ada'] },
+      { id: 'engineering', members: [] },
+      { id: 'pr_3f9c2a1b', name: 'Finance', members: ['grace'] },
+    ],
+  };
+
+  beforeEach(() => {
+    vi.mocked(audit).mockClear();
+    // The fields the install's answer reads, which this file's bridge has none of.
+    Object.assign(apiDeps.config, { organization: 'exampleco', webhookSecret: '', gitHubClientId: '', automationBot: null, humans: [], publicUrl: '', operatorEmail: '' });
+  });
+
+  it('refuses them, which only PUT /v1/people-roles writes', async () => {
+    const response = await patch({ personRoles: JSON.stringify(ROLES) });
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { error: string }).error).toBe('personRoles is written by PUT /v1/people-roles, which checks each role and its people');
+    expect(vi.mocked(settings.setSetting)).not.toHaveBeenCalled();
+  });
+
+  it('takes a person taken out of humans off every role, audited once, and does not give them back when they return', async () => {
+    stored.settings = { humans: 'ada, grace', personRoles: JSON.stringify(ROLES) };
+    expect((await patch({ humans: 'ada' })).status).toBe(200);
+
+    expect(JSON.parse(stored.settings.personRoles!)).toEqual({
+      roles: [
+        { id: 'product', members: [] },
+        { id: 'legal', members: ['ada'] },
+        { id: 'engineering', members: [] },
+        { id: 'pr_3f9c2a1b', name: 'Finance', members: [] },
+      ],
+    });
+    const pruned = vi.mocked(audit).mock.calls.map(([entry]) => entry).filter((entry) => entry.action === 'people_roles.pruned');
+    expect(pruned).toEqual([
+      {
+        actor: 'admin@exampleco.test',
+        action: 'people_roles.pruned',
+        target: 'install',
+        payload: { removed: [{ role: 'Legal', login: 'grace' }, { role: 'Finance', login: 'grace' }] },
+      },
+    ]);
+
+    vi.mocked(audit).mockClear();
+    expect((await patch({ humans: 'ada, grace' })).status).toBe(200);
+    expect(JSON.parse(stored.settings.personRoles!).roles.flatMap((role: { members: string[] }) => role.members)).toEqual(['ada']);
+    expect(vi.mocked(audit).mock.calls.some(([entry]) => entry.action === 'people_roles.pruned')).toBe(false);
+  });
+});
+
 describe('the webhook’s address, written through PATCH /v1/install', () => {
   const patch = (body: Record<string, string>) =>
     fetch(`${bridgeUrl}/v1/install`, {

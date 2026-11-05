@@ -252,6 +252,28 @@ describe('an archive laid beside an install that is set up', () => {
     expect(find(comparison, 'setting:workPaused').differences).toEqual(['the backup’s is another one']);
   });
 
+  it('carries the roles the install’s people hold, and a restore writes them back unchanged', async () => {
+    const roles = JSON.stringify({ roles: [{ id: 'product', members: ['alex'] }, { id: 'legal', members: [] }, { id: 'engineering', members: [] }, { id: 'pr_3f9c2a1b', name: 'Finance', members: ['grace'] }] });
+    const contents = archive();
+    contents.settings.personRoles = roles;
+    const install = memoryInstall(installB());
+    const comparison = compareInstall({ contents, here: install.view(), signIns: [], historyHere: null });
+    expect(find(comparison, 'setting:personRoles')).toMatchObject({ state: 'new', label: 'The roles the install’s people hold' });
+    expect(comparison.choices['setting:personRoles']).toBe(true);
+
+    const chosen = chosenArchive({ contents, here: install.view(), comparison, choices: { ...comparison.choices } });
+    await runRestore({
+      contents: chosen.contents,
+      shape: install.shape(),
+      signIns: [],
+      choices: chosen.signIns,
+      target: install.target,
+      takeOver: fakeTakeOver().ports,
+      actor: 'alex@example.test',
+    });
+    expect(install.state().settings.personRoles).toBe(roles);
+  });
+
   it('ticks what is new here, keeps this install’s where it differs, and offers nothing for the same or only here', async () => {
     const { comparison } = await compared();
 
