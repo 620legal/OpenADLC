@@ -9,7 +9,7 @@ commands, [cli.md](cli.md).
 | Place | Holds | Written by |
 |---|---|---|
 | `$OPENADLC_HOME/install.json` | This machine's install: driver, database, ports, the App's client id, the humans, the webhook secret | `openadlc init`, `openadlc up` (the database password), or by hand. The console's walkthrough writes the settings table instead |
-| The `settings` table | What the console set: organization, client id, automation bot, humans, operator email, public URL, install name, the engine update schedules and time zone, OpenADLC's own update (`selfUpdateSchedule`, and what the bridge records of it: `selfUpdateRun`, `selfUpdateLast`, `selfUpdateCandidate`), attribution mode, which repositories a person merges for (`bridgeMergeOff`, `ciMergeByPerson`), testing deploys, the CI minutes cap, pauses and holds, the console's name and logo (`consoleName`, `consoleLogo`), and whether the bridge keeps its Mac awake (`keepAwake`). The closed list is `SETTING_KEYS` in `packages/db/src/store/settings.ts`. No credential: the webhook secret, the App's private key and its client secret, set through the console, go to the secret store | the console |
+| The `settings` table | What the console set: organization, client id, automation bot, humans, operator email, public URL, install name, the engine update schedules and time zone, OpenADLC's own update (`selfUpdateSchedule`, and what the bridge records of it: `selfUpdateRun`, `selfUpdateLast`, `selfUpdateCandidate`), attribution mode, which repositories a person merges for (`bridgeMergeOff`, `ciMergeByPerson`), testing deploys, the CI minutes cap, pauses and holds, the console's name and logo (`consoleName`, `consoleLogo`), whether the bridge keeps its Mac awake (`keepAwake`), and the roles the install's people hold (`personRoles`). The closed list is `SETTING_KEYS` in `packages/db/src/store/settings.ts`. No credential: the webhook secret, the App's private key and its client secret, set through the console, go to the secret store | the console |
 | `config/*.yaml` | The crew, the repositories to seed, the caps, the review rules | you, in git |
 | Environment variables | Everything else, per service | you, or `openadlc up` |
 | `$OPENADLC_HOME/secrets/` | Refresh tokens, signing keys, model keys, the App's private key and client secret, the webhook secret, the internal secret | OpenADLC, never by hand |
@@ -726,6 +726,59 @@ nothing itself. It is a warning card, with a button to Settings →
 Notifications, while that send failed or none has got through yet, and
 clears when one does. With nothing set it passes; with only
 `OPENADLC_NOTIFY_WEBHOOK` and nothing sent yet it has no answer.
+
+## Roles
+
+**Settings → Roles** (admins only) groups the install's people into roles.
+Nothing is routed by them yet: a later change will send a Needs-you item to
+the role it concerns, such as Product for a product decision or Legal for a
+legal one.
+
+- **Product, Legal and Engineering** are on every install, including one with
+  nothing stored. You can add people to them and take people off them, but
+  you can't delete or rename them.
+- **Custom roles** are added by name and deleted with their Delete button.
+  - A name is trimmed, may not be empty, and is at most 40 characters.
+  - No two roles may share a name, compared without case: a custom "product"
+    is refused.
+  - An install has at most 50 custom roles.
+  - Each custom role keeps the id it was given (`pr_` and 8 hex characters)
+    when it is renamed.
+  - Deleting a custom role takes its people off it with it.
+- **Who holds a role** is chosen from the install's people (`humans`).
+  - A person can hold several roles, and a role can have no one in it, which
+    Settings shows as "No one yet".
+  - A login is stored as `humans` spells it.
+- **Someone taken out of `humans`** is taken off every role, and when `humans`
+  is saved the bridge takes them out of the stored setting too. If they are
+  put back later, they don't get their old roles back.
+- **When `humans` comes from `OPENADLC_HUMANS` or install.json**, a role
+  doesn't show anyone who isn't in it.
+
+The roles are kept in one setting, `personRoles`, as JSON:
+`{"roles": [{"id": "product", "members": ["ada"]}, {"id": "pr_3f9c2a1b", "name": "Finance", "members": ["grace"]}]}`.
+The fixed roles' names are in the code, not stored. Backup and restore carry
+the setting with the others. A restored role that names someone this install's
+`humans` doesn't list shows without them.
+
+The API, which takes admins only:
+
+- `GET /v1/people-roles` answers `{roles: [{id, name, fixed, members}], humans}`.
+- `PUT /v1/people-roles` takes `{roles: [{id?, name, members}]}` and replaces
+  the whole list.
+  - Send every role you mean to keep. A custom role left out is deleted, and
+    one with no `id` is added.
+  - A refusal is a 400 that says what to change, and nothing is written.
+  - Two admins who save at once: the last one wins.
+- `PATCH /v1/install` refuses `personRoles`.
+
+The audit log records each change with who made it:
+
+- `people_roles.changed`: the roles added, removed and renamed, and the people
+  added and removed. A save that changes nothing records nothing.
+- `people_roles.pruned`: who was taken off which role when `humans` was saved.
+
+See [ADR 0032](adr/0032-person-roles-are-one-install-setting-filtered-by-humans.md).
 
 ## Environment variables
 

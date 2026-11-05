@@ -13,6 +13,7 @@ import { SettingsNav } from '@/components/settings-nav';
 import { ModelAccountsCard } from '@/components/model-accounts-card';
 import { NotificationsSummary } from '@/components/notification-settings';
 import { modelAccountsKey } from '@/lib/model-accounts-key';
+import { PeopleRolesSettings } from '@/components/people-roles-settings';
 import { PauseWorkCard } from '@/components/pause-work';
 import { SpendingSummary } from '@/components/spending-limits';
 import { AppearanceSection, SettingsCard } from '@/components/settings-sections';
@@ -37,7 +38,8 @@ export const dynamic = 'force-dynamic';
  * with a host a check found refused offered by `?allow-host=`; the spending
  * caps, summarised, with the amounts edited on their own page; a backup of the
  * install; where notifications go, changed on their own page; pausing new work, across the install or in
- * chosen repositories; who may use the console; and how it looks: the color
+ * chosen repositories; who may use the console; the roles the install's people
+ * hold; and how it looks: the color
  * mode, the console's name and logo, and each repository's and crew member's color.
  */
 export default async function SettingsPage({ searchParams }: { searchParams: Promise<{ 'allow-host'?: string | string[] }> }) {
@@ -75,12 +77,14 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
       // Shown only where tasks leave through an egress proxy: a laptop has no list to widen.
       api.egressHosts().catch(() => null),
     ]);
-    const [users, notifications] = await Promise.all([
+    const [users, notifications, personRoles] = await Promise.all([
       api.users().catch(() => null),
       // Where notifications go, for its card; a bridge without the route leaves the card saying so.
       Promise.resolve()
         .then(() => api.notifications())
         .catch(() => null),
+      // Left out, card and link, when the bridge cannot answer it.
+      api.peopleRoles().catch(() => null),
     ]);
     const now = new Date().toISOString();
     const asked = (await searchParams)['allow-host'];
@@ -100,7 +104,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
     return (
       <AppShell page="settings" data={header}>
         <div className="mx-auto flex w-full max-w-[1100px] flex-col gap-5 px-4 py-6 md:flex-row md:gap-10 md:px-6 md:py-7">
-          <SettingsNav omit={showEgress ? [] : ['egress']} />
+          <SettingsNav omit={[...(showEgress ? [] : ['egress']), ...(personRoles ? [] : ['roles'])]} />
 
           <main className="flex min-w-0 max-w-[820px] flex-1 flex-col gap-[18px]">
             <h1 className="sr-only">Settings</h1>
@@ -180,6 +184,12 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
             <PauseWorkCard initial={paused} repositories={repos.repos} />
 
             <UsersSection initial={users} me={me?.known ? me.email : ''} identityMode={me?.known ? me.identityMode : undefined} />
+
+            {personRoles && (
+              <SettingsCard id="roles" title="Roles" line="Who in the install’s people holds each role. Nothing routes by them yet.">
+                <PeopleRolesSettings initial={personRoles} />
+              </SettingsCard>
+            )}
 
             {/* The console's name and logo, as the root layout read them for the header. */}
             <AppearanceSection repositories={repos.repos} crew={crew.bots} withBrand />

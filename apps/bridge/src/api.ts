@@ -131,6 +131,7 @@ import { describeSubject } from './thread-view.js';
 import { registerBoardEventRoutes } from './board-events.js';
 import { answerFromConsole, sendThreadMessage } from './thread-messages.js';
 import { repinHumans } from './human-ids.js';
+import { livePeopleRolesDeps, prunePersonRoles } from './people-roles-routes.js';
 import { checkConsoleLogo, checkConsoleName, decodeLogo, LOGO_POLICY, logoMediaType } from './brand.js';
 import { defaultItemLinkDeps, registerItemLinkRoutes, registerItemRoutes } from './item-routes.js';
 import { registerItemSearchRoutes } from './item-search-routes.js';
@@ -3261,6 +3262,8 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
       if (key === 'allowedAccounts') throw new HttpFailure(400, 'an account is allowed with POST /v1/github/allowed-accounts, which says what allowing it means');
       // Written here it would reach the database and never the proxy, and skip its own audit entry.
       if (key === 'egressExtraHosts') throw new HttpFailure(400, 'the names tasks may reach are saved with PUT /v1/egress/hosts, which puts them on the egress proxy');
+      // Written here it would skip the check that each member is one of humans, and the audit entry.
+      if (key === 'personRoles') throw new HttpFailure(400, 'personRoles is written by PUT /v1/people-roles, which checks each role and its people');
       // Written here it would skip the gate and the audit trail: the live
       // gate and the setting would disagree until the next restart.
       if (key === 'workPaused' || key === 'workPausedRepos') throw new HttpFailure(400, 'pause and resume work with POST /v1/work/pause and /v1/work/resume, which are audited');
@@ -3376,6 +3379,12 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
     if (written.includes('humans')) {
       await repinHumans(live.humans, identity).catch((error: unknown) =>
         console.warn(`[bridge] the install's people were not pinned to their accounts: ${error instanceof Error ? error.message : error}`),
+      );
+      // Taken off every person role too, so one put back later does not get
+      // their old roles back. A failure leaves them stored, and the read,
+      // which shows only members among humans, still hides them.
+      await prunePersonRoles(livePeopleRolesDeps(config), live.humans, identity).catch((error: unknown) =>
+        console.warn(`[bridge] the people taken out were not taken off their roles: ${error instanceof Error ? error.message : error}`),
       );
     }
     deps.health?.runSoon(['app-installed', 'app-permissions', 'device-flow', 'webhook', 'app-client-secret']);
