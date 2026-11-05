@@ -764,9 +764,9 @@ export function timeline(
       if (open) openShown = true;
       const options = Array.isArray(message.payload?.options) ? (message.payload.options as unknown[]).map(String) : [];
       const shown = open ? (input.openGate?.options ?? options) : options;
-      // The open gate is the record; its message's payload is a copy, and an
-      // older bridge's gate carries neither field.
-      const framing = questionFraming(open && input.openGate?.decision != null ? input.openGate : message.payload, shown);
+      // The open gate is the record; its message's payload is a copy, read
+      // only for a question already answered.
+      const framing = questionFraming(open && input.openGate ? input.openGate : message.payload, shown);
       entries.push({
         kind: 'bubble',
         key: message.id,

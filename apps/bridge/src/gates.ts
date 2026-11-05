@@ -350,9 +350,14 @@ export class Gates {
     // A plan change's choices and context are the bridge's own, so nothing the
     // session said about them is shown. Otherwise a consequence is shown only
     // beside the option it was written for: a list of any other length than
-    // the options offered would pair a choice with another one's outcome.
+    // the options offered would pair a choice with another one's outcome. An
+    // option `capOffer` rewrote loses its consequence: the session wrote it for
+    // its own amount, and the person would read that beside the one granted.
     const decision = request ? '' : (input.decision?.trim() ?? '');
-    const said = request || input.consequences?.length !== options.length ? [] : input.consequences.map((consequence) => consequence.trim());
+    const said =
+      request || input.consequences?.length !== options.length
+        ? []
+        : input.consequences.map((consequence, index) => (options[index] === input.options[index] ? consequence.trim() : ''));
     const consequences = said.some(Boolean) ? said : [];
     // A standing approval on the work settles the request as it is asked,
     // unless a path is under Human review: that one is a person's, always.

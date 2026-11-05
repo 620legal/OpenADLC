@@ -1501,6 +1501,25 @@ describe('answering a task stopped at its cost cap', () => {
     expect(tasks.updateTaskState).not.toHaveBeenCalled();
   });
 
+  it('drops the consequence of a choice it rewrote to the amount it grants', async () => {
+    vi.mocked(spendingLimits.effectiveTaskCap).mockResolvedValueOnce(5);
+    store.gate = null;
+
+    await gates.open({
+      taskId: 'task-1',
+      question: 'Stopped at the $5 cap on openadlc#78 after $5.10. How should I proceed?',
+      options: ['continue for another $1000', 'hand to a person', 'abandon this task'],
+      consequences: ['Spends up to $1000 more', 'A person takes over', 'The task stops'],
+    });
+
+    expect(threads.createGate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        options: ['continue for another $5', 'hand to a person', 'abandon this task'],
+        consequences: ['', 'A person takes over', 'The task stops'],
+      }),
+    );
+  });
+
   it('offers and adds the repository cap when that is lower than the global one', async () => {
     vi.mocked(spendingLimits.effectiveTaskCap).mockResolvedValueOnce(5).mockResolvedValueOnce(5);
     store.gate = null;

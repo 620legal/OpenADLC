@@ -819,7 +819,7 @@ function MemberList({
  * What a choice leads to is said under it, and answers nothing: the button
  * still answers with the choice's own words.
  */
-export function QuestionChoices({
+function QuestionChoices({
   options,
   consequences = [],
   pending,

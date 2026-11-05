@@ -394,7 +394,7 @@ export function parseQuestion(body: string): AskedQuestion | null {
  * with an entry that is not a string, is none at all: shifted by one, every
  * choice would be shown with the next one's consequence.
  */
-export function markerConsequences(marker: Marker): string[] {
+function markerConsequences(marker: Marker): string[] {
   const written = marker.options;
   const said = marker.consequences;
   if (!Array.isArray(written) || !Array.isArray(said) || said.length !== written.length) return [];
