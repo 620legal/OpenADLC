@@ -1098,7 +1098,8 @@ logins who must approve it:
   its own level or higher.
 
 A line it cannot read — two paths, a team such as `@org/team` (the gate waits
-on people), logins with no path — holds the gate on every pull request in the
+on people), a reviewer that is not a whole GitHub login, such as a template's
+`@<name>` or `@alice,`, logins with no path — holds the gate on every pull request in the
 repository, and the repository-config card names the line and what is wrong
 with it.
 

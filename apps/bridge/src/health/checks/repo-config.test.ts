@@ -223,6 +223,18 @@ describe('a Human review rule the bridge cannot read', () => {
     expect(result && 'detail' in result ? result.detail : '').toContain('is a team');
   });
 
+  it('names a placeholder reviewer, which otherwise left the path needing nobody', async () => {
+    const agents = ['# Agent notes', '', '## Human review', '', '- `config/` @janedoe', '- `src/policy.ts` @<name>', ''].join('\n');
+    const [result] = await repoConfigCheck(reader(agents), [humanReviewLinesInspection()]).run(new Date());
+    expect(result).toMatchObject({
+      ok: false,
+      severity: 'blocking',
+      action: { url: 'https://github.com/exampleco/api/blob/main/AGENTS.md#L6' },
+      facts: { findings: [{ kind: 'human-review-unreadable', file: 'AGENTS.md', line: 6 }] },
+    });
+    expect(result && 'detail' in result ? result.detail : '').toContain('@<name>');
+  });
+
   it('says nothing of a section it can read', async () => {
     const [result] = await repoConfigCheck(reader(AGENTS), [humanReviewLinesInspection()]).run(new Date());
     expect(result).toMatchObject({ ok: true });

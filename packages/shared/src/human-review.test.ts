@@ -205,6 +205,12 @@ describe('a rule the parser cannot read', () => {
     ['a team', '- `.github/` @myorg/platform'],
     ['logins and no path', '- @x'],
     ['a backtick left open', '- `infra/ @x'],
+    ['a placeholder reviewer', '- `src/policy.ts` @<reviewer>'],
+    ['a bare @', '- `src/` @'],
+    ['a login starting with a hyphen', '- `src/` @-x'],
+    ['a login with a comma after it', '- `src/` @alice,'],
+    ['a login with more after it', '- `src/` @bob<x>'],
+    ['a login next to a placeholder', '- `src/` @janedoe @<name>'],
   ] as const) {
     it(`makes the whole section unreadable: ${what}`, () => {
       expect(parseHumanReviewPaths(section(line))).toBeNull();
@@ -218,6 +224,32 @@ describe('a rule the parser cannot read', () => {
     expect(unreadableHumanReviewLines(section('- a/ b/ @x'))[0]?.reason).toContain('two paths');
     expect(unreadableHumanReviewLines(AGENTS)).toEqual([]);
     expect(unreadableHumanReviewLines(null)).toEqual([]);
+  });
+
+  /**
+   * A template's `@<name>` matched no login and was skipped, so the line named
+   * nobody and was dropped as prose: the gate released the path, and a pull
+   * request touching it merged on the lead's approval alone.
+   */
+  it('names a placeholder reviewer and says to put the login in its place', () => {
+    const agents = section('- `src/policy.ts` @<reviewer>');
+    expect(unreadableHumanReviewLines(agents)).toEqual([
+      { line: 4, text: '- `src/policy.ts` @<reviewer>', reason: expect.stringContaining('@<reviewer>') },
+    ]);
+    expect(unreadableHumanReviewLines(agents)[0]?.reason).toContain('GitHub login');
+    expect(unreadableHumanReviewLines(section('- `src/` @janedoe @<name>'))[0]?.reason).toContain('@<name>');
+    expect(humanReviewLogins(agents)).toEqual([{ login: 'janedoe', path: 'config/', line: 3 }]);
+  });
+
+  it('reads a placeholder in a note, and words split by a space, one word at a time', () => {
+    expect(parseHumanReviewPaths('## Human review\n\n- `x/` @a (ask @<b>)\n')).toEqual([{ path: 'x/', logins: ['a'] }]);
+    // Out of scope by intake's answer: `@na` is a login, `me>` a note.
+    expect(parseHumanReviewPaths('## Human review\n\n- `src/` @na me>\n')).toEqual([{ path: 'src/', logins: ['na'] }]);
+  });
+
+  it('still takes prose, a bare path and a commented-out rule as no rule', () => {
+    expect(parseHumanReviewPaths('## Human review\n\n- Nothing here names anyone\n- src/\n')).toEqual([]);
+    expect(parseHumanReviewPaths('## Human review\n\n<!-- human-review-pending until 2027: `p/` @<x> -->\n')).toEqual([]);
   });
 
   it('leaves an empty section meaning nothing needs a person, and a missing one unknown', () => {
