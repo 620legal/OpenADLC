@@ -37,8 +37,9 @@ import { pathMatches as globPathMatches } from './path-overlap.js';
  * - Words in parentheses, and words after the logins, are a note.
  * - An item with no login names nobody, and is not a rule.
  *
- * A line the parser cannot read — two paths, a team (`@org/team`), a path it
- * cannot find — makes the whole section unreadable, so the gate holds rather
+ * A line the parser cannot read — two paths, a team (`@org/team`), a word
+ * starting with `@` that is not a whole login (a placeholder such as
+ * `@<name>`), a path it cannot find — makes the whole section unreadable, so the gate holds rather
  * than releasing what the line meant to cover. `unreadableHumanReviewLines`
  * says which line and why.
  */
@@ -57,6 +58,7 @@ const HEADING = /^(#{1,6})\s+human\s+review\s*$/i;
 const ANY_HEADING = /^(#{1,6})\s+/;
 const ITEM = /^(?:[-*+]|\d+[.)])\s+(.+)$/;
 const LOGIN = /^@([A-Za-z0-9][A-Za-z0-9-]*)(\/\S*)?/;
+const WHOLE_LOGIN = /^@([A-Za-z0-9][A-Za-z0-9-]*)$/;
 
 /** A word that reads as a path: a `/` or a `*` in it, or a file name with an extension. */
 function pathLike(word: string): boolean {
@@ -158,12 +160,18 @@ function readLine(text: string): { rule: HumanReviewRule } | { unreadable: strin
 
   const logins: string[] = [];
   for (const word of rest) {
-    const login = LOGIN.exec(word);
+    if (LOGIN.exec(word)?.[2]) {
+      return { unreadable: `${word} is a team, and the gate waits on people: name the GitHub login of each person instead` };
+    }
+    const login = WHOLE_LOGIN.exec(word);
     if (login) {
-      if (login[2]) {
-        return { unreadable: `${word} is a team, and the gate waits on people: name the GitHub login of each person instead` };
-      }
       logins.push(login[1] as string);
+    } else if (word.startsWith('@')) {
+      // A template's `@<name>` matched no login and was skipped, which left the
+      // line with nobody against it: dropped as prose, and the gate released
+      // the path. `@alice,` read as `alice` by its prefix, so the whole word
+      // has to be one.
+      return { unreadable: `${word} is not a GitHub login: replace it with the GitHub login of the person who must approve this path` };
     } else if (logins.length === 0 && pathLike(word)) {
       return { unreadable: 'it names two paths; give each its own line' };
     }
