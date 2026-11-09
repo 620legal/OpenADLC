@@ -177,6 +177,16 @@ describe('who approves', () => {
     expect((await effectiveConfig(withEnvironment)).humans).toEqual(['carol']);
   });
 
+  it('is OPENADLC_HUMANS when reading People throws rather than rejects, and the rest of the config is still read', async () => {
+    // A store without `people` (a partial mock of @openadlc/db) threw before
+    // a promise existed, and every caller of effectiveConfig failed with it.
+    const { people } = await import('@openadlc/db');
+    vi.mocked(people.approvers).mockImplementationOnce(() => {
+      throw new TypeError('people is not defined');
+    });
+    expect(await effectiveConfig(withEnvironment)).toMatchObject({ humans: ['carol'], organization: 'janedoe' });
+  });
+
   it('does not read a humans settings row: 0162 deleted it, and Approves is what says', async () => {
     table.rows.humans = 'mallory';
     expect((await effectiveConfig(config)).humans).toEqual([]);

@@ -98,11 +98,18 @@ export async function effectiveConfig(config: BridgeConfig): Promise<EffectiveCo
   const inStore = await storedWebhookSecret().catch(() => null);
   const webhookSecret = inStore || stored.webhookSecret || config.webhookSecret;
   // A People that cannot be read leaves the environment's list, as a
-  // settings table that cannot be read leaves every other value.
-  const approving = await people
-    .approvers()
-    .then((list) => list.map((person) => person.githubLogin).filter((login): login is string => Boolean(login)))
-    .catch(() => [] as string[]);
+  // settings table that cannot be read leaves every other value. Whatever
+  // goes wrong reading it, thrown or rejected, lands here: a store module
+  // without `people` (a test's partial mock of @openadlc/db) threw before the
+  // promise existed, and took every caller of effectiveConfig with it.
+  const approving = await (async () => {
+    try {
+      const list = await people.approvers();
+      return (list ?? []).map((person) => person.githubLogin).filter((login): login is string => Boolean(login));
+    } catch {
+      return [] as string[];
+    }
+  })();
   const humans = approving.length > 0 ? approving : config.humans;
 
   return {

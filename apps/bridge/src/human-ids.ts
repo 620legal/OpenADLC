@@ -29,9 +29,17 @@ export function resolveHumanIdsWith(resolve: AccountIdOf | null): void {
   resolver = resolve;
 }
 
-/** The approving people, or none when People cannot be read. */
+/**
+ * The approving people, or none when People cannot be read. A throw as well
+ * as a rejection: a store without `people` threw before any promise existed,
+ * and the environment's own pins went unread with it.
+ */
 async function approving(): Promise<{ id: string; githubLogin: string | null; githubUserId: number | null }[]> {
-  return people.approvers().catch(() => []);
+  try {
+    return (await people.approvers()) ?? [];
+  } catch {
+    return [];
+  }
 }
 
 /** The environment logins' pins, by lower-cased login; empty when none are kept or the setting cannot be read. */
