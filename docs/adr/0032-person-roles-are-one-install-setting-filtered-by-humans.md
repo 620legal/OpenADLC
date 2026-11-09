@@ -1,6 +1,7 @@
 # 0032. Person roles are one install setting, filtered by humans
 
-- **Status:** accepted
+- **Status:** accepted; superseded in part by [0034](0034-one-list-of-people.md):
+  members are person ids from People, not a subset of live `humans`
 - **Date:** 2026-11-05
 
 ## Context

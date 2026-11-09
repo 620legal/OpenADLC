@@ -2574,22 +2574,23 @@ says the same thing in words after Terraform's own.
 
 ### Who may do what in the console
 
-IAP decides who reaches the console; Settings → Users decides what they may do
+IAP decides who reaches the console; a person's console role in Settings →
+People ([configuration.md](configuration.md#people)) decides what they may do
 there. An **admin** reaches everything. A **user** files requests, answers the
 crew's questions and gates, reads the board, threads and Costs, and stops or
 tries a task again; they cannot move a card between stages or change any
 setting, repository, bot, model account, spending limit, backup or pause. The
 bridge enforces this on every route, not only by hiding controls. Someone IAP
-lets in who is not in Users sees "Ask an admin to add you", with the admins'
+lets in who has no console role in People sees "Ask an admin to add you", with the admins'
 addresses, and nothing else.
 
-**Adding a person takes both layers.** Settings → Users gives them a role;
+**Adding a person takes both layers.** Settings → People gives them a role;
 whether they reach the console at all is IAP's, which admits exactly the
 `console_members` the last `openadlc cloud apply` applied. The module's
 binding is authoritative, so even a grant added by hand with `gcloud iap web
 add-iam-policy-binding` is deleted by the next apply. Someone added in the
 console whom IAP does not admit gets Google's own block page, which says
-nothing about this install — so the Users page warns about such an address and
+nothing about this install — so Settings → People warns about such an address and
 names the fix, `openadlc cloud members add them@example.com`, which appends
 `user:them@example.com` to `console_members` in
 `$OPENADLC_HOME/cloud.tfvars.json`, saves the settings to the state bucket and
@@ -2611,16 +2612,18 @@ change (which widens the paths a builder may write) and letting a task go on
 past its cost cap. A user also stops, retries and dismisses any task, files
 requests and has the crew comment on issues and pull requests in every managed
 repository, and reads all of its threads and attachments, private repositories
-included. Answering a gate on GitHub takes triage or more on that repository;
-the console asks for no such thing. So make someone a user only if you would
+included. On GitHub, anyone in People answers a bot's question, matched by
+their account id; an approval there (a plan change, the cost-cap question)
+takes Approves in People or triage or more on that repository. The console
+asks for no such thing. So make someone a user only if you would
 trust them with every repository the install manages.
 
-While Users is empty, the first request makes the first admins:
+While nobody in People has a console role, the first request makes the first admins:
 
 1. every address in `OPENADLC_ADMIN_EMAILS` (the module's `admin_emails`; `user:` in front is allowed), if it names any;
 2. otherwise every `user:` in the console's IAP members (`console_members`, passed as `OPENADLC_CONSOLE_MEMBERS`).
 
-Each is audited as `user.bootstrap_admin`, and Settings → Users says how they
+Each is audited as `user.bootstrap_admin`, and Settings → People says how they
 became admin. After that only an admin adds, removes or changes anyone, and the
 last admin can be neither removed nor demoted.
 
@@ -2648,7 +2651,9 @@ refusing it would only lock out the CLI, which names itself `$USER`.
 
 On a local install roles are advisory. Every console request carries one
 identity, `OPENADLC_IDENTITY` or `console` when that is unset, so anyone who
-reaches the console acts as an admin, and Settings → Users says so.
+reaches the console acts as an admin, and Settings → People says so. That
+identity is the operator: the person made admin first. Their email is
+optional, and their GitHub account is the one they link.
 Demoted to a user, that identity could never open Settings again, so the bridge
 refuses the change (`409 self-demote`) and says why. Removing it is allowed: a
 name the install does not know is an admin. An install that is locked out

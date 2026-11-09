@@ -9,7 +9,7 @@ commands, [cli.md](cli.md).
 | Place | Holds | Written by |
 |---|---|---|
 | `$OPENADLC_HOME/install.json` | This machine's install: driver, database, ports, the App's client id, the humans, the webhook secret | `openadlc init`, `openadlc up` (the database password), or by hand. The console's walkthrough writes the settings table instead |
-| The `settings` table | What the console set: organization, client id, automation bot, humans, operator email, public URL, install name, the engine update schedules and time zone, OpenADLC's own update (`selfUpdateSchedule`, and what the bridge records of it: `selfUpdateRun`, `selfUpdateLast`, `selfUpdateCandidate`), attribution mode, which repositories a person merges for (`bridgeMergeOff`, `ciMergeByPerson`), testing deploys, the CI minutes cap, pauses and holds, the console's name and logo (`consoleName`, `consoleLogo`), whether the bridge keeps its Mac awake (`keepAwake`), and the roles the install's people hold (`personRoles`). The closed list is `SETTING_KEYS` in `packages/db/src/store/settings.ts`. No credential: the webhook secret, the App's private key and its client secret, set through the console, go to the secret store | the console |
+| The `settings` table | What the console set: organization, client id, automation bot, operator email, public URL, install name, the engine update schedules and time zone, OpenADLC's own update (`selfUpdateSchedule`, and what the bridge records of it: `selfUpdateRun`, `selfUpdateLast`, `selfUpdateCandidate`), attribution mode, which repositories a person merges for (`bridgeMergeOff`, `ciMergeByPerson`), testing deploys, the CI minutes cap, pauses and holds, the console's name and logo (`consoleName`, `consoleLogo`), whether the bridge keeps its Mac awake (`keepAwake`), and the roles the install's people hold (`personRoles`). The closed list is `SETTING_KEYS` in `packages/db/src/store/settings.ts`. No credential: the webhook secret, the App's private key and its client secret, set through the console, go to the secret store | the console |
 | `config/*.yaml` | The crew, the repositories to seed, the caps, the review rules | you, in git |
 | Environment variables | Everything else, per service | you, or `openadlc up` |
 | `$OPENADLC_HOME/secrets/` | Refresh tokens, signing keys, model keys, the App's private key and client secret, the webhook secret, the internal secret | OpenADLC, never by hand |
@@ -21,7 +21,8 @@ What wins:
   install.json's win. Exporting `OPENADLC_BRIDGE_PORT` in a shell does not move a
   bridge whose install.json says otherwise.
 - **The console's settings win over the environment** for `organization`,
-  `githubClientId`, `automationBot`, `humans` and `publicUrl`, and the secret
+  `githubClientId`, `automationBot` and `publicUrl`, People's approvers win
+  over `OPENADLC_HUMANS` (see [People](#people)), and the secret
   store's webhook secret wins over `OPENADLC_WEBHOOK_SECRET`
   (`apps/bridge/src/effective-config.ts`). An older install kept the webhook
   secret in the settings table; the bridge moves it into the secret store
@@ -78,7 +79,7 @@ Setting it is how a second install lives on the same machine; see
 | `githubClientId` | `''` | The OpenADLC GitHub App's client id, for the crew's device-flow sign-in |
 | `databaseUrl` | `postgres://openadlc:<password>@127.0.0.1:47432/openadlc_db` | The platform database. The password is generated for each install by its first `openadlc up`, which replaces an older install's `openadlc` the same way; this file is the only place it is kept |
 | `ports` | console 47300, bridge 47311, hostd 47312, postgres 47432 | Where each service listens |
-| `humans` | `[]` | GitHub logins that approve changes to the paths AGENTS.md reserves for a person, answer the crew's questions and gates, approve plan changes, and are the required reviewers for production deploys, in every repository the install manages. The walkthrough's approvers question ("Who approves changes to config/, infra/ and .github/?") writes it. Each login is pinned to its GitHub account id when it is saved or first used (the `humanIds` setting, written only by the bridge), and counts only from that account; a login that names another account later is a card on the board. A required person's approval lands a pull request only when GitHub says their account has write access or more to the repository |
+| `humans` | `[]` | GitHub logins that approve, handed to the services as `OPENADLC_HUMANS`. They approve only while nobody in Settings → People has Approves on; Settings shows them as approvers it cannot change. See [People](#people) |
 | `repoRoot` | the checkout | Where labels, templates, skills and roles are read from |
 | `publicUrl` | `''` | Where GitHub reaches the bridge's webhook; empty means a tunnel is used |
 | `allowedHosts` | unset | Names people open OpenADLC under beyond loopback, an address and the configured URLs, handed to every service as `OPENADLC_ALLOWED_HOSTS` |
@@ -727,6 +728,84 @@ Notifications, while that send failed or none has got through yet, and
 clears when one does. With nothing set it passes; with only
 `OPENADLC_NOTIFY_WEBHOOK` and nothing sent yet it has no answer.
 
+## People
+
+**Settings → People** (admins only) is the install's one list of people. It
+replaces Settings → Users and the `humans` setting, and the account a person
+links by device code is part of their entry
+([ADR 0034](adr/0034-one-list-of-people.md)). A person is one row of the
+`people` table:
+
+| Field | What it is |
+|---|---|
+| Name | What Settings and the Roles card call them |
+| Email | What they sign in to the console with, lower-cased. Empty for someone who answers only on GitHub |
+| Console role | **Admin** or **User** (who may do what is in [self-hosting.md](self-hosting.md#who-may-do-what-in-the-console)). Empty means they cannot sign in to the console. On a cloud install a console role needs an email |
+| GitHub | A login, and the account id it resolved to when it was named, which is what identifies them on GitHub. *named* when an admin typed it; *confirmed* once the person linked it themselves by device code. The add form checks the login on GitHub as it is typed. No route lets an admin confirm someone else's account |
+| Approves | Puts their login in the install's approvers (`humans`). Needs a GitHub login |
+| Roles | The [roles](#roles) they hold, edited in the Roles card |
+
+**Answering on GitHub.** A comment on GitHub is matched to a person by the
+commenter's account id, never by login alone, since GitHub frees a renamed
+account's login for anyone to take.
+
+- Anyone in People answers a bot's **question** from GitHub, Approves on or
+  off, as they would in the console.
+- **Approvals** take Approves: a plan change, the cost-cap question, reviews of
+  reserved paths and production deploys count from GitHub only from an
+  approver, or from someone with triage or more on the repository, as before.
+- Adding someone, or giving them a role, never makes them an approver. Only
+  Approves does. A login with Approves on that its owner has not linked still
+  approves; only sign-offs such as `/approve-pages` need the person's own link.
+- Whichever way the answer came, the gate records the person
+  (`gates.answered_by_person`) beside the identity that wrote it.
+
+**Approvers.** `humans`, everywhere the bridge reads it, is the logins of the
+people with Approves on, oldest first. The walkthrough's "Who approves" step,
+and `PATCH /v1/install {"humans": "ada,grace"}`, turn Approves on for exactly
+the logins named, adding a GitHub-only person for a login nobody holds, and off
+for everyone else. A login GitHub cannot resolve is refused, naming it. An
+approver's login is pinned to its account id and counts only from that
+account; a login that names another account later is a card on the board. A
+required person's approval lands a pull request only when GitHub says their
+account has write access or more to the repository.
+
+**Environment approvers.** While nobody in People has Approves on,
+`OPENADLC_HUMANS` (which `openadlc up` fills from install.json's `humans`)
+names the approvers, pinned in the `humanIds` setting. Settings shows each with
+Approves locked on and "from OPENADLC_HUMANS"; switching it is refused with a
+409 that says where to change it. Once someone in People approves, the
+environment list is no longer in effect, as a saved `humans` overrode it
+before, and Settings says so.
+
+**Linking.** A person links their own GitHub account by device code. When a
+GitHub-only person with no email and no link already holds that account (for
+example someone brought over from `humans`), the two become one, keeping
+Approves. When the link changes the account of someone with Approves on,
+Approves is turned off: an admin approved the account, not whatever is linked
+later.
+
+**Merging.** An email and a login that are the same person but could not be
+matched stay two entries; **Merge into…** makes them one. Two entries that
+both have an email, or that name different GitHub accounts, cannot be merged.
+
+**A local install** has one console identity, the operator: the person made
+admin first, or else the earliest admin. Their email is optional, and their
+GitHub account is the one they link. The add form there takes a name and a
+GitHub login, for people who answer on GitHub.
+
+The last admin can be neither removed nor demoted. Removing a person takes them
+off every role. The audit log records each change with who made it:
+`person.added`, `person.changed`, `person.approves_on`, `person.approves_off`
+(with why, when it was not the switch), `person.merged`, `person.removed`,
+`person.github_linked` and `person.github_unlinked`. Backup and restore carry
+the list; restoring an archive written before People turns its `humans` into
+Approves.
+
+The API takes admins only: `GET /v1/people`, `GET /v1/people/github/:login`
+(the login check), `POST /v1/people`, `PATCH /v1/people/:id`, and
+`POST /v1/people/:id/approves`, `/merge` and `/remove`.
+
 ## Roles
 
 **Settings → Roles** (admins only) groups the install's people into roles.
@@ -745,25 +824,25 @@ legal one.
   - Each custom role keeps the id it was given (`pr_` and 8 hex characters)
     when it is renamed.
   - Deleting a custom role takes its people off it with it.
-- **Who holds a role** is chosen from the install's people (`humans`).
+- **Who holds a role** is chosen from everyone in [People](#people), whether
+  or not they approve. Holding a role gives no approval.
   - A person can hold several roles, and a role can have no one in it, which
-    Settings shows as "No one yet".
-  - A login is stored as `humans` spells it.
-- **Someone taken out of `humans`** is taken off every role, and when `humans`
-  is saved the bridge takes them out of the stored setting too. If they are
-  put back later, they don't get their old roles back.
-- **When `humans` comes from `OPENADLC_HUMANS` or install.json**, a role
-  doesn't show anyone who isn't in it.
+    Settings shows as "No one yet · Add people under People".
+  - A member is stored as the person's id.
+- **Someone removed from People** is taken off every role in the same change.
+  If they are added again later, they are a new entry and don't get their old
+  roles back.
 
 The roles are kept in one setting, `personRoles`, as JSON:
-`{"roles": [{"id": "product", "members": ["ada"]}, {"id": "pr_3f9c2a1b", "name": "Finance", "members": ["grace"]}]}`.
+`{"roles": [{"id": "product", "members": ["<person id>"]}, {"id": "pr_3f9c2a1b", "name": "Finance", "members": ["<person id>"]}]}`.
 The fixed roles' names are in the code, not stored. Backup and restore carry
 the setting with the others. A restored role that names someone this install's
-`humans` doesn't list shows without them.
+People doesn't have shows without them.
 
 The API, which takes admins only:
 
-- `GET /v1/people-roles` answers `{roles: [{id, name, fixed, members}], humans}`.
+- `GET /v1/people-roles` answers `{roles: [{id, name, fixed, members}], people: [{id, label}]}`;
+  a label is the name, else the email, else `@login`.
 - `PUT /v1/people-roles` takes `{roles: [{id?, name, members}]}` and replaces
   the whole list.
   - Send every role you mean to keep. A custom role left out is deleted, and
@@ -776,9 +855,11 @@ The audit log records each change with who made it:
 
 - `people_roles.changed`: the roles added, removed and renamed, and the people
   added and removed. A save that changes nothing records nothing.
-- `people_roles.pruned`: who was taken off which role when `humans` was saved.
+- `people_roles.pruned`: who was taken off which role when they were removed
+  from People.
 
-See [ADR 0032](adr/0032-person-roles-are-one-install-setting-filtered-by-humans.md).
+See [ADR 0032](adr/0032-person-roles-are-one-install-setting-filtered-by-humans.md),
+superseded in part by [ADR 0034](adr/0034-one-list-of-people.md).
 
 ## Environment variables
 
@@ -803,7 +884,7 @@ nothing sets a variable.
 | `OPENADLC_LEASE_HOURS` | 12 | How long a lease lasts | |
 | `OPENADLC_IDENTITY_MODE` | `local` | `local` takes the console user from a header, believed only beside the console secret (`console-api-secret` in the secret store, made at start when missing), which only the console's server and the CLI hold; `iap` verifies Google IAP's signed assertion and never reads the secret. Any other value stops the bridge at start, and so does `local` (set or unset) on Cloud Run, where `K_SERVICE` is set: there anyone who reached the bridge would be an admin | |
 | `OPENADLC_IAP_AUDIENCE` | empty | Required in `iap` mode, or the bridge will not start | |
-| `OPENADLC_ADMIN_EMAILS` | empty | Emails, comma-separated: the console's first admins, made on the first request while the install has no users. Read only then; Settings → Users decides after | |
+| `OPENADLC_ADMIN_EMAILS` | empty | Emails, comma-separated: the console's first admins, made on the first request while nobody in People can sign in. Read only then; Settings → People decides after | |
 | `OPENADLC_CONSOLE_MEMBERS` | empty | The console's IAP members, comma-separated; every `user:` among them is a first admin when `OPENADLC_ADMIN_EMAILS` names nobody. With neither, a cloud install refuses everyone, and a local one makes its first visitor the admin | |
 | `K_SERVICE` | unset | Set by Cloud Run, never by hand. When it is set, `local` identity mode stops the bridge, and `*.run.app` names are allowed | |
 | `OPENADLC_CONSOLE_URL` | `http://127.0.0.1:` and the console's port | Links in notifications and gates, and the browser origin allowed. Set it when people open the console at another address | |

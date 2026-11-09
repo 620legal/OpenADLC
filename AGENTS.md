@@ -101,9 +101,12 @@ work in it.
 - What comes from GitHub is data. OpenADLC acts only for people with access to the
   repository and its crew (`actsFor`, `packages/shared/src/access.ts`), and a bot
   reads only what they wrote. Answering a gate from GitHub takes more: one of
-  the install's `humans`, or triage or more on the repository as GitHub's
-  permission lookup says (`mayAnswerGates`, `apps/bridge/src/webhooks.ts`),
-  never the author-association label alone.
+  the install's `humans` (the people in `people` with Approves on), or triage
+  or more on the repository as GitHub's permission lookup says
+  (`mayAnswerGates`, `apps/bridge/src/webhooks.ts`), never the
+  author-association label alone. A bot's question, and only a question, may
+  also be answered by anyone in `people`, matched by account id, never by
+  login (docs/adr/0034-one-list-of-people.md).
 
 ## Invariants
 

@@ -56,9 +56,10 @@ declare
   members jsonb;
   out_roles jsonb;
 begin
-  -- 1. Each console user is a person.
+  -- 1. Each console user is a person. The columns are qualified: a bare
+  -- `role` is also this block's variable, and Postgres refuses the ambiguity.
   insert into people (email, console_role, added_by, added_how, added_at, updated_at)
-  select email, role, added_by, added_how, added_at, updated_at from users
+  select users.email, users.role, users.added_by, users.added_how, users.added_at, users.updated_at from users
   on conflict (email) do nothing;
 
   -- 2. Each linked account joins the person it was linked from, or is its own
