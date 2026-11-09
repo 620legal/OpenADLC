@@ -1,5 +1,5 @@
 import { accessTokenRef, modelAccountRef, refreshTokenRef, webhookSecretRef } from '@openadlc/github';
-import type { ArchivedAccount, ArchivedCredential, ArchivedHistory, ArchivedRepository, ArchivedSpendingLimit, BackupContents } from './archive.js';
+import type { ArchivedAccount, ArchivedCredential, ArchivedHistory, ArchivedPerson, ArchivedRepository, ArchivedSpendingLimit, BackupContents } from './archive.js';
 import { ATTRIBUTION_KEY_REF, mergedAttributionKeys, signsInByFolder } from './contents.js';
 import { archivedSeat, type RestorePlan } from './plan.js';
 import type { HistoryCounts } from './summary.js';
@@ -32,6 +32,17 @@ export interface RestoreDb {
    * that would end above the global one of its kind.
    */
   mergeSpendingLimits(rows: ArchivedSpendingLimit[], actor: string): Promise<void>;
+  /**
+   * Writes each person by id, over one here that holds the same email or
+   * account. People here the archive does not name are kept.
+   */
+  putPeople?(rows: ArchivedPerson[]): Promise<void>;
+  /**
+   * An archive from before People: turns Approves on for the logins its
+   * `humans` setting named, as `PATCH /v1/install {humans}` would, pinned by
+   * its `humanIds`, and deletes the row nothing reads any more.
+   */
+  approveArchivedHumans?(humans: string, humanIds: string | undefined): Promise<void>;
   /** The row, with its last check kept only when the credential it checked came back with it. */
   putAccount(account: ArchivedAccount, options: { keepCheck: boolean }): Promise<void>;
   /**
@@ -193,6 +204,13 @@ export async function applyRestore(
       for (const key of outcome.settings) {
         const value = contents.settings[key];
         if (value !== undefined) await db.setSetting(key, value);
+      }
+      // Who approves is People's since 0162. An archive from before it says
+      // so in its `humans` setting, which would otherwise be written to a row
+      // nothing reads, and its approvers lost.
+      if (contents.people) await db.putPeople?.(contents.people);
+      else if (outcome.settings.includes('humans') && contents.settings.humans) {
+        await db.approveArchivedHumans?.(contents.settings.humans, contents.settings.humanIds);
       }
       // Before the bots, which reference them.
       for (const id of outcome.accounts) {

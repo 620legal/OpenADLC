@@ -463,6 +463,29 @@ export interface BackupContents {
    * list, it is the whole table.
    */
   spendingLimits?: ArchivedSpendingLimit[];
+  /**
+   * The install's people (0162, docs/adr/0034-one-list-of-people.md). Absent
+   * from an archive written before them, or one that did not include the
+   * install: restoring an older archive turns Approves on for the logins its
+   * `humans` setting named instead.
+   */
+  people?: ArchivedPerson[];
+}
+
+/** A person in People, every column, as `people` holds them. */
+export interface ArchivedPerson {
+  id: string;
+  name: string;
+  email: string | null;
+  consoleRole: 'admin' | 'user' | null;
+  githubLogin: string | null;
+  githubUserId: number | null;
+  githubLinkedAt: string | null;
+  approves: boolean;
+  addedBy: string;
+  addedHow: string;
+  addedAt: string;
+  updatedAt: string;
 }
 
 /**
@@ -1040,6 +1063,7 @@ interface Payload {
   history?: ArchivedHistory | null;
   identities?: ArchivedIdentity[];
   spendingLimits?: ArchivedSpendingLimit[];
+  people?: ArchivedPerson[];
 }
 
 function versionOf(value: unknown): FormatVersion {
@@ -1079,7 +1103,45 @@ function payloadOf(value: unknown, version: FormatVersion): Payload {
   // An archive from before Settings saved caps has no list. One that has the
   // key, even empty, is the whole table: a restore replaces what is here.
   const limits = asSpendingLimits(contents);
-  return { ...v2, identities: asIdentities(contents.identities), ...limits };
+  return { ...v2, identities: asIdentities(contents.identities), ...limits, ...asPeople(contents) };
+}
+
+function textOrNull(value: unknown, what: string): string | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== 'string') throw new BackupError(`${what} is not text`);
+  return value;
+}
+
+/** People, when the archive has them; nothing for one written before them. */
+function asPeople(contents: Record<string, unknown>): { people: ArchivedPerson[] } | Record<string, never> {
+  if (!Object.prototype.hasOwnProperty.call(contents, 'people')) return {};
+  const value = contents.people;
+  if (!Array.isArray(value)) throw new BackupError('the people are not a list');
+  return {
+    people: value.map((entry, index) => {
+      const row = asObject(entry, `person ${index}`);
+      const what = `person ${index}`;
+      if (typeof row.id !== 'string' || !row.id) throw new BackupError(`${what} has no id`);
+      const role = row.consoleRole;
+      if (role !== null && role !== undefined && role !== 'admin' && role !== 'user') throw new BackupError(`${what} has a console role that is neither admin nor user`);
+      const githubUserId = row.githubUserId;
+      if (githubUserId !== null && githubUserId !== undefined && !Number.isInteger(githubUserId)) throw new BackupError(`${what} has a GitHub account id that is not a number`);
+      return {
+        id: row.id,
+        name: textOrNull(row.name, `${what}'s name`) ?? '',
+        email: textOrNull(row.email, `${what}'s email`),
+        consoleRole: (role ?? null) as ArchivedPerson['consoleRole'],
+        githubLogin: textOrNull(row.githubLogin, `${what}'s GitHub login`),
+        githubUserId: (githubUserId ?? null) as number | null,
+        githubLinkedAt: textOrNull(row.githubLinkedAt, `${what}'s link`),
+        approves: row.approves === true,
+        addedBy: textOrNull(row.addedBy, `${what}'s adder`) ?? 'openadlc',
+        addedHow: textOrNull(row.addedHow, `${what}'s origin`) ?? 'added',
+        addedAt: textOrNull(row.addedAt, `${what}'s date`) ?? new Date(0).toISOString(),
+        updatedAt: textOrNull(row.updatedAt, `${what}'s date`) ?? new Date(0).toISOString(),
+      };
+    }),
+  };
 }
 
 function asSpendingLimits(contents: Record<string, unknown>): { spendingLimits: ArchivedSpendingLimit[] } | Record<string, never> {
