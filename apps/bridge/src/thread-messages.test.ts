@@ -2,6 +2,10 @@ import { describe, expect, it, vi } from 'vitest';
 import { GitHubApiError } from '@openadlc/github';
 
 vi.mock('@openadlc/db', () => ({
+  people: {
+    personByEmail: vi.fn(async (email: string) => (email === 'dana@example.com' ? { id: 'p-dana' } : null)),
+    operator: vi.fn(async () => ({ id: 'p-operator' })),
+  },
   repos: { getRepoByName: vi.fn(async (name: string) => ({ id: 'repo-1', name, fullName: `exampleco/${name}` })) },
   tasks: { getTask: vi.fn(async () => null) },
   threads: {
@@ -11,7 +15,7 @@ vi.mock('@openadlc/db', () => ({
   },
 }));
 
-import { sendThreadMessage } from './thread-messages.js';
+import { answerFromConsole, consolePeopleBy, sendThreadMessage } from './thread-messages.js';
 
 const BUILDER = { id: 'bot-builder', name: 'openadlc-atlas-janedoe', slot: 'builder', role: 'implement', githubLogin: 'openadlc-atlas-janedoe' };
 
@@ -54,5 +58,37 @@ describe('a message a person sends to GitHub that is not sent', () => {
 
     const offline = await refusal(BUILDER, refusing(new Error('fetch failed')));
     expect(offline.message).toBe('GitHub did not answer (fetch failed), so it was not sent. Try again in a minute');
+  });
+});
+
+describe('an answer from the console, as a person in People', () => {
+  const answering = () => {
+    const answered: Record<string, unknown>[] = [];
+    const gates = {
+      answer: async (input: Record<string, unknown>) => {
+        answered.push(input);
+        return { answer: 'yes', taskId: null };
+      },
+    };
+    return { answered, deps: { gates: gates as never, taskService: { resume: async () => undefined } } };
+  };
+
+  it('is recorded as the person signed in with that email, Approves or not', async () => {
+    consolePeopleBy('iap');
+    const { answered, deps } = answering();
+    await answerFromConsole(deps, { gateId: 'gate-1', reply: 'yes', answeredBy: 'dana@example.com', via: 'thread' });
+    await answerFromConsole(deps, { gateId: 'gate-2', reply: 'yes', answeredBy: 'nobody@example.com', via: 'thread' });
+    expect(answered.map((one) => one.answeredByPerson)).toEqual(['p-dana', undefined]);
+  });
+
+  it('is the operator on a local install, whatever name the request carries', async () => {
+    consolePeopleBy('local');
+    try {
+      const { answered, deps } = answering();
+      await answerFromConsole(deps, { gateId: 'gate-1', reply: 'yes', answeredBy: 'janedoe', via: 'thread' });
+      expect(answered[0]).toMatchObject({ answeredBy: 'janedoe', answeredByPerson: 'p-operator' });
+    } finally {
+      consolePeopleBy('iap');
+    }
   });
 });

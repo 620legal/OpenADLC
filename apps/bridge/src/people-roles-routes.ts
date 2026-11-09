@@ -1,30 +1,30 @@
-import { audit, settings } from '@openadlc/db';
+import { audit, people as peopleStore, settings } from '@openadlc/db';
 import {
   checkPersonRoles,
   diffPersonRoles,
   parsePersonRoles,
+  personRoleLabel,
   personRolesUnchanged,
-  pruneMembers,
   viewPersonRoles,
   type PersonRolesView,
+  type RolePerson,
   type StoredPersonRoles,
 } from '@openadlc/shared';
 import type { BridgeConfig } from './config.js';
-import { effectiveConfig } from './effective-config.js';
 import { HttpFailure, type Router } from './router.js';
 
-/** The store, the live `humans` and the audit trail, injected so the routes can be tested without them. */
+/** The store, the install's people and the audit trail, injected so the routes can be tested without them. */
 export interface PeopleRolesDeps {
   stored(): Promise<StoredPersonRoles>;
   store(value: StoredPersonRoles, by: string): Promise<void>;
-  /** The install's people as they are now: the settings row, or `OPENADLC_HUMANS` / install.json when it is unset. */
-  humans(): Promise<string[]>;
+  /** Everyone in People, by id, as the console calls them. */
+  people(): Promise<RolePerson[]>;
   audit(entry: { actor: string; action: string; target: string; payload?: Record<string, unknown> }): Promise<unknown>;
   /** A new custom role's id; the shared check's own when left out. */
   newId?: () => string;
 }
 
-export function livePeopleRolesDeps(config: BridgeConfig): PeopleRolesDeps {
+export function livePeopleRolesDeps(_config?: BridgeConfig): PeopleRolesDeps {
   return {
     stored: async () => {
       const raw = await settings.getSetting('personRoles');
@@ -34,7 +34,7 @@ export function livePeopleRolesDeps(config: BridgeConfig): PeopleRolesDeps {
       return parsePersonRoles(raw);
     },
     store: (value, by) => settings.setSetting('personRoles', JSON.stringify(value), by),
-    humans: async () => (await effectiveConfig(config)).humans,
+    people: async () => (await peopleStore.listPeople()).map((person) => ({ id: person.id, label: personRoleLabel(person) })),
     audit,
   };
 }
@@ -48,9 +48,10 @@ function isJsonObject(raw: string): boolean {
   }
 }
 
-async function view(deps: PeopleRolesDeps): Promise<PersonRolesView> {
-  const [stored, humans] = await Promise.all([deps.stored(), deps.humans()]);
-  return { roles: viewPersonRoles(stored, humans), humans };
+/** What an audit entry says of a member: how the person is called, not only their id. */
+function labelled<T extends { members: string[] }>(roles: readonly T[], people: readonly RolePerson[]): T[] {
+  const label = new Map(people.map((person) => [person.id, person.label]));
+  return roles.map((role) => ({ ...role, members: role.members.map((id) => label.get(id) ?? id) }));
 }
 
 /**
@@ -58,39 +59,33 @@ async function view(deps: PeopleRolesDeps): Promise<PersonRolesView> {
  * Nothing routes by them yet; a later change routes Needs-you items to the
  * role they concern.
  *
- * Only an admin reads or writes them (`roles.ts`). A member is always one of
- * the live `humans`: the read leaves out anyone who is not, whichever source
- * `humans` came from, and `prunePersonRoles` takes them out of the stored row
- * when `humans` is saved, so a person taken out and later put back does not
- * quietly get their old roles back (ADR 0032).
+ * Only an admin reads or writes them (`roles.ts`). A member is a person in
+ * People, by id (docs/adr/0034-one-list-of-people.md): the read leaves out an
+ * id that is no longer a person, and removing a person takes them off every
+ * role in the same change, so a person removed and added again does not
+ * quietly get their old roles back. Holding a role never makes anyone an
+ * approver: only Approves does.
  */
 export function registerPeopleRolesRoutes(router: Router, deps: PeopleRolesDeps): void {
-  router.get('/v1/people-roles', async (): Promise<PersonRolesView> => view(deps));
+  router.get('/v1/people-roles', async (): Promise<PersonRolesView> => {
+    const [stored, people] = await Promise.all([deps.stored(), deps.people()]);
+    return { roles: viewPersonRoles(stored, people.map((person) => person.id)), people };
+  });
 
   router.add('PUT', '/v1/people-roles', async ({ body, identity }): Promise<PersonRolesView> => {
     const input = await body<unknown>();
-    const [current, humans] = await Promise.all([deps.stored(), deps.humans()]);
-    const checked = checkPersonRoles(input, current, humans, deps.newId);
+    const [current, people] = await Promise.all([deps.stored(), deps.people()]);
+    const ids = people.map((person) => person.id);
+    const checked = checkPersonRoles(input, current, ids, deps.newId);
     if (!checked.ok) throw new HttpFailure(400, checked.error);
 
     await deps.store(checked.stored, identity);
     // Against what the person saw, so a member only the read filter hid is
     // not audited as removed by them.
-    const diff = diffPersonRoles(viewPersonRoles(current, humans), viewPersonRoles(checked.stored, humans));
+    const diff = diffPersonRoles(labelled(viewPersonRoles(current, ids), people), labelled(viewPersonRoles(checked.stored, ids), people));
     if (!personRolesUnchanged(diff)) {
       await deps.audit({ actor: identity, action: 'people_roles.changed', target: 'install', payload: { ...diff } });
     }
-    return { roles: viewPersonRoles(checked.stored, humans), humans };
+    return { roles: viewPersonRoles(checked.stored, ids), people };
   });
-}
-
-/**
- * Takes everyone no longer among `humans` out of every role, after `humans`
- * is saved. Writes and audits nothing when nobody was taken out.
- */
-export async function prunePersonRoles(deps: Pick<PeopleRolesDeps, 'stored' | 'store' | 'audit'>, humans: readonly string[], by: string): Promise<void> {
-  const { stored, removed } = pruneMembers(await deps.stored(), humans);
-  if (removed.length === 0) return;
-  await deps.store(stored, by);
-  await deps.audit({ actor: by, action: 'people_roles.pruned', target: 'install', payload: { removed } });
 }

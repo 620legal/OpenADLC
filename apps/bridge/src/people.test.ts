@@ -1,7 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // The install's people as pinned to their accounts (`human-ids.ts`): janedoe is account 101.
+// Dana (account 404) is a person in People who does not approve.
 vi.mock('@openadlc/db', () => ({
+  people: {
+    approvers: vi.fn(async () => []),
+    personByGithubId: vi.fn(async (id: number) => (id === 404 ? { id: 'p-dana', githubLogin: 'dana', approves: false } : null)),
+  },
   settings: {
     getSetting: vi.fn(async (key: string) => (key === 'humanIds' ? JSON.stringify({ janedoe: 101 }) : null)),
     mergeSettingJson: vi.fn(async () => undefined),
@@ -102,5 +107,14 @@ describe('the role a login has, for the merge check', () => {
     expect(await permissionOn({ permissionOf: vi.fn(async () => 'write') }, 'exampleco/api', 'janedoe')).toBe('write');
     expect(await permissionOn(refusing, 'exampleco/api', 'janedoe')).toBe('unknown');
     expect(await permissionOn(null, 'exampleco/api', 'janedoe')).toBe('unknown');
+  });
+});
+
+describe('a person in People on GitHub', () => {
+  it('is acted for by their account id, whatever GitHub says of the login, and never by the login alone', async () => {
+    const crew: { githubLogin: string | null }[] = [];
+    const nobody = asker({});
+    expect(await actsForOn({ client: nobody, repoFullName: 'exampleco/api', author: { login: 'dana', association: 'NONE', id: 404 }, crew })).toBe(true);
+    expect(await actsForOn({ client: nobody, repoFullName: 'exampleco/api', author: { login: 'dana', association: 'NONE', id: 999 }, crew })).toBe(false);
   });
 });

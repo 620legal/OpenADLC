@@ -2,7 +2,7 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { parsePersonRoles, type StoredPersonRoles } from '@openadlc/shared';
 import { afterEach, describe, expect, it } from 'vitest';
-import { prunePersonRoles, registerPeopleRolesRoutes } from './people-roles-routes.js';
+import { registerPeopleRolesRoutes } from './people-roles-routes.js';
 import { Router } from './router.js';
 import { authorize, roleFor } from './roles.js';
 
@@ -10,7 +10,7 @@ import { authorize, roleFor } from './roles.js';
  * Settings → Roles: who among the install's people holds Product, Legal,
  * Engineering and the custom roles an admin adds. Only an admin reads or
  * writes them, each change is audited with who made it, and a member is
- * always one of the live humans.
+ * a person in People, by id, whether or not they approve.
  */
 
 let server: Server | undefined;
@@ -25,9 +25,15 @@ const FIXED = [
   { id: 'engineering', name: 'Engineering', members: [] as string[] },
 ];
 
-async function serve(options: { humans?: string[]; stored?: StoredPersonRoles } = {}) {
+/** Ada approves and Grace does not; both are people, and both may hold a role. */
+const PEOPLE = [
+  { id: 'ada', label: 'Ada' },
+  { id: 'grace', label: 'grace@example.com' },
+];
+
+async function serve(options: { people?: { id: string; label: string }[]; stored?: StoredPersonRoles } = {}) {
   let stored: string | null = options.stored ? JSON.stringify(options.stored) : null;
-  const humans = options.humans ?? ['ada', 'grace'];
+  const everyone = options.people ?? PEOPLE;
   const audited: { actor: string; action: string; target: string; payload?: Record<string, unknown> }[] = [];
   let ids = 0;
   const deps = {
@@ -35,7 +41,7 @@ async function serve(options: { humans?: string[]; stored?: StoredPersonRoles } 
     store: async (value: StoredPersonRoles) => {
       stored = JSON.stringify(value);
     },
-    humans: async () => humans,
+    people: async () => everyone,
     audit: async (entry: (typeof audited)[number]) => void audited.push(entry),
     newId: () => `pr_0000000${++ids}`,
   };
@@ -73,14 +79,14 @@ describe('the roles the install’s people hold', () => {
           { id: 'legal', name: 'Legal', fixed: true, members: [] },
           { id: 'engineering', name: 'Engineering', fixed: true, members: [] },
         ],
-        humans: ['ada', 'grace'],
+        people: PEOPLE,
       },
     });
   });
 
   it('are saved whole, read back the same, and each change is audited once with who made it and what changed', async () => {
     const roles = await serve();
-    const saved = await roles.save([{ ...FIXED[0], members: ['ADA'] }, FIXED[1], FIXED[2], { name: 'Finance', members: ['grace'] }]);
+    const saved = await roles.save([{ ...FIXED[0], members: [' ada'] }, FIXED[1], FIXED[2], { name: 'Finance', members: ['grace'] }]);
     const expected = {
       roles: [
         { id: 'product', name: 'Product', fixed: true, members: ['ada'] },
@@ -88,7 +94,7 @@ describe('the roles the install’s people hold', () => {
         { id: 'engineering', name: 'Engineering', fixed: true, members: [] },
         { id: 'pr_00000001', name: 'Finance', fixed: false, members: ['grace'] },
       ],
-      humans: ['ada', 'grace'],
+      people: PEOPLE,
     };
     expect(saved).toEqual({ status: 200, body: expected });
     expect((await roles.read()).body).toEqual(expected);
@@ -102,8 +108,8 @@ describe('the roles the install’s people hold', () => {
           rolesRemoved: [],
           rolesRenamed: [],
           membersAdded: [
-            { role: 'Product', login: 'ada' },
-            { role: 'Finance', login: 'grace' },
+            { role: 'Product', person: 'Ada' },
+            { role: 'Finance', person: 'grace@example.com' },
           ],
           membersRemoved: [],
         },
@@ -123,7 +129,7 @@ describe('the roles the install’s people hold', () => {
       ...FIXED.map((role) => ({ ...role, fixed: true })),
       { id: 'pr_aaaaaaaa', name: 'Money', fixed: false, members: ['grace'] },
     ]);
-    expect(roles.audited[0]?.payload).toMatchObject({ rolesRemoved: ['Ops'], rolesRenamed: [{ from: 'Finance', to: 'Money' }], membersRemoved: [{ role: 'Ops', login: 'ada' }] });
+    expect(roles.audited[0]?.payload).toMatchObject({ rolesRemoved: ['Ops'], rolesRenamed: [{ from: 'Finance', to: 'Money' }], membersRemoved: [{ role: 'Ops', person: 'Ada' }] });
   });
 
   it.each([
@@ -134,7 +140,7 @@ describe('the roles the install’s people hold', () => {
     ['a 41-character name', [...FIXED, { name: 'x'.repeat(41), members: [] }], `“${'x'.repeat(41)}” is longer than 40 characters: shorten the role’s name`],
     ['a fixed role’s name', [...FIXED, { name: 'product', members: [] }], 'there is already a role named “Product”: give this one another name'],
     ['two names that differ only in case', [...FIXED, { name: 'Finance', members: [] }, { name: 'FINANCE', members: [] }], 'there is already a role named “Finance”: give this one another name'],
-    ['a member not among humans', [...FIXED, { name: 'Finance', members: ['bob'] }], '“bob” is not one of the install’s people: add them under Settings → Install → People first, or take them off Finance'],
+    ['a member who is not a person', [...FIXED, { name: 'Finance', members: ['bob'] }], '“bob” is not a person in People: add them under Settings → People first, or take them off Finance'],
   ])('refuse %s with a 400 that says what to fix, and write nothing', async (_, list, error) => {
     const before = { roles: [...parsePersonRoles(null).roles, { id: 'pr_aaaaaaaa', name: 'Ops', members: ['ada'] }] };
     const roles = await serve({ stored: before });
@@ -148,11 +154,11 @@ describe('the roles the install’s people hold', () => {
     expect((await roles.save([...FIXED, { name: 'x'.repeat(40), members: [] }])).status).toBe(200);
   });
 
-  it('never show a member who is not among the live humans, wherever humans comes from', async () => {
-    const roles = await serve({ humans: ['Ada'], stored: { roles: [{ id: 'product', members: ['ada', 'grace'] }, { id: 'legal', members: ['grace'] }, { id: 'engineering', members: [] }] } });
+  it('never show a member who is no longer a person in People', async () => {
+    const roles = await serve({ people: [{ id: 'ada', label: 'Ada' }], stored: { roles: [{ id: 'product', members: ['ada', 'grace'] }, { id: 'legal', members: ['grace'] }, { id: 'engineering', members: [] }] } });
     const read = await roles.read();
     expect((read.body.roles as { id: string; members: string[] }[]).map((role) => [role.id, role.members])).toEqual([
-      ['product', ['Ada']],
+      ['product', ['ada']],
       ['legal', []],
       ['engineering', []],
     ]);
@@ -165,21 +171,5 @@ describe('the roles the install’s people hold', () => {
     expect((await roles.read('user@exampleco.test')).status).toBe(403);
     expect((await roles.save(FIXED, 'user@exampleco.test')).status).toBe(403);
     expect(roles.stored()).toBeNull();
-  });
-});
-
-describe('prunePersonRoles', () => {
-  it('takes whoever left humans off every role and audits it, and writes nothing when nobody left', async () => {
-    const roles = await serve({ stored: { roles: [{ id: 'product', members: ['ada'] }, { id: 'legal', members: ['grace'] }, { id: 'engineering', members: [] }, { id: 'pr_aaaaaaaa', name: 'Finance', members: ['grace'] }] } });
-    await prunePersonRoles(roles.deps, ['ada'], 'admin@exampleco.test');
-    expect(JSON.parse(roles.stored()!)).toEqual({ roles: [{ id: 'product', members: ['ada'] }, { id: 'legal', members: [] }, { id: 'engineering', members: [] }, { id: 'pr_aaaaaaaa', name: 'Finance', members: [] }] });
-    expect(roles.audited).toEqual([
-      { actor: 'admin@exampleco.test', action: 'people_roles.pruned', target: 'install', payload: { removed: [{ role: 'Legal', login: 'grace' }, { role: 'Finance', login: 'grace' }] } },
-    ]);
-
-    const before = roles.stored();
-    await prunePersonRoles(roles.deps, ['ada'], 'admin@exampleco.test');
-    expect(roles.stored()).toBe(before);
-    expect(roles.audited).toHaveLength(1);
   });
 });

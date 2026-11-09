@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { audit as writeAudit, bots, identities, personAccounts, users as usersStore, AccountLinkedElsewhere } from '@openadlc/db';
+import { audit as writeAudit, bots, identities, people, personAccounts, users as usersStore, AccountLinkedElsewhere } from '@openadlc/db';
 import {
   appClientSecretRef,
   getSecretStore,
@@ -69,15 +69,32 @@ export function livePersonGitHubDeps(config: BridgeConfig): PersonGitHubDeps {
     },
     // Read when used: the api's routes are registered before anything reads a
     // person's link, and a test's mock of the store need not carry this one.
+    //
+    // On a local install the console has one identity, the operator
+    // (docs/adr/0034-one-list-of-people.md): whatever name a request carries,
+    // the account linked is theirs.
     store: {
-      link: (input) => personAccounts.link(input),
-      unlink: (identity) => personAccounts.unlink(identity),
-      ofIdentity: (identity) => personAccounts.ofIdentity(identity),
+      link: async (input) => personAccounts.link({ ...input, ...(await operatorOf(config)) }),
+      unlink: async (identity) => {
+        const operator = await operatorOf(config);
+        return personAccounts.unlink(identity, operator.personId);
+      },
+      ofIdentity: async (identity) => {
+        const operator = await operatorOf(config);
+        return operator.personId ? personAccounts.ofPerson(operator.personId) : personAccounts.ofIdentity(identity);
+      },
     },
     audit: async (entry) => {
       await writeAudit(entry);
     },
   };
+}
+
+/** The operator's person id on a local install, to link as; nothing behind IAP, where the email says who. */
+async function operatorOf(config: BridgeConfig): Promise<{ personId?: string }> {
+  if (config.identityMode !== 'local') return {};
+  const operator = await people.operator().catch(() => null);
+  return operator ? { personId: operator.id } : {};
 }
 
 /** A device flow a person started, kept in memory only: a bridge that restarts forgets it, and the person starts again. */

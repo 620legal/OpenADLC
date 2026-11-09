@@ -77,6 +77,7 @@ import { DispatchRunner } from './dispatch-runner.js';
 import { abandonRequest, RequestFiling } from './request-lifecycle.js';
 import { authorize, listFromEnv, Roles } from './roles.js';
 import { livePeopleDeps, registerPeopleRoutes } from './people-routes.js';
+import { consolePeopleBy } from './thread-messages.js';
 import { liveEgressDeps, registerEgressRoutes } from './egress-routes.js';
 import { livePeopleRolesDeps, registerPeopleRolesRoutes } from './people-roles-routes.js';
 import { TESTING_EGRESS_CHECK } from './health/checks/testing-egress.js';
@@ -854,6 +855,7 @@ async function main(): Promise<void> {
     audit: auditEntry,
   });
   registerPeopleRoutes(router, livePeopleDeps(config, roles, consoleMembers));
+  consolePeopleBy(config.identityMode);
   // Settings → Egress, put on the cloud host's proxy by hostd; the check
   // that says a testing URL is off the list asks again after each save.
   registerEgressRoutes(router, liveEgressDeps(hostd, () => health.runSoon([TESTING_EGRESS_CHECK])));
