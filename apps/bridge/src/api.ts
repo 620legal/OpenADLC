@@ -130,8 +130,7 @@ import type { WaitingReads } from './waiting.js';
 import { describeSubject } from './thread-view.js';
 import { registerBoardEventRoutes } from './board-events.js';
 import { answerFromConsole, sendThreadMessage } from './thread-messages.js';
-import { repinHumans } from './human-ids.js';
-import { livePeopleRolesDeps, prunePersonRoles } from './people-roles-routes.js';
+import { setApproversFromLogins } from './people-routes.js';
 import { checkConsoleLogo, checkConsoleName, decodeLogo, LOGO_POLICY, logoMediaType } from './brand.js';
 import { defaultItemLinkDeps, registerItemLinkRoutes, registerItemRoutes } from './item-routes.js';
 import { registerItemSearchRoutes } from './item-search-routes.js';
@@ -3331,10 +3330,18 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
       // Written into AGENTS.md, CODEOWNERS and the production reviewers as it
       // is: an entry that is not a login breaks those, or names someone else.
       if (key === 'humans') {
-        const wrong = value.split(',').map((entry) => entry.trim()).filter(Boolean).find((entry) => !isGitHubLogin(entry));
+        const logins = value.split(',').map((entry) => entry.trim()).filter(Boolean);
+        const wrong = logins.find((entry) => !isGitHubLogin(entry));
         if (wrong !== undefined) {
           throw new HttpFailure(400, `“${wrong}” is not a GitHub username: give each person’s login, separated by commas, without an @`);
         }
+        // Not a settings row since 0162: who approves is Approves on each
+        // person in People (docs/adr/0034-one-list-of-people.md). This turns
+        // it on for exactly these logins and off for everyone else, each
+        // change audited by the store.
+        await setApproversFromLogins(logins, identity);
+        written.push(key);
+        continue;
       }
       if (key === 'organization') {
         // Stored as the login GitHub knows. The console's lookup ignores a
@@ -3373,20 +3380,6 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
     if (written.includes('keepAwake')) deps.keepAwake?.evaluateSoon();
 
     const live = await effectiveConfig(config);
-    // Each person added is pinned to the account their login names now, and
-    // one taken out is forgotten (`human-ids.ts`). A login GitHub cannot
-    // resolve yet is pinned on its first use.
-    if (written.includes('humans')) {
-      await repinHumans(live.humans, identity).catch((error: unknown) =>
-        console.warn(`[bridge] the install's people were not pinned to their accounts: ${error instanceof Error ? error.message : error}`),
-      );
-      // Taken off every person role too, so one put back later does not get
-      // their old roles back. A failure leaves them stored, and the read,
-      // which shows only members among humans, still hides them.
-      await prunePersonRoles(livePeopleRolesDeps(config), live.humans, identity).catch((error: unknown) =>
-        console.warn(`[bridge] the people taken out were not taken off their roles: ${error instanceof Error ? error.message : error}`),
-      );
-    }
     deps.health?.runSoon(['app-installed', 'app-permissions', 'device-flow', 'webhook', 'app-client-secret']);
     // Who the install's people are decides what a Human review line may name.
     if (written.includes('humans')) deps.health?.runSoon(['repo-config']);

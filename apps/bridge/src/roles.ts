@@ -1,8 +1,11 @@
-import { audit, users as usersStore, type AddedHow, type Role, type User } from '@openadlc/db';
+import { audit, people as peopleStore, users as usersStore, type AddedHow, type Role, type User } from '@openadlc/db';
 import type { IdentityMode } from './identity.js';
 import { HttpFailure } from './router.js';
 
 export type { Role } from '@openadlc/db';
+
+/** How the first admins came to be: the people `Roles` adds while nobody can sign in. */
+export type BootstrapHow = Extract<AddedHow, 'first' | 'admin-emails' | 'console-members'>;
 
 /**
  * The role each `/v1` route needs, by method and the path it was registered
@@ -134,7 +137,10 @@ export const ROUTE_ROLES: Readonly<Record<string, Role>> = {
   'GET /v1/backup': 'admin',
   'GET /v1/restore': 'admin',
   'GET /v1/restore/into': 'admin',
-  'GET /v1/users': 'admin',
+  // Settings → People (`people-routes.ts`): who the install's people are,
+  // and who approves.
+  'GET /v1/people': 'admin',
+  'GET /v1/people/github/:login': 'admin',
   // Settings → Hosts: Settings are an admin's, as Spending's page is.
   'GET /v1/hosts': 'admin',
 
@@ -259,9 +265,11 @@ export const ROUTE_ROLES: Readonly<Record<string, Role>> = {
   'POST /v1/signing-keys/:login/keys/:keyId/dismiss': 'admin',
   'DELETE /v1/signing-keys/:login/keys/:keyId/dismiss': 'admin',
   'POST /v1/signing-keys/:login/keys/:keyId/revoke': 'admin',
-  'POST /v1/users': 'admin',
-  'PATCH /v1/users/:email': 'admin',
-  'POST /v1/users/:email/remove': 'admin',
+  'POST /v1/people': 'admin',
+  'PATCH /v1/people/:id': 'admin',
+  'POST /v1/people/:id/approves': 'admin',
+  'POST /v1/people/:id/merge': 'admin',
+  'POST /v1/people/:id/remove': 'admin',
 };
 
 export function routeKey(method: string, path: string): string {
@@ -309,7 +317,7 @@ export async function authorize(lookup: RoleLookup, method: string, path: string
     await lookup.refused(identity, 'not-a-user').catch(() => undefined);
     throw new HttpFailure(
       403,
-      `you're signed in as ${identity}, which this install doesn't know. Ask an admin to add you in Settings → Users`,
+      `you're signed in as ${identity}, which this install doesn't know. Ask an admin to add you in Settings → People`,
       { code: 'not-a-user', email: identity, admins: await lookup.admins().catch(() => []) },
     );
   }
@@ -322,7 +330,7 @@ export async function authorize(lookup: RoleLookup, method: string, path: string
 /** The part of the store roles read and bootstrap through, injected so a test needs no database. */
 export interface UsersStore {
   listUsers(): Promise<User[]>;
-  bootstrapAdmins(emails: readonly string[], how: Exclude<AddedHow, 'added'>, actor: string): Promise<User[]>;
+  bootstrapAdmins(emails: readonly string[], how: BootstrapHow, actor: string): Promise<User[]>;
 }
 
 export interface RolesDeps {
@@ -340,7 +348,11 @@ export interface RolesDeps {
 
 /** Read when a `Roles` is built, not when this module loads: a test that mocks `@openadlc/db` whole still imports it. */
 function liveStore(): UsersStore {
-  return { listUsers: () => usersStore.listUsers(), bootstrapAdmins: (emails, how, actor) => usersStore.bootstrapAdmins(emails, how, actor) };
+  // The console users are the people with an email and a console role (0162).
+  return {
+    listUsers: () => peopleStore.listUsers(),
+    bootstrapAdmins: (emails, how, actor) => peopleStore.bootstrapAdmins(emails, how, actor),
+  };
 }
 
 /** How many refused people are remembered, so a stream of new ones cannot grow it without end. */
@@ -436,7 +448,7 @@ export class Roles implements RoleLookup {
     this.reading = null;
   }
 
-  /** Every user, for Settings → Users. */
+  /** Every console user. */
   async list(): Promise<User[]> {
     return [...(await this.users()).values()];
   }
@@ -474,7 +486,7 @@ export class Roles implements RoleLookup {
   }
 }
 
-const BOOTSTRAP_WORDS: Record<Exclude<AddedHow, 'added'>, string> = {
+const BOOTSTRAP_WORDS: Record<BootstrapHow, string> = {
   'admin-emails': 'named in OPENADLC_ADMIN_EMAILS',
   'console-members': "one of the console's IAP members",
   first: 'the first to reach this local install',
@@ -489,7 +501,7 @@ const BOOTSTRAP_WORDS: Record<Exclude<AddedHow, 'added'>, string> = {
 export function firstAdmins(
   deps: Pick<RolesDeps, 'adminEmails' | 'consoleMembers' | 'mode'>,
   first: string,
-): [string[], Exclude<AddedHow, 'added'>] | null {
+): [string[], BootstrapHow] | null {
   const present = (email: string | null): email is string => email !== null;
   const named = deps.adminEmails.map(memberEmail).filter(present);
   if (named.length > 0) return [named, 'admin-emails'];

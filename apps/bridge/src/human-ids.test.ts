@@ -1,9 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /** The settings row `humanIds`, as the store keeps it. */
-const stored = vi.hoisted(() => ({ humanIds: null as string | null }));
+const stored = vi.hoisted(() => ({
+  humanIds: null as string | null,
+  people: [] as { id: string; githubLogin: string | null; githubUserId: number | null }[],
+}));
 
 vi.mock('@openadlc/db', () => ({
+  people: {
+    approvers: vi.fn(async () => stored.people),
+    pinAccount: vi.fn(async (id: string, githubUserId: number) => {
+      const person = stored.people.find((one) => one.id === id);
+      if (person && person.githubUserId === null) person.githubUserId = githubUserId;
+    }),
+  },
   settings: {
     getSetting: vi.fn(async (key: string) => (key === 'humanIds' ? stored.humanIds : null)),
     mergeSettingJson: vi.fn(async (_key: string, fields: Record<string, unknown>) => {
@@ -25,6 +35,7 @@ const resolve = vi.fn(async (login: string) => accounts[login.toLowerCase()] ?? 
 
 beforeEach(() => {
   stored.humanIds = null;
+  stored.people = [];
   for (const login of Object.keys(accounts)) delete accounts[login];
   resolve.mockClear();
   resolveHumanIdsWith(resolve);
@@ -92,5 +103,23 @@ describe('a pinned login that names another account now', () => {
   it('calls a login GitHub did not answer for unknown, not moved', async () => {
     stored.humanIds = JSON.stringify({ janedoe: 101 });
     expect(await movedHumans(['janedoe'], resolve)).toEqual({ moved: [], unknown: ['janedoe'] });
+  });
+});
+
+describe('a person in People with Approves on', () => {
+  it('is pinned to the account on their row, not to humanIds', async () => {
+    stored.people = [{ id: 'p-1', githubLogin: 'JaneDoe', githubUserId: 101 }];
+    stored.humanIds = JSON.stringify({ janedoe: 999 });
+    expect(await isPinnedHuman(['JaneDoe'], 'janedoe', 101)).toBe(true);
+    expect(await isPinnedHuman(['JaneDoe'], 'janedoe', 999)).toBe(false);
+    expect((await pinnedHumanIds()).janedoe).toBe(101);
+  });
+
+  it('brought over unpinned, is pinned on their row on first use', async () => {
+    stored.people = [{ id: 'p-1', githubLogin: 'janedoe', githubUserId: null }];
+    accounts.janedoe = 101;
+    expect(await isPinnedHuman(['janedoe'], 'janedoe', 101)).toBe(true);
+    expect(stored.people[0]!.githubUserId).toBe(101);
+    expect(stored.humanIds).toBeNull();
   });
 });

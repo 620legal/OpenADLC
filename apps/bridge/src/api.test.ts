@@ -152,6 +152,10 @@ vi.mock('@openadlc/db', () => ({
   },
   withAdvisoryLock: vi.fn(async (_key: string, fn: () => Promise<unknown>) => fn()),
   sessions: {},
+  people: {
+    approvers: vi.fn(async () => []),
+    setApprovers: vi.fn(async (accounts: { login: string; id: number }[]) => accounts.map((account) => ({ githubLogin: account.login, githubUserId: account.id }))),
+  },
   settings: {
     isSettingKey: vi.fn(() => true),
     getSetting: vi.fn(async (key: string) => stored.settings[key] ?? null),
@@ -197,7 +201,8 @@ vi.mock('@openadlc/db', () => ({
   },
 }));
 
-import { acknowledgements, audit, bots, bridgeGaps, costs, credentials, hosts, issues,leases, modelAccounts, repos, requests, sessions, settings, tasks, threads, withAdvisoryLock } from '@openadlc/db';
+import { acknowledgements, audit, bots, bridgeGaps, costs, credentials, hosts, issues,leases, modelAccounts, people, repos, requests, sessions, settings, tasks, threads, withAdvisoryLock } from '@openadlc/db';
+import { resolveHumanIdsWith } from './human-ids.js';
 
 let hostd: Server;
 let bridge: Server;
@@ -2044,32 +2049,28 @@ describe('the roles the install’s people hold, and PATCH /v1/install', () => {
     expect(vi.mocked(settings.setSetting)).not.toHaveBeenCalled();
   });
 
-  it('takes a person taken out of humans off every role, audited once, and does not give them back when they return', async () => {
-    stored.settings = { humans: 'ada, grace', personRoles: JSON.stringify(ROLES) };
-    expect((await patch({ humans: 'ada' })).status).toBe(200);
+  it('turns Approves on for exactly the logins humans names, each resolved on GitHub, and leaves roles alone', async () => {
+    stored.settings = { personRoles: JSON.stringify(ROLES) };
+    resolveHumanIdsWith(async (login) => ({ ada: 11, grace: 12 })[login] ?? false);
+    try {
+      expect((await patch({ humans: 'ada, grace' })).status).toBe(200);
+      expect(people.setApprovers).toHaveBeenCalledWith(
+        [
+          { login: 'ada', id: 11 },
+          { login: 'grace', id: 12 },
+        ],
+        'admin@exampleco.test',
+      );
+      // Not a settings row any more, and roles no longer depend on Approves.
+      expect(stored.settings.humans).toBeUndefined();
+      expect(JSON.parse(stored.settings.personRoles!)).toEqual(ROLES);
 
-    expect(JSON.parse(stored.settings.personRoles!)).toEqual({
-      roles: [
-        { id: 'product', members: [] },
-        { id: 'legal', members: ['ada'] },
-        { id: 'engineering', members: [] },
-        { id: 'pr_3f9c2a1b', name: 'Finance', members: [] },
-      ],
-    });
-    const pruned = vi.mocked(audit).mock.calls.map(([entry]) => entry).filter((entry) => entry.action === 'people_roles.pruned');
-    expect(pruned).toEqual([
-      {
-        actor: 'admin@exampleco.test',
-        action: 'people_roles.pruned',
-        target: 'install',
-        payload: { removed: [{ role: 'Legal', login: 'grace' }, { role: 'Finance', login: 'grace' }] },
-      },
-    ]);
-
-    vi.mocked(audit).mockClear();
-    expect((await patch({ humans: 'ada, grace' })).status).toBe(200);
-    expect(JSON.parse(stored.settings.personRoles!).roles.flatMap((role: { members: string[] }) => role.members)).toEqual(['ada']);
-    expect(vi.mocked(audit).mock.calls.some(([entry]) => entry.action === 'people_roles.pruned')).toBe(false);
+      const unknown = await patch({ humans: 'ada, nobodyhere' });
+      expect(unknown.status).toBe(400);
+      expect(((await unknown.json()) as { error: string }).error).toContain('GitHub has no account @nobodyhere');
+    } finally {
+      resolveHumanIdsWith(null);
+    }
   });
 });
 

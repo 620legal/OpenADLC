@@ -4,8 +4,10 @@
  * routed to. Not an access role (`admin`/`user`) and not a crew seat's role,
  * which is why the code never calls one a bare `role`.
  *
- * Stored as one install setting, `personRoles`, written only by
- * `PUT /v1/people-roles` and by the prune when `humans` is saved (ADR 0032).
+ * Stored as one install setting, `personRoles`, written by
+ * `PUT /v1/people-roles` and by the store when a person is removed or merged.
+ * A member is a person's id in People (ADR 0034, superseding ADR 0032's
+ * "members are live humans"), so someone with no GitHub login can hold one.
  * The fixed roles' names live here and are never stored, so no write can
  * rename one; a custom role's id is `pr_` and 8 hex characters, assigned when
  * it is added and kept across renames, because that id is what routing will
@@ -45,10 +47,21 @@ export interface PersonRole {
   members: string[];
 }
 
+/** One person the console may offer for a role: their id, and how they are called. */
+export interface RolePerson {
+  id: string;
+  label: string;
+}
+
 /** What `GET` and `PUT /v1/people-roles` answer: the roles, and the people the console may offer. */
 export interface PersonRolesView {
   roles: PersonRole[];
-  humans: string[];
+  people: RolePerson[];
+}
+
+/** How a person is called in a role: their name, else their email, else `@login`. */
+export function personRoleLabel(person: { id: string; name?: string | null; email?: string | null; githubLogin?: string | null }): string {
+  return person.name?.trim() || person.email || (person.githubLogin ? `@${person.githubLogin}` : person.id);
 }
 
 const CUSTOM_ID = /^pr_[0-9a-f]{8}$/;
@@ -93,13 +106,13 @@ export function parsePersonRoles(raw: string | null): StoredPersonRoles {
   return { roles: [...FIXED_PERSON_ROLES.map((role) => ({ id: role.id, members: fixed.get(role.id) ?? [] })), ...custom] };
 }
 
-/** The members of a list that are among `humans`, spelt as `humans` spells them, each once. */
-function amongHumans(members: readonly string[], humans: readonly string[]): string[] {
-  const byLower = new Map(humans.map((login) => [login.toLowerCase(), login]));
+/** The members of a list that are people in People, each once. */
+function amongPeople(members: readonly string[], people: readonly string[]): string[] {
+  const known = new Set(people);
   const out: string[] = [];
   for (const member of members) {
-    const login = byLower.get(member.trim().toLowerCase());
-    if (login !== undefined && !out.includes(login)) out.push(login);
+    const id = member.trim();
+    if (known.has(id) && !out.includes(id)) out.push(id);
   }
   return out;
 }
@@ -110,17 +123,16 @@ function roleName(role: StoredPersonRole): string {
 
 /**
  * The roles as the API shows them: the fixed ones first in their order, then
- * the custom ones as stored. A member who is not among the live `humans`
- * is left out, whichever source `humans` came from, so a role never shows
- * someone the install no longer counts as one of its people.
+ * the custom ones as stored. A member who is no longer a person in People
+ * is left out, so a role never shows someone the install no longer has.
  */
-export function viewPersonRoles(stored: StoredPersonRoles, humans: readonly string[]): PersonRole[] {
+export function viewPersonRoles(stored: StoredPersonRoles, people: readonly string[]): PersonRole[] {
   const normal = parsePersonRoles(JSON.stringify(stored));
   return normal.roles.map((role) => ({
     id: role.id,
     name: roleName(role),
     fixed: fixedRole(role.id) !== undefined,
-    members: amongHumans(role.members, humans),
+    members: amongPeople(role.members, people),
   }));
 }
 
@@ -134,13 +146,13 @@ export type PersonRolesCheck = { ok: true; stored: StoredPersonRoles } | { ok: f
 
 /**
  * Checks a whole list sent by `PUT /v1/people-roles` against what is stored
- * and the install's people, and gives what to store. Each refusal says what to
+ * and the ids of the install's people, and gives what to store. Each refusal says what to
  * change; nothing is half-applied.
  */
 export function checkPersonRoles(
   input: unknown,
   current: StoredPersonRoles,
-  humans: readonly string[],
+  people: readonly string[],
   newId: () => string = newPersonRoleId,
 ): PersonRolesCheck {
   const shape = 'roles is a list of {id?, name, members}';
@@ -166,7 +178,7 @@ export function checkPersonRoles(
   const seenNames = new Map(FIXED_PERSON_ROLES.map((role) => [role.name.toLowerCase(), role.name]));
   const fixedOut = new Map<string, string[]>();
   const customOut: StoredPersonRole[] = [];
-  const byLower = new Map(humans.map((login) => [login.toLowerCase(), login]));
+  const known = new Set(people);
 
   for (const entry of entries) {
     const fixed = entry.id === undefined ? undefined : fixedRole(entry.id);
@@ -192,11 +204,11 @@ export function checkPersonRoles(
 
     const members: string[] = [];
     for (const member of entry.members) {
-      const login = byLower.get(member.trim().toLowerCase());
-      if (login === undefined) {
-        return { ok: false, error: `“${member.trim()}” is not one of the install’s people: add them under Settings → Install → People first, or take them off ${name}` };
+      const id = member.trim();
+      if (!known.has(id)) {
+        return { ok: false, error: `“${id}” is not a person in People: add them under Settings → People first, or take them off ${name}` };
       }
-      if (!members.includes(login)) members.push(login);
+      if (!members.includes(id)) members.push(id);
     }
     if (fixed) fixedOut.set(fixed.id, members);
     else customOut.push({ id: entry.id ?? '', name, members });
@@ -218,16 +230,17 @@ export function checkPersonRoles(
 
 export interface PersonRoleMember {
   role: string;
-  login: string;
+  /** The person's id. */
+  person: string;
 }
 
-/** The stored roles without anyone no longer among `humans`, and who was taken off which role. */
-export function pruneMembers(stored: StoredPersonRoles, humans: readonly string[]): { stored: StoredPersonRoles; removed: PersonRoleMember[] } {
-  const lower = new Set(humans.map((login) => login.toLowerCase()));
+/** The stored roles without anyone no longer in People, and who was taken off which role. */
+export function pruneMembers(stored: StoredPersonRoles, people: readonly string[]): { stored: StoredPersonRoles; removed: PersonRoleMember[] } {
+  const known = new Set(people);
   const removed: PersonRoleMember[] = [];
   const roles = stored.roles.map((role) => {
-    const kept = role.members.filter((member) => lower.has(member.trim().toLowerCase()));
-    for (const member of role.members) if (!kept.includes(member)) removed.push({ role: roleName(role), login: member });
+    const kept = role.members.filter((member) => known.has(member.trim()));
+    for (const member of role.members) if (!kept.includes(member)) removed.push({ role: roleName(role), person: member });
     return { ...role, members: kept };
   });
   return { stored: { roles }, removed };
@@ -249,13 +262,13 @@ export function diffPersonRoles(before: readonly PersonRole[], after: readonly P
     if (!was) diff.rolesAdded.push(role.name);
     else if (was.name !== role.name) diff.rolesRenamed.push({ from: was.name, to: role.name });
     const had = was?.members ?? [];
-    for (const login of role.members) if (!had.includes(login)) diff.membersAdded.push({ role: role.name, login });
-    for (const login of had) if (!role.members.includes(login)) diff.membersRemoved.push({ role: role.name, login });
+    for (const person of role.members) if (!had.includes(person)) diff.membersAdded.push({ role: role.name, person });
+    for (const person of had) if (!role.members.includes(person)) diff.membersRemoved.push({ role: role.name, person });
   }
   for (const role of before) {
     if (after.some((one) => one.id === role.id)) continue;
     diff.rolesRemoved.push(role.name);
-    for (const login of role.members) diff.membersRemoved.push({ role: role.name, login });
+    for (const person of role.members) diff.membersRemoved.push({ role: role.name, person });
   }
   return diff;
 }

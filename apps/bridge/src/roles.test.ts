@@ -4,7 +4,7 @@ import type { AddressInfo } from 'node:net';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { AddedHow, Role, User } from '@openadlc/db';
+import type { AddedHow, Person, Role, User } from '@openadlc/db';
 import { registerConsoleApi, type ApiDeps } from './api.js';
 import { registerBackupRoutes, type BackupRouteDeps } from './backup.js';
 import { DispatchGate } from './dispatch-gate.js';
@@ -12,7 +12,7 @@ import { registerInternalApi } from './internal-api.js';
 import { registerPauseRoutes } from './pause-work.js';
 import { authorize, firstAdmins, iapAccess, memberEmail, ROUTE_ROLES, roleFor, routeKey, Roles, type RoleLookup, type UsersStore } from './roles.js';
 import { HttpFailure, Router } from './router.js';
-import { registerUsersRoutes } from './users-routes.js';
+import { registerPeopleRoutes } from './people-routes.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -22,7 +22,14 @@ function everyRoute(every = false): string[] {
   registerConsoleApi(router, { config: {} } as unknown as ApiDeps);
   registerPauseRoutes(router, new DispatchGate());
   registerBackupRoutes(router, {} as BackupRouteDeps);
-  registerUsersRoutes(router, { roles: { list: async () => [], invalidate: () => undefined }, add: async () => ({}) as User, setRole: async () => ({}) as User, remove: async () => undefined, identityMode: 'local' });
+  registerPeopleRoutes(router, {
+    roles: { invalidate: () => undefined },
+    identityMode: 'local',
+    store: { list: async () => [], add: async () => ({}) as Person, update: async () => ({}) as Person, setApproves: async () => ({}) as Person, merge: async () => ({}) as Person, remove: async () => undefined },
+    environment: async () => ({ logins: [], inEffect: true }),
+    lookup: async () => null,
+    personRoles: async () => ({ roles: [] }),
+  });
   // Its routes are `/internal/*` behind the install's secret, but a `/v1`
   // route registered through its own `post` helper would be served all the same.
   registerInternalApi(router, { config: {}, internalSecret: 'x' } as unknown as Parameters<typeof registerInternalApi>[1]);
@@ -91,7 +98,8 @@ describe('every console route says who may call it', () => {
       'POST /v1/work/resume',
       'POST /v1/backup',
       'POST /v1/terminal/:bot/:session/token',
-      'POST /v1/users',
+      'POST /v1/people',
+      'POST /v1/people/:id/approves',
       'POST /v1/repos/:repo/deploys/:sha/release',
       'POST /v1/repos/:repo/delivery/automatic',
       'GET /v1/self-update',
@@ -221,7 +229,7 @@ describe('the bridge enforces the role on every route', () => {
         code: 'not-a-user',
         email: 'stranger@example.com',
         admins: ['admin@example.com'],
-        error: expect.stringContaining('Ask an admin to add you in Settings → Users'),
+        error: expect.stringContaining('Ask an admin to add you in Settings → People'),
       });
     }
     expect(ran).toEqual([]);
@@ -369,45 +377,5 @@ describe('looking a person up', () => {
     now = new Date('2026-10-01T09:00:00Z');
     await roles.refused('stranger@example.com');
     expect(audited).toHaveLength(2);
-  });
-});
-
-describe('Settings → Users', () => {
-  let server: Server | undefined;
-  afterEach(async () => {
-    if (server) await new Promise<void>((resolve) => server!.close(() => resolve()));
-    server = undefined;
-  });
-
-  it('says who is asking, and says a refused change as a status, clearing what roles read either way', async () => {
-    const { UserChangeRefused } = await import('@openadlc/db');
-    let cleared = 0;
-    const router = new Router(undefined, undefined, undefined, async () => 'admin');
-    registerUsersRoutes(router, {
-      roles: { list: async () => [user('jane@example.com', 'admin')], invalidate: () => void (cleared += 1) },
-      add: async (email, role) => user(email, role),
-      setRole: async (email) => {
-        throw new UserChangeRefused('last-admin', `${email} is the only admin. Make someone else an admin first`);
-      },
-      remove: async () => undefined,
-      identityMode: 'iap',
-    });
-    server = createServer((request, response) => void router.handle(request, response));
-    await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve));
-    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-    const as = { 'x-openadlc-identity': 'Jane@Example.com', 'content-type': 'application/json' };
-
-    expect(await (await fetch(`${url}/v1/me`, { headers: as })).json()).toEqual({ email: 'jane@example.com', role: 'admin', identityMode: 'iap' });
-
-    const demoted = await fetch(`${url}/v1/users/jane%40example.com`, { method: 'PATCH', headers: as, body: JSON.stringify({ role: 'user' }) });
-    expect(demoted.status).toBe(409);
-    expect(await demoted.json()).toMatchObject({ code: 'last-admin', error: expect.stringContaining('only admin') });
-
-    const bad = await fetch(`${url}/v1/users`, { method: 'POST', headers: as, body: JSON.stringify({ email: 'bob@example.com', role: 'owner' }) });
-    expect(bad.status).toBe(400);
-
-    const added = await fetch(`${url}/v1/users`, { method: 'POST', headers: as, body: JSON.stringify({ email: 'bob@example.com', role: 'user' }) });
-    expect(await added.json()).toMatchObject({ user: { email: 'bob@example.com', role: 'user' } });
-    expect(cleared).toBe(2);
   });
 });

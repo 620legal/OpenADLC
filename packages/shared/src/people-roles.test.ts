@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { checkPersonRoles, diffPersonRoles, parsePersonRoles, personRolesUnchanged, pruneMembers, viewPersonRoles, type StoredPersonRoles } from './people-roles.js';
+import { checkPersonRoles, diffPersonRoles, parsePersonRoles, personRoleLabel, personRolesUnchanged, pruneMembers, viewPersonRoles, type StoredPersonRoles } from './people-roles.js';
 
 const EMPTY = parsePersonRoles(null);
 const FIXED = [
@@ -7,7 +7,8 @@ const FIXED = [
   { id: 'legal', name: 'Legal', members: [] as string[] },
   { id: 'engineering', name: 'Engineering', members: [] as string[] },
 ];
-const HUMANS = ['ada', 'Grace'];
+/** The ids of the install's people. */
+const HUMANS = ['ada', 'grace'];
 let counter = 0;
 const nextId = () => `pr_0000000${++counter}`;
 
@@ -45,17 +46,17 @@ describe('parsePersonRoles', () => {
 });
 
 describe('viewPersonRoles', () => {
-  it('names the fixed roles from code and shows only members among humans, spelt as humans spells them', () => {
+  it('names the fixed roles from code and shows only members who are people, each once', () => {
     const stored = {
       roles: [
-        { id: 'engineering', members: ['GRACE', 'bob', 'grace'] },
+        { id: 'engineering', members: ['grace', 'bob', 'grace'] },
         { id: 'pr_aaaaaaaa', name: 'Finance', members: ['ada'] },
       ],
     };
     expect(viewPersonRoles(stored, HUMANS)).toEqual([
       { id: 'product', name: 'Product', fixed: true, members: [] },
       { id: 'legal', name: 'Legal', fixed: true, members: [] },
-      { id: 'engineering', name: 'Engineering', fixed: true, members: ['Grace'] },
+      { id: 'engineering', name: 'Engineering', fixed: true, members: ['grace'] },
       { id: 'pr_aaaaaaaa', name: 'Finance', fixed: false, members: ['ada'] },
     ]);
   });
@@ -63,7 +64,7 @@ describe('viewPersonRoles', () => {
 
 describe('checkPersonRoles', () => {
   it('accepts the fixed roles with members and a new custom role, and gives the new one an id', () => {
-    const result = check([...FIXED.slice(0, 2), { ...FIXED[2], members: ['ADA', 'ada'] }, { name: '  Finance ', members: ['grace'] }]);
+    const result = check([...FIXED.slice(0, 2), { ...FIXED[2], members: [' ada', 'ada'] }, { name: '  Finance ', members: ['grace'] }]);
     expect(result).toEqual({
       ok: true,
       stored: {
@@ -71,7 +72,7 @@ describe('checkPersonRoles', () => {
           { id: 'product', members: [] },
           { id: 'legal', members: [] },
           { id: 'engineering', members: ['ada'] },
-          { id: expect.stringMatching(/^pr_/), name: 'Finance', members: ['Grace'] },
+          { id: expect.stringMatching(/^pr_/), name: 'Finance', members: ['grace'] },
         ],
       },
     });
@@ -100,7 +101,7 @@ describe('checkPersonRoles', () => {
     ['a fixed role’s name, before it', { roles: [{ name: 'legal', members: [] }, ...FIXED] }, 'there is already a role named “Legal”: give this one another name'],
     ['another custom name in another case', { roles: [...FIXED, { name: 'Finance', members: [] }, { name: 'FINANCE', members: [] }] }, 'there is already a role named “Finance”: give this one another name'],
     ['an id not stored', { roles: [...FIXED, { id: 'pr_ffffffff', name: 'Finance', members: [] }] }, 'there is no role pr_ffffffff: leave id out to add a new role'],
-    ['a member not among humans', { roles: [...FIXED, { name: 'Finance', members: ['bob'] }] }, '“bob” is not one of the install’s people: add them under Settings → Install → People first, or take them off Finance'],
+    ['a member who is not a person', { roles: [...FIXED, { name: 'Finance', members: ['bob'] }] }, '“bob” is not a person in People: add them under Settings → People first, or take them off Finance'],
     ['51 custom roles', { roles: [...FIXED, ...Array.from({ length: 51 }, (_, n) => ({ name: `Role ${n}`, members: [] }))] }, 'at most 50 custom roles'],
   ])('refuses %s, saying what to fix', (_, input, error) => {
     expect(checkPersonRoles(input, EMPTY, HUMANS, nextId)).toEqual({ ok: false, error });
@@ -112,13 +113,13 @@ describe('checkPersonRoles', () => {
 });
 
 describe('pruneMembers', () => {
-  it('takes off every role whoever is no longer among humans, and says who from where', () => {
+  it('takes off every role whoever is no longer in People, and says who from where', () => {
     const stored = { roles: [{ id: 'product', members: [] }, { id: 'legal', members: ['grace', 'ada'] }, { id: 'engineering', members: [] }, { id: 'pr_aaaaaaaa', name: 'Finance', members: ['grace'] }] };
-    expect(pruneMembers(stored, ['ADA'])).toEqual({
+    expect(pruneMembers(stored, ['ada'])).toEqual({
       stored: { roles: [{ id: 'product', members: [] }, { id: 'legal', members: ['ada'] }, { id: 'engineering', members: [] }, { id: 'pr_aaaaaaaa', name: 'Finance', members: [] }] },
       removed: [
-        { role: 'Legal', login: 'grace' },
-        { role: 'Finance', login: 'grace' },
+        { role: 'Legal', person: 'grace' },
+        { role: 'Finance', person: 'grace' },
       ],
     });
   });
@@ -141,11 +142,19 @@ describe('diffPersonRoles', () => {
       rolesRemoved: ['Ops'],
       rolesRenamed: [{ from: 'Finance', to: 'Money' }],
       membersAdded: [
-        { role: 'Product', login: 'grace' },
-        { role: 'Sales', login: 'ada' },
+        { role: 'Product', person: 'grace' },
+        { role: 'Sales', person: 'ada' },
       ],
-      membersRemoved: [{ role: 'Product', login: 'ada' }],
+      membersRemoved: [{ role: 'Product', person: 'ada' }],
     });
     expect(personRolesUnchanged(diffPersonRoles(after, after))).toBe(true);
+  });
+});
+
+describe('personRoleLabel', () => {
+  it('calls a person by name, else email, else login', () => {
+    expect(personRoleLabel({ id: 'p', name: 'Ada', email: 'ada@x', githubLogin: 'ada' })).toBe('Ada');
+    expect(personRoleLabel({ id: 'p', name: '', email: 'ada@x', githubLogin: 'ada' })).toBe('ada@x');
+    expect(personRoleLabel({ id: 'p', name: '', email: null, githubLogin: 'ada' })).toBe('@ada');
   });
 });

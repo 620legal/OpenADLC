@@ -76,7 +76,7 @@ import { Dispatcher } from '@openadlc/dispatcher';
 import { DispatchRunner } from './dispatch-runner.js';
 import { abandonRequest, RequestFiling } from './request-lifecycle.js';
 import { authorize, listFromEnv, Roles } from './roles.js';
-import { liveUsersDeps, registerUsersRoutes } from './users-routes.js';
+import { livePeopleDeps, registerPeopleRoutes } from './people-routes.js';
 import { liveEgressDeps, registerEgressRoutes } from './egress-routes.js';
 import { livePeopleRolesDeps, registerPeopleRolesRoutes } from './people-roles-routes.js';
 import { TESTING_EGRESS_CHECK } from './health/checks/testing-egress.js';
@@ -853,7 +853,7 @@ async function main(): Promise<void> {
     soak: (repoId, sha, after, detail) => deployRuns.holdPromote(repoId, sha, after, detail),
     audit: auditEntry,
   });
-  registerUsersRoutes(router, liveUsersDeps(roles, config.identityMode, consoleMembers));
+  registerPeopleRoutes(router, livePeopleDeps(config, roles, consoleMembers));
   // Settings → Egress, put on the cloud host's proxy by hostd; the check
   // that says a testing URL is off the list asks again after each save.
   registerEgressRoutes(router, liveEgressDeps(hostd, () => health.runSoon([TESTING_EGRESS_CHECK])));
