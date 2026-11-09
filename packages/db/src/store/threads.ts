@@ -41,6 +41,7 @@ interface GateRow {
   state: Gate['state'];
   answer: string | null;
   answered_by: string | null;
+  answered_by_person?: string | null;
   answered_at: Date | null;
   addressed_to: string | null;
   github_comment_url: string | null;
@@ -59,7 +60,7 @@ interface GateRow {
  * whether a person's approval of its plan change waits (`held`), so nothing
  * offers Approve on one already approved.
  */
-export type GateRecord = Gate & { addedNeedsHuman?: boolean; held?: PlanChangeHold | null };
+export type GateRecord = Gate & { addedNeedsHuman?: boolean; held?: PlanChangeHold | null; answeredByPerson?: string | null };
 
 function toMessage(row: MessageRow): Message {
   return {
@@ -96,6 +97,7 @@ function toGate(row: GateRow): GateRecord {
     ...(row.consequences !== undefined ? { consequences: row.consequences } : {}),
     ...(row.added_needs_human !== undefined ? { addedNeedsHuman: row.added_needs_human } : {}),
     ...(row.held !== undefined ? { held: toHold(row.held) } : {}),
+    ...(row.answered_by_person !== undefined ? { answeredByPerson: row.answered_by_person } : {}),
   };
 }
 
@@ -368,13 +370,19 @@ export async function getGate(id: string): Promise<GateRecord | null> {
   return row ? toGate(row) : null;
 }
 
-export async function answerGate(id: string, answer: string, answeredBy: string): Promise<Gate | null> {
+/**
+ * Answers an open gate. `answeredByPerson` is the person in People who
+ * answered, however the answer came (the console by email, GitHub by account
+ * id), so the same person answering either way is recorded once as them;
+ * `answeredBy` keeps the identity as written.
+ */
+export async function answerGate(id: string, answer: string, answeredBy: string, answeredByPerson: string | null = null): Promise<GateRecord | null> {
   const row = await queryOne<GateRow>(
-    `update gates set state = 'answered', answer = $2, answered_by = $3, answered_at = now(), updated_at = now()
+    `update gates set state = 'answered', answer = $2, answered_by = $3, answered_by_person = $4, answered_at = now(), updated_at = now()
      where id = $1 and state = 'open'
-     returning id, task_id, thread_id, question, options, state, answer, answered_by, answered_at, addressed_to, github_comment_url, created_at,
+     returning id, task_id, thread_id, question, options, state, answer, answered_by, answered_by_person, answered_at, addressed_to, github_comment_url, created_at,
                decision, consequences`,
-    [id, answer, answeredBy],
+    [id, answer, answeredBy, answeredByPerson],
   );
   return row ? toGate(row) : null;
 }
@@ -387,7 +395,7 @@ export async function answerGate(id: string, answer: string, answeredBy: string)
  */
 export async function reopenGate(id: string, answer: string, answeredBy: string): Promise<boolean> {
   const row = await queryOne<{ id: string }>(
-    `update gates set state = 'open', answer = null, answered_by = null, answered_at = null, updated_at = now()
+    `update gates set state = 'open', answer = null, answered_by = null, answered_by_person = null, answered_at = null, updated_at = now()
      where id = $1 and state = 'answered' and answer = $2 and answered_by = $3
      returning id`,
     [id, answer, answeredBy],

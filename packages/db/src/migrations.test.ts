@@ -17,6 +17,32 @@ function statements(file: string): string[] {
     .filter(Boolean);
 }
 
+describe('0162, one list of people', () => {
+  const sql = readFileSync(join(migrations, '0162_people.sql'), 'utf8').replace(/\s+/g, ' ').toLowerCase();
+
+  it('creates people, keyed by a person id, with an account id no two people share', () => {
+    expect(sql).toContain('create table if not exists people');
+    expect(sql).toContain('id uuid primary key');
+    expect(sql).toContain('github_user_id bigint unique');
+    // A login is not unique: GitHub frees a renamed account's login for anyone.
+    expect(sql).not.toMatch(/github_login text unique/);
+  });
+
+  it('records who answered a gate as a person', () => {
+    expect(sql).toContain('alter table gates add column if not exists answered_by_person uuid');
+  });
+
+  it('moves users, linked accounts, humans and role members forward, and deletes the humans row', () => {
+    expect(sql).toContain('from users');
+    expect(sql).toContain('from person_github_accounts');
+    expect(sql).toContain("key = 'humanids'");
+    expect(sql).toContain("key = 'personroles'");
+    expect(sql).toContain("delete from settings where key = 'humans'");
+    // Kept, so the migration loses nothing; a later change can drop them.
+    expect(sql).not.toMatch(/drop table (if exists )?(users|person_github_accounts)/);
+  });
+});
+
 describe('the migrations, which `migrate.ts` applies in name order', () => {
   it('are each named by a four-digit number no other shares, so that order is the numbers’', () => {
     const files = readdirSync(migrations).filter((file) => file.endsWith('.sql'));
