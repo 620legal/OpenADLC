@@ -39,7 +39,7 @@ export const SETTINGS_SECTIONS = [
   { id: 'spending-limits', label: 'Spending limits' },
   { id: 'backup', label: 'Backup' },
   { id: 'pause', label: 'Pause work' },
-  { id: 'users', label: 'Users' },
+  { id: 'people', label: 'People' },
   // Left out when the bridge could not be asked for them.
   { id: 'roles', label: 'Roles' },
   { id: 'appearance', label: 'Appearance' },
@@ -47,11 +47,13 @@ export const SETTINGS_SECTIONS = [
 
 /**
  * `#engine-updates` is System: a failed update's card was written before the
- * section was renamed. `#keep-awake`, where the sleep card's button lands, is
+ * section was renamed. `#users` is People. `#keep-awake`, where the sleep card's button lands, is
  * a row of System.
  */
 export function hashSection(hash: string): string | null {
   if (!hash) return null;
+  // Users became People (#251); a link to `#users` lands there.
+  if (hash === 'users') return 'people';
   return hash === 'engine-updates' || hash === 'keep-awake' ? 'system' : hash;
 }
 
