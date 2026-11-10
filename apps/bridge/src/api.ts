@@ -152,7 +152,7 @@ import { HOST_STOPPED_REPORTING } from './reconciler.js';
 import { DEFAULT_REMOVAL, RepoRemoval, appOnRepository, appStanding, configuredLabelNames } from './repo-removal.js';
 import type { SendBack } from './send-back.js';
 import type { StageRunner } from './stage-runner.js';
-import type { DeliveryKnowledge } from './delivery-rules.js';
+import { releaseShipping, type DeliveryKnowledge } from './delivery-rules.js';
 import type { MessageStarts } from './message-starts.js';
 
 export interface ApiDeps {
@@ -1081,6 +1081,9 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
     stopLeasing: config?.costs?.onCap?.stopLeasing ?? true,
     ...(deps.health ? { health: () => deps.health!.rows() } : {}),
     ...(deps.delivery ? { pathPolicy: async (repo) => (await deps.delivery!.get(repo)).rules.paths } : {}),
+    // A merged dependency in a repository that ships by release is met, as
+    // the dispatcher reads it: the board and Needs you said "waits on" it.
+    ...(deps.delivery ? { shipsByRelease: releaseShipping(deps.delivery) } : {}),
   };
   // Which repositories ship by merging, for the Ship column; see `deploys.ts`.
   const deploys = new DeployKnowledge(() => asAutomation(deps.actors, config));

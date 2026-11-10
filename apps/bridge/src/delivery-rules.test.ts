@@ -13,11 +13,15 @@ const world = {
 };
 
 vi.mock('@openadlc/db', () => ({
-  repos: { getDelivery: vi.fn(async () => world.stored), getProductionChoice: vi.fn(async () => world.choice) },
+  repos: {
+    getDelivery: vi.fn(async () => world.stored),
+    getProductionChoice: vi.fn(async () => world.choice),
+    getRepoByName: vi.fn(async (name: string) => (name.toLowerCase() === 'exampleco/app' ? REPO : null)),
+  },
   settings: { getSetting: vi.fn(async () => world.setting) },
 }));
 
-import { DeliveryKnowledge, effectiveDelivery } from './delivery-rules.js';
+import { DeliveryKnowledge, effectiveDelivery, releaseShipping, type EffectiveDelivery } from './delivery-rules.js';
 
 const REPO = { id: 'repo-1', name: 'app', fullName: 'exampleco/app', defaultBranch: 'main' };
 
@@ -178,5 +182,33 @@ describe('what was read', () => {
     known.forget(REPO.fullName);
     await known.get(REPO);
     expect(github.readFileIfPresent).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('whether a repository ships by release, for what waits on its issues', () => {
+  const answering = (testingOn: string, readError: string | null = null) => ({
+    get: vi.fn(async () => ({ rules: { version: 1, testing: { on: testingOn } }, readError }) as unknown as EffectiveDelivery),
+  });
+
+  it('is yes for testing.on: release, and no for merge', async () => {
+    expect(await releaseShipping(answering('release'))('exampleco/app')).toBe(true);
+    expect(await releaseShipping(answering('release'))('ExampleCo/App')).toBe(true);
+    expect(await releaseShipping(answering('merge'))('exampleco/app')).toBe(false);
+  });
+
+  it('is no when the rules could not be read, or reading them throws: the stricter rule only waits longer', async () => {
+    expect(await releaseShipping(answering('release', 'GitHub answered 502'))('exampleco/app')).toBe(false);
+    const throwing = {
+      get: vi.fn(async (): Promise<EffectiveDelivery> => {
+        throw new Error('the database went away');
+      }),
+    };
+    expect(await releaseShipping(throwing)('exampleco/app')).toBe(false);
+  });
+
+  it('is no for a repository this install does not manage, without asking its rules', async () => {
+    const rules = answering('release');
+    expect(await releaseShipping(rules)('someone/else')).toBe(false);
+    expect(rules.get).not.toHaveBeenCalled();
   });
 });

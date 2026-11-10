@@ -17,6 +17,7 @@ import {
   resolutionPolicy,
   tooManyAttempts,
   type ContextDocument,
+  type ShipsByRelease,
 } from '@openadlc/shared';
 import type { Started } from './build-start.js';
 import { sayOnCard } from './deploy-pipeline.js';
@@ -165,6 +166,12 @@ export interface StackingDeps {
    * round is with the builder, else why not. Absent, a person is asked.
    */
   rebuild?: (input: { repoName: string; prNumber: number; reason: string }) => Promise<string | null>;
+  /**
+   * Whether a repository ships by release (`releaseShipping`): there a merged
+   * dependency is met, as the dispatcher reads it, and is neither stacked on
+   * nor counted outstanding. Absent, none does, the stricter rule.
+   */
+  shipsByRelease?: ShipsByRelease;
   /** Says a line in a card's timeline (`sayOnCard`). */
   say?: (subjects: readonly string[], text: string, payload: Record<string, unknown>) => Promise<boolean>;
   record?: (input: { type: string; payload: unknown }) => Promise<unknown>;
@@ -270,6 +277,11 @@ export class Stacking {
     paths: { shared: string[]; exclusive: string[] },
   ): Promise<string[]> {
     const done: string[] = [];
+    // Every dependency stacking judges is in this repository (ADR 0013), so
+    // its rules are asked once, and only when a dependency needs them.
+    let releasing: Promise<boolean> | undefined;
+    const shipsByRelease = () =>
+      (releasing ??= this.deps.shipsByRelease ? this.deps.shipsByRelease(repo.fullName).catch(() => false) : Promise.resolve(false));
     for (const issue of await issues.listBlockedIssues(repo.id).catch(() => [])) {
       if (hasIgnoreLabel(issue.labels) || hasPausedLabel(issue.labels) || issue.prNumber || issue.declaredPaths.length === 0) continue;
       if (await leases.getActiveLease(repo.id, issue.number).catch(() => null)) continue;
@@ -291,7 +303,7 @@ export class Stacking {
           continue;
         }
         const { issue: dependency, ignored } = await issues.resolveDependency(repo, ref).catch(() => ({ issue: null, ignored: null }));
-        if (dependencyIsSatisfied(dependency, ignored)) continue;
+        if (dependencyIsSatisfied(dependency, ignored, { shipsByRelease: await shipsByRelease() })) continue;
         // One labelled `openadlc:ignore` is a person's: its pull request is not
         // the crew's to stack on, in review or not.
         if (ignored || hasIgnoreLabel(dependency?.labels)) outstanding.push({ number: ref.number, stage: 'ignored', prNumber: null });
