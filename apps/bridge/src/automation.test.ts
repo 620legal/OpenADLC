@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { GitHubApiError, ReviewerStandings, type PullCommit } from '@openadlc/github';
-import { Automation, BLOCKED_READ_TIMEOUT_MS, CI_RUN_LAG_MS, CI_RUN_READ_TIMEOUT_MS, COMMITS_LISTED, FORBIDDEN_PUSH, LABEL_READ_BACKOFF_MS, ciKeysChanged, contentChanged, dismissalRefused, fastPathOf, mergeBlockers, mergeDecision, personMayMergeOver, requestsTakenAway, reviewSample, seatsWaitedOn, standingApprovals, type BlockedFacts, type MergeBlockerKind, type MergeFacts } from './automation.js';
+import { Automation, BLOCKED_READ_TIMEOUT_MS, CI_RUN_LAG_MS, CI_RUN_READ_TIMEOUT_MS, COMMITS_LISTED, FORBIDDEN_PUSH, LABEL_READ_BACKOFF_MS, ciKeysChanged, contentChanged, dismissalRefused, fastPathOf, mergeBlockers, mergeDecision, personMayMergeOver, requestsTakenAway, reviewSample, reviewedAfter, seatsWaitedOn, standingApprovals, type BlockedFacts, type MergeBlockerKind, type MergeFacts } from './automation.js';
 import { Attribution } from './attribution.js';
 import type { BridgeConfig } from './config.js';
 import { ConflictRounds } from './conflict-round.js';
@@ -1771,6 +1771,136 @@ describe('the reviews on this diff, and the lead’s turn', () => {
       posts.filter((post) => (post as { user: string }).user !== 'exampleco-security'),
     );
     expect((await reading.reviewStanding('exampleco/app', pr)).gate).toEqual({ state: 'pending', description: 'not approved yet by security-reviewer' });
+  });
+});
+
+describe('a request for changes that comes after the lead’s approval', () => {
+  // On #253 the security seat found a blocker after the lead approved;
+  // nothing read it, and a person had to send the pull request back by hand.
+  const said = (name: string, verdict: string | null) =>
+    `Findings.\n\n<!-- openadlc:{"event":"review_posted"${verdict ? `,"verdict":"${verdict}"` : ''}} -->\n\n<!-- openadlc-seat:${name} -->`;
+  const plain = (name: string) => `A note.\n\n<!-- openadlc-seat:${name} -->`;
+  const LEAD = (id: number, at: string | null, state = 'APPROVED') => ({ id, user: 'exampleco-lead', state, body: said('lead-reviewer', 'approve'), submittedAt: at, commitId: 'head' });
+  const SECOND = (id: number, at: string | null, body: string, state = 'COMMENTED') => ({ id, user: 'exampleco-second', state, body, submittedAt: at, commitId: 'head' });
+  const BEFORE = '2026-11-10T10:00:00Z';
+  const APPROVED_AT = '2026-11-10T10:05:00Z';
+  const AFTER = '2026-11-10T10:10:00Z';
+
+  function standing(
+    reviews: Record<string, unknown>[],
+    options: { labels?: string[]; signed?: (review: { id: number; user: string }) => boolean; attribution?: boolean } = {},
+  ) {
+    world.crew = [
+      { id: 'b-lead', name: 'lead-reviewer', slot: 'lead-reviewer', role: 'review_lead', githubLogin: 'exampleco-lead' },
+      { id: 'b-second', name: 'second-reviewer', slot: 'second-reviewer', role: 'review_second', githubLogin: 'exampleco-second' },
+      { id: 'b-security', name: 'security-reviewer', slot: 'security-reviewer', role: 'review_security', githubLogin: 'exampleco-security' },
+    ];
+    const github = {
+      listEveryPullFile: vi.fn(async () => ({ files: ['apps/console/src/page.tsx'], complete: true, renamedFrom: [] })),
+      listReviews: vi.fn(async () => reviews),
+      readFileAtRef: vi.fn(async () => '# Agent notes\n\n## Human review\n\n- `config/` @janedoe\n'),
+      diffFingerprint: vi.fn(async () => 'the diff'),
+    };
+    const signed = options.signed ?? (() => true);
+    const attribution = {
+      countable: vi.fn(async (posts: unknown[]) => [...posts]),
+      reviewsThatCount: vi.fn(async (_repo: string, _n: number, posts: { id: number; user: string }[]) => posts.filter(signed)),
+    };
+    const reading = new Automation(config, { asBot: vi.fn(async () => github), ...(options.attribution === false ? {} : { attribution }) } as never);
+    const labels = (options.labels ?? []).map((name) => ({ name }));
+    return reading.reviewStanding('exampleco/app', { number: 70, draft: false, labels, head: { sha: 'head', ref: 'agent/builder/42-fix' }, baseRef: 'main' });
+  }
+
+  const UNCHANGED = { state: 'success', description: 'every requested review has been posted' };
+
+  it('holds the gate on an advisory seat’s request after the lead approved, and asks the lead again from it', async () => {
+    const result = await standing([SECOND(1, BEFORE, said('second-reviewer', 'approve')), LEAD(2, APPROVED_AT), SECOND(3, AFTER, said('second-reviewer', 'request_changes'))]);
+
+    expect(result.gate).toEqual({ state: 'pending', description: 'changes requested by second-reviewer after lead-reviewer approved; lead-reviewer asked again' });
+    expect(result.lateAsks).toEqual([{ seat: 'second-reviewer', reviewId: 3, submittedAt: AFTER }]);
+    expect(result.leadDue).toEqual({ seat: 'lead-reviewer', since: AFTER, lateAsks: [{ seat: 'second-reviewer', reviewId: 3, submittedAt: AFTER }] });
+  });
+
+  it('holds on the security seat’s late request on a change that is not to how CI runs', async () => {
+    const security = (id: number, at: string, verdict: string) => ({ id, user: 'exampleco-security', state: 'COMMENTED', body: said('security-reviewer', verdict), submittedAt: at, commitId: 'head' });
+    const result = await standing(
+      [SECOND(1, BEFORE, said('second-reviewer', 'approve')), security(2, BEFORE, 'approve'), LEAD(3, APPROVED_AT), security(4, AFTER, 'request_changes')],
+      { labels: ['touches:security'] },
+    );
+
+    expect(result.decision.reviewers).toContain('security-reviewer');
+    expect(result.securityAsks).toBeNull();
+    expect(result.gate.state).toBe('pending');
+    expect(result.gate.description).toContain('changes requested by security-reviewer after lead-reviewer approved');
+    expect(result.leadDue).toMatchObject({ seat: 'lead-reviewer', since: AFTER, lateAsks: [{ seat: 'security-reviewer', reviewId: 4 }] });
+  });
+
+  it('changes nothing on a later approval, in a marker or as GitHub’s', async () => {
+    for (const late of [SECOND(3, AFTER, said('second-reviewer', 'approve')), SECOND(3, AFTER, plain('second-reviewer'), 'APPROVED')]) {
+      const result = await standing([SECOND(1, BEFORE, said('second-reviewer', 'approve')), LEAD(2, APPROVED_AT), late]);
+      expect(result.gate).toEqual(UNCHANGED);
+      expect(result.lateAsks).toBeUndefined();
+      expect(result.leadDue).toBeNull();
+    }
+  });
+
+  it('changes nothing on a later plain comment, nor on one after a request the lead had read', async () => {
+    const after = await standing([SECOND(1, BEFORE, said('second-reviewer', 'approve')), LEAD(2, APPROVED_AT), SECOND(3, AFTER, plain('second-reviewer'))]);
+    expect(after.gate).toEqual(UNCHANGED);
+    expect(after.leadDue).toBeNull();
+
+    // The request is the seat's verdict still, but it was given before the
+    // lead's approval: the comment after it is no new one.
+    const read = await standing([SECOND(1, BEFORE, said('second-reviewer', 'request_changes')), LEAD(2, APPROVED_AT), SECOND(3, AFTER, plain('second-reviewer'))]);
+    expect(read.gate).toEqual(UNCHANGED);
+    expect(read.leadDue).toBeNull();
+  });
+
+  it('does not hold on a request the lead read before it approved, nor once the lead approves again', async () => {
+    const before = await standing([SECOND(1, BEFORE, said('second-reviewer', 'request_changes')), LEAD(2, APPROVED_AT)]);
+    expect(before.gate).toEqual(UNCHANGED);
+    expect(before.lateAsks).toBeUndefined();
+    expect(before.leadDue).toBeNull();
+
+    const again = await standing([
+      SECOND(1, BEFORE, said('second-reviewer', 'approve')),
+      LEAD(2, APPROVED_AT),
+      SECOND(3, AFTER, said('second-reviewer', 'request_changes')),
+      LEAD(4, '2026-11-10T10:20:00Z'),
+    ]);
+    expect(again.gate).toEqual(UNCHANGED);
+    expect(again.leadDue).toBeNull();
+  });
+
+  it('orders by review id when a review has no time, both ways', async () => {
+    const late = await standing([SECOND(1, null, said('second-reviewer', 'approve')), LEAD(2, null), SECOND(3, null, said('second-reviewer', 'request_changes'))]);
+    expect(late.gate.state).toBe('pending');
+    expect(late.leadDue).toEqual({ seat: 'lead-reviewer', since: null, lateAsks: [{ seat: 'second-reviewer', reviewId: 3, submittedAt: null }] });
+
+    const early = await standing([SECOND(1, null, said('second-reviewer', 'request_changes')), LEAD(2, APPROVED_AT)]);
+    expect(early.gate).toEqual(UNCHANGED);
+    expect(early.leadDue).toBeNull();
+  });
+
+  it('counts only a signed late request when signatures can be checked, and a crew one when nothing can check it', async () => {
+    const reviews = [SECOND(1, BEFORE, said('second-reviewer', 'approve')), LEAD(2, APPROVED_AT), SECOND(3, AFTER, said('second-reviewer', 'request_changes'))];
+
+    const unsigned = await standing(reviews, { signed: (review) => review.id !== 3 });
+    expect(unsigned.gate).toEqual(UNCHANGED);
+    expect(unsigned.leadDue).toBeNull();
+
+    const unchecked = await standing(reviews, { attribution: false });
+    expect(unchecked.gate.state).toBe('pending');
+    expect(unchecked.lateAsks).toEqual([{ seat: 'second-reviewer', reviewId: 3, submittedAt: AFTER }]);
+  });
+});
+
+describe('which of two reviews came later', () => {
+  it('compares times, and review ids when a time is missing or the same', () => {
+    expect(reviewedAfter({ reviewId: 1, submittedAt: '2026-11-10T10:10:00Z' }, { reviewId: 2, submittedAt: '2026-11-10T10:00:00Z' })).toBe(true);
+    expect(reviewedAfter({ reviewId: 3, submittedAt: null }, { reviewId: 2, submittedAt: '2026-11-10T10:00:00Z' })).toBe(true);
+    expect(reviewedAfter({ reviewId: 3, submittedAt: '2026-11-10T10:00:00Z' }, { reviewId: 2, submittedAt: '2026-11-10T10:00:00Z' })).toBe(true);
+    expect(reviewedAfter({ reviewId: 1, submittedAt: null }, { reviewId: 2, submittedAt: null })).toBe(false);
   });
 });
 
