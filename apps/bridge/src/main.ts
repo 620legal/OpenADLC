@@ -195,10 +195,22 @@ async function main(): Promise<void> {
   // review (ADR 0042): only the merge line started those again, and only for
   // a pull request whose gate passed, which one before review never has.
   // Read through a holder, since the rounds are made below.
+  // And a patch round a busy builder or a full host turned away (ADR 0044),
+  // first: it is the builder's own pull request, and started before the
+  // dispatcher's gather can lease the seat another issue.
   let resolutionRounds: Pick<ConflictRounds, 'startWaiting' | 'waitingSeats'> | null = null;
+  let patchWaits: Pick<SendBack, 'startWaiting' | 'waitingSeats'> | null = null;
   const stageRuns = new StageRunner({
-    start: async (seats) => [...(await stages.sweep({ seats })), ...((await resolutionRounds?.startWaiting(seats)) ?? [])],
-    waitedOn: () => [...stages.waitingOnSeats().map((wait) => wait.botId), ...(resolutionRounds?.waitingSeats() ?? [])],
+    start: async (seats) => [
+      ...((await patchWaits?.startWaiting(seats)) ?? []),
+      ...(await stages.sweep({ seats })),
+      ...((await resolutionRounds?.startWaiting(seats)) ?? []),
+    ],
+    waitedOn: () => [
+      ...stages.waitingOnSeats().map((wait) => wait.botId),
+      ...(resolutionRounds?.waitingSeats() ?? []),
+      ...(patchWaits?.waitingSeats() ?? []),
+    ],
     hasRoom: (seat) => tasks.seatHasRoom(seat),
   });
   // A task stopped from outside its own session — a card's Cancel, its pull
@@ -271,6 +283,7 @@ async function main(): Promise<void> {
     stopTask: stopFreeing,
     client: () => asAutomation(actors, config),
   });
+  patchWaits = sendBack;
   // A branch the merge line cannot bring up to date goes back to build.
   mergeLine.useSendBack(async (input) => {
     await sendBack.backToBuild(input);
@@ -1010,6 +1023,13 @@ async function main(): Promise<void> {
         if (count > 0) console.log(`[bridge] ${count} conflict resolution round(s) wait on a busy builder; each starts when its seat has room`);
       })
       .catch((error: unknown) => console.warn(`[bridge] could not read which resolution rounds wait on a builder: ${error instanceof Error ? error.message : error}`));
+    // The patch rounds a busy builder or a full host had turned away.
+    void sendBack
+      .loadWaits()
+      .then((count) => {
+        if (count > 0) console.log(`[bridge] ${count} patch round(s) wait on a busy builder; each starts when its seat has room`);
+      })
+      .catch((error: unknown) => console.warn(`[bridge] could not read which patch rounds wait on a builder: ${error instanceof Error ? error.message : error}`));
     void webhooks
       .resumeMergeabilityWaits()
       .then((lines) => {

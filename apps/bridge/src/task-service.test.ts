@@ -75,6 +75,7 @@ vi.mock('@openadlc/db', () => ({
     countActiveTasksForBot: vi.fn(async () => 0),
     seatHasRoom: vi.fn(async () => true),
     liveTaskOn: vi.fn(async () => null),
+    listTasks: vi.fn(async () => []),
     discardUnstarted: vi.fn(async () => undefined),
     pausedWithAnswer: vi.fn(async () => []),
     createTask: vi.fn(async (input: { botId: string }) => ({ id: 'task-2', ...input })),
@@ -112,6 +113,7 @@ import {
   UsageRefusedError,
   awaitPeople,
   awaitedPeople,
+  busyWords,
   crewReviewsOn,
   reviewSummary,
   heldAtCap,
@@ -1043,6 +1045,52 @@ describe('opening a task on a seat that runs several at once', () => {
     );
 
     await expect(opener().open({ ...OPEN, whenBlocked: 'record' })).rejects.toBeInstanceOf(SubjectBusyError);
+  });
+
+  it('answers what a start would be turned away for, in the order the start asks, and the start throws the same', async () => {
+    // A send-back asks first, so its comment can say the round waits; the two
+    // must agree, or the comment says one thing and the start does another.
+    const service = opener();
+    expect(await service.wouldWait({ botId: 'bot-1', subjectRef: 'openadlc#7' })).toBeNull();
+
+    vi.mocked(hosts.taskRoom).mockResolvedValue(0);
+    vi.mocked(tasks.seatHasRoom).mockResolvedValue(false);
+    vi.mocked(tasks.liveTaskOn).mockResolvedValue({ id: 'task-already' } as never);
+    const order: unknown[] = [];
+    for (const clear of [() => vi.mocked(tasks.liveTaskOn).mockResolvedValue(null), () => vi.mocked(tasks.seatHasRoom).mockResolvedValue(true), () => undefined]) {
+      const would = await service.wouldWait({ botId: 'bot-1', subjectRef: 'openadlc#7' });
+      order.push(would?.constructor);
+      const thrown = await service.open(OPEN).catch((error: unknown) => error);
+      expect(thrown).toBeInstanceOf(would!.constructor);
+      expect((thrown as Error).message).toBe(would!.message);
+      clear();
+    }
+    expect(order).toEqual([SubjectBusyError, BotBusyError, HostFullError]);
+    expect(tasks.createTask).not.toHaveBeenCalled();
+  });
+
+  it('says what holds a busy builder: its tasks, a full host, or the round under way', async () => {
+    const on = { repoId: 'repo-1', subjectRef: 'OpenADLC#31' };
+    vi.mocked(tasks.listTasks).mockResolvedValueOnce([{ skill: 'implement', repoId: 'repo-1', subjectRef: 'OpenADLC#280' }] as never);
+    expect(await busyWords(new BotBusyError('builder'), 'bot-1', on)).toBe('running `implement` on OpenADLC#280');
+    vi.mocked(tasks.listTasks).mockResolvedValueOnce([1, 2, 3, 4].map((n) => ({ skill: 'review', repoId: 'repo-1', subjectRef: `OpenADLC#${n}` })) as never);
+    expect(await busyWords(new BotBusyError('builder', 4), 'bot-1', on)).toBe('running 4 tasks');
+    expect(tasks.listTasks).toHaveBeenLastCalledWith({ botId: 'bot-1', states: ['queued', 'running'] });
+    expect(await busyWords(new HostFullError('builder'), 'bot-1', on)).toBe('waiting for a host: every host is running all the tasks it has room for');
+    expect(await busyWords(new SubjectBusyError('builder', 'OpenADLC#31'), 'bot-1', on)).toBe('finishing the round already under way on #31');
+  });
+
+  // A send-back comment is read by whoever can read the pull request; the
+  // builder's work in another repository is none of theirs.
+  it('names only work in the pull request’s repository, the rest as other work', async () => {
+    const on = { repoId: 'repo-1', subjectRef: 'OpenADLC#31' };
+    vi.mocked(tasks.listTasks).mockResolvedValueOnce([{ skill: 'implement', repoId: 'repo-2', subjectRef: 'private-repo#9' }] as never);
+    expect(await busyWords(new BotBusyError('builder'), 'bot-1', on)).toBe('running other work');
+    vi.mocked(tasks.listTasks).mockResolvedValueOnce([
+      { skill: 'implement', repoId: 'repo-1', subjectRef: 'OpenADLC#280' },
+      { skill: 'review', repoId: 'repo-2', subjectRef: 'private-repo#9' },
+    ] as never);
+    expect(await busyWords(new BotBusyError('builder', 2), 'bot-1', on)).toBe('running `implement` on OpenADLC#280 and other work besides');
   });
 
   it('is busy, not failed, when every host runs all it has room for, before anything is recorded', async () => {

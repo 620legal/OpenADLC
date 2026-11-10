@@ -1693,6 +1693,30 @@ behaves like this:
 grep -E 'resolution round|waits for #|stacked on|let go|held for a person|once the hold goes' "$(openadlc logs bridge)" | tail -n 20
 ```
 
+## The send-back says the round is waiting for the builder
+
+A patch round is the builder's next round on a pull request. Something sent the pull request back to Build: CI went red after the lead approved, the lead or a person asked for changes, a person wrote to the builder, or a person moved the card from Review to Build. The round could not start, for one of two reasons:
+
+- The builder was running all the tasks it may at once (Crew → tasks at once), often the next issue the dispatcher had just leased it.
+- Every host was running all the tasks it has room for.
+
+The comment ends **This round is waiting for the builder:** _builder_ is running `implement` on #N (or is waiting for a host). Work the builder is doing in another repository is said only as "other work": the comment is on this repository, and its readers may not have access to the other one. Look at Crew → tasks for what it is. It is not a failure, and nothing is lost:
+
+- The card is in Build, and the round waits on the builder's seat. The wait is recorded as a `patch.round_waiting` event, so a bridge restart keeps it.
+- The round starts as soon as the builder has room. That is either when the task the comment names ends, or within a minute of a seat or a host freeing up some other way. The issue then says **Review round N started**, with how long it waited.
+- The wait ends without a round if a patch round opens on the pull request some other way, if the card leaves Build, or if the pull request closes.
+
+If it waits longer than you expected, look at what the comment names:
+
+- If the builder is busy with a long build, let it finish, or raise the builder's tasks at once on Crew.
+- If every host is full, give a host more room with `OPENADLC_HOST_CAPACITY_TASKS`.
+
+The bridge log says each step:
+
+```bash
+grep -E 'patch round' "$(openadlc logs bridge)" | tail -n 20
+```
+
 ## An approved plan change waits on another issue
 
 A builder that asks to add paths to its lease (`plan_change`) and is approved

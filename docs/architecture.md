@@ -960,6 +960,21 @@ back, is a card in Needs you.
 Review to build is the review loop: changes requested, or CI that fails again
 after its rerun, moves the card to Build and opens the builder's patch round,
 keeping its lease; the next push that changes the diff moves it to Review.
+A round the builder has no room for — it runs all the tasks it may at once,
+or every host is full — waits on the builder's seat rather than being
+dropped, and so does a person's message to the builder or move of the card
+back to Build. The send-back asks first (`TaskService.wouldWait`, the same
+checks the start makes), still moves the card to Build, and its comment ends
+"This round is waiting for the builder: _builder_ is running `implement` on
+#N". It names only the builder's work in the same repository (`busyWords`);
+work elsewhere is "other work", since a reader of this pull request may have
+no access to that repository. The wait is a `patch.round_waiting` event
+(`patch-waits.ts`); the `StageRunner` starts it when one of the builder's
+tasks ends, or within a minute of the seat having room, once even when both
+reach it together, and posts "Review round N started". It is
+read back at start-up (`SendBack.loadWaits`), so a restart keeps it, and it
+ends when a patch round opens on the pull request or the card leaves Build
+([ADR 0044](adr/0044-a-patch-round-a-busy-builder-turned-away-waits-on-its-seat.md)).
 No review seat starts on a pull request while its builder is queued or
 running on it — a patch round on the pull request, of any kind, or the build
 that opened it, on its head branch. A push, a seat finishing, the gate sweep

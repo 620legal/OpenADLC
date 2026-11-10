@@ -296,6 +296,22 @@ describe('starting a role’s work from a message', () => {
     expect(world.messages).toEqual([]);
   });
 
+  it('says the round waits for the builder, and on what, when a busy builder turned it away', async () => {
+    // It used to be refused with "write again once one of them ends".
+    const { starts } = starter({
+      sendBack: { fromMessage: vi.fn(async () => ({ started: true as const, round: 2, waiting: 'running `implement` on app#9' })) },
+    });
+    const started = await starts.start({
+      route: { bot: 'builder', botId: 'b-builder', role: 'implement', subject: 'app#5' },
+      read: read('review'),
+      text: 'Handle the empty state.',
+      identity: 'janedoe@example.com',
+      access: 'user',
+      message,
+    });
+    expect(started).toEqual({ kind: 'starts', what: 'patch round 2 on pull request #7 once builder has room (it is running `implement` on app#9)' });
+  });
+
   describe('to a role whose task is live', () => {
     const patching = (takesMessages: boolean | null = true) =>
       read('review', { tasks: [task({ id: 'k-round', bot: 'builder', role: 'implement', kind: 'patch', state: 'running', takesMessages }), ...IN_REVIEW.tasks] });

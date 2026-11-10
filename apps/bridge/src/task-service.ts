@@ -114,6 +114,46 @@ export class RestartPendingError extends BotBusyError {
 }
 
 /**
+ * Why a start on this seat and subject would be turned away for want of room
+ * now, or null: the same work already live on the seat, then the seat running
+ * all it may at once, then every host full. `openNow` and `wouldWait` both ask
+ * this, so the two cannot drift apart.
+ */
+async function busyCheck(bot: { id: string; name: string } & Parameters<typeof maxTasksOf>[0], subjectRef: string): Promise<BotBusyError | null> {
+  if (await tasks.liveTaskOn(bot.id, subjectRef)) return new SubjectBusyError(bot.name, subjectRef);
+  if (!(await tasks.seatHasRoom(bot.id))) return new BotBusyError(bot.name, maxTasksOf(bot));
+  const room = await hosts.taskRoom();
+  if (room !== null && room <= 0) return new HostFullError(bot.name);
+  return null;
+}
+
+/**
+ * What holds a builder, in words a send-back comment ends a sentence with
+ * ("_builder_ is …"): the tasks it is running, the host it waits for, or the
+ * round already under way on the pull request. A round dropped on 2026-11-09
+ * said only "patch round not started" in the log; a person reading the issue
+ * had nothing to tell them what the builder was doing instead.
+ *
+ * The words go to a comment on `on`'s repository, so they name only work in
+ * that repository: the builder's tasks elsewhere are "other work", with no
+ * repository, number or skill, since whoever reads this pull request may
+ * have no access to the repository the other work is on.
+ */
+export async function busyWords(error: BotBusyError, botId: string, on: { repoId: string; subjectRef: string }): Promise<string> {
+  if (error instanceof SubjectBusyError) {
+    const number = on.subjectRef.split('#')[1];
+    return `finishing the round already under way${number ? ` on #${number}` : ''}`;
+  }
+  if (error instanceof HostFullError) return 'waiting for a host: every host is running all the tasks it has room for';
+  const live = await (async () => tasks.listTasks({ botId, states: ['queued', 'running'] }))().catch(() => []);
+  if (live.length === 0) return 'running all the tasks it may at once';
+  const here = live.filter((task) => task.repoId === on.repoId);
+  const parts = here.length > 3 ? [`${here.length} tasks`] : here.map((task) => `\`${task.skill}\` on ${task.subjectRef}`);
+  if (here.length < live.length) parts.push(here.length === 0 ? 'other work' : 'other work besides');
+  return `running ${parts.join(' and ')}`;
+}
+
+/**
  * Whether the task was stopped so that an answer must not start it again: a
  * person stopped it, an answer of theirs ended it (`wasRefused`), or the
  * bridge stopped it because its work was over (`stoppedByTheBridge`). A task
@@ -960,6 +1000,20 @@ export class TaskService {
     }
   }
 
+  /**
+   * The refusal a start on this seat and subject would meet now for want of
+   * room, or null: the same checks, in the same order, as `openNow` makes
+   * before its row (`busyCheck`), so a send-back that asks first and says
+   * "this round is waiting for the builder" never disagrees with the start.
+   * A start can still lose the room to another between the two; its caller
+   * hears the same error from `open` then.
+   */
+  async wouldWait(input: { botId: string; subjectRef: string }): Promise<BotBusyError | null> {
+    const bot = await bots.getBotById(input.botId);
+    if (!bot) return null;
+    return busyCheck(bot, input.subjectRef);
+  }
+
   /** Starts under way in this process. */
   private readonly opening = new Set<Promise<unknown>>();
 
@@ -1118,12 +1172,11 @@ export class TaskService {
     const opened = await this.names.withBot(found.id, async () => {
       // Read again: a rename this waited for has given the bot another name.
       const bot = (await bots.getBotById(found.id)) ?? found;
-      // The same work twice, then room on the seat, then room on a host, then
-      // whether a review's pull request is still open (above).
-      if (await tasks.liveTaskOn(bot.id, input.subjectRef)) throw new SubjectBusyError(bot.name, input.subjectRef);
-      if (!(await tasks.seatHasRoom(bot.id))) throw new BotBusyError(bot.name, maxTasksOf(bot));
-      const room = await hosts.taskRoom();
-      if (room !== null && room <= 0) throw new HostFullError(bot.name);
+      // The same work twice, then room on the seat, then room on a host
+      // (`busyCheck`, which `wouldWait` asks too), then whether a review's
+      // pull request is still open (above).
+      const busy = await busyCheck(bot, input.subjectRef);
+      if (busy) throw busy;
       const record = async () => {
         const refused = reviewed && repo ? await this.reviewRefusal(repo, reviewed.number) : null;
         if (refused) {
