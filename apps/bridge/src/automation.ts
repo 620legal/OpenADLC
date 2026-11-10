@@ -1704,15 +1704,40 @@ export function reviewLimits(raw: unknown): Pick<ReviewRules, 'maxRounds' | 'sen
   };
 }
 
+/**
+ * A closing issue's labels that some seat's `trigger.labels` names, and only
+ * those (`Automation.closingIssueLabels`). Kept apart from the pull request's
+ * own labels: an issue's `revert` or `deps` must not reach the fast path or
+ * scope, which read the pull request's alone.
+ */
+export interface IssueLabels {
+  number: number;
+  labels: string[];
+}
+
+/** The first closing issue carrying one of a seat's trigger labels, and which label. */
+function issueTrigger(labels: readonly string[], issues: readonly IssueLabels[]): { number: number; label: string } | null {
+  for (const issue of [...issues].sort((a, b) => a.number - b.number)) {
+    const label = labels.find((one) => issue.labels.includes(one));
+    if (label) return { number: issue.number, label };
+  }
+  return null;
+}
+
 /** Why a reviewer seat is asked on a pull request, or null when it is not. */
 function triggeredBy(
   entry: ReviewerSeat,
-  input: { labels: readonly string[]; changedFiles: readonly string[]; sample: number },
+  input: { labels: readonly string[]; issueLabels?: readonly IssueLabels[]; changedFiles: readonly string[]; sample: number },
 ): string | null {
   // The lead decides every pull request, whatever trigger it was given.
   if (entry.lead) return 'lead review is required on every pull request';
   if (entry.trigger === 'always') return `the ${entry.lens} lens reviews every pull request`;
   if (entry.trigger.labels.some((label) => input.labels.includes(label))) return `labels put this in the ${entry.lens} lens`;
+  // A `safety` label intake or design put on the issue asked for nothing
+  // while only the pull request's labels were read: a builder's pull request
+  // carries none, so the security seat was asked only by path or by sample.
+  const fromIssue = issueTrigger(entry.trigger.labels, input.issueLabels ?? []);
+  if (fromIssue) return `label ${fromIssue.label} on #${fromIssue.number} put this in the ${entry.lens} lens`;
   if (entry.trigger.paths.some((path) => input.changedFiles.some((file) => file.startsWith(path)))) {
     return `touches a path in the ${entry.lens} lens`;
   }
@@ -1721,9 +1746,13 @@ function triggeredBy(
 }
 
 /** Whether a seat is asked only by default: on every pull request, or by the sample. */
-function askedByDefault(entry: ReviewerSeat, input: { labels: readonly string[]; changedFiles: readonly string[] }): boolean {
+function askedByDefault(
+  entry: ReviewerSeat,
+  input: { labels: readonly string[]; issueLabels?: readonly IssueLabels[]; changedFiles: readonly string[] },
+): boolean {
   if (entry.trigger === 'always') return true;
-  const byLabel = entry.trigger.labels.some((label) => input.labels.includes(label));
+  const byLabel =
+    entry.trigger.labels.some((label) => input.labels.includes(label)) || issueTrigger(entry.trigger.labels, input.issueLabels ?? []) !== null;
   const byPath = entry.trigger.paths.some((path) => input.changedFiles.some((file) => file.startsWith(path)));
   return !byLabel && !byPath;
 }
@@ -1818,6 +1847,49 @@ export class Automation {
   }
 
   /**
+   * The labels on the issues a pull request closes that some seat's
+   * `trigger.labels` names, for `decideReviewers`' `issueLabels`. Read from
+   * GitHub on every decision, as the rest of it is, so a label put on the
+   * issue after the pull request opened counts the next time seats are
+   * chosen. This repository's issues only, as `scopeFacts` reads them.
+   *
+   * Never throws: an issue that cannot be read counts as unlabelled, so seats
+   * fall back to the pull request's own labels and nothing is held for it.
+   */
+  async closingIssueLabels(
+    client: Pick<GitHubClient, 'closingIssues' | 'getIssue'>,
+    repoFullName: string,
+    prNumber: number,
+  ): Promise<IssueLabels[]> {
+    const triggers = new Set(
+      this.reviewRules([]).reviewers.flatMap((entry) => (entry.lead || entry.trigger === 'always' ? [] : entry.trigger.labels)),
+    );
+    if (triggers.size === 0) return [];
+    let numbers: number[];
+    try {
+      numbers = await client.closingIssues(repoFullName, prNumber);
+    } catch (error) {
+      console.warn(
+        `[review] could not read the issues ${repoFullName}#${prNumber} closes; its seats are chosen from its own labels: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return [];
+    }
+    const read = await Promise.all(
+      (numbers ?? []).map(async (number): Promise<IssueLabels | null> => {
+        try {
+          const issue = await client.getIssue(repoFullName, number);
+          if (!issue || issue.pullRequest) return null;
+          const labels = (issue.labels ?? []).filter((label) => triggers.has(label));
+          return labels.length > 0 ? { number, labels } : null;
+        } catch {
+          return null;
+        }
+      }),
+    );
+    return read.filter((one): one is IssueLabels => one !== null);
+  }
+
+  /**
    * Decides who reviews a pull request, from the rules, not from a bot's choice.
    *
    * Given the crew, the reviewers come back as the names those bots go by, so
@@ -1826,7 +1898,13 @@ export class Automation {
    */
   decideReviewers(
     input: {
+      /** The pull request's own labels: every rule reads these. */
       labels: string[];
+      /**
+       * The trigger labels on the issues it closes (`closingIssueLabels`).
+       * Only a seat's trigger reads them; nothing else does.
+       */
+      issueLabels?: readonly IssueLabels[];
       changedFiles: string[];
       /** Labelled `revert`: the one change the lead may review alone. */
       isRevert: boolean;
@@ -1853,8 +1931,8 @@ export class Automation {
     for (const entry of rules.reviewers) {
       const why = triggeredBy(entry, input);
       if (!why || reviewers.includes(entry.seat)) continue;
-      // A revert drops only the seats there by default. One its own label or
-      // path asked for still reads it — the security seat on its paths — and
+      // A revert drops only the seats there by default. One its own label, its
+      // closing issue's label or its path asked for still reads it — the security seat on its paths — and
       // so does a blocking seat: the revert went to the lead alone whatever it
       // touched, and the label was one a session could put on its own pull
       // request to choose one-model review.
@@ -2140,6 +2218,8 @@ export class Automation {
     const ciKeys = client
       ? await ciKeysChanged(changedFiles, (path, ref) => client.readFileIfPresent(repoFullName, path, ref), { base: pr.baseRef, head: pr.head.sha })
       : undefined;
+    // As the opened path and `mergeFacts` read them, so all three ask the same seats.
+    const issueLabels = client ? await this.closingIssueLabels(client, repoFullName, pr.number) : [];
 
     const crew = await bots.listBots();
     // Whatever the attribution mode: on a shared account, a lead-tagged post
@@ -2156,6 +2236,7 @@ export class Automation {
     const decision = this.decideReviewers(
       {
         labels,
+        issueLabels,
         changedFiles,
         isRevert: fastPathOf(labels, pr.head.ref),
         humanReviewPaths: [],
@@ -2503,7 +2584,7 @@ export class Automation {
     const client = await this.automationClient();
     if (!client) return null;
     const repoFullName = repo.fullName;
-    const [files, onGitHub, runs, statuses, crew, gate, mode] = await Promise.all([
+    const [files, onGitHub, runs, statuses, crew, gate, mode, issueLabels] = await Promise.all([
       client.listEveryPullFile(repoFullName, pull.number),
       client.listReviews(repoFullName, pull.number),
       client.checkRunsFor(repoFullName, pull.headSha),
@@ -2514,6 +2595,9 @@ export class Automation {
       effectiveConfig(this.config)
         .then((live) => live.attributionMode)
         .catch(() => 'audit' as const),
+      // The seats the gate and the opened path ask; never throws. Not
+      // `scopeFacts`' read, which is of crew branches only and comes later.
+      this.closingIssueLabels(client, repoFullName, pull.number),
     ]);
     // From the default branch: a pull request into another branch could have
     // been opened against a copy with the human paths taken out.
@@ -2528,6 +2612,7 @@ export class Automation {
     const decision = this.decideReviewers(
       {
         labels: pull.labels,
+        issueLabels,
         changedFiles: files.files,
         isRevert: fastPathOf(pull.labels, pull.headRef),
         humanReviewPaths: [],

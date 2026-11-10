@@ -426,7 +426,11 @@ none yet, says its kind of work instead ("writing the change").
 5. **Review.** The bridge asks the reviewer seats `config/review.yaml` lists
    and triggers — a second reviewer on another model, the security reviewer by
    label, path or sample, the SRE for workflow, runbook and infrastructure
-   changes — and the lead last.
+   changes — and the lead last. A trigger label counts on the pull request or
+   on an issue it closes in the same repository, read from GitHub each time
+   seats are chosen; only trigger labels are taken from an issue, and an issue
+   that cannot be read counts as unlabelled
+   ([ADR 0039](adr/0039-seat-trigger-labels-are-read-from-closing-issues.md)).
    Every seat but the lead reviews at once, without CI, and posts a comment
    with its verdict and lens in its marker; OpenADLC's `gh` refuses an advisory
    seat an approval or a request for changes (`OPENADLC_REVIEW_MODE`). Once every

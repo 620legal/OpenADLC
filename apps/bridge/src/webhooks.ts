@@ -2578,10 +2578,14 @@ export class Webhooks {
       await issues.setPullRequestPaths(repo.id, ownIssue, changedFiles).catch(() => undefined);
     }
 
+    // The trigger labels on the issues it closes, read once for both
+    // decisions below, as the gate and the merge read them. Never throws.
+    const issueLabels = client ? await this.automation.closingIssueLabels(client, repoFullName, pr.number) : [];
+
     if (resolution) {
       const crewNow = await bots.listBots();
       const leadSeat = this.automation.decideReviewers(
-        { labels, changedFiles, isRevert: false, humanReviewPaths: [], sample: reviewSample(repoFullName, pr.number) },
+        { labels, issueLabels, changedFiles, isRevert: false, humanReviewPaths: [], sample: reviewSample(repoFullName, pr.number) },
         crewNow,
       ).lead;
       await this.automation.setReviewGate({
@@ -2617,6 +2621,7 @@ export class Webhooks {
     const decision = this.automation.decideReviewers(
       {
         labels,
+        issueLabels,
         changedFiles,
         isRevert: fastPathOf(labels, pr.head.ref),
         // The repository's own AGENTS.md decides this now, and is read below.
