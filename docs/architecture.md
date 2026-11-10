@@ -975,6 +975,25 @@ reach it together, and posts "Review round N started". It is
 read back at start-up (`SendBack.loadWaits`), so a restart keeps it, and it
 ends when a patch round opens on the pull request or the card leaves Build
 ([ADR 0044](adr/0044-a-patch-round-a-busy-builder-turned-away-waits-on-its-seat.md)).
+A sent-back card says why. Its newest stage move into Build from Review
+(`stageMoves.newestMoves`) gives the reason. That is the row `sent-back.md`
+reads, so the card and the round agree. On the card it is one line under the
+title: "Sent back: CI failed on … : test › Run unit tests", or "`<lead>` asked
+for changes: …". It stays there while the round runs.
+
+With nothing running, the card waits as `sent_back` rather than `leased`:
+
+- "Waiting for `<builder>` · running `implement` on #N · since 10:42" while the
+  round waits on the builder's seat;
+- "Sent back · no builder round has started on #P" when none will start.
+
+After `STUCK_AFTER_MS` (3 minutes) with no round, no wait and no question, the
+card is stuck. Needs you then has a `work_stuck` item, "No builder round has
+started on #P for N min". The item quotes the reason, and its **Start the
+builder round** opens the patch round on the branch (`SendBack.startHeldRound`)
+rather than asking the dispatcher, which never starts an issue a lease holds.
+The lease keeps holding the open pull request throughout
+([ADR 0046](adr/0046-a-sent-back-card-is-read-from-its-newest-move-and-its-patch-wait.md)).
 No review seat starts on a pull request while its builder is queued or
 running on it — a patch round on the pull request, of any kind, or the build
 that opened it, on its head branch. A push, a seat finishing, the gate sweep

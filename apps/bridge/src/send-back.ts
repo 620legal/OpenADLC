@@ -751,23 +751,81 @@ export class SendBack {
       console.warn(`[bridge] ${ref}: adlc:ci was not taken off #${prNumber}: ${error instanceof Error ? error.message : error}`),
     );
 
+    await this.openHeldRound({ repo, issueNumber, prNumber, by: input.by });
+  }
+
+  /**
+   * Needs you's Start the builder round, on a Build card whose lease holds
+   * its open pull request and that nothing will start: the patch round on
+   * its branch, as a send-back opens it. The dispatcher it used to ask never
+   * starts an issue a lease holds (#153), so on 2026-11-09 a card sat 21
+   * hours with nothing to press that would move it (ADR 0046). What was done,
+   * in words: the round started, or waits for its builder; none when nothing
+   * could start, with why in the log.
+   */
+  async startHeldRound(input: { repoName: string; issueNumber: number; by?: string }): Promise<string[]> {
+    const repo = await repos.getRepoByName(input.repoName);
+    if (!repo) return [];
+    const issue = await issues.getIssue(repo.id, input.issueNumber).catch(() => null);
+    const lease = await leases.getActiveLease(repo.id, input.issueNumber).catch(() => null);
+    const prNumber = lease?.prNumber ?? issue?.prNumber ?? null;
+    if (!prNumber) {
+      console.warn(`[bridge] ${input.repoName}#${input.issueNumber}: no builder round started: no pull request is held for it`);
+      return [];
+    }
+    const opened = await this.openHeldRound({ repo, issueNumber: input.issueNumber, prNumber, by: input.by ?? 'openadlc', fromNeedsYou: true });
+    if (!opened) return [];
+    return [opened.waiting ? `patch round ${opened.round} on #${prNumber} waits for ${opened.bot}: ${opened.waiting}` : `started patch round ${opened.round} on #${prNumber}`];
+  }
+
+  /**
+   * The patch round on a pull request a lease holds, when nothing is live on
+   * it: a person's move back to Build (`backFromReview`) and Needs you's
+   * Start the builder round (`startHeldRound`). Null when none was opened,
+   * and why is in the log.
+   */
+  private async openHeldRound(input: {
+    repo: repos.RepoRecord;
+    issueNumber: number;
+    prNumber: number;
+    by: string;
+    fromNeedsYou?: boolean;
+  }): Promise<{ round: number; bot: string; waiting?: string } | null> {
+    const { repo, issueNumber, prNumber } = input;
+    const ref = `${repo.name}#${issueNumber}`;
+    const notStarted = (why: string) => {
+      console.warn(`[bridge] ${ref}: no builder round started on #${prNumber}: ${why}`);
+      return null;
+    };
     const client = (await this.deps.client?.().catch(() => null)) ?? null;
     const pull = client ? await client.getPullRequest(repo.fullName, prNumber).catch(() => null) : null;
-    if (!pull || pull.state !== 'open') return;
+    if (!pull) return notStarted(client ? `GitHub did not answer for #${prNumber}` : 'the automation account is not connected');
+    if (pull.state !== 'open') return notStarted(`#${prNumber} is ${pull.state}`);
     const found = await leases.getActiveLease(repo.id, issueNumber).catch(() => null);
     const lease = found && (found.prNumber === null || found.prNumber === undefined || found.prNumber === prNumber) ? found : null;
-    const builder = lease ? await bots.getBotById(lease.botId).catch(() => null) : null;
-    if (!lease || !builder) return;
+    if (!lease) return notStarted(found ? `the lease on #${issueNumber} is for #${found.prNumber}` : `no lease holds #${issueNumber}`);
+    const builder = await bots.getBotById(lease.botId).catch(() => null);
+    if (!builder) return notStarted(`the builder that held #${issueNumber} is no longer in the crew`);
     // A round already open on it has the reason too; a second would race it.
     const open = (await tasks.listTasksOnSubjects([`${repo.name}#${prNumber}`]).catch(() => [])).some(
       (task) => task.kind === 'patch' && ['queued', 'running', 'paused'].includes(task.state),
     );
-    if (open) return;
+    if (open) return notStarted('a patch round is already live on it');
     const pr = { number: prNumber, head: { ref: pull.headRef } };
     const round = await this.nextRound({ repo, repoFullName: repo.fullName, pr, issueNumber, lease, builder });
-    if (round === null) return;
+    if (round === null) return notStarted('its review rounds have not converged, and the loop stopped for a person');
     const opened = await this.openPatchRound({ repo, repoFullName: repo.fullName, pr, client, issueNumber, lease, builder, round, by: input.by, head: pull.headSha });
-    if (opened.waiting) await this.sayWaiting({ repoFullName: repo.fullName, issueNumber, prNumber, round, bot: builder.name, busyWith: opened.waiting });
+    if (opened.refused) return notStarted(opened.refused);
+    if (opened.waiting) {
+      await this.sayWaiting({ repoFullName: repo.fullName, issueNumber, prNumber, round, bot: builder.name, busyWith: opened.waiting });
+      return { round, bot: builder.name, waiting: opened.waiting };
+    }
+    if (input.fromNeedsYou) {
+      await this.deps.automation
+        .comment(repo.fullName, issueNumber, `**Review round ${round} started from Needs you** on #${prNumber}.`)
+        .catch(() => null);
+    }
+    return { round, bot: builder.name };
   }
 
   /**

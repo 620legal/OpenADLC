@@ -29,7 +29,7 @@ import {
   type TaskFacts,
 } from './work.js';
 import { stillTried } from './request-queue.js';
-import { buildCandidates, readWaitingContext, waitingCards, waitingOf, type CardWaiting, type BuildHold, type WaitingContext, type WaitingKind, type WaitingReads } from './waiting.js';
+import { buildCandidates, readWaitingContext, waitingCards, waitingOf, type CardWaiting, type BuildHold, type SendBackFacts, type WaitingContext, type WaitingKind, type WaitingReads } from './waiting.js';
 import { followWaits, personWaitsOf, readWaitFacts, type WaitChain, type WaitFacts } from './wait-chain.js';
 import { ATTENTION_WINDOW_DAYS } from './attention.js';
 
@@ -109,6 +109,12 @@ export interface CardExtras extends CardWork {
    * works out no waiting: the activity poll's.
    */
   waiting?: CardWaiting | null;
+  /**
+   * On a Build card whose lease holds its pull request, why it was sent back
+   * from Review (`sendBackOf`), set while its round runs too; null when it
+   * was not. Absent from a read that works out no waiting (ADR 0046).
+   */
+  sendBack?: SendBackFacts | null;
   /**
    * Its wait followed to its root (`followWaits`), the same chain Needs you
    * follows; null when it waits on nothing behind it, has work going, or its
@@ -547,6 +553,8 @@ export function boardWork(input: BoardWorkInput): BoardWork {
       assignees: [...new Set(active.map((task) => task.bot))],
       sentBack: input.sendBacks?.get(`${issue.repoId}#${issue.number}`) ?? 0,
       ...(waits ? { waiting: waits.cards.get(`${issue.repoName}#${issue.number}`) ?? null } : {}),
+      // Why it came back to Build, whether or not its round is running now.
+      ...(issue.stage === 'build' && input.waiting?.sentBacks ? { sendBack: input.waiting.sentBacks.get(`${issue.repoName}#${issue.number}`) ?? null } : {}),
     });
   }
   // A pull request with no issue has no issue row for `cardWork`: its own

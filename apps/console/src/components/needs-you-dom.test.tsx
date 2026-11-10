@@ -2,7 +2,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { answerGate, retryTask } from '@/app/actions';
+import { answerGate, retryTask, startItem } from '@/app/actions';
 import type { AttentionItem } from '@/lib/api';
 import { headerData } from '@/lib/header';
 import { NeedsYou } from './needs-you';
@@ -277,7 +277,34 @@ describe('work stuck with its seat free', () => {
     expect(card.textContent).toContain('Nothing has started OpenADLC#141 for 41 min');
     await click(button('Start it now', card));
     expect(pressed.started).toEqual(['OpenADLC#141']);
-    expect(card.querySelector('[data-done]')?.textContent).toBe('Started.');
+    expect(card.querySelector('[data-done]')?.textContent).toBe('Started spec on OpenADLC#141.');
+  });
+
+  // A sent-back card no builder round will start (ADR 0046): the button opens
+  // the patch round, and says what the bridge did, a round that only waits too.
+  it('starts a sent-back card’s builder round, and says the bridge’s own line', async () => {
+    const SENT_BACK: AttentionItem = {
+      ...STUCK,
+      id: 'stuck:OpenADLC#274',
+      headline: 'No builder round has started on #281 for 20 min',
+      subject: { repo: 'OpenADLC', number: 274, title: 'Say on a sent-back card why it waits', ref: 'OpenADLC#274', url: null, item: 'OpenADLC#274' },
+      bot: { name: 'builder', slot: 'builder', role: 'implement', roleLabel: 'builder', githubLogin: null },
+      detail: 'OpenADLC#274 was sent back to builder 20 min ago: CI failed on abc1234: test › Run unit tests.',
+      actions: [{ kind: 'start_work', label: 'Start the builder round', subject: 'OpenADLC#274' }],
+    };
+    pressed.started.length = 0;
+    vi.mocked(startItem).mockResolvedValueOnce({ ok: true, started: ['started patch round 2 on #281'] } as never);
+    await render([SENT_BACK]);
+    const card = container.querySelector('article')!;
+    expect(card.textContent).toContain('CI failed on abc1234');
+    await click(button('Start the builder round', card));
+    expect(card.querySelector('[data-done]')?.textContent).toBe('Started patch round 2 on #281.');
+
+    vi.mocked(startItem).mockResolvedValueOnce({ ok: true, started: ['patch round 2 on #281 waits for builder: running `implement` on OpenADLC#280'] } as never);
+    await render([{ ...SENT_BACK, id: 'stuck:OpenADLC#275' }]);
+    const waiting = container.querySelector('article')!;
+    await click(button('Start the builder round', waiting));
+    expect(waiting.querySelector('[data-done]')?.textContent).toBe('Patch round 2 on #281 waits for builder: running `implement` on OpenADLC#280.');
   });
 });
 

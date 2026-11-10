@@ -21,7 +21,7 @@ import { findBot, labelIn } from '@/lib/bot-label';
 import { withActivity, type BoardActivity } from '@/lib/board-activity';
 import { attemptMove, columnsWithMoves, movesBack, NO_MOVES, reconcile, type MoveState } from '@/lib/board-move';
 import { liveLine, saveView, spendLine, stateColumns, storedView, type StateColumn as StateColumnData, type ViewName } from '@/lib/board-state';
-import { abandoned, awaitedApprovalsOf, cardBot, cardCost, cardStatus, heldApprovalsOf, nextUp, rootButton, runningStatus, type CardContext, type CardStatus, type RootButton, type StatusTone } from '@/lib/card-status';
+import { abandoned, awaitedApprovalsOf, cardBot, cardCost, cardStatus, heldApprovalsOf, nextUp, rootButton, runningStatus, sendBackLine, type CardContext, type CardStatus, type RootButton, type StatusTone } from '@/lib/card-status';
 import { cn } from '@/lib/cn';
 import { cardMatches, exactKey } from '@/lib/item';
 import { heldLine, IssueControls } from '@/components/issue-controls';
@@ -769,6 +769,7 @@ function Card({
   // In Working the line is always the running task's, with how long it has
   // run, whatever the card would say first in its stage.
   const status = (working ? runningStatus(card, context) : null) ?? cardStatus(card, context);
+  const sentBackWhy = sendBackLine(card);
   const cost = working ? working.spend : cardCost(card, money);
   const pending = Boolean(handlers.moves.pending[card.ref]);
   const refused = handlers.moves.refused[card.ref];
@@ -887,6 +888,13 @@ function Card({
           {card.title}
         </button>
       </h3>
+
+      {/* Why a Build card came back from Review: "sent back ×1" alone never said (ADR 0046). */}
+      {sentBackWhy && (
+        <span className="line-clamp-2 text-[12px] leading-[1.35] text-dim md:text-[11px]" title={sentBackWhy.title}>
+          {sentBackWhy.text}
+        </span>
+      )}
 
       {people.length > 0 && stage !== 'done' && (
         <span className="flex min-w-0 items-center gap-1.5 text-[12.5px] text-soft md:text-[11.5px]">

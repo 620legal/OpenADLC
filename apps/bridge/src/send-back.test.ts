@@ -1000,6 +1000,68 @@ describe('a person moving a card back', () => {
   });
 });
 
+/**
+ * Needs you's Start the builder round, on a sent-back card a lease holds for
+ * its pull request with nothing started: the dispatcher it used to ask never
+ * starts an issue a lease holds (#153), and on 2026-11-09 a card sat 21 hours
+ * (ADR 0046).
+ */
+describe('starting a held pull request’s builder round from Needs you', () => {
+  const said = (automation: ReturnType<typeof sendBack>['automation']) => (automation.comment.mock.calls as unknown as [string, number, string][]).map((call) => call[2]);
+
+  beforeEach(() => {
+    world.issue = { number: 7, stage: 'build', prNumber: 31, labels: ['adlc:build'] };
+    world.lease = { id: 'lease-7', botId: 'bot-builder', declaredPaths: ['src/app.ts'], prNumber: 31 };
+  });
+
+  it('opens the patch round on its branch, with the lease and the next round, and says so on the issue', async () => {
+    world.botTasks = [{ id: 'p1', subjectRef: 'openadlc-testbed#31', kind: 'patch', state: 'done', startedAt: 'x' }];
+    const { service, automation, taskService } = sendBack();
+
+    expect(await service.startHeldRound({ repoName: REPO.name, issueNumber: 7 })).toEqual(['started patch round 2 on #31']);
+
+    expect(taskService.open).toHaveBeenCalledWith(
+      expect.objectContaining({ bot: 'builder', kind: 'patch', subjectRef: 'openadlc-testbed#31', branch: 'agent/builder/7-issue-7', issueNumber: 7, leaseId: 'lease-7', round: 2 }),
+    );
+    expect(said(automation)).toEqual(['**Review round 2 started from Needs you** on #31.']);
+    // Nothing moves: the card is in Build already.
+    expect(automation.moveStage).not.toHaveBeenCalled();
+  });
+
+  it('opens nothing beside a patch round already live on it', async () => {
+    world.onSubjects = [{ id: 'p2', kind: 'patch', state: 'queued', subjectRef: 'openadlc-testbed#31' }];
+    const { service, taskService, automation } = sendBack();
+
+    expect(await service.startHeldRound({ repoName: REPO.name, issueNumber: 7 })).toEqual([]);
+    expect(taskService.open).not.toHaveBeenCalled();
+    expect(automation.comment).not.toHaveBeenCalled();
+  });
+
+  it('records the wait when the builder is busy, and says the round waits', async () => {
+    world.botTasks = [{ id: 'task-280', botId: 'bot-builder', repoId: REPO.id, subjectRef: 'openadlc-testbed#280', kind: 'implement', skill: 'implement', state: 'running' }];
+    const { service, taskService, automation } = sendBack();
+    taskService.open.mockRejectedValueOnce(new BotBusyError('builder'));
+
+    expect(await service.startHeldRound({ repoName: REPO.name, issueNumber: 7 })).toEqual(['patch round 1 on #31 waits for builder: running `implement` on openadlc-testbed#280']);
+    expect(world.events).toContainEqual(expect.objectContaining({ type: PATCH_ROUND_WAITING, payload: expect.objectContaining({ subjectRef: 'openadlc-testbed#31', round: 1 }) }));
+    expect(said(automation)[0]).toMatch(/^Review round 1 on #31 has not started\./);
+    expect(service.waitingSeats()).toEqual(['bot-builder']);
+  });
+
+  it('opens nothing when its pull request closed, or no pull request is held for it', async () => {
+    const closed = sendBack();
+    closed.client.getPullRequest.mockResolvedValueOnce({ state: 'closed', headRef: 'agent/builder/7-issue-7', headSha: 'h1' });
+    expect(await closed.service.startHeldRound({ repoName: REPO.name, issueNumber: 7 })).toEqual([]);
+    expect(closed.taskService.open).not.toHaveBeenCalled();
+
+    world.lease = { id: 'lease-7', botId: 'bot-builder', declaredPaths: [], prNumber: null };
+    world.issue = { number: 7, stage: 'build', prNumber: null, labels: ['adlc:build'] };
+    const other = sendBack();
+    expect(await other.service.startHeldRound({ repoName: REPO.name, issueNumber: 7 })).toEqual([]);
+    expect(other.taskService.open).not.toHaveBeenCalled();
+  });
+});
+
 describe('the record on the issue', () => {
   it('carries a marker the bridge only ever records', () => {
     const body = recordComment({ from: 'spec', to: 'intake', by: 'system-engineer', round: 2, reason: 'two readings', staffed: true });

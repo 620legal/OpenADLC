@@ -2290,7 +2290,7 @@ export function attentionItems(given: AttentionInput): AttentionItem[] {
   }
 
   const leftOut = (ref: string | null | undefined): boolean => Boolean(ref) && (ignored.has(ref!) || abandoned.has(ref!));
-  return items
+  return withoutDoubledStuck(items, waits)
     .filter((item) => !leftOut(item.subject.ref) && !leftOut(item.subject.item))
     .map((item) => {
       const behind = unblocks.get(item.id);
@@ -2313,13 +2313,17 @@ function stuckItems(
   input: AttentionInput,
   cards: ReadonlyMap<string, CardWaiting>,
   stalledIntake: ReadonlyMap<string, unknown>,
-  subjectOf: (subjectRef: string) => { subject: AttentionSubject },
+  subjectOf: (subjectRef: string) => { subject: AttentionSubject; prUrl: string | null },
   botsById: ReadonlyMap<string, BotRow>,
 ): AttentionItem[] {
   if (!input.waiting) return [];
   const items: AttentionItem[] = [];
   for (const [ref, waiting] of cards) {
     const reason = waiting.reason;
+    if (waiting.stuck && reason.kind === 'sent_back') {
+      items.push(sentBackStuck(input, ref, waiting, reason, subjectOf, botsById));
+      continue;
+    }
     if (!waiting.stuck || reason.kind !== 'free' || stalledIntake.has(ref)) continue;
     const issue = input.issues.find((one) => `${one.repoName}#${one.number}` === ref);
     // A parked issue is free outside Build, and Start it now there runs a sweep
@@ -2356,6 +2360,69 @@ function stuckItems(
     });
   }
   return items;
+}
+
+/**
+ * A Build card sent back with its pull request open, no round running or
+ * waiting and no question open, past `STUCK_AFTER_MS`: nothing will start
+ * its builder round, since the dispatcher never starts an issue a lease
+ * holds. On 2026-11-09 one sat 21 hours with nothing here (ADR 0046). Start
+ * the builder round opens the patch round (`SendBack.startHeldRound`).
+ */
+function sentBackStuck(
+  input: AttentionInput,
+  ref: string,
+  waiting: CardWaiting,
+  reason: Extract<CardWaiting['reason'], { kind: 'sent_back' }>,
+  subjectOf: (subjectRef: string) => { subject: AttentionSubject; prUrl: string | null },
+  botsById: ReadonlyMap<string, BotRow>,
+): AttentionItem {
+  const bot = [...botsById.values()].find((one) => one.name === reason.bot);
+  const issue = input.issues.find((one) => `${one.repoName}#${one.number}` === ref);
+  const minutes = Math.max(1, Math.round((input.now.getTime() - Date.parse(waiting.since)) / 60_000));
+  const sentAgo = Math.max(1, Math.round((input.now.getTime() - Date.parse(reason.sendBack.at)) / 60_000));
+  const when = sentAgo < 120 ? `${sentAgo} min ago` : `${Math.round(sentAgo / 60)} h ago`;
+  const why = reason.sendBack.reason.replace(/[.!?]+\s*$/, '');
+  const prSubject = `${ref.slice(0, ref.lastIndexOf('#'))}#${reason.pr}`;
+  const prUrl = subjectOf(prSubject).prUrl ?? (issue?.url ? issue.url.replace(/\/issues\/\d+$/, `/pull/${reason.pr}`) : null);
+  const actions: AttentionAction[] = [{ kind: 'start_work', label: 'Start the builder round', subject: ref }];
+  if (bot) actions.push({ kind: 'open_thread', label: 'Open thread', bot: bot.name });
+  if (prUrl) actions.push({ kind: 'open_url', label: 'Open the pull request', url: prUrl });
+  return {
+    id: `stuck:${ref}`,
+    kind: 'work_stuck',
+    headline: `No builder round has started on #${reason.pr} for ${minutes} min`,
+    subject: subjectOf(ref).subject,
+    bot: asAttentionBot(bot),
+    since: waiting.since,
+    detail:
+      `${ref} was sent back to ${reason.bot} ${when}: ${why}. ` +
+      `No round is running on #${reason.pr}, none is waiting for ${reason.bot}, and no question is open, so nothing will start one. ` +
+      `Start the builder round opens the next round on its branch now; the bridge’s log says why none started.`,
+    actions,
+  };
+}
+
+/**
+ * One Needs-you item per stuck pull request: a sent-back card's work_stuck
+ * item is left out while a stopped review or a failed task not tried again
+ * stands on the issue or its pull request, which already says what to do
+ * and gives Try again.
+ */
+function withoutDoubledStuck(items: AttentionItem[], cards: ReadonlyMap<string, CardWaiting>): AttentionItem[] {
+  const covered = new Set<string>();
+  for (const item of items) {
+    if (item.kind !== 'review_stalled' && item.kind !== 'task_failed') continue;
+    for (const subject of [item.subject, ...(item.members ?? []).map((member) => member.subject)]) {
+      if (subject.ref) covered.add(subject.ref);
+      if (subject.item) covered.add(subject.item);
+    }
+  }
+  return items.filter((item) => {
+    if (item.kind !== 'work_stuck' || !item.id.startsWith('stuck:')) return true;
+    const ref = item.id.slice('stuck:'.length);
+    return cards.get(ref)?.reason.kind !== 'sent_back' || !covered.has(ref);
+  });
 }
 
 /**
