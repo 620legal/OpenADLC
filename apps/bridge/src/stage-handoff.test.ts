@@ -74,6 +74,7 @@ vi.mock('@openadlc/db', async (importOriginal) => ({
   },
   recordEvent: vi.fn(async (event: { type: string; payload: unknown }) => (board.events.push(event), 'event-1')),
   listEventsOfType: vi.fn(async (type: string) => board.events.filter((event) => event.type === type).map((event) => ({ id: 1, at: '2026-10-02T00:00:00.000Z', payload: event.payload }))),
+  listEventsOfTypeWith: vi.fn(async (type: string) => board.events.filter((event) => event.type === type).map((event) => ({ at: '2026-10-02T00:00:00.000Z', payload: event.payload }))),
   stageMoves: { sendBackOfTask: vi.fn(async (taskId: string) => board.sentBack[taskId] ?? null) },
 }));
 
@@ -372,7 +373,7 @@ describe('a task that ended by sending its work back', () => {
       const stages = new StageHandoff({ moveStage: async () => ({ moved: true }), reviewRules } as never, { openLeadReview } as never);
       const ended = new Date().toISOString();
 
-      expect(await stages.onTaskDone({ kind: 'patch', subjectRef: 'openadlc#31', taskId: 'task-patch', branch: 'agent/builder/11-issue-11' })).toBe('review');
+      await stages.builderEnded({ kind: 'patch', subjectRef: 'openadlc#31', branch: 'agent/builder/11-issue-11' });
 
       expect(openLeadReview).toHaveBeenCalledWith({
         repo: expect.objectContaining({ name: 'openadlc' }),
@@ -393,7 +394,7 @@ describe('a task that ended by sending its work back', () => {
       const openLeadReview = vi.fn(async () => null);
       const stages = new StageHandoff({ moveStage: async () => ({ moved: true }), reviewRules } as never, { openLeadReview } as never);
 
-      expect(await stages.onTaskDone({ kind: 'patch', subjectRef: 'openadlc#31', taskId: 'task-patch', branch: 'agent/builder/11-issue-11' })).toBe('review');
+      await stages.builderEnded({ kind: 'patch', subjectRef: 'openadlc#31', branch: 'agent/builder/11-issue-11' });
 
       expect(board.events).toEqual([
         { source: 'platform', type: 'review.stalled', payload: expect.objectContaining({ repo: 'openadlc', pr: 31, issue: 11 }) },
@@ -433,7 +434,7 @@ describe('a task that ended by sending its work back', () => {
         const reviewStanding = standing(`waiting on ${SECOND}`);
         const { stages, openLeadReview, openMissingReviews } = handoff(reviewStanding);
 
-        expect(await stages.onTaskDone({ kind: 'patch', subjectRef: 'openadlc#31', taskId: 'task-patch', branch: BRANCH })).toBe('review');
+        await stages.builderEnded({ kind: 'patch', subjectRef: 'openadlc#31', branch: BRANCH });
 
         expect(reviewStanding).toHaveBeenCalledWith('janedoe/openadlc', {
           number: 31,
@@ -456,7 +457,7 @@ describe('a task that ended by sending its work back', () => {
       it('asks the lead once every other seat has posted on this diff, from when its turn came', async () => {
         const { stages, openLeadReview, openMissingReviews } = handoff(standing(`waiting on ${LEAD}`, { seat: LEAD, since: '2026-10-23T01:30:00.000Z' }));
 
-        expect(await stages.onTaskDone({ kind: 'patch', subjectRef: 'openadlc#31', taskId: 'task-patch', branch: BRANCH })).toBe('review');
+        await stages.builderEnded({ kind: 'patch', subjectRef: 'openadlc#31', branch: BRANCH });
 
         expect(openMissingReviews).not.toHaveBeenCalled();
         expect(openLeadReview).toHaveBeenCalledWith(expect.objectContaining({ seat: LEAD, since: '2026-10-23T01:30:00.000Z' }));
@@ -466,7 +467,7 @@ describe('a task that ended by sending its work back', () => {
         const { stages, openLeadReview, openMissingReviews } = handoff(standing(`changes requested by ${LEAD}`));
         const ended = new Date().toISOString();
 
-        expect(await stages.onTaskDone({ kind: 'patch', subjectRef: 'openadlc#31', taskId: 'task-patch', branch: BRANCH })).toBe('review');
+        await stages.builderEnded({ kind: 'patch', subjectRef: 'openadlc#31', branch: BRANCH });
 
         expect(openMissingReviews).not.toHaveBeenCalled();
         const [{ seat, since }] = openLeadReview.mock.calls[0] as unknown as [{ seat: string; since: string }];
@@ -475,15 +476,115 @@ describe('a task that ended by sending its work back', () => {
       });
     });
 
-    it('opens nothing more for a round that pushed, which moved the card already', async () => {
-      board.issues = [{ number: 11, repoName: 'openadlc', stage: 'review', labels: ['adlc:review'], createdAt: '2026-09-29T09:00:00.000Z' }];
+    it('asks no seat from the round being done: its end asks them once, whatever way it ended (builderEnded)', async () => {
       const openLeadReview = vi.fn(async () => null);
-      const stages = new StageHandoff({ moveStage: async () => ({ moved: true }), reviewRules } as never, { openLeadReview } as never);
+      const openMissingReviews = vi.fn(async () => []);
+      const stages = new StageHandoff({ moveStage: async () => ({ moved: true }), reviewRules } as never, { openLeadReview, openMissingReviews } as never);
 
-      expect(await stages.onTaskDone({ kind: 'patch', subjectRef: 'openadlc#31', taskId: 'task-patch', branch: 'agent/builder/11-issue-11' })).toBeNull();
+      expect(await stages.onTaskDone({ kind: 'patch', subjectRef: 'openadlc#31', taskId: 'task-patch', branch: 'agent/builder/11-issue-11' })).toBe('review');
       expect(openLeadReview).not.toHaveBeenCalled();
+      expect(openMissingReviews).not.toHaveBeenCalled();
       expect(board.events).toEqual([]);
     });
+  });
+});
+
+describe('the review seats once a builder working on the pull request ends', () => {
+  // Held while it worked (`BuilderWorkingError`): a push's own ask was
+  // refused, and #257's lead reviewed a head the round then replaced.
+  const BRANCH = 'agent/builder/11-issue-11';
+  const LEAD = 'openadlc-lead-janedoe';
+  const SECOND = 'openadlc-vega-janedoe';
+  const reviewRules = vi.fn(() => ({ reviewers: [{ seat: LEAD, lead: true }] }));
+  const pull = (over: Partial<{ draft: boolean; headSha: string; headRef: string }> = {}) =>
+    vi.fn(async () => ({ draft: false, headSha: 'd2d2d2d2', headRef: BRANCH, baseRef: 'main', labels: [], ...over }));
+  const standing = (description: string, leadDue: { seat: string; since: string | null } | null = null) =>
+    vi.fn(async () => ({ gate: { state: 'pending', description }, decision: { reviewers: [SECOND, LEAD], lead: LEAD, approvers: [LEAD] }, posted: [], leadDue }));
+  const handoff = (reviewStanding: ReturnType<typeof standing>, pullOf: ReturnType<typeof pull> | null = pull()) => {
+    const openLeadReview = vi.fn(async () => 'openadlc#31: started the lead’s review');
+    const openMissingReviews = vi.fn(async () => [`openadlc#31: started ${SECOND}’s review`]);
+    const stages = new StageHandoff(
+      { moveStage: async () => ({ moved: true }), reviewRules, reviewStanding } as never,
+      { openLeadReview, openMissingReviews } as never,
+      null,
+      null,
+      null,
+      pullOf,
+    );
+    return { stages, openLeadReview, openMissingReviews };
+  };
+
+  beforeEach(() => {
+    board.events = [];
+    board.onSubject = {};
+    board.issues = [{ number: 11, repoName: 'openadlc', stage: 'review', labels: ['adlc:review'], prNumber: 31, createdAt: '2026-09-29T09:00:00.000Z' }];
+  });
+
+  it('are asked on the new head after a patch round that pushed: every seat before the lead, on the round its push opened', async () => {
+    const { stages, openLeadReview, openMissingReviews } = handoff(standing(`waiting on ${SECOND}, ${LEAD}`));
+
+    await stages.builderEnded({ kind: 'patch', subjectRef: 'openadlc#31', branch: BRANCH });
+
+    expect(openMissingReviews).toHaveBeenCalledWith(expect.objectContaining({ prNumber: 31, branch: BRANCH, issueNumber: 11, waitingOn: [SECOND] }));
+    expect(openLeadReview).not.toHaveBeenCalled();
+  });
+
+  it('ask the lead to re-check a lead-only conflict resolution pushed as the head, with its brief', async () => {
+    board.events = [
+      {
+        type: 'conflict.resolved',
+        payload: { repo: 'openadlc', pr: 31, issue: 11, files: ['pnpm-lock.yaml'], review: 'lead-only', from: 'c1c1c1c1', to: 'd2d2d2d2', at: '2026-10-02T00:00:00.000Z' },
+      },
+    ];
+    const { stages, openLeadReview, openMissingReviews } = handoff(standing(`waiting on ${SECOND}, ${LEAD}`));
+
+    await stages.builderEnded({ kind: 'patch', subjectRef: 'openadlc#31', branch: BRANCH });
+
+    expect(openMissingReviews).not.toHaveBeenCalled();
+    expect(openLeadReview).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prNumber: 31,
+        seat: LEAD,
+        since: '2026-10-02T00:00:00.000Z',
+        extraContext: [expect.objectContaining({ content: expect.stringContaining('pnpm-lock.yaml') })],
+      }),
+    );
+  });
+
+  it('are asked when the build that opened the pull request ends, on its own branch', async () => {
+    const { stages, openMissingReviews } = handoff(standing(`waiting on ${SECOND}, ${LEAD}`));
+
+    await stages.builderEnded({ kind: 'implement', subjectRef: 'openadlc#11', branch: BRANCH });
+
+    expect(openMissingReviews).toHaveBeenCalledWith(expect.objectContaining({ prNumber: 31, branch: BRANCH, issueNumber: 11, waitingOn: [SECOND] }));
+  });
+
+  it('are not asked for a build whose pull request has not been seen yet, or is on another branch: its delivery asks them', async () => {
+    board.issues = [{ number: 11, repoName: 'openadlc', stage: 'build', labels: ['adlc:build'], prNumber: null, createdAt: '2026-09-29T09:00:00.000Z' }];
+    const first = handoff(standing(`waiting on ${SECOND}, ${LEAD}`));
+    await first.stages.builderEnded({ kind: 'implement', subjectRef: 'openadlc#11', branch: BRANCH });
+
+    board.issues = [{ number: 11, repoName: 'openadlc', stage: 'review', labels: ['adlc:review'], prNumber: 31, createdAt: '2026-09-29T09:00:00.000Z' }];
+    const other = handoff(standing(`waiting on ${SECOND}, ${LEAD}`), pull({ headRef: 'agent/builder/11-issue-11-again' }));
+    await other.stages.builderEnded({ kind: 'implement', subjectRef: 'openadlc#11', branch: BRANCH });
+
+    for (const { openLeadReview, openMissingReviews } of [first, other]) {
+      expect(openMissingReviews).not.toHaveBeenCalled();
+      expect(openLeadReview).not.toHaveBeenCalled();
+    }
+    expect(board.events).toEqual([]);
+  });
+
+  it('are not asked on a draft, or for a task that is no builder', async () => {
+    const draft = handoff(standing(`waiting on ${SECOND}, ${LEAD}`), pull({ draft: true }));
+    await draft.stages.builderEnded({ kind: 'patch', subjectRef: 'openadlc#31', branch: BRANCH });
+    const review = handoff(standing(`waiting on ${SECOND}, ${LEAD}`));
+    await review.stages.builderEnded({ kind: 'review', subjectRef: 'openadlc#31', branch: BRANCH });
+
+    for (const { openLeadReview, openMissingReviews } of [draft, review]) {
+      expect(openMissingReviews).not.toHaveBeenCalled();
+      expect(openLeadReview).not.toHaveBeenCalled();
+    }
   });
 });
 

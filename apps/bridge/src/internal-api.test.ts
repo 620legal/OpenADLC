@@ -111,6 +111,7 @@ const sendBackRequest = vi.fn(async (_input: unknown) => ({ sent: true, from: 'b
 const fromBridge = vi.fn(async (_input: unknown): Promise<unknown> => ({ sent: true, from: 'build', to: 'intake', staffed: true, round: 1, commentUrl: null }));
 const sendToTriage = vi.fn(async (_repo: string, _number: number, _reason: string) => undefined);
 const onTaskDone = vi.fn(async (_input: unknown) => undefined);
+const builderEnded = vi.fn(async (_input: unknown) => undefined);
 const seatFreed = vi.fn((_seat: string, _reason: string) => undefined);
 const afterIntake = vi.fn(async (_input: unknown) => 'build');
 const startLocalCi = vi.fn(async (taskId: string) => ({ run: { id: 'run-1', taskId, state: 'running', headSha: null } }));
@@ -144,7 +145,7 @@ beforeEach(async () => {
     config: { automationBot: null, costs: { monthlyCapUsd: 1500, perTaskCapUsd: 15 }, organization: 'exampleco', webhookSecret: '', gitHubClientId: '', humans: [] } as never,
     webhooks: { receive } as never,
     scheduler: { afterBuildEnded } as never,
-    stages: { onTaskDone, afterIntake } as never,
+    stages: { onTaskDone, afterIntake, builderEnded } as never,
     sendBack: { request: sendBackRequest, fromBridge } as never,
     internalSecret: SECRET,
     alertsSecret: ALERTS_SECRET,
@@ -282,6 +283,56 @@ describe('a task ending, which may let go of paths a plan change was waiting for
     expect(response.status).toBe(200);
     expect(resume.mock.calls.map((call) => call[0])).toEqual(['task-7', 'task-8']);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('hostd refused'));
+    warn.mockRestore();
+  });
+});
+
+describe('a builder’s task ending, which lets the review seats it held back be asked (#265)', () => {
+  async function endAs(kind: string, state: string) {
+    const { tasks } = await import('@openadlc/db');
+    vi.mocked(tasks.updateTaskState).mockImplementationOnce((async (id: string, to: string) => ({
+      id,
+      botId: 'bot-builder',
+      repoId: 'repo-1',
+      kind,
+      skill: null,
+      subjectType: 'pr',
+      subjectRef: 'openadlc#31',
+      branch: 'agent/builder/78-issue-78',
+      leaseId: null,
+      state: to,
+      exitReason: null,
+    })) as never);
+    return post('/internal/tasks/task-1/state', { state });
+  }
+
+  it.each(
+    ['patch', 'implement'].flatMap((kind) => ['done', 'failed', 'stopped', 'paused'].map((state) => [kind, state] as const)),
+  )('asks them when a %s task is %s, after its issue is handed on', async (kind, state) => {
+    const response = await endAs(kind, state);
+
+    expect(response.status).toBe(200);
+    expect(builderEnded).toHaveBeenCalledTimes(1);
+    expect(builderEnded).toHaveBeenCalledWith({ kind, subjectRef: 'openadlc#31', branch: 'agent/builder/78-issue-78' });
+    if (state === 'done') expect(onTaskDone.mock.invocationCallOrder[0]!).toBeLessThan(builderEnded.mock.invocationCallOrder[0]!);
+  });
+
+  it('asks nothing while the builder runs, or when the task is no builder', async () => {
+    await endAs('patch', 'running');
+    await endAs('review', 'done');
+    await endAs('spec', 'done');
+
+    expect(builderEnded).not.toHaveBeenCalled();
+  });
+
+  it('answers the task’s state anyway when the seats cannot be asked', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    builderEnded.mockRejectedValueOnce(new Error('GitHub did not answer'));
+
+    const response = await endAs('patch', 'done');
+
+    expect(response.status).toBe(200);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('GitHub did not answer'));
     warn.mockRestore();
   });
 });

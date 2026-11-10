@@ -2,6 +2,7 @@ import { audit, bots, issues, listEventsOfType, recordEvent, repos, stageMoves, 
 import { acceptOnStage } from './design-memory.js';
 import { leadReviewer, maxTasksOf, PLAN_CHANGE_REVIEW_SKILL, REPO_DEFAULTS, type ContextDocument, type StageKey, type StageMode } from '@openadlc/shared';
 import { seatsWaitedOn, type Automation } from './automation.js';
+import { leadOnlyResolutionTo, resolutionCheckBrief } from './conflict-round.js';
 import type { DispatchGate } from './dispatch-gate.js';
 import type { TaskService } from './task-service.js';
 import { dependencyIsSatisfied, dependencyRepository, hasIgnoreLabel, missingLabels, parseDependencyRefs, type ShipsByRelease } from '@openadlc/shared';
@@ -479,6 +480,11 @@ export class StageHandoff {
     await this.automation.setBlocked(repo.fullName, issueNumber, waiting);
   }
 
+  /**
+   * Moves the card back to Review. The seats are not asked here: every end
+   * of a builder's task asks them (`builderEnded`), and asked from both, a
+   * round that pushed nothing would ask them twice.
+   */
   private async patchDone(subjectRef: string, branch: string | null): Promise<StageKey | null> {
     const issueNumber = branch ? issueNumberFromBranch(branch) : null;
     const repo = await repos.getRepoByName(subjectRef.split('#')[0] ?? '');
@@ -487,12 +493,87 @@ export class StageHandoff {
     if (known?.stage !== 'build' || hasIgnoreLabel(known.labels)) return null;
     const moved = await this.automation.moveStage({ repoName: repo.name, issueNumber, to: 'review', actor: 'patch task' });
     if (!moved.moved) return null;
-    const prNumber = Number(subjectRef.split('#')[1]);
-    if (branch && Number.isInteger(prNumber) && prNumber > 0) await this.backToLead(repo, prNumber, branch, issueNumber);
     return 'review';
   }
 
   /**
+   * A builder's task on a pull request ended — done, failed, stopped, or
+   * paused on a person — so the review seats it held back (`builderOn`,
+   * `BuilderWorkingError`) are asked now, on the head it left. Held while it
+   * worked, a push's own ask of the seats was refused; and before the hold,
+   * #257's lead reviewed a head the message-started round then replaced.
+   *
+   * The pull request is a patch round's subject, or, for a build, the one its
+   * issue's row names open on the build's branch. A build whose pull request's
+   * `opened` delivery has not arrived yet has nothing here: when it arrives,
+   * the build is no longer working, and that delivery asks the seats itself.
+   * A draft is left alone, as its delivery leaves it.
+   *
+   * On a lead-only conflict resolution pushed as this head, the lead re-checks
+   * it with the resolution's brief, as the gate sweep would ask it. Otherwise
+   * it is `backToLead`: a push opened a new round, so every seat before the
+   * lead is unasked on it; a round that pushed nothing finds them asked, and
+   * the lead decides again. Asking twice starts nothing twice: each start
+   * finds the seat's review under way.
+   */
+  async builderEnded(input: { kind: string; subjectRef: string; branch?: string | null }): Promise<void> {
+    if (input.kind !== 'patch' && input.kind !== 'implement') return;
+    const at = input.subjectRef.lastIndexOf('#');
+    const number = Number(input.subjectRef.slice(at + 1));
+    const repo = await repos.getRepoByName(input.subjectRef.slice(0, at));
+    if (!repo || !Number.isInteger(number) || number <= 0 || !input.branch) return;
+
+    let prNumber: number;
+    let issueNumber: number | null;
+    if (input.kind === 'patch') {
+      prNumber = number;
+      issueNumber = issueNumberFromBranch(input.branch);
+    } else {
+      const known = await issues.getIssue(repo.id, number);
+      if (!known?.prNumber) return;
+      prNumber = known.prNumber;
+      issueNumber = number;
+    }
+    // The `backToLead` record of a stall names the issue; a pull request with
+    // none is left to the gate sweep, which asks its seats the same way.
+    if (!issueNumber) return;
+
+    // A patch round's pull request that cannot be read is asked on the
+    // round's branch, as `backToLead` asked before the hold; a build's is
+    // known to be its own only once it is read.
+    const pull = this.pullOf ? await this.pullOf(repo.fullName, prNumber).catch(() => null) : null;
+    if (pull?.draft) return;
+    if (input.kind === 'implement' && pull?.headRef !== input.branch) return;
+    if (!pull) {
+      await this.backToLead(repo, prNumber, input.branch, issueNumber);
+      return;
+    }
+
+    const resolution = await leadOnlyResolutionTo(repo.name, prNumber, pull.headSha).catch(() => null);
+    if (resolution) {
+      const crew = await bots.listBots().catch(() => []);
+      const standing = await this.standingOf(repo.fullName, prNumber);
+      const seat = standing?.decision.lead ?? leadReviewer(this.automation.reviewRules(crew)).seat;
+      await this.taskService.openLeadReview({
+        repo,
+        prNumber,
+        branch: pull.headRef,
+        issueNumber,
+        seat,
+        since: resolution.at,
+        extraContext: [resolutionCheckBrief({ before: resolution.from, after: resolution.to, files: resolution.files })],
+      });
+      return;
+    }
+    await this.backToLead(repo, prNumber, pull.headRef, issueNumber);
+  }
+
+  /**
+   * The seats asked on a pull request's head once its builder ended
+   * (`builderEnded`). After a push, the round it opened has every seat before
+   * the lead unasked, and they are started here: the push's own ask was held
+   * while the builder worked.
+   *
    * A patch round that pushed nothing: it answered the lead in words, or the
    * local-CI rule sent it back and the checks then passed on the head as it
    * was. No push opens a round, so nothing asks a seat: the lead's request

@@ -609,6 +609,20 @@ export function registerInternalApi(
       }
     }
 
+    // A builder that worked on a pull request held its review seats back
+    // (`BuilderWorkingError`); they are asked on the head it left whenever
+    // it stops working, a pause on a person included. After the handoff
+    // above, so a patch round's card is back in Review first.
+    if ((ended.kind === 'patch' || ended.kind === 'implement') && ['done', 'failed', 'stopped', 'paused'].includes(state)) {
+      // In a `then`, so even a throw before its first await is said and the
+      // task's state, already written, is still answered.
+      await Promise.resolve()
+        .then(() => deps.stages.builderEnded({ kind: ended.kind, subjectRef: ended.subjectRef, branch: ended.branch }))
+        .catch((error: unknown) =>
+          console.warn(`[bridge] the review seats on ${ended.subjectRef}'s pull request were not asked: ${error instanceof Error ? error.message : error}`),
+        );
+    }
+
     // Its seat has room again, and what it turned away while it was full
     // starts now (`StageRunner`), rather than on the hourly sweep: a design
     // refused while the design seat ran another waited up to an hour after
