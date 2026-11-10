@@ -33,6 +33,12 @@ export const ROUTE_ROLES: Readonly<Record<string, Role>> = {
   'GET /v1/me/notifications': 'user',
   'PUT /v1/me/notifications': 'user',
   'POST /v1/me/notifications/test': 'user',
+  // A person's own push devices (ADR 0048): each lists, adds, tests or removes
+  // only the caller's own devices (`my-notifications-routes.ts`).
+  'GET /v1/me/push': 'user',
+  'POST /v1/me/push/devices': 'user',
+  'DELETE /v1/me/push/devices/:id': 'user',
+  'POST /v1/me/push/devices/:id/test': 'user',
 
   // The board, the crew, the threads and the costs, to read.
   'GET /v1/board': 'user',
