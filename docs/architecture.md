@@ -228,7 +228,12 @@ none yet, says its kind of work instead ("writing the change").
    ([ADR 0001](adr/0001-attachments-in-the-database.md)) — or opens an issue.
    While both boxes are empty the form offers starters (a bug, a small
    feature, a docs fix, tests for a module; `apps/console/src/lib/request-starters.ts`)
-   that fill it with an example whose `[bracketed blanks]` the person replaces. A console request is not an issue yet: it is a request row,
+   that fill it with an example whose `[bracketed blanks]` the person replaces.
+   The repository is optional and starts unchosen ("Not sure, intake
+   decides"), whichever page the form was opened from: a request sent without
+   one is filed with no repository, and triage works out which repositories it
+   concerns, asking if it cannot tell
+   ([ADR 0012](adr/0012-a-request-files-one-issue-per-repository.md)). A console request is not an issue yet: it is a request row,
    and an intake task runs on the subject `request:<id8>`; it shows in the
    Intake column while it does. `<id8>` is the first eight characters of the
    request's id, and it is unique per install: the database refuses a second

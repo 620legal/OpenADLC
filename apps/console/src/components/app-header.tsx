@@ -144,7 +144,7 @@ export function AppHeader({ page, repo = 'all', data }: { page: Page; repo?: str
           {/* Every role's, unlike Settings: how this browser says something waits. */}
           <AlertsMenu />
           {data.needsYou !== null && <NeedsChip count={data.needsYou} split={data.needsSplit} href={needsHref} />}
-          <IntakeDialog repos={data.repos} labelOf={labelOf} defaultRepo={repo}>
+          <IntakeDialog repos={data.repos} labelOf={labelOf}>
             <button
               type="button"
               className="inline-flex h-8 items-center gap-1.5 rounded-md bg-body px-3 text-[13px] font-medium text-surface transition-colors hover:bg-soft focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-link"
@@ -166,7 +166,7 @@ export function AppHeader({ page, repo = 'all', data }: { page: Page; repo?: str
           <div className="ml-auto shrink-0">
             <AlertsMenu compact />
           </div>
-          <IntakeDialog repos={data.repos} labelOf={labelOf} defaultRepo={repo}>
+          <IntakeDialog repos={data.repos} labelOf={labelOf}>
             <button
               type="button"
               className="inline-flex h-11 items-center gap-1.5 rounded-lg bg-body px-3.5 text-sm font-medium text-surface focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-link"

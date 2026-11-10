@@ -83,10 +83,26 @@ async function press(label: string): Promise<void> {
 
 async function openDialog(): Promise<void> {
   const { IntakeDialog } = await import('./intake-dialog');
-  await act(async () => root.render(<IntakeDialog repos={['api', 'web']} defaultRepo="api" />));
+  await act(async () => root.render(<IntakeDialog repos={['api', 'web']} />));
   await act(async () => button('+ New request', container).click());
   await settle();
 }
+
+describe('the New request form’s repository', () => {
+  it('starts on “Not sure, intake decides”, before the repositories, and says it is optional', async () => {
+    await openDialog();
+    const { repo } = selects();
+    expect(repo.value).toBe('');
+    expect([...repo.options].map((one) => [one.value, one.textContent])).toEqual([
+      ['', 'Not sure, intake decides'],
+      ['api', 'api'],
+      ['web', 'web'],
+    ]);
+    const label = repo.closest('label')!;
+    expect(label.querySelector('span')?.textContent).toBe('Repository (optional)');
+    expect(dialog().textContent).toContain('Not sure? Leave it: the intake bot works out which repositories it concerns.');
+  });
+});
 
 describe('the New request form’s starters', () => {
   it('shows the four starters while the form is empty', async () => {
@@ -140,10 +156,13 @@ describe('the New request form’s starters', () => {
 
   it('shows again on the emptied form after Send & add another', async () => {
     await openDialog();
+    await choose(selects().repo, 'api');
     await act(async () => button('A bug, with steps', starters()!).click());
     await press('Send & add another');
 
     expect(filing.sent).toEqual([expect.objectContaining({ text: REQUEST_STARTERS[0]!.text, kind: 'defect', repo: 'api' })]);
+    // The repository chosen stays chosen for the next request.
+    expect(selects().repo.value).toBe('api');
     expect(areas().text.value).toBe('');
     expect(starters()).not.toBeNull();
   });
