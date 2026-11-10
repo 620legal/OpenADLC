@@ -1070,13 +1070,27 @@ describe('opening a task on a seat that runs several at once', () => {
   });
 
   it('says what holds a busy builder: its tasks, a full host, or the round under way', async () => {
-    vi.mocked(tasks.listTasks).mockResolvedValueOnce([{ skill: 'implement', subjectRef: 'OpenADLC#280' }] as never);
-    expect(await busyWords(new BotBusyError('builder'), 'bot-1')).toBe('running `implement` on OpenADLC#280');
-    vi.mocked(tasks.listTasks).mockResolvedValueOnce([1, 2, 3, 4].map((n) => ({ skill: 'review', subjectRef: `OpenADLC#${n}` })) as never);
-    expect(await busyWords(new BotBusyError('builder', 4), 'bot-1')).toBe('running 4 tasks');
+    const on = { repoId: 'repo-1', subjectRef: 'OpenADLC#31' };
+    vi.mocked(tasks.listTasks).mockResolvedValueOnce([{ skill: 'implement', repoId: 'repo-1', subjectRef: 'OpenADLC#280' }] as never);
+    expect(await busyWords(new BotBusyError('builder'), 'bot-1', on)).toBe('running `implement` on OpenADLC#280');
+    vi.mocked(tasks.listTasks).mockResolvedValueOnce([1, 2, 3, 4].map((n) => ({ skill: 'review', repoId: 'repo-1', subjectRef: `OpenADLC#${n}` })) as never);
+    expect(await busyWords(new BotBusyError('builder', 4), 'bot-1', on)).toBe('running 4 tasks');
     expect(tasks.listTasks).toHaveBeenLastCalledWith({ botId: 'bot-1', states: ['queued', 'running'] });
-    expect(await busyWords(new HostFullError('builder'), 'bot-1')).toBe('waiting for a host: every host is running all the tasks it has room for');
-    expect(await busyWords(new SubjectBusyError('builder', 'OpenADLC#31'), 'bot-1', 'OpenADLC#31')).toBe('finishing the round already under way on #31');
+    expect(await busyWords(new HostFullError('builder'), 'bot-1', on)).toBe('waiting for a host: every host is running all the tasks it has room for');
+    expect(await busyWords(new SubjectBusyError('builder', 'OpenADLC#31'), 'bot-1', on)).toBe('finishing the round already under way on #31');
+  });
+
+  // A send-back comment is read by whoever can read the pull request; the
+  // builder's work in another repository is none of theirs.
+  it('names only work in the pull request’s repository, the rest as other work', async () => {
+    const on = { repoId: 'repo-1', subjectRef: 'OpenADLC#31' };
+    vi.mocked(tasks.listTasks).mockResolvedValueOnce([{ skill: 'implement', repoId: 'repo-2', subjectRef: 'private-repo#9' }] as never);
+    expect(await busyWords(new BotBusyError('builder'), 'bot-1', on)).toBe('running other work');
+    vi.mocked(tasks.listTasks).mockResolvedValueOnce([
+      { skill: 'implement', repoId: 'repo-1', subjectRef: 'OpenADLC#280' },
+      { skill: 'review', repoId: 'repo-2', subjectRef: 'private-repo#9' },
+    ] as never);
+    expect(await busyWords(new BotBusyError('builder', 2), 'bot-1', on)).toBe('running `implement` on OpenADLC#280 and other work besides');
   });
 
   it('is busy, not failed, when every host runs all it has room for, before anything is recorded', async () => {

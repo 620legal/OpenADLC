@@ -704,7 +704,7 @@ describe('a patch round its builder has no room for', () => {
   // round was refused as busy, and nothing started it for 21 hours.
   const pr = { number: 31, head: { ref: 'agent/builder/7-issue-7', sha: 'h1' } };
   const crew = [{ id: 'bot-builder', name: 'builder' }];
-  const elsewhere = { id: 'task-280', botId: 'bot-builder', subjectRef: 'openadlc-testbed#280', kind: 'implement', skill: 'implement', state: 'running' };
+  const elsewhere = { id: 'task-280', botId: 'bot-builder', repoId: REPO.id, subjectRef: 'openadlc-testbed#280', kind: 'implement', skill: 'implement', state: 'running' };
   const waits = () => world.events.filter((event) => event.type === PATCH_ROUND_WAITING);
   const said = (automation: ReturnType<typeof sendBack>['automation']) => (automation.comment.mock.calls as unknown as [string, number, string][]).map((call) => call[2]);
 
@@ -744,6 +744,35 @@ describe('a patch round its builder has no room for', () => {
     expect(said(automation).at(-1)).toMatch(/^\*\*Review round 1 started\*\* on #31: builder has room now \(it waited since \d\d:\d\d UTC\)\.$/);
     expect(service.waitingSeats()).toEqual([]);
     expect(await service.startWaiting(['bot-builder'])).toEqual([]);
+  });
+
+  it('names no work the builder has in another repository on this pull request', async () => {
+    const { service, automation, taskService } = sendBack();
+    world.botTasks = [elsewhere, { id: 'task-9', botId: 'bot-builder', repoId: 'repo-private', subjectRef: 'secret-repo#9', kind: 'implement', skill: 'implement', state: 'running' }];
+    taskService.wouldWait.mockResolvedValue(new BotBusyError('builder'));
+
+    await service.reviewRound({ repo: REPO, repoFullName: REPO.fullName, pr, crew, client: null, by: 'openadlc', reason: 'CI failed', check: 'ci' });
+
+    const [comment] = said(automation);
+    expect(comment).toContain('_builder_ is running `implement` on openadlc-testbed#280 and other work besides.');
+    expect(comment).not.toContain('secret-repo');
+    expect(JSON.stringify(waits())).not.toContain('secret-repo');
+  });
+
+  it('starts a wait once when the seat freeing and the minute look reach it together', async () => {
+    const { service, taskService } = sendBack();
+    taskService.wouldWait.mockResolvedValue(new BotBusyError('builder'));
+    await service.reviewRound({ repo: REPO, repoFullName: REPO.fullName, pr, crew, client: null, by: 'openadlc', reason: 'CI failed', check: 'ci' });
+    world.botTasks = [];
+    world.issue = { number: 7, stage: 'build', prNumber: 31, labels: ['adlc:build'] };
+    taskService.wouldWait.mockResolvedValue(null);
+
+    const [first, second] = await Promise.all([service.startWaiting(['bot-builder']), service.startWaiting(['bot-builder'])]);
+
+    expect([...first, ...second]).toEqual(['openadlc-testbed#31: patch round 1 started']);
+    expect(taskService.open).toHaveBeenCalledTimes(1);
+    expect(waits()).toHaveLength(1);
+    expect(service.waitingSeats()).toEqual([]);
   });
 
   it('waits the same when every host is full, and starts once a host has room', async () => {

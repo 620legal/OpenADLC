@@ -435,7 +435,7 @@ export class SendBack {
     // ever started it (2026-11-09). A round that will wait says so, and on what.
     const subjectRef = `${repo.name}#${pr.number}`;
     const busy = await this.wouldWait(builder.id, subjectRef);
-    const busyWith = busy ? await busyWords(busy, builder.id, subjectRef) : null;
+    const busyWith = busy ? await busyWords(busy, builder.id, { repoId: repo.id, subjectRef }) : null;
     if (issueNumber) {
       const commentUrl = await this.deps.automation
         .comment(
@@ -567,11 +567,23 @@ export class SendBack {
     const oldestFirst = [...this.waits.values()].sort((a, b) => Date.parse(a.wait.since) - Date.parse(b.wait.since));
     for (const { wait } of oldestFirst) {
       if (!free.has(wait.botId)) continue;
-      const line = await this.startWait(wait).catch((error: unknown) => `failed: ${error instanceof Error ? error.message : error}`);
-      lines.push(`${wait.subjectRef}: patch round ${line}`);
+      // The seat freeing and the minute look can both reach the same wait at
+      // once; the second start would find the first's round live on the pull
+      // request (`SubjectBusyError`) and record the wait again after it began.
+      if (this.starting.has(wait.subjectRef)) continue;
+      this.starting.add(wait.subjectRef);
+      try {
+        const line = await this.startWait(wait).catch((error: unknown) => `failed: ${error instanceof Error ? error.message : error}`);
+        lines.push(`${wait.subjectRef}: patch round ${line}`);
+      } finally {
+        this.starting.delete(wait.subjectRef);
+      }
     }
     return lines;
   }
+
+  /** The waits a `startWaiting` is starting now, by `subjectRef`. */
+  private readonly starting = new Set<string>();
 
   private async startWait(wait: PatchWait): Promise<string> {
     const drop = (why: string) => {
@@ -926,7 +938,7 @@ export class SendBack {
           // A busy builder or a full host is a wait on the builder's seat,
           // never a drop. A pending restart is recorded by the start itself.
           if (error instanceof BotBusyError && !(error instanceof RestartPendingError)) {
-            const busyWith = await busyWords(error, input.builder.id, `${input.repo.name}#${input.pr.number}`);
+            const busyWith = await busyWords(error, input.builder.id, { repoId: input.repo.id, subjectRef: `${input.repo.name}#${input.pr.number}` });
             await this.recordWait(input, busyWith);
             return { refused: null, error: null, waiting: busyWith };
           }
@@ -1013,7 +1025,7 @@ export class SendBack {
     // once one of them ends"): the round waits on its seat with the message
     // as its brief, and starts when it has room (`startWaiting`).
     const busy = await this.wouldWait(builder.id, subjectRef);
-    const busyWith = busy ? await busyWords(busy, builder.id, subjectRef) : null;
+    const busyWith = busy ? await busyWords(busy, builder.id, { repoId: repo.id, subjectRef }) : null;
 
     const issue = await issues.getIssue(repo.id, issueNumber).catch(() => null);
     if (issue?.stage === 'review') {

@@ -33,6 +33,7 @@ The same shape had already been solved twice: a stage that a busy seat turns awa
   - A retry that is turned away again records it once a day, so it stays inside the seven-day window that is read at start-up.
 - **When a wait stands.** `standingPatchWaits` says a wait stands until a `patch` task of any skill is created on its pull request at or after it, or until its issue is no longer in Build with that pull request. `since` comes from the first event after the newest patch task, and every other field from the newest event.
 - **The send-back says it.** `reviewRound` asks `TaskService.wouldWait` before it comments. That runs the same checks, in the same order, as `openNow` (`busyCheck`: the subject, then the seat, then the hosts). When the round will wait, the comment ends with "**This round is waiting for the builder:** _builder_ is {busyWith}. It starts as soon as builder has room."
+  - `busyWords` names only the builder's tasks in the pull request's repository, by `repoId`. Its work in another repository is "other work", with no repository, number or skill: the comment is read by whoever can read this pull request.
   - The card still moves to Build.
   - When a start loses that race, one short comment says the same.
   - `fromMessage` no longer refuses a busy builder. It records the wait with the message as its brief.

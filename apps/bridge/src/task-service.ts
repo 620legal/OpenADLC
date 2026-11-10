@@ -133,17 +133,24 @@ async function busyCheck(bot: { id: string; name: string } & Parameters<typeof m
  * round already under way on the pull request. A round dropped on 2026-11-09
  * said only "patch round not started" in the log; a person reading the issue
  * had nothing to tell them what the builder was doing instead.
+ *
+ * The words go to a comment on `on`'s repository, so they name only work in
+ * that repository: the builder's tasks elsewhere are "other work", with no
+ * repository, number or skill, since whoever reads this pull request may
+ * have no access to the repository the other work is on.
  */
-export async function busyWords(error: BotBusyError, botId: string, subjectRef?: string): Promise<string> {
+export async function busyWords(error: BotBusyError, botId: string, on: { repoId: string; subjectRef: string }): Promise<string> {
   if (error instanceof SubjectBusyError) {
-    const number = subjectRef?.split('#')[1];
+    const number = on.subjectRef.split('#')[1];
     return `finishing the round already under way${number ? ` on #${number}` : ''}`;
   }
   if (error instanceof HostFullError) return 'waiting for a host: every host is running all the tasks it has room for';
   const live = await (async () => tasks.listTasks({ botId, states: ['queued', 'running'] }))().catch(() => []);
   if (live.length === 0) return 'running all the tasks it may at once';
-  if (live.length > 3) return `running ${live.length} tasks`;
-  return `running ${live.map((task) => `\`${task.skill}\` on ${task.subjectRef}`).join(' and ')}`;
+  const here = live.filter((task) => task.repoId === on.repoId);
+  const parts = here.length > 3 ? [`${here.length} tasks`] : here.map((task) => `\`${task.skill}\` on ${task.subjectRef}`);
+  if (here.length < live.length) parts.push(here.length === 0 ? 'other work' : 'other work besides');
+  return `running ${parts.join(' and ')}`;
 }
 
 /**

@@ -1700,7 +1700,7 @@ A patch round is the builder's next round on a pull request. Something sent the 
 - The builder was running all the tasks it may at once (Crew → tasks at once), often the next issue the dispatcher had just leased it.
 - Every host was running all the tasks it has room for.
 
-The comment ends **This round is waiting for the builder:** _builder_ is running `implement` on #N (or is waiting for a host). It is not a failure, and nothing is lost:
+The comment ends **This round is waiting for the builder:** _builder_ is running `implement` on #N (or is waiting for a host). Work the builder is doing in another repository is said only as "other work": the comment is on this repository, and its readers may not have access to the other one. Look at Crew → tasks for what it is. It is not a failure, and nothing is lost:
 
 - The card is in Build, and the round waits on the builder's seat. The wait is recorded as a `patch.round_waiting` event, so a bridge restart keeps it.
 - The round starts as soon as the builder has room. That is either when the task the comment names ends, or within a minute of a seat or a host freeing up some other way. The issue then says **Review round N started**, with how long it waited.
