@@ -41,6 +41,12 @@ let calls: Call[];
 let capAfterUsage: number;
 /** The dollars posted to the ledger at which it says the task is at its cap, as the real ledger does. */
 let capDollars: number;
+/**
+ * What the task spent in its earlier sessions, before this one started: the
+ * ledger counts it toward `capDollars` and names it in `spent`, as the real
+ * ledger does for a task resumed after "continue".
+ */
+let spentBefore: number;
 /** Whether the bridge opens a gate asked for; a bridge that cannot be reached opens none. */
 let gateOpens: boolean;
 /** What the bridge answers a send-back with. */
@@ -61,6 +67,7 @@ beforeEach(async () => {
   calls = [];
   capAfterUsage = Number.POSITIVE_INFINITY;
   capDollars = Number.POSITIVE_INFINITY;
+  spentBefore = 0;
   gateOpens = true;
   sendBackAnswer = { sent: true, from: 'build', to: 'spec', staffed: true, round: 1, commentUrl: null };
   failing = {};
@@ -68,6 +75,9 @@ beforeEach(async () => {
   failingStatus = 500;
   inbox = [];
   statuses = {};
+  // The task's total, as the ledger answers it: earlier sessions' and this one's.
+  const spentSoFar = () =>
+    spentBefore + calls.filter((call) => call.path.endsWith('/usage')).reduce((sum, call) => sum + Number(call.body.costUsd), 0);
   // Answers as the bridge does: a gate opened, headroom left, usage taken.
   bridge = createServer((request, response) => {
     let text = '';
@@ -103,10 +113,8 @@ beforeEach(async () => {
           ? {
               stop:
                 calls.filter((call) => call.path.endsWith('/usage')).length >= capAfterUsage ||
-                calls
-                  .filter((call) => call.path.endsWith('/usage'))
-                  .reduce((sum, call) => sum + Number(call.body.costUsd), 0) >= capDollars,
-              spent: 0,
+                spentSoFar() >= capDollars,
+              spent: spentSoFar(),
               cap: 15,
               // The install's per-task cap, which "continue" adds: not the task's
               // own cap, so the two differ here to show which is offered.
@@ -797,6 +805,52 @@ describe('a task that reaches its cost cap', () => {
     expect(to('gate')).toEqual([]);
     expect(to('state').at(-1)?.body).toEqual({ state: 'done', reason: 'complete' });
   }, 30_000);
+
+  it('ends a Codex turn as done when its usage, which comes as the turn ends, crosses the cap', async () => {
+    // Codex reports usage only on `turn.completed`. Read as a run still under
+    // way, a finished review paused at the cap, and "continue" reviewed again.
+    capAfterUsage = 1;
+    const made = join(dir, 'codex-calls.jsonl');
+    const bin = fakeCodex(made);
+
+    expect(await runTriage(bin, { OPENADLC_ENGINE: 'codex', OPENADLC_MODEL: 'gpt-5.3-codex', OPENADLC_CONTAINED: '1' })).toBe(0);
+
+    expect(to('usage')).toHaveLength(1);
+    expect(to('gate')).toEqual([]);
+    expect(to('state').at(-1)?.body).toEqual({ state: 'done', reason: 'complete' });
+    // The idle nudge is a next turn, and the headroom check refused it.
+    const runs = readFileSync(made, 'utf8').trim().split('\n');
+    expect(runs).toHaveLength(1);
+  }, 30_000);
+
+  it('names the task’s total spend in the question after one "continue", not this session’s', async () => {
+    // A session resumed with the cap raised to $30 used to say "after $15.xx",
+    // its own sum, when the task had spent twice that.
+    spentBefore = 15;
+    capDollars = 30;
+    const turns = Array.from({ length: 600 }, (_, index) => ({
+      type: 'assistant',
+      message: {
+        id: `msg-${index}`,
+        content: [{ type: 'text', text: 'Next step.' }],
+        usage: { input_tokens: 3, cache_creation_input_tokens: 2048, cache_read_input_tokens: 140_000, output_tokens: 2 },
+      },
+    }));
+    const bin = slowClaude(turns, result(47.52), join(dir, 'reached-the-result'));
+
+    expect(await runTriage(bin, { OPENADLC_TASK_COST_CAP_USD: '30' })).toBe(0);
+
+    const session = to('usage').reduce((sum, call) => sum + Number(call.body.costUsd), 0);
+    expect(session).toBeLessThan(30);
+    const gates = to('gate').map((call) => call.body);
+    expect(gates).toHaveLength(1);
+    const question = String(gates[0]?.question);
+    expect(question).toMatch(/^Stopped at the \$30 cap on request:a4b02784 after \$/);
+    const named = Number(/after \$(\d+\.\d{2})/.exec(question)?.[1]);
+    expect(named).toBeGreaterThanOrEqual(30);
+    expect(named).toBeCloseTo(15 + session, 1);
+    expect(to('state').at(-1)?.body).toEqual({ state: 'paused', reason: 'waiting on a person' });
+  }, 60_000);
 
   it('does not start the engine at all when the ledger has no headroom left', async () => {
     // Asking the engine first and the ledger afterwards would spend a turn

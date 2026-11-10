@@ -859,9 +859,31 @@ describe('the codex engine', () => {
         tokensOut: 200,
         cachedTokensIn: 13_696,
         costUsd: costOf('gpt-5-codex', 27_688, 200, 13_696),
+        // `turn.completed` is the end of the turn: there is nothing left to
+        // stop, so the runner asks no cap question of it.
+        final: true,
       },
     ]);
     expect(costOf('gpt-5-codex', 27_688, 200, 13_696)).toBeLessThan(costOf('gpt-5-codex', 27_688, 200));
+  });
+
+  it('marks final only the usage that comes with the end of a turn', async () => {
+    // A usage on any other line, were Codex to write one, comes while the turn
+    // is still under way, and the cap can still stop it there.
+    const binary = fakeCodex(dir, [
+      { type: 'thread.started', thread_id: 'thr_1' },
+      { type: 'item.completed', item: { id: 'item_0', type: 'agent_message', text: 'Working.' }, usage: { input_tokens: 500, output_tokens: 20 } },
+      // A command run, so the turn acted and Codex is not nudged into a second.
+      { type: 'item.started', item: { id: 'item_1', type: 'command_execution', command: 'make ci' } },
+      { type: 'turn.completed', usage: { input_tokens: 1000, output_tokens: 100 } },
+    ]);
+
+    const events = await runAll(new CodexEngine(binary), { workdir: dir, model: 'gpt-5-codex' });
+
+    const usage = events.filter((event) => event.type === 'usage');
+    expect(usage).toHaveLength(2);
+    expect(usage[0]).not.toHaveProperty('final');
+    expect(usage[1]).toMatchObject({ tokensIn: 1000, final: true });
   });
 
   it('runs without a sandbox of its own in the bot’s container, where bubblewrap cannot start', async () => {
