@@ -193,7 +193,7 @@ describe('a bot’s thread', () => {
 
 async function openDialog(): Promise<HTMLElement> {
   const { IntakeDialog } = await import('./intake-dialog');
-  await act(async () => root.render(<IntakeDialog repos={['api', 'web']} defaultRepo="api" />));
+  await act(async () => root.render(<IntakeDialog repos={['api', 'web']} />));
   await act(async () => button('+ New request', container).click());
   return document.querySelector('[role="dialog"]') as HTMLElement;
 }
@@ -204,6 +204,13 @@ async function type(dialog: HTMLElement, text: string): Promise<void> {
     const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!;
     set.call(area, text);
     area.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+}
+
+async function choose(select: HTMLSelectElement, value: string): Promise<void> {
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!.call(select, value);
+    select.dispatchEvent(new Event('change', { bubbles: true }));
   });
 }
 
@@ -221,8 +228,11 @@ describe('sending a request', () => {
     await press('Send to intake');
 
     const shown = document.querySelector('[role="dialog"]') as HTMLElement;
-    expect(filing.sent).toEqual([expect.objectContaining({ text: 'A hello world page\nWith a link back home.', repo: 'api' })]);
-    expect(shown.textContent).toContain('Sent: A hello world page → api');
+    // No repository chosen: the request goes without one, and intake decides.
+    expect(filing.sent).toEqual([expect.objectContaining({ text: 'A hello world page\nWith a link back home.' })]);
+    expect('repo' in filing.sent[0]!).toBe(false);
+    expect(shown.textContent).toContain('Sent: A hello world page → intake decides the repository');
+    expect(shown.textContent).not.toContain('no repository');
     expect(shown.textContent).toContain('Intake is on it');
     // The form is gone: the confirmation stands in its place.
     expect(shown.querySelector('textarea')).toBeNull();
@@ -236,6 +246,17 @@ describe('sending a request', () => {
     const fresh = document.querySelector('[role="dialog"]') as HTMLElement;
     expect(fresh.querySelector('textarea')?.value).toBe('');
     expect(fresh.textContent).not.toContain('Sent:');
+  });
+
+  it('sends the repository a person chose, and names it in what it says', async () => {
+    filing.answer = { ok: true, bot: 'ottoexampleco', subject: 'request:aaaa1111', queued: false, position: null };
+    const dialog = await openDialog();
+    await type(dialog, 'A hello world page');
+    await choose(dialog.querySelector('select')!, 'web');
+    await press('Send to intake');
+
+    expect(filing.sent).toEqual([expect.objectContaining({ text: 'A hello world page', repo: 'web' })]);
+    expect(document.querySelector('[role="dialog"]')!.textContent).toContain('Sent: A hello world page → web');
   });
 
   it('asks for detail and files, and says the files never reach GitHub', async () => {
@@ -266,7 +287,7 @@ describe('sending a request', () => {
     const still = document.querySelector('[role="dialog"]') as HTMLElement;
     expect(filing.sent).toHaveLength(1);
     expect(still.querySelector('textarea')?.value).toBe('');
-    expect(still.querySelector('[role="status"]')?.textContent).toBe('Sent: A Tetris game → api · Queued (#1).');
+    expect(still.querySelector('[role="status"]')?.textContent).toBe('Sent: A Tetris game → intake decides the repository · Queued (#1).');
 
     await type(still, 'A snake game');
     await press('Send & add another');

@@ -37,7 +37,6 @@ export function FirstRun({
   crew,
   counts,
   repos,
-  repo,
   repoFullName,
   repositories = [],
   labelOf,
@@ -46,6 +45,10 @@ export function FirstRun({
   crew: readonly CrewMember[];
   counts: CrewCounts;
   repos: string[];
+  /**
+   * The repository the board shows. Unread: New request starts with none
+   * chosen and leaves the repository to intake. The board still passes it.
+   */
   repo: string;
   /** `owner/name`, for filing on GitHub directly, and for the review-gate check. */
   repoFullName: string | null;
@@ -95,7 +98,7 @@ export function FirstRun({
           The crew builds, reviews and ships it, and asks you in Needs you when it needs something.
         </p>
         <div className="mt-2 flex flex-wrap items-center gap-3.5">
-          <IntakeDialog repos={repos} labelOf={labelOf} defaultRepo={repo}>
+          <IntakeDialog repos={repos} labelOf={labelOf}>
             <button
               type="button"
               className="inline-flex h-10 items-center gap-2 rounded-md bg-body px-4 text-sm font-medium text-surface transition-colors hover:bg-soft focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-link"

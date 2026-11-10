@@ -43,10 +43,14 @@ export function whatNext(sent: Pick<SentRequest, 'queued' | 'position' | 'paused
   return sent.paused ? `${place}: work is paused, so it starts when work resumes` : place;
 }
 
+/** Where a request went, as the confirmation says it: none chosen is intake's to decide. */
+export function sentTo(repo: string): string {
+  return repo || 'intake decides the repository';
+}
+
 export function IntakeDialog({
   repos,
   labelOf = (name) => botLabel({ name }),
-  defaultRepo,
   children,
   open: openFromOutside,
   onOpenChange,
@@ -54,8 +58,6 @@ export function IntakeDialog({
   repos: string[];
   /** The bot that took the request, as a person reads it: the bridge answers with its name. */
   labelOf?: (name: string) => BotLabel;
-  /** The repository the board is showing, which a request is most likely for. */
-  defaultRepo?: string;
   /** The button that opens it, where a page wants its own; one button element. */
   children?: ReactNode;
   /**
@@ -76,7 +78,10 @@ export function IntakeDialog({
   // restarted under the tab.
   const [text, setText] = useDraft('intake:text');
   const [context, setContext] = useDraft('intake:context');
-  const [repo, setRepo] = useState(defaultRepo && repos.includes(defaultRepo) ? defaultRepo : (repos[0] ?? ''));
+  // Starts unchosen, not on the board's repository: a person who did not
+  // know which one a request concerned left the preselected one and filed it
+  // in the wrong place. Left empty, triage works out the repositories itself.
+  const [repo, setRepo] = useState('');
   const [kind, setKind] = useState(KINDS[0]);
   const [result, setResult] = useState<string | null>(null);
   /**
@@ -113,7 +118,7 @@ export function IntakeDialog({
     startTransition(async () => {
       const title = requestTitle(text);
       const response = await safeAction(() =>
-        fileRequest({ text, context, repo, kind, ...(files.ids.length > 0 ? { attachments: files.ids } : {}) }),
+        fileRequest({ text, context, ...(repo ? { repo } : {}), kind, ...(files.ids.length > 0 ? { attachments: files.ids } : {}) }),
       );
       if (response.ok) {
         // Where its conversation is, not just a sentence about it: "watch the
@@ -183,7 +188,7 @@ export function IntakeDialog({
 
             {added && (
               <p role="status" className="mt-3 rounded-md border border-signal/40 bg-signal/10 px-2.5 py-1.5 text-[12px] text-signal">
-                Sent: {added.title} → {added.repo || 'no repository'} · {whatNext(added)}.
+                Sent: {added.title} → {sentTo(added.repo)} · {whatNext(added)}.
               </p>
             )}
 
@@ -228,18 +233,22 @@ export function IntakeDialog({
 
               <div className="grid gap-3 sm:grid-cols-2">
                 <label className="block">
-                  <span className="text-[11px] font-medium text-soft">Repository</span>
+                  <span className="text-[11px] font-medium text-soft">Repository (optional)</span>
                   <select
                     value={repo}
                     onChange={(event) => setRepo(event.target.value)}
                     className="mt-1 w-full rounded-md border border-edge-strong bg-surface px-2 py-1.5 text-[12.5px] text-body"
                   >
+                    <option value="">Not sure, intake decides</option>
                     {repos.map((entry) => (
                       <option key={entry} value={entry}>
                         {entry}
                       </option>
                     ))}
                   </select>
+                  <span className="mt-1 block text-[11px] text-muted">
+                    Not sure? Leave it: the intake bot works out which repositories it concerns.
+                  </span>
                 </label>
                 <label className="block">
                   <span className="text-[11px] font-medium text-soft">Kind</span>
@@ -303,7 +312,7 @@ function SentView({ sent, said, onAnother }: { sent: SentRequest; said: string; 
   return (
     <div role="status" aria-label="Sent" className="flex flex-col gap-3">
       <DialogTitle>
-        Sent: {sent.title} → {sent.repo || 'no repository'}
+        Sent: {sent.title} → {sentTo(sent.repo)}
       </DialogTitle>
       <DialogDescription>
         {whatNext(sent)}. {atStart(said)} asks in this request’s own conversation if anything is missing, then files the issue.

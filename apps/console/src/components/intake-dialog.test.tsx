@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { whatNext } from './intake-dialog';
+import { sentTo, whatNext } from './intake-dialog';
+
+describe('where the New request dialog says a request went', () => {
+  it('names the repository a person chose', () => {
+    expect(sentTo('api')).toBe('api');
+  });
+
+  it('says intake decides when none was chosen, not "no repository"', () => {
+    expect(sentTo('')).toBe('intake decides the repository');
+  });
+});
 
 describe('what the New request dialog says comes next', () => {
   it('says intake is starting when the bridge answered before its task existed', () => {
