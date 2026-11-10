@@ -1152,6 +1152,34 @@ export interface PersonalNotificationUpdate {
   target?: string;
 }
 
+/**
+ * This device and the others (`GET /v1/me/push`, ADR 0048): each browser or
+ * installed app a person turned notifications on in, by name and when it was
+ * added. Never its subscription, which only the bridge's secret store holds.
+ */
+export interface PushDeviceView {
+  id: string;
+  name: string;
+  addedAt: string;
+  last: { at: string; ok: boolean; status: number | null; error: string | null } | null;
+}
+
+export interface PushDevicesView {
+  /** The install's VAPID public key, which a browser subscribes with. */
+  key: string;
+  devices: PushDeviceView[];
+  /** None of the devices took the last notification. */
+  allFailing: boolean;
+  /** Devices removed because their browser stopped taking notifications, since the newest was added. */
+  dropped: { name: string; at: string; status: number | null }[];
+}
+
+/** What a browser's `PushSubscription.toJSON()` gives, sent to the bridge once and kept there as a secret. */
+export interface PushSubscriptionInput {
+  endpoint: string;
+  keys: { p256dh: string; auth: string };
+}
+
 export interface NotificationTestResult {
   ok: boolean;
   status: number | null;
@@ -1514,6 +1542,7 @@ export const api = {
   spendingLimits: () => get<SpendingLimitsView>('/v1/spending/limits'),
   notifications: () => get<NotificationSettingsView>('/v1/settings/notifications'),
   myNotifications: () => get<PersonalNotificationView>('/v1/me/notifications'),
+  pushDevices: () => get<PushDevicesView>('/v1/me/push'),
   hosts: () => get<HostsView>('/v1/hosts'),
   attention: () => get<{ items: AttentionItem[] }>('/v1/attention'),
   modelAccounts: () => get<{ accounts: ModelAccountRef[] }>('/v1/model-accounts'),

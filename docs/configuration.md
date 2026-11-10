@@ -779,6 +779,93 @@ fell back, `cap_warning`, `promote_waiting`, `check_failing` and
   targetChanged}`, never the target. A local install refuses them: its one
   person's channel is the install's.
 
+### Notifications on your devices
+
+Everyone signed in, on a cloud install or a local one, can have OpenADLC's
+notifications arrive as push on their phone and computer, whether or not the
+console is open. Nothing has to be set up first: no topic, no webhook, no URL
+([ADR 0048](adr/0048-push-devices-keep-their-subscription-in-the-secret-store.md)).
+
+**Installing the console as an app.** This is optional on a computer, and
+required on an iPhone or iPad.
+
+- **iPhone and iPad (iOS 16.4 or later):** open the console in Safari, tap
+  Share → **Add to Home Screen**, and open OpenADLC from the Home Screen. Safari
+  gives push only to a site opened from there. In Safari itself, the page
+  says to add it first instead of offering the button.
+- **Android:** in Chrome, use the menu's **Install app** or **Add to Home
+  screen**. Push works in the browser too.
+- **A computer:** Chrome and Edge offer **Install** in the address bar.
+  Firefox and Safari take push in an ordinary tab.
+
+**Turning notifications on.** Open **Settings → Notifications** on the device
+and press **Turn on notifications on this device**. The browser asks for its
+permission, and the device appears in the list as, say, "iPhone · Safari".
+Do this once on each device. The list shows each device's name, when it was
+added and how its last push went, with **Send a test** and **Remove**. You can
+have up to ten devices.
+
+**What arrives.**
+
+- Items routed to you, as on Your channel.
+- For an admin, also what the install's channel carries: an item that fell
+  back, `cap_warning`, `promote_waiting`, `check_failing` and `check_fixed`.
+  On a local install, the operator is the admin.
+- The install's switches (`notifyKinds`) apply to push as to every channel.
+
+A push does not replace a channel. Each person's channel and the install's
+keep working beside it. Tapping a notification opens the console on the item.
+A device whose console tab is open and in front shows nothing for a push,
+because the page already says it.
+
+**What a device needs.**
+
+- The console over https, or the console on the same computer at
+  `http://127.0.0.1`. Browsers give push only to a secure page.
+- A local install's console can push only to the computer it runs on: a phone
+  cannot reach `http://127.0.0.1`, and the page says so. A phone needs a cloud
+  install.
+- On a cloud install behind IAP, the installed app signs in through IAP as
+  the browser does.
+- The bridge must reach the push services: `fcm.googleapis.com` (Chrome,
+  Edge, Android), `updates.push.services.mozilla.com` (Firefox),
+  `web.push.apple.com` (Safari, iPhone, iPad) and `*.notify.windows.com`. The
+  `push-egress` health check says so when it cannot.
+
+**When a device stops.** When a push service answers 404 or 410, the browser
+has dropped the subscription: it was uninstalled, its site data was cleared,
+or notifications were turned off. The device is then removed, and Settings
+says so ("Removed … on …: its browser stopped taking notifications"). Turn
+notifications on there again. When none of your devices took the last
+notification, Settings says that too.
+
+**What is kept.**
+
+- Each device's subscription is a credential, kept only in the secret store
+  as `push-device:<person id>:<device id>`. The `push_devices` table holds the
+  device's name, its person, its push service's host and a hash of the
+  endpoint.
+- Removing a person removes their devices. Merging two people drops the
+  merged-away person's devices; they turn notifications on again as the
+  person kept.
+- The install's VAPID key is `push-vapid-key` in the secret store, made the
+  first time it is needed. Backup and restore carry both. If the key is ever
+  lost, every device has to turn notifications on again.
+
+**The API**, for any signed-in person, acting only on their own devices:
+
+- `GET /v1/me/push`: the devices, the install's public key, `allFailing` and
+  recent drops.
+- `POST /v1/me/push/devices`: `{subscription: {endpoint, keys: {p256dh,
+  auth}}, name}`.
+- `DELETE /v1/me/push/devices/:id`.
+- `POST /v1/me/push/devices/:id/test`.
+
+Adds and removals are audited as `notify.device_added` and
+`notify.device_removed`, with `{person, device, name, service}`. Each send is
+`notify.delivery` with `transport: "push"`, `source: "device"` and the
+device's id. A dropped device is `notify.device_dropped`.
+
 **Upgrading a cloud install.** Once people hold roles, the items routed to
 them stop going to the install's channel. Until each of them sets their own,
 the bridge sends them nothing for those items. A local install is unchanged.

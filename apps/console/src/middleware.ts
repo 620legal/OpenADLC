@@ -37,7 +37,7 @@ export async function middleware(request: Request): Promise<Response | undefined
     return new Response(null, { status: 421 });
   }
   const path = new URL(request.url).pathname;
-  const signIn = await signInRefusal(request, path);
+  const signIn = isPublicAsset(request.method, path) ? undefined : await signInRefusal(request, path);
   if (signIn) return signIn;
   if (!path.startsWith('/api/')) return undefined;
   if (!rejectsBrowser(request.method, request.headers)) return undefined;
@@ -54,6 +54,28 @@ async function signInRefusal(request: Request, path: string): Promise<Response |
   if (!refusal || (refusal.status === 401 && path === '/signin')) return undefined;
   const { status, message } = refusal;
   return path.startsWith('/api/') ? Response.json({ error: message }, { status }) : text(message, status);
+}
+
+/**
+ * What installs the console as an app (ADR 0048): its manifest, its service
+ * worker and its icons. The phone or computer fetches the icons on its own,
+ * with no session, and a manifest it cannot read is an app it will not
+ * install. None of them holds anything of the install. Exact paths, and only
+ * to be read: a server action posts to a page path, and must not find one
+ * here that skips the sign-in. The matcher still runs on them, so the name
+ * check above holds for them too.
+ */
+export const PUBLIC_ASSETS: ReadonlySet<string> = new Set([
+  '/manifest.webmanifest',
+  '/sw.js',
+  '/icons/icon-192.png',
+  '/icons/icon-512.png',
+  '/icons/icon-maskable-512.png',
+  '/icons/apple-touch-icon.png',
+]);
+
+export function isPublicAsset(method: string, path: string): boolean {
+  return (method === 'GET' || method === 'HEAD') && PUBLIC_ASSETS.has(path);
 }
 
 function text(body: string, status: number): Response {

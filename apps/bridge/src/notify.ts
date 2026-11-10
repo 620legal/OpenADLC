@@ -1,6 +1,7 @@
 import { lastEventAt, listEventsOfTypeWith, recordEvent, settings, withAdvisoryLock } from '@openadlc/db';
 import { getSecretStore, notifyTargetRef, personNotifyTargetRef } from '@openadlc/github';
 import type { BridgeConfig } from './config.js';
+import { databasePushStore, DEVICE_TEST_TEXT, forgetDevices, sendToDevice, sendToDevices, type PushStore } from './push-devices.js';
 
 /**
  * Tells a person that a bot is waiting on them.
@@ -255,10 +256,13 @@ export function redactTarget(text: string, target: string): string {
 export interface DeliveryRecord {
   at: string;
   event: string;
-  transport: TransportKind;
-  source: 'settings' | 'env' | 'person';
+  /** `push` for a device's Web Push (ADR 0048), which only Settings' devices list reads. */
+  transport: TransportKind | 'push';
+  source: 'settings' | 'env' | 'person' | 'device';
   setAt: string | null;
   person?: string;
+  /** The device's id, for `source: 'device'`: never its endpoint. */
+  device?: string;
   ok: boolean;
   status: number | null;
   error: string | null;
@@ -296,10 +300,16 @@ export interface NotifyStore {
   setPersonTarget(personId: string, value: string | null): Promise<void>;
   /** Runs a read-modify-write of `personNotify` alone: two people saving at once each keep their own entry. */
   lockPeople<T>(fn: () => Promise<T>): Promise<T>;
+  /**
+   * Each person's devices (ADR 0048), kept beside their channel so whatever
+   * forgets the one forgets the other. Absent, nothing is pushed.
+   */
+  push?: PushStore;
 }
 
-export function databaseNotifyStore(): NotifyStore {
+export function databaseNotifyStore(options: { local?: boolean } = {}): NotifyStore {
   return {
+    push: databasePushStore(options),
     setting: (key) => settings.getSetting(key),
     write: (values, by) => settings.setSettings(values, by),
     target: () => getSecretStore().get(notifyTargetRef()),
@@ -395,8 +405,30 @@ function messageOf(error: unknown): string {
 export class Notifier {
   constructor(
     private readonly config: BridgeConfig,
-    readonly store: NotifyStore = databaseNotifyStore(),
+    readonly store: NotifyStore = databaseNotifyStore({ local: config.identityMode === 'local' }),
+    readonly push: PushStore | null = store.push ?? null,
   ) {}
+
+  /**
+   * Pushes to each device of these people (ADR 0048), beside their channels,
+   * not instead. A push service that is down, or a store that cannot be read,
+   * must not stop the send: whatever else took it still counts.
+   */
+  private async pushTo(personIds: readonly string[], notification: Notification): Promise<boolean> {
+    if (!this.push) return false;
+    try {
+      const results = await sendToDevices(
+        this.push,
+        personIds,
+        { event: notification.event, text: notification.text, link: notification.link, ...(notification.item ? { item: notification.item } : {}) },
+        { consoleUrl: this.config.consoleUrl },
+      );
+      return results.some((result) => result.ok);
+    } catch (error) {
+      console.warn(`[bridge] could not push: ${error instanceof Error ? error.message : String(error)}`);
+      return false;
+    }
+  }
 
   /**
    * Where a notification goes now, read on every send so a save in Settings
@@ -492,9 +524,13 @@ export class Notifier {
     // Routed: each of its people's own channel, and not the install's, which
     // would tell everyone on it. Someone with no channel of their own still
     // has the console's badge and alert, and GitHub's mention.
+    // Their devices too, and every admin's for one that is not routed: what
+    // the install's channel carries is an admin's to act on.
     if (notification.people?.length) {
+      const people = [...new Set(notification.people)];
+      const pushed = this.pushTo(people, notification);
       let sent = false;
-      for (const person of new Set(notification.people)) {
+      for (const person of people) {
         const own = await this.personTransport(person);
         if (!own) {
           console.log(`[bridge] would notify person ${person}, who has no channel of their own: ${notification.text} — ${notification.link}`);
@@ -502,19 +538,27 @@ export class Notifier {
         }
         if ((await this.deliver(own, notification)).ok) sent = true;
       }
+      if (await pushed) sent = true;
       return sent ? 'sent' : 'logged';
     }
 
+    const pushed = this.push
+      ? this.push
+          .admins()
+          .then((admins) => this.pushTo(admins.map((admin) => admin.id), notification))
+          .catch(() => false)
+      : Promise.resolve(false);
     const transport = await this.transport();
     if (!transport) {
-      console.log(`[bridge] would notify ${to}: ${notification.text} — ${notification.link}`);
-      return 'logged';
+      const any = await pushed;
+      if (!any) console.log(`[bridge] would notify ${to}: ${notification.text} — ${notification.link}`);
+      return any ? 'sent' : 'logged';
     }
 
     // A transport that is down must not stop the platform. The gate is
     // already on GitHub and on the board; the notification is the extra.
     const result = await this.deliver(transport, notification);
-    return result.ok ? 'sent' : 'logged';
+    return result.ok || (await pushed) ? 'sent' : 'logged';
   }
 
   /**
@@ -542,6 +586,23 @@ export class Notifier {
       text: PERSON_TEST_TEXT,
       link: `${this.config.consoleUrl.replace(/\/+$/, '')}/settings/notifications`,
     });
+  }
+
+  /**
+   * A person's Send a test to one of their devices, whatever the switches say.
+   * Null when they have no device by that id.
+   */
+  async testDevice(personId: string, deviceId: string): Promise<DeliveryResult | null> {
+    if (!this.push) return null;
+    const device = (await this.push.devices([personId])).find((one) => one.id === deviceId);
+    if (!device) return null;
+    const { ok, status, error } = await sendToDevice(
+      this.push,
+      device,
+      { event: 'test', text: DEVICE_TEST_TEXT, link: `${this.config.consoleUrl.replace(/\/+$/, '')}/settings/notifications` },
+      { consoleUrl: this.config.consoleUrl },
+    );
+    return { ok, status, error };
   }
 
   /**
@@ -822,10 +883,12 @@ export async function savePersonalNotification(
 }
 
 /**
- * Takes a removed person's own channel away: their entry and their secret.
- * Their deliveries stay in the event log, which is history.
+ * Takes a removed person's own channel away: their entry and their secret,
+ * and their devices with theirs. Their deliveries stay in the event log,
+ * which is history.
  */
 export async function forgetPersonalNotification(store: NotifyStore, personId: string, by: string): Promise<void> {
+  if (store.push) await forgetDevices(store.push, personId);
   await store.lockPeople(async () => {
     const all = parsePersonNotify(await store.personSetting());
     await store.setPersonTarget(personId, null);

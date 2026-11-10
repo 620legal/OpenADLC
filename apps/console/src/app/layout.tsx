@@ -54,6 +54,19 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
           it can answer. Without it that first click did nothing at all.
         */}
         <script dangerouslySetInnerHTML={{ __html: EARLY_CLICKS_SCRIPT }} />
+        {/*
+          What makes the console an app a phone or computer installs (ADR 0048).
+          The manifest is fetched with credentials: behind IAP, a request
+          without its cookie gets the sign-in page, and the browser reads no
+          manifest from that. iOS reads the touch icon and the capable flag,
+          not the manifest's icons.
+        */}
+        <link rel="manifest" href="/manifest.webmanifest" crossOrigin="use-credentials" />
+        <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+        <meta name="apple-mobile-web-app-capable" content="yes" />
+        <meta name="mobile-web-app-capable" content="yes" />
+        <meta name="apple-mobile-web-app-title" content="OpenADLC" />
+        <meta name="theme-color" content="#14171d" />
       </head>
       <body className="min-h-screen antialiased">
         {me && !me.known ? (

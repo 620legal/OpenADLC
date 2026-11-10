@@ -8,6 +8,7 @@ import {
   type NotificationSettingsView,
   type NotificationTestResult,
   type PersonalNotificationUpdate,
+  type PushSubscriptionInput,
   type PersonalNotificationView,
   type PersonRolesView,
   type RemovalChoices,
@@ -1103,6 +1104,46 @@ export async function savePersonalNotifications(
 export async function testPersonalNotifications(): Promise<{ ok: boolean; error?: string; result?: NotificationTestResult }> {
   try {
     const result = await call<NotificationTestResult>('/v1/me/notifications/test', 'POST', {});
+    revalidatePath('/settings/notifications');
+    return { ok: true, result };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : 'the test was not sent' };
+  }
+}
+
+/**
+ * Turns notifications on in this browser for the signed-in person: the
+ * subscription goes to the bridge, which keeps it in its secret store and
+ * gives back only the device's name and when it was added (ADR 0048).
+ */
+export async function addPushDevice(
+  subscription: PushSubscriptionInput,
+  name: string,
+): Promise<{ ok: boolean; error?: string; device?: { id: string; name: string; addedAt: string } }> {
+  try {
+    const device = await call<{ id: string; name: string; addedAt: string }>('/v1/me/push/devices', 'POST', { subscription, name });
+    revalidatePath('/settings/notifications');
+    return { ok: true, device };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : 'notifications were not turned on for this device' };
+  }
+}
+
+/** Removes one of the signed-in person's devices: it gets no more notifications. */
+export async function removePushDevice(id: string): Promise<{ ok: boolean; error?: string }> {
+  try {
+    await call<{ removed: string }>(`/v1/me/push/devices/${encodeURIComponent(id)}`, 'DELETE');
+    revalidatePath('/settings/notifications');
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : 'the device was not removed' };
+  }
+}
+
+/** Sends a test to one of the signed-in person's devices, and whether its push service took it. */
+export async function testPushDevice(id: string): Promise<{ ok: boolean; error?: string; result?: NotificationTestResult }> {
+  try {
+    const result = await call<NotificationTestResult>(`/v1/me/push/devices/${encodeURIComponent(id)}/test`, 'POST', {});
     revalidatePath('/settings/notifications');
     return { ok: true, result };
   } catch (error) {

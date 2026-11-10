@@ -4,7 +4,7 @@ import { readAccounts } from '../github-identities.js';
 import { signInKind } from '../sign-in.js';
 import { revokeGate, settledSigningKey } from '../signing-keys.js';
 import { createHash } from 'node:crypto';
-import { attributions, audit, bots, credentials, deployRuns, externalSigningKeys, identities, issues, lastAudit, lastGithubDelivery, leases, listEventsOfType, modelAccounts, repos, settings, tasks } from '@openadlc/db';
+import { attributions, audit, bots, credentials, deployRuns, externalSigningKeys, identities, issues, lastAudit, lastGithubDelivery, leases, listEventsOfType, modelAccounts, pushDevices, repos, settings, tasks } from '@openadlc/db';
 import { parseEgressHosts } from '@openadlc/shared';
 import {
   GcpSecretStore,
@@ -63,6 +63,7 @@ import { Notifier } from '../notify.js';
 import { deliveryCheck, productionEnvironmentOf } from './checks/delivery.js';
 import { shipsByReleaseCheck } from './checks/ships-by-release.js';
 import { testingEgressCheck } from './checks/testing-egress.js';
+import { pushEgressCheck, reachHost } from './checks/push-egress.js';
 import { sleptCheck } from './checks/slept.js';
 import { SLEPT_EVENT, type KeepAwake } from '../keep-awake.js';
 import { effectiveDelivery, type DeliveryKnowledge } from '../delivery-rules.js';
@@ -326,6 +327,7 @@ export function defaultChecks(wiring: HealthWiring): HealthCheck[] {
     repoConfig,
     repoOwnerCheck({ repos: () => repos.listRepos() }),
     notificationsCheck(wiring.notifier ?? new Notifier(config)),
+    pushEgressCheck({ services: () => pushDevices.services(), reach: (host) => reachHost(host) }),
     cloudNamesCheck(cloudSecretStore()),
     deliveryCheck({
       repos: async () =>

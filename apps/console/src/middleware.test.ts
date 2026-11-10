@@ -1,6 +1,9 @@
+import { existsSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { sessionValue, signInToken } from './lib/sign-in';
-import { middleware, middlewareCovers } from './middleware';
+import { middleware, middlewareCovers, PUBLIC_ASSETS } from './middleware';
 
 /**
  * A local console serves nothing but `/signin` to a browser that has not
@@ -95,6 +98,26 @@ describe('paths the matcher must still sign in', () => {
       expect(middlewareCovers(path), path).toBe(true);
       expect((await at(path, { method: 'POST' }))?.status, path).toBe(401);
     }
+  });
+});
+
+describe('what installs the console as an app', () => {
+  it('is read without a session: the phone fetches its icons on its own', async () => {
+    for (const path of PUBLIC_ASSETS) {
+      expect(await at(path), path).toBeUndefined();
+      expect(await at(path, { method: 'HEAD' }), path).toBeUndefined();
+      expect(existsSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'public', path)), path).toBe(true);
+    }
+  });
+
+  it('is not a way past the sign-in: a post there, or a path only like it, still needs one', async () => {
+    expect((await at('/sw.js', { method: 'POST' }))?.status).toBe(401);
+    expect((await at('/manifest.webmanifest', { method: 'POST' }))?.status).toBe(401);
+    for (const path of ['/sw.jsx', '/icons/', '/icons/other.png', '/icons/icon-192.png/x', '/sw.js/']) expect((await at(path))?.status, path).toBe(401);
+  });
+
+  it('still gets 421 under a name the console is not served under', async () => {
+    expect((await at('/sw.js', { host: 'attacker.example:47300' }))?.status).toBe(421);
   });
 });
 

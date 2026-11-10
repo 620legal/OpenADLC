@@ -12,7 +12,15 @@ const ADMIN: Me = { known: true, email: 'janedoe@example.com', role: 'admin', id
 const who = vi.hoisted(() => ({ me: null as unknown as Me }));
 who.me = ADMIN;
 
-vi.mock('@/app/actions', () => ({ saveNotifications: vi.fn(), testNotifications: vi.fn(), savePersonalNotifications: vi.fn(), testPersonalNotifications: vi.fn() }));
+vi.mock('@/app/actions', () => ({
+  saveNotifications: vi.fn(),
+  testNotifications: vi.fn(),
+  savePersonalNotifications: vi.fn(),
+  testPersonalNotifications: vi.fn(),
+  addPushDevice: vi.fn(),
+  removePushDevice: vi.fn(),
+  testPushDevice: vi.fn(),
+}));
 vi.mock('@/lib/api', async (original) => ({
   ...(await original<typeof import('@/lib/api')>()),
   readMe: async () => who.me,
@@ -29,6 +37,7 @@ vi.mock('@/lib/api', async (original) => ({
       last: null,
     }),
     myNotifications: async () => ({ kind: 'ntfy', server: 'https://ntfy.sh', target: '…9z8y', last: null }),
+    pushDevices: async () => ({ key: 'BKEY', devices: [{ id: 'd1', name: 'iPhone · Safari', addedAt: '2026-11-10T10:00:00Z', last: null }], allFailing: false, dropped: [] }),
   },
 }));
 vi.mock('@/lib/read-header', () => ({
@@ -77,6 +86,22 @@ describe('the notifications page', () => {
       expect(local).toContain('name="notify-kind"');
     } finally {
       who.me = ADMIN;
+    }
+  });
+
+  it('shows everyone signed in their devices, on a cloud install and a local one, and says a phone cannot reach a local one', async () => {
+    const { default: NotificationSettingsPage } = await import('./page');
+    for (const me of [ADMIN, { known: true, email: 'bob@example.com', role: 'user', identityMode: 'iap' } as Me, { ...ADMIN, identityMode: 'local' } as Me]) {
+      who.me = me;
+      try {
+        const html = renderToStaticMarkup(await NotificationSettingsPage()).replace(/<!-- -->/g, '');
+        expect(html, me.email + me.identityMode).toContain('Notifications on your devices');
+        expect(html).toContain('iPhone · Safari');
+        expect(html.includes('A phone cannot reach this install at http://127.0.0.1'), me.identityMode).toBe(me.identityMode === 'local');
+        expect(html.indexOf('Notifications on your devices')).toBeLessThan(html.indexOf(me.identityMode === 'local' ? 'name="notify-kind"' : 'Your channel'));
+      } finally {
+        who.me = ADMIN;
+      }
     }
   });
 });
