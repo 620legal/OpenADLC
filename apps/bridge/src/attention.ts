@@ -49,6 +49,7 @@ import {
 import type { HeldStack } from './stacking.js';
 
 export { standingPersonAsks, standingPersonAwaits, type HeldPlanChange, type PersonAsk, type PersonAwait } from './wait-chain.js';
+import type { PersonAwaitReview } from './wait-chain.js';
 import { ACCOUNTS_STEP, RECONNECT } from './health/words.js';
 import type { Router } from './router.js';
 import type { SubjectTitle } from './subject-titles.js';
@@ -245,7 +246,37 @@ export type AttentionAction =
    */
   | { kind: 'start_work'; label: string; subject: string }
   /** Lets go of the hold on the work `subject` names, as its card's Resume does (`POST /v1/items/:subject/resume`). */
-  | { kind: 'resume_item'; label: string; subject: string };
+  | { kind: 'resume_item'; label: string; subject: string }
+  /**
+   * A held Human-review approval decided from the card (`human-review-decide.ts`):
+   * Approve (`POST /v1/items/:subject/pull/human-review/approve`), Reject
+   * (`…/reject`), or Discuss, the item's message box (`POST /v1/items/:subject/messages`).
+   * `subject` is the pull request, `login` the person it waits on, `head` the commit they decide.
+   */
+  | { kind: 'human_review_approve' | 'human_review_reject' | 'human_review_discuss'; label: string; subject: string; login: string; head: string };
+
+/** A held Human-review approval, as its card describes it (`AttentionItem.decision`). */
+export interface HumanReviewDecision {
+  repo: string;
+  pr: number;
+  head: string;
+  login: string;
+  /** What the change does: the issue's Outcome, its first paragraph; else the issue's title; else null. */
+  change: string | null;
+  /** Why they are asked: the paths and the Human review rule that names them. */
+  why: string;
+  /** The crew's reviews on the head, as the wait recorded them; null when none were recorded, and the card links to GitHub. */
+  reviews: PersonAwaitReview[] | null;
+  prUrl: string;
+  diffUrl: string;
+  /** What each button does next. */
+  next: { approve: string; reject: string; discuss: string };
+  /** For the viewer only (`GET /v1/attention`): whether the decision is theirs to make. */
+  yours?: boolean;
+  /** For the viewer only, when it is not theirs: why, and where to link an account when that is why. */
+  notYours?: string;
+  settingsUrl?: string;
+}
 
 export interface HeldPromote {
   repo: string;
@@ -412,6 +443,13 @@ export interface AttentionItem {
    * card says it from this, so the card and Needs you say the same.
    */
   awaiting?: { login: string; again: boolean; paths: string[] };
+  /**
+   * What a person waited on under Human review decides (`approval:…`,
+   * `approve-again:…`), said plainly enough to decide from the card: what the
+   * change does, why they are asked, what the reviewers found, and what each
+   * button does next. `GET /v1/attention` adds whether it is the viewer's own.
+   */
+  decision?: HumanReviewDecision;
   /**
    * The pull request an item is about, when its repository declares commands
    * in `.github/openadlc.yml` (`pull-commands.ts`): the console puts that pull
@@ -1336,8 +1374,18 @@ export function attentionItems(given: AttentionInput): AttentionItem[] {
       bot: null,
       since: ask.at,
       detail: `${approvalCountsForNothing(ask)} OpenADLC does not merge it until @${ask.login} approves ${ask.head.slice(0, 7)}.`,
-      actions: [{ kind: 'open_url', label: 'Review it on GitHub', url: `${url}/files` }],
+      actions: [...decisionActions(ref, ask.login, ask.head), { kind: 'open_url', label: 'Review it on GitHub', url: `${url}/files` }],
       awaiting: { login: ask.login, again: true, paths: [] },
+      decision: heldDecision({
+        repo: ask.repo,
+        pr: ask.pr,
+        head: ask.head,
+        login: ask.login,
+        url,
+        issue: issueFacts(input.issues, ask.repo, ask.issue),
+        why: `${approvalCountsForNothing(ask)} AGENTS.md's Human review names @${ask.login} for what it changes.`,
+        reviews: null,
+      }),
     });
   }
 
@@ -1362,8 +1410,18 @@ export function attentionItems(given: AttentionInput): AttentionItem[] {
       bot: null,
       since: wait.at,
       detail: `The lead approved ${wait.head.slice(0, 7)}. It changes ${changes}. OpenADLC does not merge it until ${who} approves it.`,
-      actions: [{ kind: 'open_url', label: 'Review it on GitHub', url: `${url}/files` }],
+      actions: [...decisionActions(ref, wait.login, wait.head), { kind: 'open_url', label: 'Review it on GitHub', url: `${url}/files` }],
       awaiting: { login: wait.login, again: false, paths: [...wait.paths] },
+      decision: heldDecision({
+        repo: wait.repo,
+        pr: wait.pr,
+        head: wait.head,
+        login: wait.login,
+        url,
+        issue: issueFacts(input.issues, wait.repo, wait.issue),
+        why: `The lead approved ${wait.head.slice(0, 7)}. It changes ${changes}, so OpenADLC does not merge it until ${who} approves it.`,
+        reviews: wait.reviews,
+      }),
     });
   }
 
@@ -2801,8 +2859,107 @@ export async function readAttention(now: Date, deps: AttentionDeps = {}): Promis
   return { ...read, closed, ...(waiting ? { waiting } : {}) };
 }
 
-export function registerAttentionRoutes(router: Router, deps: AttentionDeps = {}): void {
-  router.get('/v1/attention', async ({ identity, role }) => ({
-    items: await attentionFor(identity, attentionItems(await readAttention(new Date(), deps)), deps, role),
-  }));
+/** Whether a held decision is the viewer's (`HumanReviewDecisions.mayDecide`). */
+export type MayDecideOn = (identity: string, login: string) => Promise<{ yours: true } | { yours: false; why: string; settingsUrl?: string }>;
+
+/**
+ * Says on each held Human-review decision whether it is the viewer's own: an
+ * annotation on the items they already get, never a filter. A lookup that
+ * fails says it is not, with why.
+ */
+export async function forViewer(items: AttentionItem[], identity: string, mayDecide: MayDecideOn): Promise<AttentionItem[]> {
+  const asked = new Map<string, ReturnType<MayDecideOn>>();
+  return Promise.all(
+    items.map(async (item) => {
+      if (!item.decision) return item;
+      const login = item.decision.login.toLowerCase();
+      let may = asked.get(login);
+      if (!may) {
+        may = mayDecide(identity, item.decision.login).catch(() => ({ yours: false as const, why: 'OpenADLC could not tell whether this is yours to decide; reload in a moment.' }));
+        asked.set(login, may);
+      }
+      const said = await may;
+      const decision: HumanReviewDecision = said.yours
+        ? { ...item.decision, yours: true }
+        : { ...item.decision, yours: false, notYours: said.why, ...(said.settingsUrl ? { settingsUrl: said.settingsUrl } : {}) };
+      return { ...item, decision };
+    }),
+  );
+}
+
+export function registerAttentionRoutes(router: Router, deps: AttentionDeps = {}, mayDecide?: MayDecideOn): void {
+  router.get('/v1/attention', async ({ identity, role }) => {
+    // The audience filter first, so a held approval still reaches only the
+    // people it is for; whether it is the viewer's own is said after.
+    const items = await attentionFor(identity, attentionItems(await readAttention(new Date(), deps)), deps, role);
+    return { items: mayDecide ? await forViewer(items, identity, mayDecide) : items };
+  });
+}
+
+/** The three buttons of a held Human-review approval, before "Review it on GitHub". */
+function decisionActions(pull: string, login: string, head: string): AttentionAction[] {
+  return [
+    { kind: 'human_review_approve', label: 'Approve', subject: pull, login, head },
+    { kind: 'human_review_reject', label: 'Reject', subject: pull, login, head },
+    { kind: 'human_review_discuss', label: 'Discuss', subject: pull, login, head },
+  ];
+}
+
+function issueFacts(issues: readonly IssueFacts[], repo: string, number: number | null): Pick<IssueFacts, 'title' | 'body'> | null {
+  if (number === null) return null;
+  return issues.find((issue) => issue.repoName === repo && issue.number === number) ?? null;
+}
+
+/** How much of an issue's Outcome a card says. */
+const CHANGE_CHARS = 400;
+
+/**
+ * An issue's Outcome, its first paragraph, cut on a word: what the change
+ * does, in the words the issue was filed with. Null when the body has no
+ * `## Outcome` section with text in it.
+ */
+export function outcomeOf(body: string | null | undefined): string | null {
+  if (!body) return null;
+  const text = body.replace(/<!--[\s\S]*?(?:-->|$)/g, '');
+  const heading = /^#{2,3}[ \t]+Outcome[ \t]*$/im.exec(text);
+  if (!heading) return null;
+  const rest = text.slice(heading.index + heading[0].length);
+  const end = rest.search(/^#{1,3}\s/m);
+  const section = (end === -1 ? rest : rest.slice(0, end)).trim();
+  const paragraph = section.split(/\n\s*\n/)[0]?.replace(/\s+/g, ' ').trim() ?? '';
+  if (!paragraph) return null;
+  if (paragraph.length <= CHANGE_CHARS) return paragraph;
+  const cut = paragraph.slice(0, CHANGE_CHARS);
+  const space = cut.lastIndexOf(' ');
+  return `${(space > CHANGE_CHARS / 2 ? cut.slice(0, space) : cut).trimEnd()}…`;
+}
+
+/** What a held Human-review approval's card says, for `approval:…` and `approve-again:…` alike. */
+function heldDecision(input: {
+  repo: string;
+  pr: number;
+  head: string;
+  login: string;
+  url: string;
+  issue: Pick<IssueFacts, 'title' | 'body'> | null;
+  why: string;
+  reviews: PersonAwaitReview[] | null;
+}): HumanReviewDecision {
+  const short = input.head.slice(0, 7);
+  return {
+    repo: input.repo,
+    pr: input.pr,
+    head: input.head,
+    login: input.login,
+    change: outcomeOf(input.issue?.body) ?? (input.issue?.title?.trim() || null),
+    why: input.why,
+    reviews: input.reviews,
+    prUrl: input.url,
+    diffUrl: `${input.url}/files`,
+    next: {
+      approve: `Posts your approval of ${short} on GitHub as @${input.login}, after you approve a one-time code. OpenADLC merges it once CI passes.`,
+      reject: 'Sends it back to the builder with your reason. The lead reviews the fix, and you are asked again.',
+      discuss: 'Sends your message to the lead reviewer, or the builder, who answers on the pull request. The decision stays open.',
+    },
+  };
 }

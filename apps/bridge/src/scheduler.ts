@@ -27,7 +27,7 @@ import { buildStatus, renderStatusMarkdown, statusDrift, statusIssueTarget } fro
 import { CHECKS_FAILED, verdictFor, type MergeLine } from './merge-line.js';
 import type { StageHandoff } from './stage-handoff.js';
 import type { HostdClient } from './hostd-client.js';
-import { askPeopleAgain, awaitPeople, heldAtCap, heldForRestart, type TaskService } from './task-service.js';
+import { askPeopleAgain, awaitPeople, crewReviewsOn, heldAtCap, heldForRestart, type TaskService } from './task-service.js';
 import type { Notifier } from './notify.js';
 import type { EngineUpdates } from './engine-updates.js';
 import type { SelfUpdate } from './self-update.js';
@@ -1116,6 +1116,8 @@ export class Scheduler {
                 return listed.complete ? listed.files : null;
               },
               rules: () => this.automation.humanReviewRules(repo.fullName, pull.baseRef),
+              reviews: async () =>
+                crewReviewsOn(await client.listReviews(repo.fullName, pull.number), { head: pull.headSha, crew, repoFullName: repo.fullName, prNumber: pull.number }),
             })),
           );
 

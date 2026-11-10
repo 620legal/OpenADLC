@@ -1,13 +1,14 @@
 'use client';
 
 import Link from 'next/link';
-import { type ReactNode, useRef, useState, useTransition } from 'react';
+import { type ReactNode, useEffect, useRef, useState, useTransition } from 'react';
 import { useRole } from '@/components/app-header';
 import {
   abandonRequest,
   acknowledgeNotice,
   answerGate,
   approveAll,
+  approveHumanReview,
   askDesigner,
   turnOffApproveAll,
   decideUnowned,
@@ -16,11 +17,13 @@ import {
   dismissDesignMemoryNotice,
   dismissTasks,
   recheckHealth,
+  rejectHumanReview,
   releasePromote,
   resumeItem,
   retryTask,
   retryTriage,
   revokeSigningKey,
+  sendItemMessage,
   startItem,
   stopTask,
   stopTasks,
@@ -28,6 +31,7 @@ import {
   undismissSigningKey,
 } from '@/app/actions';
 import { Copyable } from '@/components/copyable';
+import { DeviceCode } from '@/components/device-code';
 import { CheckIcon, ExternalIcon, QuestionIcon, ShipIcon, WarningIcon } from '@/components/icons';
 import type { AttentionAction, AttentionItem, AttentionMember } from '@/lib/api';
 import { cn } from '@/lib/cn';
@@ -35,9 +39,26 @@ import { Markdown } from '@/components/markdown';
 import { RepoBadge } from '@/components/repo-badge';
 import { Dialog, DialogClose, DialogTitle, SheetContent } from '@/components/ui/dialog';
 import { safeAction } from '@/lib/safe-action';
-import { CHOICES_ON_CARD, alarming, audienceLine, faceActions, groupCounts, groupOf, hasMore, plainDetail, stripItems, unblockedOf, waiting as waitingOf } from '@/lib/attention-card';
+import {
+  CHOICES_ON_CARD,
+  alarming,
+  audienceLine,
+  decisionButtons,
+  faceActions,
+  groupCounts,
+  groupOf,
+  hasMore,
+  plainDetail,
+  rejectReady,
+  reviewVerdict,
+  reviewerName,
+  stripItems,
+  unblockedOf,
+  waiting as waitingOf,
+  type DecisionButton,
+} from '@/lib/attention-card';
 import { IncidentSteps } from '@/components/incident-steps';
-import { PullActions } from '@/components/pull-panel';
+import { PullActions, pullPath } from '@/components/pull-panel';
 import { standsOut } from '@/lib/thread';
 import { ago } from '@/lib/when';
 
@@ -541,7 +562,7 @@ function NeedsCard({
             {decision}
           </p>
         )}
-        {item.detail && (
+        {item.detail && !item.decision && (
           <p
             data-clamp="detail"
             className={cn(
@@ -553,6 +574,7 @@ function NeedsCard({
             {plainDetail(item.detail)}
           </p>
         )}
+        {item.decision && <HumanReviewDecisionPanel item={item} />}
         {unblocked && (
           // What doing this lets go on: each card behind it opens.
           <p data-unblocks className="text-[12px] leading-normal text-soft">
@@ -1250,5 +1272,243 @@ function ActionButton({
           {action.label}
         </Link>
       );
+    case 'human_review_approve':
+    case 'human_review_reject':
+    case 'human_review_discuss':
+      // Drawn by the card's decision, each with what it does next (`HumanReviewDecisionPanel`).
+      return null;
   }
+}
+
+/** How often an Approve's sign-in is read while it waits for the person to approve its code. */
+const DECISION_FLOW_READ_MS = 3_000;
+
+/** What a held Human-review approval's panel is doing: nothing, a reason or message being written, or a sign-in waiting. */
+export type DecisionStep =
+  | { kind: 'idle' }
+  | { kind: 'reject'; reason: string }
+  | { kind: 'discuss'; text: string; role: 'review_lead' | 'implement' }
+  | { kind: 'signing'; flowId: string; userCode: string; verificationUri: string };
+
+/**
+ * A held Human-review approval, decided from its card: what the change does,
+ * why this person is asked, what the reviewers found, and Approve, Reject and
+ * Discuss, each with what it does next (`decision.next`). Approve and Reject
+ * are drawn only for the person it waits on, as the bridge says from their
+ * linked account; the bridge refuses them from anyone else, so this only
+ * keeps off a button it would refuse. See
+ * docs/adr/0036-a-person-decides-a-held-human-review-approval-from-the-console.md.
+ */
+export function HumanReviewDecisionPanel({ item, initialStep = { kind: 'idle' } }: { item: AttentionItem; /** Where it starts: idle, or, in a test, a reason being written. */ initialStep?: DecisionStep }) {
+  const decision = item.decision!;
+  const buttons = decisionButtons(item);
+  const subject = `${decision.repo}#${decision.pr}`;
+  const [step, setStep] = useState<DecisionStep>(initialStep);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [done, setDone] = useState<string | null>(null);
+  const short = decision.head.slice(0, 7);
+
+  // An Approve's sign-in, read until the person approves its code or it ends.
+  useEffect(() => {
+    if (step.kind !== 'signing') return;
+    const timer = setInterval(() => {
+      void fetch(pullPath(subject, `/flows/${encodeURIComponent(step.flowId)}`), { cache: 'no-store' })
+        .then((response) => response.json())
+        .then((said: { state: string; error?: string }) => {
+          if (said.state === 'waiting') return;
+          setStep({ kind: 'idle' });
+          if (said.state === 'sent') setDone(`Approved ${short} on GitHub as @${decision.login}. The card goes once GitHub says so.`);
+          else if (said.state === 'failed') setError(said.error ?? 'The sign-in ended before anything was posted. Press Approve again.');
+          else setError('OpenADLC no longer knows how this sign-in went. Look at the pull request before you press Approve again.');
+        })
+        .catch(() => undefined);
+    }, DECISION_FLOW_READ_MS);
+    return () => clearInterval(timer);
+  }, [step, subject, short, decision.login]);
+
+  const press = (button: DecisionButton) => {
+    if (busy || done) return;
+    setError(null);
+    if (button === 'reject') return setStep({ kind: 'reject', reason: '' });
+    if (button === 'discuss') return setStep({ kind: 'discuss', text: '', role: 'review_lead' });
+    setBusy(true);
+    void safeAction(() => approveHumanReview(subject, { head: decision.head, login: decision.login })).then((result) => {
+      setBusy(false);
+      if (!result.ok || !result.flow) return setError(result.error ?? 'The sign-in could not start.');
+      setStep({ kind: 'signing', flowId: result.flow.flowId, userCode: result.flow.userCode, verificationUri: result.flow.verificationUri });
+    });
+  };
+
+  const sendReject = (reason: string) => {
+    if (busy || !rejectReady(reason)) return;
+    setBusy(true);
+    setError(null);
+    void safeAction(() => rejectHumanReview(subject, { head: decision.head, login: decision.login, reason })).then((result) => {
+      setBusy(false);
+      if (!result.ok) return setError(result.error ?? 'It was not sent back.');
+      setStep({ kind: 'idle' });
+      setDone(result.sentBack ? 'Sent back to the builder with your reason.' : `Your reason is on the pull request, but it was not sent back: ${result.why ?? 'the bridge did not say why'}.`);
+    });
+  };
+
+  const sendDiscuss = (text: string, role: 'review_lead' | 'implement') => {
+    if (busy || !text.trim()) return;
+    setBusy(true);
+    setError(null);
+    const about = { kind: 'human_review' as const, repo: decision.repo, pr: decision.pr, login: decision.login, head: decision.head };
+    void safeAction(() => sendItemMessage(subject, { text, role, about })).then((result) => {
+      setBusy(false);
+      if (!result.ok) return setError(result.error ?? 'Your message was not sent.');
+      setStep({ kind: 'idle' });
+      setDone(`Sent to the ${role === 'implement' ? 'builder' : 'lead reviewer'}. The decision stays open.`);
+    });
+  };
+
+  const LABEL: Record<DecisionButton, string> = { approve: 'Approve', reject: 'Reject', discuss: 'Discuss' };
+
+  return (
+    <div data-decision-panel className="flex flex-col gap-2 rounded-md border border-edge bg-surface px-2.5 py-2 text-[12px] leading-snug">
+      {decision.change && (
+        <p data-change className="text-body">
+          <span className="font-medium">What it does: </span>
+          {decision.change}
+        </p>
+      )}
+      <p data-why className="text-soft">
+        <span className="font-medium text-body">Why you are asked: </span>
+        {decision.why}
+      </p>
+      <div data-reviews className="flex flex-col gap-1 text-soft">
+        <span className="font-medium text-body">What the reviewers found:</span>
+        {decision.reviews && decision.reviews.length > 0 ? (
+          <ul className="flex flex-col gap-1">
+            {decision.reviews.map((review) => (
+              <li key={review.url} data-review>
+                <a href={review.url} target="_blank" rel="noreferrer" className="text-link hover:underline">
+                  {reviewerName(review)} {reviewVerdict(review.state)}
+                </a>
+                {review.summary && <span className="line-clamp-3 text-muted">{review.summary}</span>}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <a href={decision.prUrl} target="_blank" rel="noreferrer" className="w-fit text-link hover:underline">
+            Read the reviews on GitHub
+          </a>
+        )}
+        <a data-diff href={decision.diffUrl} target="_blank" rel="noreferrer" className="inline-flex w-fit items-center gap-1 text-link hover:underline">
+          See the diff <ExternalIcon size={11} />
+        </a>
+      </div>
+      {decision.yours !== true && decision.notYours && (
+        <p data-not-yours className="text-muted">
+          {decision.notYours}{' '}
+          {decision.settingsUrl && (
+            <Link href={decision.settingsUrl} className="text-link hover:underline">
+              Link your GitHub account
+            </Link>
+          )}
+        </p>
+      )}
+      {step.kind === 'idle' && !done && buttons.length > 0 && (
+        <div role="group" aria-label="Decision" className="flex flex-wrap gap-1.5">
+          {buttons.map((button) => (
+            <button
+              key={button}
+              type="button"
+              data-decide={button}
+              disabled={busy}
+              onClick={() => press(button)}
+              className="inline-flex min-h-11 items-center rounded-md border border-edge-strong bg-panel px-3 py-2 text-left text-[12.5px] leading-snug text-body transition-colors hover:border-attention/60 hover:bg-attention/10 focus-visible:outline-2 focus-visible:outline-link disabled:opacity-60 md:min-h-7 md:px-2.5 md:py-1"
+            >
+              <span className="flex flex-col gap-0.5">
+                <span>{busy && button === 'approve' ? 'Starting…' : LABEL[button]}</span>
+                <span data-next className="text-[11.5px] leading-snug text-muted">
+                  {decision.next[button]}
+                </span>
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+      {step.kind === 'signing' && (
+        <div data-signing className="flex flex-col gap-1.5">
+          <p className="text-soft">Approve this code as @{decision.login} on GitHub; your approval of {short} is posted once you do.</p>
+          <DeviceCode code={step.userCode} url={step.verificationUri} />
+        </div>
+      )}
+      {step.kind === 'reject' && (
+        <form
+          data-reject
+          className="flex flex-col gap-1.5"
+          onSubmit={(event) => {
+            event.preventDefault();
+            sendReject(step.reason);
+          }}
+        >
+          <label className="flex flex-col gap-1 text-soft">
+            Why? The builder fixes what you say here.
+            <textarea
+              required
+              maxLength={2000}
+              value={step.reason}
+              onChange={(event) => setStep({ kind: 'reject', reason: event.target.value })}
+              className="min-h-16 rounded-md border border-edge-strong bg-panel px-2 py-1.5 text-[12.5px] text-body"
+            />
+          </label>
+          <div className="flex gap-1.5">
+            <button type="submit" disabled={busy || !rejectReady(step.reason)} className={PRIMARY}>
+              {busy ? 'Sending back…' : 'Send it back'}
+            </button>
+            <button type="button" className={SECONDARY} onClick={() => setStep({ kind: 'idle' })}>
+              Cancel
+            </button>
+          </div>
+        </form>
+      )}
+      {step.kind === 'discuss' && (
+        <form
+          data-discuss
+          className="flex flex-col gap-1.5"
+          onSubmit={(event) => {
+            event.preventDefault();
+            sendDiscuss(step.text, step.role);
+          }}
+        >
+          <label className="flex items-center gap-1.5 text-soft">
+            To
+            <select
+              value={step.role}
+              onChange={(event) => setStep({ ...step, role: event.target.value === 'implement' ? 'implement' : 'review_lead' })}
+              className="rounded-md border border-edge-strong bg-panel px-1.5 py-1 text-[12px] text-body"
+            >
+              <option value="review_lead">the lead reviewer</option>
+              <option value="implement">the builder</option>
+            </select>
+          </label>
+          <textarea
+            aria-label="Your message"
+            value={step.text}
+            onChange={(event) => setStep({ ...step, text: event.target.value })}
+            className="min-h-16 rounded-md border border-edge-strong bg-panel px-2 py-1.5 text-[12.5px] text-body"
+          />
+          <div className="flex gap-1.5">
+            <button type="submit" disabled={busy || !step.text.trim()} className={PRIMARY}>
+              {busy ? 'Sending…' : 'Send'}
+            </button>
+            <button type="button" className={SECONDARY} onClick={() => setStep({ kind: 'idle' })}>
+              Cancel
+            </button>
+          </div>
+        </form>
+      )}
+      {done && <DoneLine done={{ text: done, final: true }} />}
+      {error && (
+        <p role="status" className="text-[12px] text-alarm">
+          {error}
+        </p>
+      )}
+    </div>
+  );
 }

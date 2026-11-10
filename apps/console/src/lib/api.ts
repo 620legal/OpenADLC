@@ -506,7 +506,48 @@ export type AttentionAction =
   /** Starts now what would start the work `subject` names when it comes round: the stage sweep, or a dispatch. */
   | { kind: 'start_work'; label: string; subject: string }
   /** Lets go of the hold on the work `subject` names, as its card's Resume does. Absent from an older bridge. */
-  | { kind: 'resume_item'; label: string; subject: string };
+  | { kind: 'resume_item'; label: string; subject: string }
+  /**
+   * A held Human-review approval's buttons: Approve, Reject, Discuss.
+   * `subject` is the pull request, `login` the person it waits on, `head` the
+   * commit decided. The card draws them from `decision`. Absent from an older bridge.
+   */
+  | { kind: 'human_review_approve' | 'human_review_reject' | 'human_review_discuss'; label: string; subject: string; login: string; head: string };
+
+/** A crew review a held approval's card shows. */
+export interface HumanReviewSummary {
+  login: string;
+  /** The seat it names, on an account seats share. */
+  seat: string | null;
+  state: string;
+  summary: string;
+  url: string;
+}
+
+/**
+ * What a person waited on under Human review decides, said plainly enough to
+ * decide from the card. See `apps/bridge/src/attention.ts` (`HumanReviewDecision`).
+ */
+export interface HumanReviewDecision {
+  repo: string;
+  pr: number;
+  head: string;
+  login: string;
+  /** What the change does: the issue's Outcome, its first paragraph, or its title. */
+  change: string | null;
+  /** Why they are asked: the paths and the Human review rule that names them. */
+  why: string;
+  /** The crew's reviews on the head; null when none were recorded, and the card links to GitHub. */
+  reviews: HumanReviewSummary[] | null;
+  prUrl: string;
+  diffUrl: string;
+  next: { approve: string; reject: string; discuss: string };
+  /** Whether it is the viewer's to decide. Absent from a bridge that does not say: then it is not. */
+  yours?: boolean;
+  /** Why it is not the viewer's, and where to link an account when that is why. */
+  notYours?: string;
+  settingsUrl?: string;
+}
 
 export type AttentionKind =
   | 'question'
@@ -574,6 +615,8 @@ export interface AttentionItem {
   heldApproval?: { blockedBy: number[]; paths: string[] };
   /** A pull request's that waits on a person's approval (`merge_waiting`): who, whether it is an approval again, and the Human review paths that name them. Absent from an older bridge. */
   awaiting?: { login: string; again: boolean; paths: string[] };
+  /** A held Human-review approval's decision, for its card's Approve, Reject and Discuss. Absent from an older bridge. */
+  decision?: HumanReviewDecision;
   /**
    * The pull request it is about, when its repository declares commands in
    * `.github/openadlc.yml`: the card shows that pull request's command buttons

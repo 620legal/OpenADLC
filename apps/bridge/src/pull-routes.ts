@@ -1,11 +1,14 @@
-import { lastAudit, audit as writeAudit, personAccounts, repos } from '@openadlc/db';
+import { bots, issues, lastAudit, listEventsOfTypeWith, audit as writeAudit, personAccounts, repos } from '@openadlc/db';
 import { GitHubClient } from '@openadlc/github';
+import { decisionTarget, HumanReviewDecisions, type HumanReviewDeps } from './human-review-decide.js';
 import { resolveItem, type Item } from './items.js';
 import { theApp } from './people.js';
 import { PersonFlows, type FlowView, type PersonGitHubDeps } from './person-github.js';
 import { PullCommands, PullRules, useDeclaredCommands, type PullCommandDeps, type PullReader, type PullRepo } from './pull-commands.js';
 import { HttpFailure, STREAMING, type Router } from './router.js';
-import { parseRef } from './work.js';
+import type { SendBack } from './send-back.js';
+import { standingPersonAsks, standingPersonAwaits } from './wait-chain.js';
+import { parseRef, PERSON_ASKED_AGAIN, PERSON_AWAITED, REVIEW_ROUND_OPENED, REVIEW_SUBMITTED_ON } from './work.js';
 
 /**
  * A work item's pull request, as its pull panel shows it: the commands its
@@ -88,13 +91,129 @@ export function livePullCommands(input: { reader: () => Promise<PullReader | nul
   return commands;
 }
 
+/** Posts a person's `APPROVE` review with their one-post token (ADR 0018), pinned to the head they approved. */
+export async function postReviewAsPerson(accessToken: string, fullName: string, number: number, review: { commitId: string; body: string }): Promise<{ id: number; htmlUrl: string }> {
+  const client = new GitHubClient({ token: accessToken, actingAs: 'a person' });
+  const posted = await client.request<{ id: number; html_url: string }>('POST', `/repos/${fullName}/pulls/${number}/reviews`, {
+    commit_id: review.commitId,
+    event: 'APPROVE',
+    body: review.body,
+  });
+  return { id: posted.id, htmlUrl: posted.html_url };
+}
+
+/** How far back a wait is read: as far as Needs you reads it (`ATTENTION_WINDOW_DAYS`). */
+const WAIT_WINDOW_MS = 7 * 24 * 60 * 60_000;
+
+/**
+ * The live wiring of a held approval's decisions: reads as the automation
+ * account, posts Approve as the person and Reject's comment as the app, and
+ * opens the patch round through `SendBack`.
+ */
+export function liveHumanReviewDecisions(input: {
+  reader: () => Promise<GitHubClient | null>;
+  person: PersonGitHubDeps;
+  flows: PersonFlows;
+  sendBack: SendBack | null;
+}): HumanReviewDecisions {
+  const reader = async (): Promise<GitHubClient> => {
+    const client = await input.reader();
+    if (!client) throw new HttpFailure(503, 'OpenADLC has no GitHub account to read the pull request with yet. Finish connecting the automation account first.');
+    return client;
+  };
+  const deps: HumanReviewDeps = {
+    // The operator's link on a local install, as Settings shows it (`livePersonGitHubDeps`).
+    linkOf: (identity) => input.person.store.ofIdentity(identity),
+    userIdOf: async (login) => {
+      const client = await input.reader();
+      if (!client) return null;
+      const user = await client.request<{ id?: number }>('GET', `/users/${encodeURIComponent(login)}`).catch(() => null);
+      return typeof user?.id === 'number' ? user.id : null;
+    },
+    standing: async (repo, pr, login) => {
+      const subjectRef = `${repo}#${pr}`;
+      const since = Date.now() - WAIT_WINDOW_MS;
+      const recent = <T extends { at: string }>(rows: readonly T[]) => rows.filter((row) => Date.parse(row.at) >= since);
+      const [awaits, asks, reviews, rounds, listed] = await Promise.all([
+        listEventsOfTypeWith(PERSON_AWAITED, { subjectRef }),
+        listEventsOfTypeWith(PERSON_ASKED_AGAIN, { subjectRef }),
+        listEventsOfTypeWith(REVIEW_SUBMITTED_ON, { subjectRef }),
+        listEventsOfTypeWith(REVIEW_ROUND_OPENED, { subjectRef }),
+        issues.listIssues(repo),
+      ]);
+      const key = `${subjectRef}@${login.toLowerCase()}`;
+      // Asked again first, as Needs you shows one card per person and pull request.
+      const ask = standingPersonAsks(recent(asks), recent(reviews), listed).get(key);
+      if (ask) return { head: ask.head };
+      const wait = standingPersonAwaits(recent(awaits), recent(reviews), recent(rounds), listed).get(key);
+      return wait ? { head: wait.head } : null;
+    },
+    pull: async (repo, number) => {
+      const client = await reader();
+      const pull = await client.request<{ state: string; html_url: string; head: { sha: string } }>('GET', `/repos/${repo.fullName}/pulls/${number}`);
+      return { open: pull.state === 'open', head: pull.head.sha, url: pull.html_url };
+    },
+    flows: input.flows,
+    isCrew: input.person.isCrew,
+    postReviewAsPerson,
+    commentAsApp: async (fullName, number, body) => {
+      const app = await theApp(fullName);
+      if (!app) return null;
+      const posted = await app.request<{ html_url: string }>('POST', `/repos/${fullName}/issues/${number}/comments`, { body });
+      return { htmlUrl: posted.html_url };
+    },
+    rejected: async (repo, pr, head) => {
+      const row = await lastAudit('pull.human_review_rejected', decisionTarget(repo, pr));
+      // Only a Reject that opened the round holds the head: one refused may be tried again.
+      const said = (row?.payload ?? {}) as Record<string, unknown>;
+      return said.head === head && said.sentBack === true;
+    },
+    audit: async (entry) => {
+      await writeAudit(entry);
+    },
+    sendBack: async ({ repo, number, by, reason }) => {
+      if (!input.sendBack) return 'nothing on this bridge sends work back to Build';
+      const [found, crew, client] = await Promise.all([repos.getRepoByName(repo.name), bots.listBots(), reader()]);
+      if (!found) return `${repo.name} is not a repository this install manages`;
+      const pull = await client.request<{ head: { ref: string; sha: string } }>('GET', `/repos/${repo.fullName}/pulls/${number}`);
+      return input.sendBack.reviewRound({
+        repo: { id: found.id, name: found.name },
+        repoFullName: repo.fullName,
+        pr: { number, head: { ref: pull.head.ref, sha: pull.head.sha } },
+        crew,
+        client,
+        by,
+        reason,
+      });
+    },
+  };
+  return new HumanReviewDecisions(deps);
+}
+
+/** A GitHub login a decision names, as GitHub allows one. */
+function loginOf(value: unknown): string {
+  if (typeof value !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/.test(value)) throw new HttpFailure(400, 'login is the GitHub login the approval waits on');
+  return value;
+}
+
+function headOf(value: unknown): string {
+  if (typeof value !== 'string' || !/^[0-9a-f]{40}$/i.test(value)) throw new HttpFailure(400, 'head is the commit the decision was shown for');
+  return value;
+}
+
 function positive(value: string | undefined, what: string): number {
   const number = Number(value);
   if (!Number.isInteger(number) || number < 0) throw new HttpFailure(400, `${what} is a number`);
   return number;
 }
 
-export function registerPullRoutes(router: Router, commands: PullCommands, flows: PersonFlows, pullOf: PullOf = livePullOf): void {
+export function registerPullRoutes(
+  router: Router,
+  commands: PullCommands,
+  flows: PersonFlows,
+  pullOf: PullOf = livePullOf,
+  decisions: HumanReviewDecisions | null = null,
+): void {
   const pullFor = async (subject: string | undefined) => {
     const found = await pullOf(subject ?? '');
     if (!found) throw new HttpFailure(404, 'This work item has no pull request yet.');
@@ -111,6 +230,25 @@ export function registerPullRoutes(router: Router, commands: PullCommands, flows
     const input = await body<{ head?: unknown }>();
     if (typeof input.head !== 'string' || !/^[0-9a-f]{40}$/i.test(input.head)) throw new HttpFailure(400, 'head is the commit the button was shown for');
     return commands.send({ repo, number, name: params.name ?? '', head: input.head, identity });
+  });
+
+  /**
+   * A held Human-review approval decided from the console
+   * (`human-review-decide.ts`): Approve answers with the sign-in to approve,
+   * whose flow is read as a command's is; Reject sends it back with a reason.
+   */
+  router.post('/v1/items/:subject/pull/human-review/approve', async ({ params, body, identity }) => {
+    if (!decisions) throw new HttpFailure(503, 'This bridge does not decide Human-review approvals; approve it on GitHub.');
+    const { repo, number } = await pullFor(params.subject);
+    const input = await body<{ head?: unknown; login?: unknown }>();
+    return decisions.approve({ repo, number, login: loginOf(input.login), head: headOf(input.head), identity });
+  });
+
+  router.post('/v1/items/:subject/pull/human-review/reject', async ({ params, body, identity }) => {
+    if (!decisions) throw new HttpFailure(503, 'This bridge does not decide Human-review approvals; request changes on GitHub.');
+    const { repo, number } = await pullFor(params.subject);
+    const input = await body<{ head?: unknown; login?: unknown; reason?: unknown }>();
+    return decisions.reject({ repo, number, login: loginOf(input.login), head: headOf(input.head), identity, reason: typeof input.reason === 'string' ? input.reason : '' });
   });
 
   router.get('/v1/items/:subject/pull/flows/:flowId', async ({ params, identity }) => {

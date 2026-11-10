@@ -511,7 +511,18 @@ describe('what needs a person', () => {
           since: minutesAgo(10),
           detail:
             "GitHub shows @janedoe's approval on 692cd1f, but it was given on b789079, whose diff is another, so it counts for nothing. OpenADLC does not merge it until @janedoe approves 692cd1f.",
-          actions: [{ kind: 'open_url', label: 'Review it on GitHub', url: 'https://github.com/janedoe/openadlc-testbed/pull/29/files' }],
+          actions: [
+            { kind: 'human_review_approve', label: 'Approve', subject: 'openadlc-testbed#29', login: 'janedoe', head: B },
+            { kind: 'human_review_reject', label: 'Reject', subject: 'openadlc-testbed#29', login: 'janedoe', head: B },
+            { kind: 'human_review_discuss', label: 'Discuss', subject: 'openadlc-testbed#29', login: 'janedoe', head: B },
+            { kind: 'open_url', label: 'Review it on GitHub', url: 'https://github.com/janedoe/openadlc-testbed/pull/29/files' },
+          ],
+          decision: expect.objectContaining({
+            head: B,
+            login: 'janedoe',
+            why: "GitHub shows @janedoe's approval on 692cd1f, but it was given on b789079, whose diff is another, so it counts for nothing. AGENTS.md's Human review names @janedoe for what it changes.",
+            reviews: null,
+          }),
         }),
       ]);
       // One given before the bridge kept the head each was submitted on.
@@ -579,7 +590,12 @@ describe('what needs a person', () => {
           subject: expect.objectContaining({ repo: 'openadlc-testbed', number: 11, ref: 'openadlc-testbed#11' }),
           since: minutesAgo(10),
           detail: "The lead approved 692cd1f. It changes `infra/`, which AGENTS.md's Human review names @janedoe for. OpenADLC does not merge it until @janedoe approves it.",
-          actions: [{ kind: 'open_url', label: 'Review it on GitHub', url: 'https://github.com/janedoe/openadlc-testbed/pull/29/files' }],
+          actions: [
+            { kind: 'human_review_approve', label: 'Approve', subject: 'openadlc-testbed#29', login: 'janedoe', head: B },
+            { kind: 'human_review_reject', label: 'Reject', subject: 'openadlc-testbed#29', login: 'janedoe', head: B },
+            { kind: 'human_review_discuss', label: 'Discuss', subject: 'openadlc-testbed#29', login: 'janedoe', head: B },
+            { kind: 'open_url', label: 'Review it on GitHub', url: 'https://github.com/janedoe/openadlc-testbed/pull/29/files' },
+          ],
           awaiting: { login: 'janedoe', again: false, paths: ['infra/'] },
         }),
       ]);
@@ -629,6 +645,93 @@ describe('what needs a person', () => {
           ],
         }),
       ).toEqual([]);
+    });
+
+    it('describes the decision: what the change does, why they are asked, what the reviewers found, and what each button does', async () => {
+      const { attentionItems } = await load();
+      const body = [
+        '## Outcome',
+        'Limit each client to 60 requests a minute on the webhook route,',
+        'so a flood of retries cannot starve the bridge.',
+        '',
+        'A second paragraph the card leaves out.',
+        '',
+        '## Acceptance criteria',
+        '- It limits.',
+      ].join('\n');
+      const issues = ISSUES.map((one) => (one.number === 11 ? { ...one, body } : one));
+      const reviews = [
+        { login: 'openadlc-sydney-janedoe', seat: 'lead-reviewer', state: 'approved', summary: 'The limit is per client, as asked.', url: 'https://github.com/janedoe/openadlc-testbed/pull/29#pullrequestreview-5' },
+      ];
+      const [item] = attentionItems({ ...base, issues, personAwaits: [awaited(minutesAgo(10), { reviews })] });
+
+      expect(item?.decision).toEqual({
+        repo: 'openadlc-testbed',
+        pr: 29,
+        head: B,
+        login: 'janedoe',
+        change: 'Limit each client to 60 requests a minute on the webhook route, so a flood of retries cannot starve the bridge.',
+        why: "The lead approved 692cd1f. It changes `infra/`, which AGENTS.md's Human review names @janedoe for, so OpenADLC does not merge it until @janedoe approves it.",
+        reviews,
+        prUrl: 'https://github.com/janedoe/openadlc-testbed/pull/29',
+        diffUrl: 'https://github.com/janedoe/openadlc-testbed/pull/29/files',
+        next: {
+          approve: 'Posts your approval of 692cd1f on GitHub as @janedoe, after you approve a one-time code. OpenADLC merges it once CI passes.',
+          reject: 'Sends it back to the builder with your reason. The lead reviews the fix, and you are asked again.',
+          discuss: 'Sends your message to the lead reviewer, or the builder, who answers on the pull request. The decision stays open.',
+        },
+      });
+      // No Outcome: the issue's title. A wait recorded before reviews were: none, and the card links to GitHub.
+      const [plain] = attentionItems({ ...base, personAwaits: [awaited(minutesAgo(10))] });
+      expect(plain?.decision).toMatchObject({ change: 'Rate-limit the webhook route', reviews: null });
+    });
+
+    it('says on each decision whether it is the viewer’s, without leaving any item out', async () => {
+      const { attentionItems, forViewer } = await load();
+      const items = attentionItems({ ...base, personAwaits: [awaited(minutesAgo(10)), awaited(minutesAgo(9), { login: 'someone-else' })] });
+      const mayDecide = vi.fn(async (_identity: string, login: string) =>
+        login === 'janedoe' ? ({ yours: true } as const) : ({ yours: false, why: "This is @someone-else's to decide; you can Discuss it." } as const),
+      );
+      const seen = await forViewer(items, 'jane@acme.test', mayDecide);
+
+      expect(seen.map((item) => item.id).sort()).toEqual(items.map((item) => item.id).sort());
+      expect(seen.find((item) => item.decision?.login === 'janedoe')?.decision).toMatchObject({ yours: true });
+      expect(seen.find((item) => item.decision?.login === 'someone-else')?.decision).toMatchObject({ yours: false, notYours: "This is @someone-else's to decide; you can Discuss it." });
+
+      const unlinked = await forViewer(items, 'new@acme.test', async (_identity, login) => ({ yours: false, why: `You have not linked a GitHub account. Link it in Settings → Your GitHub account; this is @${login}'s to decide.`, settingsUrl: '/settings#your-github' }));
+      expect(unlinked[0]?.decision).toMatchObject({ yours: false, settingsUrl: '/settings#your-github', notYours: expect.stringContaining('Settings → Your GitHub account') });
+
+      const failed = await forViewer(items, 'jane@acme.test', async () => Promise.reject(new Error('down')));
+      expect(failed[0]?.decision).toMatchObject({ yours: false, notYours: expect.stringContaining('reload') });
+    });
+
+    it('sends a held approval only to its audience, and says it is the viewer’s after that filter', async () => {
+      const { attentionItems, attentionFor, forViewer } = await load();
+      const person = (id: string, email: string, githubLogin: string) => ({ id, name: id, email, githubLogin, consoleRole: 'user' as const, approves: false });
+      const facts = { people: [person('p-jane', 'jane@acme.test', 'janedoe'), person('p-bob', 'bob@acme.test', 'bob')], roles: [] };
+      const deps = { audience: { local: false, facts: async () => facts } };
+      const items = attentionItems({ ...base, personAwaits: [awaited(minutesAgo(10))] });
+      const mayDecide = vi.fn(async () => ({ yours: true }) as const);
+
+      const jane = await forViewer(await attentionFor('jane@acme.test', items, deps, 'user'), 'jane@acme.test', mayDecide);
+      expect(jane.map((item) => item.decision?.yours)).toEqual([true]);
+      expect(jane[0]?.audience).toMatchObject({ for: 'person', people: ['p-jane'] });
+
+      // Bob is not its audience: the item never reaches him, so nothing is annotated for him.
+      mayDecide.mockClear();
+      const bob = await forViewer(await attentionFor('bob@acme.test', items, deps, 'user'), 'bob@acme.test', mayDecide);
+      expect(bob).toEqual([]);
+      expect(mayDecide).not.toHaveBeenCalled();
+    });
+
+    it('takes the first paragraph of an Outcome, its comments out, and cuts a long one on a word', async () => {
+      const { outcomeOf } = await load();
+      expect(outcomeOf('## Outcome\n<!-- a note -->\nIt does the thing.\n\nMore.')).toBe('It does the thing.');
+      expect(outcomeOf('No outcome here.')).toBeNull();
+      expect(outcomeOf('## Outcome\n\n## Acceptance criteria\n- x')).toBeNull();
+      const long = outcomeOf(`## Outcome\n${'word '.repeat(150)}`)!;
+      expect(long.length).toBeLessThanOrEqual(401);
+      expect(long.endsWith('word…')).toBe(true);
     });
 
     it('gives one item per pull request and person, the approve-again one when that applies', async () => {

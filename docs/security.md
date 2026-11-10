@@ -1356,6 +1356,21 @@ nothing is kept
 A command anyone may send is posted as the app's installation, and never by a
 crew account.
 
+The same one-post token also posts a person's approval of a crew pull request
+held for them under `AGENTS.md`'s Human review, from the console's Approve
+([troubleshooting](troubleshooting.md#deciding-it-from-the-console)), and it
+posts nothing else. That approval is an `APPROVE` review pinned to the head the
+person saw (`commit_id`). It is posted only if:
+- the account that approved the code is the one linked to them, matched by account id;
+- that account is not a crew account;
+- the head has not moved.
+
+The merge gate counts it as it counts any review that person submits on
+GitHub. The bridge refuses Approve, and Reject, which posts as the app and
+needs no sign-in, unless the console person's linked account id is the
+awaited login's
+([ADR 0036](adr/0036-a-person-decides-a-held-human-review-approval-from-the-console.md)).
+
 OpenADLC never asks for a personal access token, and nothing in the repository
 should ever contain one. If you find a credential in a diff, treat it as leaked:
 revoke it at the provider, then rotate.

@@ -2266,7 +2266,25 @@ describe('a person’s approval that counts for nothing on the diff, at the swee
       quiet.mockRestore();
     }
     expect(store.events.filter((event) => event.type === 'review.person_awaited').map((event) => event.payload)).toEqual([
-      { subjectRef: 'openadlc-testbed#2', login: 'janedoe', head: HEAD, repo: 'openadlc-testbed', pr: 2, issue: 1, paths: ['config/'] },
+      {
+        subjectRef: 'openadlc-testbed#2',
+        login: 'janedoe',
+        head: HEAD,
+        repo: 'openadlc-testbed',
+        pr: 2,
+        issue: 1,
+        paths: ['config/'],
+        // The crew's reviews on the head go with the wait, for the person's card.
+        reviews: [
+          {
+            login: 'openadlc-sydney-janedoe',
+            seat: 'lead-reviewer',
+            state: 'approved',
+            summary: 'Approved.',
+            url: 'https://github.com/janedoe/openadlc-testbed/pull/2#pullrequestreview-77',
+          },
+        ],
+      },
     ]);
     expect(store.events.filter((event) => event.type === 'review.person_asked_again')).toEqual([]);
   });

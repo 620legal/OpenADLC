@@ -88,6 +88,11 @@ export const ROUTE_ROLES: Readonly<Record<string, Role>> = {
   // is posted only from the caller's own GitHub sign-in (`pull-commands.ts`).
   'GET /v1/items/:subject/pull': 'user',
   'POST /v1/items/:subject/pull/commands/:name': 'user',
+  // A held Human-review approval decided from the console: refused by the
+  // bridge unless the caller's linked account is the person it waits on
+  // (`human-review-decide.ts`), so any console user may ask.
+  'POST /v1/items/:subject/pull/human-review/approve': 'user',
+  'POST /v1/items/:subject/pull/human-review/reject': 'user',
   'GET /v1/items/:subject/pull/flows/:flowId': 'user',
   'GET /v1/items/:subject/pull/images/:commentId/:index': 'user',
   'POST /v1/threads/:bot/messages': 'user',

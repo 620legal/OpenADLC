@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AttentionItem } from './api';
-import { alarming, audienceLine, faceActions, groupCounts, groupOf, hasMore, plainDetail, unblockedOf, unblocksLine } from './attention-card';
+import { alarming, audienceLine, decisionButtons, faceActions, groupCounts, groupOf, hasMore, plainDetail, rejectReady, reviewerName, reviewVerdict, unblockedOf, unblocksLine } from './attention-card';
 
 const ITEM: AttentionItem = {
   id: 'task:t-1',
@@ -295,5 +295,60 @@ describe('what an item unblocks', () => {
   it('says nothing when nothing waits behind it, or the bridge is older', () => {
     expect(unblocksLine(ITEM)).toBeNull();
     expect(unblocksLine({ ...ITEM, unblocks: { count: 0, items: [] } })).toBeNull();
+  });
+});
+
+describe('a held Human-review approval’s card', () => {
+  const HEAD = '692cd1f88f3e45093ad9ba4e68e84d590af3b595';
+  const HELD: AttentionItem = {
+    ...ITEM,
+    id: 'approval:api#40@janedoe',
+    kind: 'merge_waiting',
+    detail: 'The lead approved 692cd1f.',
+    actions: [
+      { kind: 'human_review_approve', label: 'Approve', subject: 'api#40', login: 'janedoe', head: HEAD },
+      { kind: 'human_review_reject', label: 'Reject', subject: 'api#40', login: 'janedoe', head: HEAD },
+      { kind: 'human_review_discuss', label: 'Discuss', subject: 'api#40', login: 'janedoe', head: HEAD },
+      { kind: 'open_url', label: 'Review it on GitHub', url: 'https://github.com/acme/api/pull/40/files' },
+    ],
+    decision: {
+      repo: 'api',
+      pr: 40,
+      head: HEAD,
+      login: 'janedoe',
+      change: null,
+      why: 'Because.',
+      reviews: null,
+      prUrl: 'https://github.com/acme/api/pull/40',
+      diffUrl: 'https://github.com/acme/api/pull/40/files',
+      next: { approve: 'a', reject: 'r', discuss: 'd' },
+    },
+  };
+
+  it('gives the person it waits on Approve, Reject and Discuss, and anyone else Discuss alone', () => {
+    expect(decisionButtons({ ...HELD, decision: { ...HELD.decision!, yours: true } })).toEqual(['approve', 'reject', 'discuss']);
+    expect(decisionButtons({ ...HELD, decision: { ...HELD.decision!, yours: false } })).toEqual(['discuss']);
+    // A bridge that does not say whose it is: not yours.
+    expect(decisionButtons(HELD)).toEqual(['discuss']);
+    expect(decisionButtons(ITEM)).toEqual([]);
+  });
+
+  it('keeps its decision buttons off the face row, and counts no Show more for them', () => {
+    expect(faceActions(HELD).map((action) => action.kind)).toEqual(['open_url']);
+    expect(hasMore(HELD)).toBe(false);
+  });
+
+  it('sends a Reject only with a reason', () => {
+    expect(rejectReady('')).toBe(false);
+    expect(rejectReady('  \n ')).toBe(false);
+    expect(rejectReady('Keep the old timeout.')).toBe(true);
+  });
+
+  it('names a review by its seat, else its account, with its verdict in words', () => {
+    expect(reviewerName({ login: 'reviewer-bot', seat: 'lead-reviewer' })).toBe('lead-reviewer');
+    expect(reviewerName({ login: 'reviewer-bot', seat: null })).toBe('@reviewer-bot');
+    expect(reviewVerdict('approved')).toBe('approved');
+    expect(reviewVerdict('changes_requested')).toBe('asked for changes');
+    expect(reviewVerdict('commented')).toBe('commented');
   });
 });

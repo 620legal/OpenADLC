@@ -109,7 +109,8 @@ export function registerItemRoutes(router: Router, deps: Pick<ApiDeps, 'actors' 
    */
   router.post('/v1/items/:subject/messages', async ({ params, body, identity, role: access }) => {
     const subject = params.subject ?? '';
-    const input = await body<{ text?: unknown; gateId?: unknown; role?: unknown; attachments?: unknown }>();
+    const input = await body<{ text?: unknown; gateId?: unknown; role?: unknown; attachments?: unknown; about?: unknown }>();
+    const about = humanReviewAbout(input.about);
     const files = attachmentIds(input.attachments);
     const read = shown(subject, await readItem(subject, { starts }));
     // Checked before anything is sent: a message whose files cannot go with
@@ -162,8 +163,47 @@ export function registerItemRoutes(router: Router, deps: Pick<ApiDeps, 'actors' 
             message: { id: sent.message.id, githubUrl: sent.message.githubUrl ?? null },
           })
         : null;
+    // Discuss on a held Human-review approval: the message is the item's like
+    // any other, and the decision stays open; the audit row says who discussed
+    // which head, for a reader of the record (`human-review-decide.ts`).
+    // The repository and pull request are the item's, never the request's: a
+    // body naming another one wrote a row about a pull request nobody
+    // discussed. An item with no pull request has no approval held on it.
+    const discussed = read.item.pr;
+    const repoName = read.repo?.name ?? read.item.repo;
+    if (about && !sent.answered && discussed !== null && repoName) {
+      await audit({
+        actor: identity,
+        action: 'pull.human_review_discussed',
+        target: `${repoName}#${discussed}`,
+        payload: {
+          repo: repoName,
+          pr: discussed,
+          login: about.login,
+          head: about.head,
+          role: route.role,
+          messageId: sent.message.id,
+          commentUrl: sent.message.githubUrl ?? null,
+          by: identity,
+        },
+      }).catch((error: unknown) => console.warn(`[bridge] the discussion of ${repoName}#${discussed} was not audited: ${error instanceof Error ? error.message : error}`));
+    }
     return { ...sent, bot: bot.name, subject: route.subject, item: read.item.key, ...(start ? { start } : {}) };
   });
+}
+
+/**
+ * What a message on a held Human-review approval says it is about (Discuss);
+ * null for any other message, or one malformed. Only the login and head are
+ * read from it: the repository and pull request are the item's.
+ */
+export function humanReviewAbout(value: unknown): { login: string; head: string } | null {
+  if (!value || typeof value !== 'object') return null;
+  const about = value as Record<string, unknown>;
+  if (about.kind !== 'human_review') return null;
+  if (typeof about.login !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/.test(about.login)) return null;
+  if (typeof about.head !== 'string' || !/^[0-9a-f]{40}$/i.test(about.head)) return null;
+  return { login: about.login, head: about.head };
 }
 
 /** A managed repository, as linking by hand reads it. */

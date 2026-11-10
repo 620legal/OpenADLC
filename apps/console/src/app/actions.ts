@@ -397,7 +397,18 @@ export async function sendMessage(
  */
 export async function sendItemMessage(
   subject: string,
-  input: { text: string; gateId?: string | null; role?: string | null; attachments?: string[] },
+  input: {
+    text: string;
+    gateId?: string | null;
+    role?: string | null;
+    attachments?: string[];
+    /**
+     * Discuss on a held Human-review approval: the message is audited as about
+     * it, and decides nothing. The bridge reads the login and head from it; the
+     * repository and pull request it records are the item's, not these.
+     */
+    about?: { kind: 'human_review'; repo: string; pr: number; login: string; head: string } | null;
+  },
 ): Promise<{ ok: boolean; error?: string; answered?: boolean }> {
   try {
     const result = await call<{ answered?: boolean }>(`/v1/items/${encodeURIComponent(subject)}/messages`, 'POST', {
@@ -405,11 +416,54 @@ export async function sendItemMessage(
       ...(input.gateId ? { gateId: input.gateId } : {}),
       ...(input.role ? { role: input.role } : {}),
       ...(input.attachments && input.attachments.length > 0 ? { attachments: input.attachments } : {}),
+      ...(input.about ? { about: input.about } : {}),
     });
     revalidatePath('/');
     return { ok: true, answered: result.answered === true };
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : 'could not send' };
+  }
+}
+
+/**
+ * Approve on a held Human-review approval: the bridge checks the person is the
+ * one it waits on and the head is the one they saw, and answers with the
+ * device code their own GitHub sign-in approves; their review is posted once
+ * they do (`apps/bridge/src/human-review-decide.ts`). The flow is read through
+ * the pull panel's flow route.
+ */
+export async function approveHumanReview(
+  subject: string,
+  input: { head: string; login: string },
+): Promise<{ ok: boolean; error?: string; url?: string; flow?: { flowId: string; userCode: string; verificationUri: string; expiresInSeconds: number } }> {
+  try {
+    const result = await call<{ flow: { flowId: string; userCode: string; verificationUri: string; expiresInSeconds: number } }>(
+      `/v1/items/${encodeURIComponent(subject)}/pull/human-review/approve`,
+      'POST',
+      { head: input.head, login: input.login },
+    );
+    return { ok: true, flow: result.flow };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : 'could not start the sign-in' };
+  }
+}
+
+/** Reject on a held Human-review approval: back to the builder with the person's reason as the finding. */
+export async function rejectHumanReview(
+  subject: string,
+  input: { head: string; login: string; reason: string },
+): Promise<{ ok: boolean; error?: string; sentBack?: boolean; why?: string; commentUrl?: string }> {
+  try {
+    const result = await call<{ state: 'sent_back' | 'not_sent_back'; commentUrl: string; why?: string }>(
+      `/v1/items/${encodeURIComponent(subject)}/pull/human-review/reject`,
+      'POST',
+      { head: input.head, login: input.login, reason: input.reason },
+    );
+    revalidatePath('/');
+    revalidatePath('/needs-you');
+    return { ok: true, sentBack: result.state === 'sent_back', commentUrl: result.commentUrl, ...(result.why ? { why: result.why } : {}) };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : 'could not send it back' };
   }
 }
 

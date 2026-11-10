@@ -44,6 +44,10 @@ export function plainDetail(detail: string): string {
  * else…" goes with the choices.
  */
 export function faceActions(item: AttentionItem): AttentionAction[] {
+  // A held Human-review approval draws Approve, Reject and Discuss from its
+  // decision, each with what it does next; the face keeps only the way to
+  // GitHub beside them.
+  if (item.decision) return item.actions.filter((action) => !isDecisionAction(action)).slice(0, 1);
   // A choice between three, none of them the obvious one: all on the card.
   if (item.kind === 'unowned_issues') return item.actions;
   // Release it, or stop holding promotes for a person at all: both on the card.
@@ -88,7 +92,47 @@ export function hasMore(item: AttentionItem): boolean {
     // Beside the choices only "Something else…" is on the card.
     return item.actions.some((action) => action.kind !== 'answer');
   }
-  return item.actions.length > faceActions(item).length;
+  return item.actions.filter((action) => !isDecisionAction(action)).length > faceActions(item).length;
+}
+
+// ---------------------------------------------------------------- a held Human-review approval
+
+/** A held Human-review approval's own buttons, which its decision draws, never `ActionButton`. */
+export function isDecisionAction(action: AttentionAction): action is Extract<AttentionAction, { kind: 'human_review_approve' | 'human_review_reject' | 'human_review_discuss' }> {
+  return action.kind === 'human_review_approve' || action.kind === 'human_review_reject' || action.kind === 'human_review_discuss';
+}
+
+export type DecisionButton = 'approve' | 'reject' | 'discuss';
+
+/**
+ * The buttons a viewer gets on a held Human-review approval, in the bridge's
+ * order: all three for the person it waits on, as the bridge says from their
+ * linked account (`decision.yours`), and Discuss alone for anyone else. The
+ * bridge refuses Approve and Reject from anyone else too; this only keeps a
+ * button off a card it would refuse.
+ */
+export function decisionButtons(item: Pick<AttentionItem, 'decision' | 'actions'>): DecisionButton[] {
+  if (!item.decision) return [];
+  const offered = item.actions.filter(isDecisionAction).map((action): DecisionButton => (action.kind === 'human_review_approve' ? 'approve' : action.kind === 'human_review_reject' ? 'reject' : 'discuss'));
+  return item.decision.yours === true ? offered : offered.filter((button) => button === 'discuss');
+}
+
+/** Whether a Reject can be sent: its reason is the builder's finding, and never empty. */
+export function rejectReady(reason: string): boolean {
+  return reason.trim().length > 0;
+}
+
+/** How a crew review on a held approval's card is named: its seat, else its account. */
+export function reviewerName(review: { login: string; seat: string | null }): string {
+  return review.seat ?? `@${review.login}`;
+}
+
+/** A review's verdict in words. */
+export function reviewVerdict(state: string): string {
+  if (state === 'approved') return 'approved';
+  if (state === 'changes_requested') return 'asked for changes';
+  if (state === 'dismissed') return 'was dismissed';
+  return 'commented';
 }
 
 /** The cards waiting behind an item, as its card names them: `#207` in the item's own repository, `web#12` in another. */
