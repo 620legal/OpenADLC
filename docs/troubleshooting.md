@@ -1733,6 +1733,63 @@ one head it says so, once, as below.
 | GitHub has not yet worked out whether it can be merged | GitHub has said `unknown` at this head for ten minutes; it usually works it out within seconds of a push | Nothing, usually: the line reads it again on each pass. If it stays, the merge box on the pull request's GitHub page says whether it can merge |
 | GitHub says it is blocked, and did not say why | Nothing OpenADLC read explains it. It names what the rules also require that it did not check (every conversation resolved, a code owner's approval, a deployment), or says no ruleset applies to the base, which leaves a branch protection rule (Settings → Branches), which only an admin can read | The merge box on the pull request's GitHub page lists what is missing |
 
+### Deciding a held merge from the console
+
+The card reads "Pull request #N is held for a person: merge it, leave it, or
+discuss it". It says why it waits for a person, in `mergeDecision`'s words, and
+under each button what that button does next.
+
+- **Merge** shows a one-time code. Approve it on GitHub as the account you
+  linked in Settings → Your GitHub account. OpenADLC then merges the head the
+  card showed (squashed, as the merge line merges) *as you*, from that account,
+  with a token it uses once and revokes
+  ([security](security.md#a-persons-sign-off)). The app never merges on your
+  say. GitHub's branch rules still apply. If GitHub refuses, the card shows
+  GitHub's reason, nothing changes, and `pull.person_merge_failed` records it.
+- **Leave it** takes the card off Needs you for everyone it is shown to. It
+  comes back when the pull request gets a new commit, a new review, or a new
+  reason it is held. Nothing on GitHub changes.
+- **Discuss** sends your message to the lead reviewer, or the builder, who
+  answers on the pull request. It stays held.
+- **Open on GitHub** is always there.
+
+**Merge is offered only over a hold a person may decide.** Those holds are:
+- `needs-human` or `openadlc:paused`;
+- a stale branch (GitHub's `behind`), or `blocked` with no cause OpenADLC can name;
+- a crew pull request with no issue or no lease;
+- a change to how CI runs that a person merges here;
+- an approval whose signature nothing here can check;
+- the merge line's own holds: auto-merge off, GitHub not read in full, or the app with no token.
+
+There is no Merge in these cases, and the card says why:
+- a required check (`ci`, `review-gate` or any other red check);
+- a missing crew review, or a request for changes;
+- an approval whose signature fails a check that can run;
+- files outside a crew lease, a conflict, or a draft;
+- anything that could not be read.
+
+**Merge never stands in for a named person's approval.** While a Human-review
+approval is awaited on the pull request, the card says it waits for that
+person's approval, which is decided on its own card
+([below](#a-pull-request-the-lead-approved-waits-for-a-person-under-human-review)).
+
+The stored reason is only the first rule `mergeDecision` refused on. When you
+press Merge, and again once you approve the code, the bridge rechecks every
+rule on the current head (`mergeBlockers`, `apps/bridge/src/automation.ts`).
+It refuses with what it found (`pull.person_merge_refused`), and the card
+offers no Merge on that head again. Merge is also refused:
+- when your linked account cannot write to the repository ("@you cannot merge
+  in … (GitHub says read)"), even if the route is called directly;
+- with "reload" when the pull request moved since you looked.
+
+A merge that lands writes `pull.person_merged`. The board card says "Approved ·
+waiting for you to merge it" only when you can merge it from Needs you, and
+otherwise "Approved · held for a person to merge".
+
+```bash
+grep -E 'pull.person_merge|attention.left' "$(openadlc logs bridge)" | tail -n 20
+```
+
 ## A pull request the lead approved waits for a person under Human review
 
 A crew pull request that changes a path `AGENTS.md`'s `## Human review`
@@ -1871,14 +1928,24 @@ it was; otherwise it says why not, and that the sweep tries again.
   Environments → production → Required reviewers. On a private
   repository below GitHub Enterprise, GitHub holds no reviewer at all, so
   OpenADLC holds each promote itself: it waits in Needs you, and nothing goes
-  to production until an admin presses **Release to production** or **Switch
-  to automatic delivery**.
-- **A promote waits in Needs you** — that hold. Release it once you have
-  looked at testing (the QA run's readiness report, if there is one). If you
-  want production to follow testing on its own, switch the repository to
-  automatic: a soak of at least 30 minutes on testing, the smoke, and an
-  automatic rollback. Where `.github/openadlc.yml` sets the rules, set
-  `production.approval: auto` there; the card opens the file.
+  to production until an admin presses **Release** or **Switch to automatic
+  delivery**.
+- **A promote waits in Needs you** — that hold. The card asks "Release
+  <repo>@<sha> to production?". It says what is released (the commit, and the
+  pull request it was merged from), why it waits for a person, and what each
+  choice does next:
+  - **Release** starts the production deploy now. Release it once you have
+    looked at testing (the QA run's readiness report, if there is one).
+  - **Keep holding** leaves the promote held and takes the card off Needs you
+    for everyone. It comes back only when another commit waits for
+    production (`attention.left`).
+  - **Discuss** sends your message to the lead reviewer of that pull request,
+    and the promote stays held (`deploy.promote_discussed`). It is offered only
+    when the pull request is known.
+  - **Switch to automatic delivery**, if you want production to follow testing
+    on its own: a soak of at least 30 minutes on testing, the smoke, and an
+    automatic rollback. Where `.github/openadlc.yml` sets the rules, set
+    `production.approval: auto` there; the card opens the file.
 - **A crew account can approve a production deploy** — the `production-rules`
   card, blocking. Take the crew out of the environment's required reviewers in
   the repository's Settings → Environments → production. A bot never approves a

@@ -261,6 +261,17 @@ describe('a card’s status line', () => {
     expect(cardStatus(approved, { ...CONTEXT, mergeLine: line })).toMatchObject({ text: 'Approved · waiting for you to merge it', tone: 'attention' });
   });
 
+  it('says a held merge waits on you only where you can merge it from Needs you', () => {
+    const approved = card({ stage: 'review', prNumber: 30 });
+    const held = { repo: 'openadlc', ref: 'openadlc#30', position: 1, state: 'merging', detail: 'green', heldFor: 'it is behind main, and main requires a branch to be up to date before it merges: update it from main' };
+    expect(cardStatus(approved, { ...CONTEXT, mergeLine: [{ ...held, heldForYou: true }] }).text).toBe('Approved · waiting for you to merge it');
+    expect(cardStatus(approved, { ...CONTEXT, mergeLine: [{ ...held, heldForYou: false }] })).toMatchObject({ text: 'Approved · held for a person to merge', tone: 'attention' });
+    // A Human-review approval awaited is said first, whoever may merge.
+    expect(cardStatus(approved, { ...CONTEXT, mergeLine: [{ ...held, heldForYou: true }], awaitedApproval: [{ login: 'orzelig', yours: false }] }).text).toBe(
+      "Approved · waiting for @orzelig's approval",
+    );
+  });
+
   // No pull request is recorded for it, so no deploy carries it to Done: it
   // said "Merged · waiting to deploy" for good.
   it('says a card in Ship with no merge to deploy is for the person to move to Done', () => {

@@ -1,4 +1,4 @@
-import { acknowledgements, bots, issues, lastAudit, leases, listEventsOfType, modelAccounts, repos, requests, standingApprovals, tasks, threads, type HealthRow } from '@openadlc/db';
+import { acknowledgements, audit as writeAudit, bots, issues, lastAudit, leases, listEventsOfType, listEventsOfTypeWith, modelAccounts, repos, requests, standingApprovals, tasks, threads, type HealthRow } from '@openadlc/db';
 import { rulesFileEditUrl } from './deploy-routes.js';
 import { REQUIRED_CHECKS } from './merge-line.js';
 import { readUnowned } from './unowned-issues.js';
@@ -47,11 +47,12 @@ import {
   type WaitFacts,
 } from './wait-chain.js';
 import type { HeldStack } from './stacking.js';
+import { namesRequiredCheck, occurrence as heldMergeOccurrence, offer as offerMerge, type MayMerge, type MergeOffer } from './held-merge-decide.js';
 
 export { standingPersonAsks, standingPersonAwaits, type HeldPlanChange, type PersonAsk, type PersonAwait } from './wait-chain.js';
 import type { PersonAwaitReview } from './wait-chain.js';
 import { ACCOUNTS_STEP, RECONNECT } from './health/words.js';
-import type { Router } from './router.js';
+import { HttpFailure, type Router } from './router.js';
 import type { SubjectTitle } from './subject-titles.js';
 import { isCostCapGate, viewerOf, visibleTo, withAudiences, type Audience, type AudienceFacts, type ConsoleRole } from './needs-you-audience.js';
 import {
@@ -60,6 +61,7 @@ import {
   issueNumberFromBranch,
   parseRef,
   RESUME_WAITS_ON_GITHUB,
+  REVIEW_SUBMITTED_ON,
   SEND_BACK_STALLED,
   SEND_BACK_TO_PERSON,
   stageOfTask,
@@ -253,7 +255,51 @@ export type AttentionAction =
    * (`…/reject`), or Discuss, the item's message box (`POST /v1/items/:subject/messages`).
    * `subject` is the pull request, `login` the person it waits on, `head` the commit they decide.
    */
-  | { kind: 'human_review_approve' | 'human_review_reject' | 'human_review_discuss'; label: string; subject: string; login: string; head: string };
+  | { kind: 'human_review_approve' | 'human_review_reject' | 'human_review_discuss'; label: string; subject: string; login: string; head: string }
+  /**
+   * A held merge decided from the card (`held-merge-decide.ts`): Merge, the
+   * person's own merge (`POST /v1/items/:subject/pull/held-merge/merge`), Leave
+   * it (`POST /v1/attention/leave`), or Discuss, the item's message box.
+   * `subject` is the pull request, `head` the commit they decide.
+   */
+  | { kind: 'held_merge_merge' | 'held_merge_leave' | 'held_merge_discuss'; label: string; subject: string; head: string }
+  /**
+   * A held promote kept held and taken off Needs you until another commit
+   * waits (`POST /v1/attention/leave`), or discussed with the lead reviewer of
+   * its pull request, `subject`.
+   */
+  | { kind: 'promote_keep_holding'; label: string; repo: string; sha: string }
+  | { kind: 'promote_discuss'; label: string; repo: string; sha: string; subject: string };
+
+/** A pull request the merge line holds for a person, as its card describes it (`AttentionItem.heldMerge`). */
+export interface HeldMergeDecision {
+  repo: string;
+  pr: number;
+  head: string | null;
+  /** Why it is held: `mergeDecision`'s reason, in the card's sentence. */
+  why: string;
+  /** Whether Merge is offered, or why not (`offer`). */
+  merge: MergeOffer;
+  /** What each button does next. */
+  next: { merge: string; leave: string; discuss: string };
+  prUrl: string | null;
+  /** For the viewer only (`GET /v1/attention`): whether they may press Merge, and why not. */
+  yours?: boolean;
+  whyNot?: string;
+  settingsUrl?: string;
+}
+
+/** A promote held for a person, as its card describes it (`AttentionItem.heldPromote`). */
+export interface HeldPromoteDecision {
+  repo: string;
+  sha: string;
+  pr: number | null;
+  /** What is being released. */
+  what: string;
+  /** Why it waits for a person. */
+  why: string;
+  next: { release: string; keepHolding: string; discuss: string | null; automatic: string };
+}
 
 /** A held Human-review approval, as its card describes it (`AttentionItem.decision`). */
 export interface HumanReviewDecision {
@@ -289,6 +335,9 @@ export interface HeldPromote {
    * environment is another.
    */
   reason: string;
+  /** The pull request it was merged from, and its title, when known. */
+  pr?: number | null;
+  title?: string | null;
 }
 
 export interface AttentionBot {
@@ -450,6 +499,10 @@ export interface AttentionItem {
    * button does next. `GET /v1/attention` adds whether it is the viewer's own.
    */
   decision?: HumanReviewDecision;
+  /** A held merge's decision (`merge:…`): Merge, Leave it or Discuss, each with what it does next. */
+  heldMerge?: HeldMergeDecision;
+  /** A held promote's decision (`promote:…`): Release, Keep holding or Discuss, each with what it does next. */
+  heldPromote?: HeldPromoteDecision;
   /**
    * The pull request an item is about, when its repository declares commands
    * in `.github/openadlc.yml` (`pull-commands.ts`): the console puts that pull
@@ -583,7 +636,18 @@ export interface AttentionInput extends WaitFacts {
    * The board called one "Merging" and Needs you said nothing, so an approved,
    * green pull request waited with nobody told.
    */
-  heldMerges?: readonly { repo: string; prNumber: number; reason: string; since: string }[];
+  heldMerges?: readonly { repo: string; prNumber: number; reason: string; since: string; head?: string | null }[];
+  /**
+   * The reasons a console Merge was refused, by `repo#pr`, with the head it
+   * was refused on (`pull.person_merge_refused`): the card offers no Merge on
+   * that head again. Absent, none was.
+   */
+  mergeRefusals?: ReadonlyMap<string, { head: string; reasons: string[] }>;
+  /**
+   * The newest review recorded on each held merge someone left, by `repo#pr`
+   * (`REVIEW_SUBMITTED_ON`'s event id): a new one brings the card back.
+   */
+  heldMergeReviews?: ReadonlyMap<string, number | null>;
   /**
    * The people asked to approve a pull request again (`PERSON_ASKED_AGAIN`),
    * and the reviews people submitted (`REVIEW_SUBMITTED_ON`), in the window.
@@ -1339,21 +1403,56 @@ export function attentionItems(given: AttentionInput): AttentionItem[] {
   // card says they passed, except over a reason that names one of them: those
   // say the success did not count (a commit status named `ci`, a `review-gate`
   // OpenADLC did not publish), and the card would contradict itself again.
+  //
+  // A person decides it from the card: Merge, their own merge on GitHub, only
+  // over a hold a person may decide, and never while a named person's
+  // Human-review approval is awaited, which its own card decides; Leave it
+  // until something about it changes; or Discuss.
+  const awaitedOn = new Map<string, string>();
+  for (const ask of standingPersonAsks(input.personAsks ?? [], input.personReviews ?? [], input.issues).values()) awaitedOn.set(`${ask.repo}#${ask.pr}`, ask.login);
+  for (const wait of standingPersonAwaits(input.personAwaits ?? [], input.personReviews ?? [], input.roundsOpened ?? [], input.issues).values()) {
+    if (!awaitedOn.has(`${wait.repo}#${wait.pr}`)) awaitedOn.set(`${wait.repo}#${wait.pr}`, wait.login);
+  }
   for (const held of input.heldMerges ?? []) {
-    const { subject } = subjectOf(`${held.repo}#${held.prNumber}`);
+    const ref = `${held.repo}#${held.prNumber}`;
+    const id = `merge:${ref}`;
+    const head = held.head ?? null;
+    if (input.acknowledged?.get(id)?.has(heldMergeOccurrence({ head, reason: held.reason }, input.heldMergeReviews?.get(ref) ?? null))) continue;
+    const { subject } = subjectOf(ref);
     const fullName = reposByName.get(held.repo)?.fullName ?? null;
     const url = fullName ? `https://github.com/${fullName}/pull/${held.prNumber}` : null;
+    const why = namesRequiredCheck(held.reason)
+      ? `OpenADLC did not merge it, because ${held.reason}.`
+      : `${REQUIRED_CHECKS.join(' and ')} passed, but OpenADLC did not merge it, because ${held.reason}.`;
+    const refused = input.mergeRefusals?.get(ref);
+    const merge = offerMerge({ reason: held.reason, head }, { humanReview: awaitedOn.get(ref) ?? null, refusedOnHead: refused && refused.head === head ? refused.reasons : null });
+    const base = reposByName.get(held.repo)?.defaultBranch ?? 'the default branch';
+    const actions: AttentionAction[] = [];
+    if (merge.merge && head) actions.push({ kind: 'held_merge_merge', label: 'Merge', subject: ref, head });
+    actions.push({ kind: 'held_merge_leave', label: 'Leave it', subject: ref, head: head ?? '' }, { kind: 'held_merge_discuss', label: 'Discuss', subject: ref, head: head ?? '' });
+    if (url) actions.push({ kind: 'open_url', label: 'Open on GitHub', url });
     items.push({
-      id: `merge:${held.repo}#${held.prNumber}`,
+      id,
       kind: 'merge_waiting',
-      headline: `Pull request #${held.prNumber} waits for you to merge it`,
+      headline: `Pull request #${held.prNumber} is held for a person: merge it, leave it, or discuss it`,
       subject: { ...subject, url: subject.url ?? url },
       bot: null,
       since: held.since,
-      detail: namesRequiredCheck(held.reason)
-        ? `OpenADLC did not merge it, because ${held.reason}.`
-        : `${REQUIRED_CHECKS.join(' and ')} passed, but OpenADLC did not merge it, because ${held.reason}.`,
-      actions: url ? [{ kind: 'open_url', label: 'Merge it on GitHub', url }] : [],
+      detail: why,
+      actions,
+      heldMerge: {
+        repo: held.repo,
+        pr: held.prNumber,
+        head,
+        why,
+        merge,
+        next: {
+          merge: `Merges ${head ? head.slice(0, 7) : 'it'} into ${base} on GitHub as you, after you approve a one-time code. GitHub's branch rules still apply; if GitHub refuses, nothing changes.`,
+          leave: 'Takes it off Needs you for everyone it is shown to. It comes back when the pull request gets a new commit, a new review, or a new reason it is held. Nothing on GitHub changes.',
+          discuss: 'Sends your message to the lead reviewer, or the builder, who answers on the pull request. It stays held.',
+        },
+        prUrl: url,
+      },
     });
   }
 
@@ -1429,17 +1528,39 @@ export function attentionItems(given: AttentionInput): AttentionItem[] {
   for (const held of input.heldPromotes ?? []) {
     const repo = reposByName.get(held.repo);
     if (!repo) continue;
+    const id = `promote:${held.repo}@${held.sha}`;
+    // Keep holding: away until another commit waits for production.
+    if (input.acknowledged?.get(id)?.has(held.sha)) continue;
     const short = held.sha.slice(0, 7);
-    const actions: AttentionAction[] = [{ kind: 'promote_release', label: 'Release to production', repo: held.repo, sha: held.sha }];
+    const pr = held.pr ?? null;
+    const actions: AttentionAction[] = [
+      { kind: 'promote_release', label: 'Release', repo: held.repo, sha: held.sha },
+      { kind: 'promote_keep_holding', label: 'Keep holding', repo: held.repo, sha: held.sha },
+    ];
+    if (pr !== null) actions.push({ kind: 'promote_discuss', label: 'Discuss', repo: held.repo, sha: held.sha, subject: `${held.repo}#${pr}` });
     actions.push(
       held.fileGoverned
         ? { kind: 'open_url', label: 'Switch to automatic in .github/openadlc.yml', url: rulesFileEditUrl({ fullName: repo.fullName, defaultBranch: repo.defaultBranch ?? 'main' }) }
         : { kind: 'promote_automatic', label: 'Switch to automatic delivery', repo: held.repo, sha: held.sha },
     );
+    const from = pr !== null ? `${short} (pull request #${pr}${held.title ? `: ${held.title}` : ''})` : short;
     items.push({
-      id: `promote:${held.repo}@${held.sha}`,
+      id,
       kind: 'promote_held',
-      headline: `${held.repo}@${short} waits for you to release it to production`,
+      headline: `Release ${held.repo}@${short} to production?`,
+      heldPromote: {
+        repo: held.repo,
+        sha: held.sha,
+        pr,
+        what: `Releases ${from} from testing to production. Its smoke passed on testing.`,
+        why: `${held.repo}'s delivery rules say a person approves each production deploy. ${held.reason || 'Why this one is held was not recorded.'}`,
+        next: {
+          release: `Starts the production deploy of ${short} now.`,
+          keepHolding: 'Leaves the promote held and takes it off Needs you for everyone it is shown to. Nothing deploys. It comes back only when another commit waits for production.',
+          discuss: pr !== null ? `Sends your message to the lead reviewer of pull request #${pr}, who answers there. The promote stays held.` : null,
+          automatic: 'Switches the repository to automatic delivery: a soak on testing, the smoke, and an automatic rollback if production fails.',
+        },
+      },
       subject: { repo: held.repo, number: null, title: null, ref: null, url: `https://github.com/${repo.fullName}/commit/${held.sha}` },
       bot: null,
       since: held.since,
@@ -2513,18 +2634,6 @@ export function attentionAction(action: HealthAction): AttentionAction {
   return { kind: 'open_page', label: action.label, href: action.href };
 }
 
-/**
- * Whether a held merge's reason names `ci` or `review-gate` as a word of its
- * own. It reads no more of `mergeDecision`'s prose than the names: "changes how
- * CI runs" and "visual-review failed" do not name either. Nor does a path: a
- * person-merges hold lists `.github/workflows/ci.yml`, and read as `ci` it
- * lost the sentence saying the checks passed, so `-`, `/` and a `.` inside a
- * name stay part of the word.
- */
-function namesRequiredCheck(reason: string): boolean {
-  return REQUIRED_CHECKS.some((name) => new RegExp(`(?<![\\w./-])${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w/-]|\\.\\w)`).test(reason));
-}
-
 /** How many items wait on a person: a notice that something was fixed does not. */
 export function waitingCount(items: readonly Pick<AttentionItem, 'kind'>[]): number {
   return items.filter((item) => item.kind !== 'check_fixed').length;
@@ -2570,6 +2679,29 @@ export interface AttentionDeps {
    * is in the one list.
    */
   audience?: { local: boolean; facts(): Promise<AudienceFacts> };
+  /** The last refused console Merge of a pull request (`pull.person_merge_refused`), by `repo#pr`; the audit log unless a test says otherwise. */
+  mergeRefusal?: (ref: string) => Promise<{ head: string; reasons: string[] } | null>;
+  /** The newest review recorded on a pull request (`REVIEW_SUBMITTED_ON`'s id), by `repo#pr`; the event log unless a test says otherwise. */
+  newestReview?: (ref: string) => Promise<number | null>;
+  /** Where Leave it and Keep holding are kept and recorded; the store unless a test says otherwise. */
+  leave?: {
+    acknowledge(id: string, occurrence: string, by: string): Promise<void>;
+    audit(entry: { actor: string; action: string; target: string; payload: Record<string, unknown> }): Promise<void>;
+  };
+}
+
+/** The last refused console Merge of a pull request, as `held-merge-decide.ts` audits it. */
+async function liveMergeRefusal(ref: string): Promise<{ head: string; reasons: string[] } | null> {
+  const row = await lastAudit('pull.person_merge_refused', ref);
+  const payload = (row?.payload ?? {}) as Record<string, unknown>;
+  if (typeof payload.head !== 'string' || !Array.isArray(payload.blockers)) return null;
+  const reasons = payload.blockers.flatMap((one) => (one && typeof (one as { reason?: unknown }).reason === 'string' ? [(one as { reason: string }).reason] : []));
+  return { head: payload.head, reasons };
+}
+
+async function liveNewestReview(ref: string): Promise<number | null> {
+  const rows = await listEventsOfTypeWith(REVIEW_SUBMITTED_ON, { subjectRef: ref });
+  return rows[0]?.id ?? null;
 }
 
 /**
@@ -2763,6 +2895,21 @@ export async function readAttention(now: Date, deps: AttentionDeps = {}): Promis
   const unowned = await readUnowned().catch(() => ({}));
   // A table that cannot be read holds nothing here; the deploy sweep still does.
   const heldPromotes = deps.heldPromotes ? await deps.heldPromotes().catch(() => []) : [];
+  // For each held merge: a Merge refused on it, and, only where someone left
+  // it, the newest review on it, which brings it back. A read that fails
+  // offers no Merge over a refusal it could not see, and keeps a left card away.
+  const mergeRefusals = new Map<string, { head: string; reasons: string[] }>();
+  const heldMergeReviews = new Map<string, number | null>();
+  const refusalOf = deps.mergeRefusal ?? liveMergeRefusal;
+  const reviewOf = deps.newestReview ?? liveNewestReview;
+  await Promise.all(
+    heldMerges.map(async (held) => {
+      const ref = `${held.repo}#${held.prNumber}`;
+      const refusal = await refusalOf(ref).catch(() => (held.head ? { head: held.head, reasons: ['OpenADLC could not read whether a Merge was refused on it'] } : null));
+      if (refusal) mergeRefusals.set(ref, refusal);
+      if (seen.has(`merge:${ref}`)) heldMergeReviews.set(ref, await reviewOf(ref).catch(() => null));
+    }),
+  );
   // Which repositories of a deploy or QA task that did not finish ship by
   // merging. Asked only for those, and an answer that could not be had keeps
   // the card, as the deploy path does.
@@ -2810,6 +2957,8 @@ export async function readAttention(now: Date, deps: AttentionDeps = {}): Promis
     ...facts,
     unowned,
     heldPromotes,
+    mergeRefusals,
+    heldMergeReviews,
     health: checks,
     planChanges,
     standing,
@@ -2867,10 +3016,24 @@ export type MayDecideOn = (identity: string, login: string) => Promise<{ yours: 
  * annotation on the items they already get, never a filter. A lookup that
  * fails says it is not, with why.
  */
-export async function forViewer(items: AttentionItem[], identity: string, mayDecide: MayDecideOn): Promise<AttentionItem[]> {
+export async function forViewer(items: AttentionItem[], identity: string, mayDecide: MayDecideOn, mayMerge?: MayMergeIn): Promise<AttentionItem[]> {
   const asked = new Map<string, ReturnType<MayDecideOn>>();
+  const merging = new Map<string, Promise<MayMerge>>();
   return Promise.all(
     items.map(async (item) => {
+      if (item.heldMerge && mayMerge) {
+        const repo = item.heldMerge.repo;
+        let may = merging.get(repo);
+        if (!may) {
+          may = mayMerge(identity, repo).catch(() => ({ yours: false as const, status: 503, why: 'OpenADLC could not tell whether you can merge it; reload in a moment.' }));
+          merging.set(repo, may);
+        }
+        const said = await may;
+        const heldMerge: HeldMergeDecision = said.yours
+          ? { ...item.heldMerge, yours: true, next: { ...item.heldMerge.next, merge: item.heldMerge.next.merge.replace('on GitHub as you,', `on GitHub as you (@${said.login}),`) } }
+          : { ...item.heldMerge, yours: false, whyNot: said.why, ...(said.settingsUrl ? { settingsUrl: said.settingsUrl } : {}) };
+        return { ...item, heldMerge };
+      }
       if (!item.decision) return item;
       const login = item.decision.login.toLowerCase();
       let may = asked.get(login);
@@ -2887,12 +3050,46 @@ export async function forViewer(items: AttentionItem[], identity: string, mayDec
   );
 }
 
-export function registerAttentionRoutes(router: Router, deps: AttentionDeps = {}, mayDecide?: MayDecideOn): void {
+/** Whether the viewer may press Merge on a held merge in a repository, by its name (`HeldMergeDecisions.mayMerge`). */
+export type MayMergeIn = (identity: string, repo: string) => Promise<MayMerge>;
+
+export function registerAttentionRoutes(router: Router, deps: AttentionDeps = {}, mayDecide?: MayDecideOn, mayMerge?: MayMergeIn): void {
   router.get('/v1/attention', async ({ identity, role }) => {
     // The audience filter first, so a held approval still reaches only the
     // people it is for; whether it is the viewer's own is said after.
     const items = await attentionFor(identity, attentionItems(await readAttention(new Date(), deps)), deps, role);
-    return { items: mayDecide ? await forViewer(items, identity, mayDecide) : items };
+    return { items: mayDecide ? await forViewer(items, identity, mayDecide, mayMerge) : items };
+  });
+
+  /**
+   * Leave it on a held merge, Keep holding on a held promote: the card goes
+   * for everyone it is shown to until something about it changes. Only an
+   * item in the viewer's own list, and the bridge works out what it covers:
+   * a body naming any occurrence it liked hid a card for good.
+   */
+  router.post('/v1/attention/leave', async ({ identity, role, body }) => {
+    const input = await body<{ id?: unknown }>();
+    const id = typeof input.id === 'string' ? input.id : '';
+    if (!id.startsWith('merge:') && !id.startsWith('promote:')) throw new HttpFailure(400, 'id is a held merge (merge:…) or a held promote (promote:…)');
+    const read = await readAttention(new Date(), deps);
+    const item = (await attentionFor(identity, attentionItems(read), deps, role)).find((one) => one.id === id);
+    if (!item) throw new HttpFailure(404, 'That is not in your Needs you any more; reload.');
+    let occurrence: string;
+    if (item.heldMerge) {
+      const ref = `${item.heldMerge.repo}#${item.heldMerge.pr}`;
+      const held = read.heldMerges?.find((one) => `${one.repo}#${one.prNumber}` === ref);
+      if (!held) throw new HttpFailure(404, 'That is not in your Needs you any more; reload.');
+      const reviewsSeen = await (deps.newestReview ?? liveNewestReview)(ref).catch(() => null);
+      occurrence = heldMergeOccurrence({ head: held.head ?? null, reason: held.reason }, reviewsSeen);
+    } else if (item.heldPromote) {
+      occurrence = item.heldPromote.sha;
+    } else {
+      throw new HttpFailure(404, 'That is not in your Needs you any more; reload.');
+    }
+    const store = deps.leave ?? { acknowledge: (one: string, at: string, by: string) => acknowledgements.acknowledge(one, at, by), audit: writeAudit };
+    await store.acknowledge(id, occurrence, identity);
+    await store.audit({ actor: identity, action: 'attention.left', target: id, payload: { id, occurrence, by: identity } }).catch((error: unknown) => console.warn(`[bridge] leaving ${id} was not audited: ${error instanceof Error ? error.message : error}`));
+    return { left: id, occurrence };
   });
 }
 

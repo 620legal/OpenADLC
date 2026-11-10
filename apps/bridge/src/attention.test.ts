@@ -367,9 +367,9 @@ describe('what needs a person', () => {
     const item = items.find((one) => one.kind === 'merge_waiting');
     expect(item).toMatchObject({
       group: 'work',
-      headline: 'Pull request #5 waits for you to merge it',
+      headline: 'Pull request #5 is held for a person: merge it, leave it, or discuss it',
       detail: `${(await import('./merge-line.js')).REQUIRED_CHECKS.join(' and ')} passed, but OpenADLC did not merge it, because it changes how CI runs (Makefile).`,
-      actions: [{ kind: 'open_url', label: 'Merge it on GitHub' }],
+      actions: [{ kind: 'held_merge_leave' }, { kind: 'held_merge_discuss' }, { kind: 'open_url', label: 'Open on GitHub' }],
     });
     expect(`${item?.headline} ${item?.detail}`).not.toMatch(/ready|CI is green/);
   });
@@ -394,9 +394,9 @@ describe('what needs a person', () => {
     const item = items.find((one) => one.kind === 'merge_waiting');
     expect(item).toMatchObject({
       id: 'merge:openadlc-testbed#48',
-      headline: 'Pull request #48 waits for you to merge it',
+      headline: 'Pull request #48 is held for a person: merge it, leave it, or discuss it',
       detail: `${REQUIRED_CHECKS.join(' and ')} passed, but OpenADLC did not merge it, because ${reason}.`,
-      actions: [{ kind: 'open_url', label: 'Merge it on GitHub' }],
+      actions: [{ kind: 'held_merge_leave' }, { kind: 'held_merge_discuss' }, { kind: 'open_url', label: 'Open on GitHub' }],
     });
   });
 
@@ -418,9 +418,9 @@ describe('what needs a person', () => {
     const item = items.find((one) => one.kind === 'merge_waiting');
     expect(item).toMatchObject({
       id: 'merge:openadlc-testbed#46',
-      headline: 'Pull request #46 waits for you to merge it',
+      headline: 'Pull request #46 is held for a person: merge it, leave it, or discuss it',
       detail: `${(await import('./merge-line.js')).REQUIRED_CHECKS.join(' and ')} passed, but OpenADLC did not merge it, because visual-review failed on the head.`,
-      actions: [{ kind: 'open_url', label: 'Merge it on GitHub' }],
+      actions: [{ kind: 'held_merge_leave' }, { kind: 'held_merge_discuss' }, { kind: 'open_url', label: 'Open on GitHub' }],
     });
     expect(item?.headline).not.toMatch(/ready|CI is green/);
     expect(item?.detail).not.toMatch(/ready|CI is green/);
@@ -449,9 +449,9 @@ describe('what needs a person', () => {
     const item = items.find((one) => one.kind === 'merge_waiting');
     expect(item).toMatchObject({
       id: 'merge:openadlc-testbed#47',
-      headline: 'Pull request #47 waits for you to merge it',
+      headline: 'Pull request #47 is held for a person: merge it, leave it, or discuss it',
       detail: `OpenADLC did not merge it, because ${reason}.`,
-      actions: [{ kind: 'open_url', label: 'Merge it on GitHub' }],
+      actions: [{ kind: 'held_merge_leave' }, { kind: 'held_merge_discuss' }, { kind: 'open_url', label: 'Open on GitHub' }],
     });
     expect(`${item?.headline} ${item?.detail}`).not.toMatch(/passed|ready|CI is green/);
   });
@@ -478,7 +478,7 @@ describe('what needs a person', () => {
 
     const declared = attentionItems({ ...input, commandRepos: new Set(['openadlc-testbed']) });
     const item = declared.find((one) => one.kind === 'merge_waiting');
-    expect(item).toMatchObject({ pull: { repo: 'openadlc-testbed', number: 46 }, actions: [{ kind: 'open_url', label: 'Merge it on GitHub' }] });
+    expect(item).toMatchObject({ pull: { repo: 'openadlc-testbed', number: 46 }, actions: [{ kind: 'held_merge_leave' }, { kind: 'held_merge_discuss' }, { kind: 'open_url', label: 'Open on GitHub' }] });
     const { pull: _pull, ...rest } = item!;
     expect(rest).toEqual(plain.find((one) => one.kind === 'merge_waiting'));
   });
@@ -812,11 +812,22 @@ describe('what needs a person', () => {
     );
     expect(held).toMatchObject({
       group: 'work',
-      headline: 'openadlc-testbed@abc1234 waits for you to release it to production',
+      headline: 'Release openadlc-testbed@abc1234 to production?',
+      // No pull request known, so nobody to Discuss it with.
       actions: [
-        { kind: 'promote_release', label: 'Release to production', repo: 'openadlc-testbed', sha },
+        { kind: 'promote_release', label: 'Release', repo: 'openadlc-testbed', sha },
+        { kind: 'promote_keep_holding', label: 'Keep holding', repo: 'openadlc-testbed', sha },
         { kind: 'promote_automatic', label: 'Switch to automatic delivery', repo: 'openadlc-testbed', sha },
       ],
+      heldPromote: {
+        what: 'Releases abc1234 from testing to production. Its smoke passed on testing.',
+        why: `openadlc-testbed's delivery rules say a person approves each production deploy. ${unread}`,
+        next: {
+          release: 'Starts the production deploy of abc1234 now.',
+          keepHolding: 'Leaves the promote held and takes it off Needs you for everyone it is shown to. Nothing deploys. It comes back only when another commit waits for production.',
+          discuss: null,
+        },
+      },
     });
     // The reason reads as a sentence between two others, as the card shows it.
     expect(held?.detail).toBe(
@@ -837,7 +848,7 @@ describe('what needs a person', () => {
     const [governed] = attentionItems({ ...base, heldPromotes: [{ repo: 'openadlc-testbed', sha, since: minutesAgo(5), fileGoverned: true, reason: plan }] }).filter(
       (one) => one.kind === 'promote_held',
     );
-    expect(governed?.actions[1]).toMatchObject({ kind: 'open_url', url: expect.stringMatching(/github\.com\/janedoe\/openadlc-testbed\/edit\/.+\/\.github\/openadlc\.yml$/) });
+    expect(governed?.actions.at(-1)).toMatchObject({ kind: 'open_url', url: expect.stringMatching(/github\.com\/janedoe\/openadlc-testbed\/edit\/.+\/\.github\/openadlc\.yml$/) });
     expect(governed?.detail).toContain('approves each production deploy. GitHub’s plan cannot hold a production reviewer here. OpenADLC holds the promote');
   });
 
@@ -4010,5 +4021,155 @@ describe('what an item unblocks', () => {
     const { attentionItems } = await load();
     const alone = { ...input(), issues: input().issues.filter((one) => one.number === 206) };
     expect(attentionItems(alone as never).find((item) => item.id === 'approval:openadlc-testbed#213@orzelig')).not.toHaveProperty('unblocks');
+  });
+});
+
+describe('a held merge and a held promote, decided from the card (ADR 0037)', () => {
+  const HEAD = '692cd1f88f3e45093ad9ba4e68e84d590af3b595';
+  const NEXT = 'c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00';
+  const STALE = 'it is behind main, and main requires a branch to be up to date before it merges: update it from main';
+  const base = { now: NOW, gates: [], tasks: [], bots: BOTS, repos: REPOS, issues: ISSUES, requests: [], stallEvents: [] };
+  const held = (reason = STALE, head: string | null = HEAD) => ({ repo: 'openadlc-testbed', prNumber: 29, reason, since: minutesAgo(2), head });
+  const mergeItem = async (input: Record<string, unknown>) => {
+    const { attentionItems } = await load();
+    return attentionItems({ ...base, ...input } as never).find((item) => item.id === 'merge:openadlc-testbed#29');
+  };
+
+  it('says why it is held and what each button does next, and offers Merge over a stale branch', async () => {
+    const item = await mergeItem({ heldMerges: [held()] });
+    expect(item).toMatchObject({
+      headline: 'Pull request #29 is held for a person: merge it, leave it, or discuss it',
+      actions: [
+        { kind: 'held_merge_merge', label: 'Merge', subject: 'openadlc-testbed#29', head: HEAD },
+        { kind: 'held_merge_leave', label: 'Leave it' },
+        { kind: 'held_merge_discuss', label: 'Discuss' },
+        { kind: 'open_url', label: 'Open on GitHub', url: 'https://github.com/janedoe/openadlc-testbed/pull/29' },
+      ],
+      heldMerge: {
+        head: HEAD,
+        merge: { merge: true },
+        why: `ci and review-gate passed, but OpenADLC did not merge it, because ${STALE}.`,
+        next: {
+          merge: "Merges 692cd1f into the default branch on GitHub as you, after you approve a one-time code. GitHub's branch rules still apply; if GitHub refuses, nothing changes.",
+          leave: 'Takes it off Needs you for everyone it is shown to. It comes back when the pull request gets a new commit, a new review, or a new reason it is held. Nothing on GitHub changes.',
+          discuss: 'Sends your message to the lead reviewer, or the builder, who answers on the pull request. It stays held.',
+        },
+      },
+    });
+  });
+
+  it.each(['ci failed on the head', 'ci has not passed on the head', 'openadlc-sydney-janedoe has not reviewed it'])('offers no Merge over %s, and says why', async (reason) => {
+    const item = await mergeItem({ heldMerges: [held(reason)] });
+    expect(item?.actions.map((action) => action.kind)).toEqual(['held_merge_leave', 'held_merge_discuss', 'open_url']);
+    expect(item?.heldMerge?.merge).toEqual({ merge: false, why: expect.stringMatching(/^There is no Merge: /) });
+  });
+
+  it('offers no Merge while a Human-review approval is awaited on the pull request, and names who decides it', async () => {
+    const awaited = { at: minutesAgo(10), payload: { subjectRef: 'openadlc-testbed#29', repo: 'openadlc-testbed', pr: 29, issue: 11, login: 'orzelig', head: HEAD, paths: ['infra/'] } };
+    const item = await mergeItem({ heldMerges: [held('it changes how CI runs (.github/workflows/ci.yml), and in this repository a person merges those')], personAwaits: [awaited] });
+    expect(item?.actions.some((action) => action.kind === 'held_merge_merge')).toBe(false);
+    expect(item?.heldMerge?.merge).toEqual({ merge: false, why: expect.stringContaining("@orzelig's approval under AGENTS.md's Human review") });
+  });
+
+  it('offers no Merge on a head a Merge was refused on, and offers it again on a new head', async () => {
+    const mergeRefusals = new Map([['openadlc-testbed#29', { head: HEAD, reasons: ['@orzelig has not approved this version'] }]]);
+    expect((await mergeItem({ heldMerges: [held()], mergeRefusals }))?.heldMerge?.merge).toEqual({ merge: false, why: 'Merge was refused on 692cd1f: @orzelig has not approved this version.' });
+    expect((await mergeItem({ heldMerges: [held(STALE, NEXT)], mergeRefusals }))?.heldMerge?.merge).toEqual({ merge: true });
+  });
+
+  it('stays away once left, and comes back on a new head, a new reason or a new review', async () => {
+    const { occurrence } = await import('./held-merge-decide.js');
+    const acknowledged = new Map([['merge:openadlc-testbed#29', new Set([occurrence({ head: HEAD, reason: STALE }, 7)])]]);
+    const reviews = (id: number) => new Map([['openadlc-testbed#29', id]]);
+    expect(await mergeItem({ heldMerges: [held()], acknowledged, heldMergeReviews: reviews(7) })).toBeUndefined();
+    expect(await mergeItem({ heldMerges: [held(STALE, NEXT)], acknowledged, heldMergeReviews: reviews(7) })).toBeDefined();
+    expect(await mergeItem({ heldMerges: [held('auto-merge is not on for it')], acknowledged, heldMergeReviews: reviews(7) })).toBeDefined();
+    expect(await mergeItem({ heldMerges: [held()], acknowledged, heldMergeReviews: reviews(8) })).toBeDefined();
+  });
+
+  it('says on each held merge whether the viewer may press Merge, as @login, or why not', async () => {
+    const { attentionItems, forViewer } = await load();
+    const items = attentionItems({ ...base, heldMerges: [held()] } as never);
+    const mayDecide = vi.fn(async () => ({ yours: true }) as const);
+    const yours = await forViewer(items, 'jane@acme.test', mayDecide, async () => ({ yours: true, linkedId: 1, login: 'janedoe' }));
+    expect(yours[0]?.heldMerge).toMatchObject({ yours: true, next: { merge: expect.stringContaining('on GitHub as you (@janedoe), after') } });
+    const theirs = await forViewer(items, 'sam@acme.test', mayDecide, async () => ({ yours: false, status: 403, why: '@sam cannot merge in janedoe/openadlc-testbed (GitHub says read); someone who can merges it.' }));
+    expect(theirs[0]?.heldMerge).toMatchObject({ yours: false, whyNot: expect.stringContaining('GitHub says read') });
+    const failed = await forViewer(items, 'sam@acme.test', mayDecide, async () => Promise.reject(new Error('down')));
+    expect(failed[0]?.heldMerge).toMatchObject({ yours: false, whyNot: expect.stringContaining('reload') });
+  });
+
+  it('reads a held promote as a decision, with Discuss where its pull request is known', async () => {
+    const { attentionItems } = await load();
+    const sha = 'abc1234def567890abc1234def567890abc12345';
+    const promote = { repo: 'openadlc-testbed', sha, since: minutesAgo(5), fileGoverned: false, reason: 'GitHub’s plan cannot hold a production reviewer here.', pr: 29, title: 'Rate-limit the webhook route' };
+    const [item] = attentionItems({ ...base, heldPromotes: [promote] } as never).filter((one) => one.kind === 'promote_held');
+    expect(item?.actions.map((action) => action.kind)).toEqual(['promote_release', 'promote_keep_holding', 'promote_discuss', 'promote_automatic']);
+    expect(item?.actions[2]).toMatchObject({ subject: 'openadlc-testbed#29' });
+    expect(item?.heldPromote).toMatchObject({
+      what: 'Releases abc1234 (pull request #29: Rate-limit the webhook route) from testing to production. Its smoke passed on testing.',
+      why: "openadlc-testbed's delivery rules say a person approves each production deploy. GitHub’s plan cannot hold a production reviewer here.",
+      next: { discuss: 'Sends your message to the lead reviewer of pull request #29, who answers there. The promote stays held.' },
+    });
+
+    // Keep holding: away for this commit, and another one waiting is shown.
+    const acknowledged = new Map([[`promote:openadlc-testbed@${sha}`, new Set([sha])]]);
+    const other = { ...promote, sha: 'def5678abc1234def5678abc1234def5678abc12' };
+    const kept = attentionItems({ ...base, heldPromotes: [promote, other], acknowledged } as never).filter((one) => one.kind === 'promote_held');
+    expect(kept.map((one) => one.id)).toEqual([`promote:openadlc-testbed@${other.sha}`]);
+  });
+
+  describe('POST /v1/attention/leave', () => {
+    let bridge: Server;
+    let bridgeUrl: string;
+    const left: { id: string; occurrence: string; by: string }[] = [];
+    const audits: { action: string; target: string }[] = [];
+
+    beforeEach(async () => {
+      const db = (await import('@openadlc/db')) as unknown as { mergeLines: Record<string, unknown> };
+      db.mergeLines.line = vi.fn(async () => [
+        { repoName: 'openadlc-testbed', prNumber: 29, state: 'merging', detail: `waiting for a person to merge it, because ${STALE}`, enteredAt: minutesAgo(3), headSha: HEAD },
+      ]);
+      store.gates = [];
+      store.tasks = [];
+      left.length = 0;
+      audits.length = 0;
+      const { registerAttentionRoutes } = await load();
+      const { Router } = await import('./router.js');
+      const router = new Router();
+      registerAttentionRoutes(router, {
+        newestReview: async () => 7,
+        mergeRefusal: async () => null,
+        leave: {
+          acknowledge: async (id, occurrence, by) => void left.push({ id, occurrence, by }),
+          audit: async (entry) => void audits.push(entry),
+        },
+      });
+      bridge = createServer((request, response) => void router.handle(request, response));
+      await new Promise<void>((resolve) => bridge.listen(0, '127.0.0.1', resolve));
+      bridgeUrl = `http://127.0.0.1:${(bridge.address() as AddressInfo).port}`;
+    });
+
+    afterEach(async () => {
+      const db = (await import('@openadlc/db')) as unknown as { mergeLines: Record<string, unknown> };
+      delete db.mergeLines.line;
+      await new Promise<void>((resolve) => bridge.close(() => resolve()));
+    });
+
+    const leave = (id: string) => fetch(`${bridgeUrl}/v1/attention/leave`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id }) });
+
+    it('keeps what the bridge works out the item covers, and records who left it', async () => {
+      const { occurrence } = await import('./held-merge-decide.js');
+      const response = await leave('merge:openadlc-testbed#29');
+      expect(response.status).toBe(200);
+      expect(left).toEqual([{ id: 'merge:openadlc-testbed#29', occurrence: occurrence({ head: HEAD, reason: STALE }, 7), by: expect.any(String) }]);
+      expect(audits).toEqual([expect.objectContaining({ action: 'attention.left', target: 'merge:openadlc-testbed#29' })]);
+    });
+
+    it('refuses an item not in the viewer’s list, and anything but a held merge or promote', async () => {
+      expect((await leave('merge:openadlc-testbed#30')).status).toBe(404);
+      expect((await leave('gate:abc')).status).toBe(400);
+      expect(left).toEqual([]);
+    });
   });
 });

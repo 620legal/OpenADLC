@@ -223,6 +223,19 @@ describe('reading a work item', () => {
     expect(comments).toEqual([expect.objectContaining({ repo: 'acme/api', number: 31, as: 'lead-reviewer' })]);
   });
 
+  it.each([
+    ['a held merge', { kind: 'held_merge', head: '692cd1f88f3e45093ad9ba4e68e84d590af3b595' }, 'pull.held_merge_discussed', { head: '692cd1f88f3e45093ad9ba4e68e84d590af3b595' }],
+    ['a held promote', { kind: 'held_promote', sha: 'abc1234def567890abc1234def567890abc12345' }, 'deploy.promote_discussed', { sha: 'abc1234def567890abc1234def567890abc12345' }],
+  ])('discusses %s with the lead reviewer on the pull request, audits it, and leaves it held', async (_name, about, action, said) => {
+    const response = await send('api#31', { text: 'Why is this held?', role: 'review_lead', about });
+
+    expect(await response.json()).toMatchObject({ answered: false, bot: 'lead-reviewer', subject: 'api#31' });
+    expect(world.audits).toEqual([
+      { actor: 'jane@acme.test', action, target: 'api#31', payload: expect.objectContaining({ repo: 'api', pr: 31, role: 'review_lead', by: 'jane@acme.test', ...said }) },
+    ]);
+    expect(answered).toEqual([]);
+  });
+
   it('discusses a held Human-review approval with the lead reviewer on the pull request, audits it, and decides nothing', async () => {
     const head = '692cd1f88f3e45093ad9ba4e68e84d590af3b595';
     // A repository and pull request in the body are not what the row records: the item's are.

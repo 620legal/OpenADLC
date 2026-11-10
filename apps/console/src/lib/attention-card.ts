@@ -48,10 +48,14 @@ export function faceActions(item: AttentionItem): AttentionAction[] {
   // decision, each with what it does next; the face keeps only the way to
   // GitHub beside them.
   if (item.decision) return item.actions.filter((action) => !isDecisionAction(action)).slice(0, 1);
+  // A held merge draws Merge, Leave it and Discuss from its decision; the face
+  // keeps only the way to GitHub, after them.
+  if (item.heldMerge) return item.actions.filter((action) => !isHeldDecisionAction(action)).slice(0, 1);
   // A choice between three, none of them the obvious one: all on the card.
   if (item.kind === 'unowned_issues') return item.actions;
-  // Release it, or stop holding promotes for a person at all: both on the card.
-  if (item.kind === 'promote_held') return item.actions;
+  // Release it, or stop holding promotes for a person at all: both on the
+  // card. Keep holding and Discuss are the decision's, each with what it does next.
+  if (item.kind === 'promote_held') return item.actions.filter((action) => !isHeldDecisionAction(action));
   // Drop the dependency, or reopen what it waits on: either settles it.
   if (item.kind === 'dependency_abandoned') return item.actions;
   // Approved already, and waiting: what it waits on, and nothing that answers
@@ -92,7 +96,7 @@ export function hasMore(item: AttentionItem): boolean {
     // Beside the choices only "Something else…" is on the card.
     return item.actions.some((action) => action.kind !== 'answer');
   }
-  return item.actions.filter((action) => !isDecisionAction(action)).length > faceActions(item).length;
+  return item.actions.filter((action) => !isDecisionAction(action) && !isHeldDecisionAction(action)).length > faceActions(item).length;
 }
 
 // ---------------------------------------------------------------- a held Human-review approval
@@ -115,6 +119,49 @@ export function decisionButtons(item: Pick<AttentionItem, 'decision' | 'actions'
   if (!item.decision) return [];
   const offered = item.actions.filter(isDecisionAction).map((action): DecisionButton => (action.kind === 'human_review_approve' ? 'approve' : action.kind === 'human_review_reject' ? 'reject' : 'discuss'));
   return item.decision.yours === true ? offered : offered.filter((button) => button === 'discuss');
+}
+
+// ---------------------------------------------------------------- a held merge and a held promote
+
+/** The buttons a held merge's or a held promote's panel draws itself, never `ActionButton`. */
+export function isHeldDecisionAction(
+  action: AttentionAction,
+): action is Extract<AttentionAction, { kind: 'held_merge_merge' | 'held_merge_leave' | 'held_merge_discuss' | 'promote_keep_holding' | 'promote_discuss' }> {
+  return (
+    action.kind === 'held_merge_merge' ||
+    action.kind === 'held_merge_leave' ||
+    action.kind === 'held_merge_discuss' ||
+    action.kind === 'promote_keep_holding' ||
+    action.kind === 'promote_discuss'
+  );
+}
+
+export type HeldMergeButton = 'merge' | 'leave' | 'discuss';
+
+/**
+ * The buttons a viewer gets on a held merge, in the bridge's order: Merge only
+ * when the bridge offers it on this hold and says the viewer may press it
+ * (`heldMerge.yours`), Leave it and Discuss for anyone it is shown to. The
+ * bridge refuses a Merge it would not offer, from anyone; this only keeps a
+ * button off a card it would refuse.
+ */
+export function heldMergeButtons(item: Pick<AttentionItem, 'heldMerge' | 'actions'>): HeldMergeButton[] {
+  const held = item.heldMerge;
+  if (!held) return [];
+  const mayMerge = held.merge.merge && held.yours === true;
+  return item.actions.flatMap((action): HeldMergeButton[] => {
+    if (action.kind === 'held_merge_merge') return mayMerge ? ['merge'] : [];
+    if (action.kind === 'held_merge_leave') return ['leave'];
+    if (action.kind === 'held_merge_discuss') return ['discuss'];
+    return [];
+  });
+}
+
+/** Why the viewer has no Merge on a held merge, or null when they have one. */
+export function noMergeReason(held: NonNullable<AttentionItem['heldMerge']>): string | null {
+  if (!held.merge.merge) return held.merge.why;
+  if (held.yours !== true) return held.whyNot ?? 'OpenADLC did not say whether you can merge it; reload in a moment.';
+  return null;
 }
 
 /** Whether a Reject can be sent: its reason is the builder's finding, and never empty. */

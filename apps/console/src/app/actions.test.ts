@@ -4,7 +4,9 @@ import {
   answerGate,
   fileRequest,
   killSession,
+  leaveAttention,
   linkToItem,
+  mergeHeld,
   mergeItem,
   pauseWork,
   unlinkFromItem,
@@ -313,6 +315,34 @@ describe('a promote held for a person', () => {
   it('passes on the bridge’s refusal in its own words', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: 'app@abc1234 is not held for a person' }), { status: 409 })));
     expect(await releasePromote('app', 'abc1234def')).toEqual({ ok: false, error: 'app@abc1234 is not held for a person' });
+  });
+});
+
+describe('a held merge and a held promote decided from the card', () => {
+  const HEAD = '692cd1f88f3e45093ad9ba4e68e84d590af3b595';
+
+  it('asks the bridge to merge as the person, and to leave an item, through its routes', async () => {
+    const calls: { url: string; method: string; body: unknown }[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init: RequestInit) => {
+        calls.push({ url: String(url), method: init.method ?? 'GET', body: init.body ? JSON.parse(String(init.body)) : null });
+        const flow = { flowId: 'f', userCode: 'ABCD-1234', verificationUri: 'https://github.com/login/device', expiresInSeconds: 900 };
+        return new Response(JSON.stringify(String(url).endsWith('/merge') ? { flow } : { left: 'merge:www#46' }), { status: 200 });
+      }),
+    );
+    expect(await mergeHeld('www#46', { head: HEAD })).toMatchObject({ ok: true, flow: { userCode: 'ABCD-1234' } });
+    expect(await leaveAttention('merge:www#46')).toEqual({ ok: true });
+    expect(calls).toEqual([
+      { url: expect.stringMatching(/\/v1\/items\/www%2346\/pull\/held-merge\/merge$/), method: 'POST', body: { head: HEAD } },
+      { url: expect.stringMatching(/\/v1\/attention\/leave$/), method: 'POST', body: { id: 'merge:www#46' } },
+    ]);
+  });
+
+  it('passes on the bridge’s refusal of a Merge in its own words', async () => {
+    const said = '@sam cannot merge in 620legal/www (GitHub says read); someone who can merges it.';
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: said }), { status: 403 })));
+    expect(await mergeHeld('www#46', { head: HEAD })).toEqual({ ok: false, error: said });
   });
 });
 
