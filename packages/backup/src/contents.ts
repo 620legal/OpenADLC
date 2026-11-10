@@ -19,6 +19,7 @@ import {
   type ArchivedHistory,
   type ArchivedIdentity,
   type ArchivedRepository,
+  type ArchivedPerson,
   type ArchivedSpendingLimit,
   type BackupContents,
   type LoginFiles,
@@ -78,6 +79,8 @@ export interface InstallSnapshot {
   identities?: InstallIdentity[];
   /** Caps saved in Settings. Absent when the read did not ask. */
   spendingLimits?: ArchivedSpendingLimit[];
+  /** The install's people. Absent when the read did not ask, or People could not be read. */
+  people?: ArchivedPerson[];
   /**
    * Repositories removed from OpenADLC, by name and full name. A removed row
    * still holds its name, so no other repository can be restored under it.
@@ -530,6 +533,8 @@ export function buildBackup(
     // Only caps that were read. A list here, even an empty one, is the whole
     // table to a restore, which deletes every cap not in it.
     ...(selection.install && found.spendingLimits !== undefined ? { spendingLimits: found.spendingLimits } : {}),
+    // With the install too: who signs in to the console, and who approves.
+    ...(selection.install && found.people !== undefined ? { people: found.people } : {}),
   };
   return { contents, leftOut };
 }

@@ -568,11 +568,11 @@ describe('a question that says what it decides and what each choice leads to', (
     store.task.leaseId = null;
     await ask();
     await gates.answer({ gateId: 'gate-1', reply: '2', answeredBy: 'janedoe' });
-    expect(threads.answerGate).toHaveBeenLastCalledWith('gate-1', 'docs/', 'janedoe');
+    expect(threads.answerGate).toHaveBeenLastCalledWith('gate-1', 'docs/', 'janedoe', null);
 
     store.gate = { ...store.gate, state: 'open', answer: null };
     await gates.answer({ gateId: 'gate-1', reply: 'Served at /docs', answeredBy: 'janedoe' });
-    expect(threads.answerGate).toHaveBeenLastCalledWith('gate-1', 'Served at /docs', 'janedoe');
+    expect(threads.answerGate).toHaveBeenLastCalledWith('gate-1', 'Served at /docs', 'janedoe', null);
   });
 });
 
@@ -711,7 +711,7 @@ describe('an answer on work that has already landed', () => {
     const answered = await gates.answer({ gateId: 'gate-1', reply: 'p1', answeredBy: 'alexsmith' });
 
     expect(answered).toEqual({ answer: 'p1', taskId: 'task-1' });
-    expect(threads.answerGate).toHaveBeenCalledWith('gate-1', 'p1', 'alexsmith');
+    expect(threads.answerGate).toHaveBeenCalledWith('gate-1', 'p1', 'alexsmith', null);
     expect(store.messages).toContainEqual(expect.objectContaining({ kind: 'you', author: 'alexsmith', text: 'p1' }));
     expect(store.task.state).toBe('stopped');
     expect(wasRefused(store.task.exitReason)).toBe(true);
@@ -821,7 +821,7 @@ describe('approving a plan change', () => {
       78,
       ISSUE_BODY.replace('- apps/bridge/src/gates.ts\n', '- apps/bridge/src/gates.ts\n- apps/hostd/src/skill-runner.ts\n'),
     );
-    expect(threads.answerGate).toHaveBeenCalledWith('gate-1', 'Approve', 'alexsmith');
+    expect(threads.answerGate).toHaveBeenCalledWith('gate-1', 'Approve', 'alexsmith', null);
     const said = String((client.comment.mock.calls[0] as unknown[])[2]);
     expect(said).toContain('**alexsmith answered:** Approve');
     expect(said).toContain('Added to Expected paths: `apps/hostd/src/skill-runner.ts`.');
@@ -1137,7 +1137,7 @@ describe('refusing a plan change', () => {
     const answered = await gates.answer({ gateId: 'gate-1', reply: '2', answeredBy: 'alexsmith' });
 
     expect(answered).toEqual({ answer: 'Refuse', taskId: 'task-1' });
-    expect(threads.answerGate).toHaveBeenCalledWith('gate-1', 'Refuse', 'alexsmith');
+    expect(threads.answerGate).toHaveBeenCalledWith('gate-1', 'Refuse', 'alexsmith', null);
     expect(tasks.updateTaskState).toHaveBeenCalledWith('task-1', 'stopped', { exitReason: 'plan change refused by alexsmith' });
     expect(leases.setLeaseState).toHaveBeenCalledWith('lease-1', 'released');
     expect(leases.widenPaths).not.toHaveBeenCalled();
@@ -1332,7 +1332,7 @@ describe('approved requests waiting for a path to be let go', () => {
     expect(resume).toEqual(['task-1']);
     expect(leases.widenPaths).toHaveBeenCalledWith('lease-1', ['apps/hostd/src/skill-runner.ts']);
     expect(client.updateIssueBody).toHaveBeenCalledTimes(1);
-    expect(threads.answerGate).toHaveBeenCalledWith('gate-1', 'Approve', 'alexsmith');
+    expect(threads.answerGate).toHaveBeenCalledWith('gate-1', 'Approve', 'alexsmith', null);
     expect(client.removeLabel).toHaveBeenCalledWith('acme/openadlc', 78, 'needs-human');
   });
 
@@ -1419,7 +1419,7 @@ describe('approved requests waiting for a path to be let go', () => {
     // Fixed, and tried again: granted as the person approved.
     actors.asBot.mockImplementation(async () => client as never);
     expect(await gates.applyHeld()).toEqual(['task-1']);
-    expect(threads.answerGate).toHaveBeenLastCalledWith('gate-1', 'Approve', 'alexsmith');
+    expect(threads.answerGate).toHaveBeenLastCalledWith('gate-1', 'Approve', 'alexsmith', null);
     warn.mockRestore();
   });
 
@@ -1944,7 +1944,7 @@ describe('an answer from a console person signed in by email', () => {
 
     expect(everythingSaid()).toContain('**jane answered:**');
     expect(everythingSaid()).not.toContain('@example.com');
-    expect(threads.answerGate).toHaveBeenCalledWith('gate-1', 'p1', JANE);
+    expect(threads.answerGate).toHaveBeenCalledWith('gate-1', 'p1', JANE, null);
     expect(store.messages).toContainEqual(expect.objectContaining({ kind: 'you', author: JANE }));
   });
 
@@ -2159,5 +2159,15 @@ describe('a plan change settled by no person answering it', () => {
       gates.answer({ gateId: 'gate-1', reply: 'Refuse', answeredBy: 'architect', via: 'designer', decided: { by: 'designer', seat: 'architect', taskId: 't', askedBy: 'x', reason: 'r' } }),
     ).rejects.toThrow(/only a plan change's approval/);
     expect(store.gate).toMatchObject({ state: 'open' });
+  });
+});
+
+describe('which answers from GitHub are approvals', () => {
+  it('a plan change and the cost-cap question are; any other question a bot asks is not', async () => {
+    const judging = new Gates(actors as never);
+    expect(await judging.needsApprover({ id: 'gate-9', options: ['Approve', 'Refuse'] })).toBe(true);
+    expect(await judging.needsApprover({ id: 'gate-9', options: ['continue for another $10', 'hand to a person', 'abandon this task'] })).toBe(true);
+    expect(await judging.needsApprover({ id: 'gate-9', options: ['p1', 'p2'] })).toBe(false);
+    expect(await judging.needsApprover({ id: 'gate-9', options: [] })).toBe(false);
   });
 });

@@ -1,4 +1,4 @@
-import { repos, tasks, threads, type Role } from '@openadlc/db';
+import { people, repos, tasks, threads, type Role } from '@openadlc/db';
 import { botAtStart, botInWords, resolveAnswer, type Bot, type Message } from '@openadlc/shared';
 import type { Actors } from './actors.js';
 import type { Afterwards } from './api.js';
@@ -126,6 +126,28 @@ function refusedWords(error: unknown, bot: Bot, where: string): string {
   return `GitHub did not take it (${said}). Try again`;
 }
 
+let consoleMode: 'local' | 'iap' = 'iap';
+
+/** Set once at start-up (`main.ts`): how a console identity is a person. */
+export function consolePeopleBy(mode: 'local' | 'iap'): void {
+  consoleMode = mode;
+}
+
+/**
+ * The person in People a console answer is from: behind IAP, the person whose
+ * email IAP asserted; on a local install, which has one identity, the
+ * operator, whatever name the request carries (the CLI names itself
+ * `$USER`). Null when they are not in People, or it cannot be read.
+ */
+export async function consolePersonOf(identity: string): Promise<string | null> {
+  try {
+    const person = consoleMode === 'local' ? await people.operator() : await people.personByEmail(identity);
+    return person?.id ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * A person's answer to a question from the console — a card, a work item, a
  * bot's panel — answered once the question is claimed.
@@ -151,7 +173,12 @@ export async function answerFromConsole(
   input: { gateId: string; reply: string; answeredBy: string; role?: Role; via: GateChannel },
 ): Promise<{ answer: string; taskId: string | null; held?: boolean; again?: true; ended?: true }> {
   const { afterwards } = deps;
-  const result = await deps.gates.answer({ ...input, ...(afterwards ? { deferGitHub: true } : {}) }).catch(async (error: unknown) => {
+  // The same person whether they answer here or on GitHub
+  // (docs/adr/0034-one-list-of-people.md).
+  const answeredByPerson = await consolePersonOf(input.answeredBy);
+  const result = await deps.gates
+    .answer({ ...input, ...(answeredByPerson ? { answeredByPerson } : {}), ...(afterwards ? { deferGitHub: true } : {}) })
+    .catch(async (error: unknown) => {
     // Only a question that was not open to this answer, as `Gates.answer`
     // says it. One its own answer closed and could not carry out is that
     // answer's failure, and is said as it is.

@@ -39,12 +39,15 @@ who.me = ADMIN;
 /** Settings → Roles as the bridge answers it; null for a bridge that cannot. */
 const personRoles = vi.hoisted(() => ({
   view: {
-    humans: ['janedoe', 'ada'],
+    people: [
+      { id: 'p-jane', label: 'janedoe@example.com' },
+      { id: 'p-ada', label: 'ada' },
+    ],
     roles: [
-      { id: 'product', name: 'Product', fixed: true, members: ['ada'] },
+      { id: 'product', name: 'Product', fixed: true, members: ['p-ada'] },
       { id: 'legal', name: 'Legal', fixed: true, members: [] as string[] },
       { id: 'engineering', name: 'Engineering', fixed: true, members: [] as string[] },
-      { id: 'pr_3f9c2a1b', name: 'Finance', fixed: false, members: ['janedoe'] },
+      { id: 'pr_3f9c2a1b', name: 'Finance', fixed: false, members: ['p-jane'] },
     ],
   } as unknown,
 }));
@@ -54,10 +57,15 @@ const awake = vi.hoisted(() => ({ view: undefined as { available: boolean; on: b
 vi.mock('@/lib/api', () => ({
   readMe: async () => who.me,
   api: {
-    users: async () => [
-      { email: 'janedoe@example.com', role: 'admin', addedBy: 'janedoe@example.com', addedHow: 'first', addedAt: '2026-09-30T10:00:00.000Z' },
-      { email: 'bob@example.com', role: 'user', addedBy: 'janedoe@example.com', addedHow: 'added', addedAt: '2026-09-30T11:00:00.000Z' },
-    ],
+    people: async () => ({
+      identityMode: who.me.identityMode,
+      environment: { logins: [], inEffect: false },
+      people: [
+        { id: 'p-jane', name: '', email: 'janedoe@example.com', consoleRole: 'admin', github: { login: 'janedoe', id: 101, confirmed: true }, approves: true, approvesFrom: 'people', roles: ['pr_3f9c2a1b'], addedBy: 'janedoe@example.com', addedAt: '2026-09-30T10:00:00.000Z' },
+        { id: 'p-bob', name: 'Bob', email: 'bob@example.com', consoleRole: 'user', github: null, approves: false, approvesFrom: null, roles: [], addedBy: 'janedoe@example.com', addedAt: '2026-09-30T11:00:00.000Z' },
+        { id: 'env:carol', name: '', email: null, consoleRole: null, github: { login: 'carol', id: null, confirmed: false }, approves: false, approvesFrom: null, roles: [], addedBy: 'OPENADLC_HUMANS', addedAt: '', virtual: true },
+      ],
+    }),
     repos: async () => ({
       repos: [
         {
@@ -247,7 +255,7 @@ describe('the settings page', () => {
       const html = await page();
       expect(html).toContain('Settings need an admin');
       expect(html).toContain('bob@example.com');
-      expect(html).not.toContain('id="users"');
+      expect(html).not.toContain('id="people"');
       expect(html).not.toContain('id="backup"');
       expect(html).not.toContain('OPENADLC_IDENTITY');
     } finally {
@@ -268,24 +276,29 @@ describe('the settings page', () => {
     }
   });
 
-  it('says roles are advisory on a local install, and who may use the console behind IAP', async () => {
-    expect(section(await page(), 'users')).toContain('Who may use the console.');
+  it('says the console is the operator on a local install, and who may use it behind IAP', async () => {
+    expect(section(await page(), 'people')).toContain('Who may use the console, and who answers the crew on GitHub.');
     who.me = { ...ADMIN, identityMode: 'local' };
     try {
-      const users = section(await page(), 'users');
-      expect(users).toContain('On a local install roles are advisory');
-      expect(users).not.toContain('Who may use the console.');
+      const people = section(await page(), 'people');
+      expect(people).toContain('On a local install the console is one person, the operator');
+      expect(people).not.toContain('Who may use the console');
     } finally {
       who.me = ADMIN;
     }
   });
 
-  it('lists the users for an admin, saying who became admin by being first', async () => {
-    const users = section(await page(), 'users');
-    expect(users).toContain('janedoe@example.com (you)');
-    expect(users).toContain('Admin by being the first to open the console');
-    expect(users).toContain('bob@example.com');
-    expect(users).toContain('Added by janedoe@example.com');
+  it('shows People and no Users: each person with their email, GitHub account, Approves and roles', async () => {
+    const html = await page();
+    expect(html).not.toContain('id="users"');
+    const people = section(html, 'people');
+    expect(people).toContain('janedoe@example.com (you)');
+    expect(people).toContain('@janedoe · confirmed');
+    expect(people).toContain('Finance');
+    expect(people).toContain('Bob');
+    expect(people).toContain('bob@example.com');
+    expect(people).toContain('No GitHub account');
+    expect(people).toContain('@carol');
   });
 
   it('is under the console’s header, with Settings marked', async () => {
@@ -306,7 +319,7 @@ describe('the settings page', () => {
       ['#spending-limits', 'Spending limits'],
       ['#backup', 'Backup'],
       ['#pause', 'Pause work'],
-      ['#users', 'Users'],
+      ['#people', 'People'],
       ['#roles', 'Roles'],
       ['#appearance', 'Appearance'],
       ['/onboarding', 'Run the setup again'],
@@ -559,6 +572,7 @@ describe('the settings page', () => {
     const listed = section(html, 'roles');
     expect(listed).toContain('Nothing routes by them yet');
     expect(listed).toMatch(/Product.*ada/s);
+    expect(listed).toMatch(/Finance.*janedoe@example.com/s);
     expect(listed).toMatch(/Legal.*No one yet/s);
     expect(listed).toContain('Finance');
     expect(listed).toContain('Finance Delete');

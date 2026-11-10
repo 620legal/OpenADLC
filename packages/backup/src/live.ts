@@ -1,7 +1,7 @@
-import { bots, credentials, identities, modelAccounts, query, repos, settings, spendingLimits, withTransaction } from '@openadlc/db';
+import { bots, credentials, identities, modelAccounts, people, query, repos, settings, spendingLimits, withTransaction } from '@openadlc/db';
 import { appPrivateKeyRef, credentialKind, getSecretStore, modelAccountRef, signingKeyRef, webhookSecretRef, type SecretStore } from '@openadlc/github';
 import { MESSAGE_KINDS, holdsCredential, isRepoColor, nextRepoColor } from '@openadlc/shared';
-import { archiveSpendingLimit, BackupError, resolveSpendingLimits, type ArchivedAccount, type ArchivedCredential, type ArchivedHistory, type ArchivedRepository, type ArchivedRequest, type ArchivedRequestIssue, type ArchivedWorkItem, type ArchivedWorkItemLink, type ArchivedSpendingLimit, type LoginFiles } from './archive.js';
+import { archiveSpendingLimit, BackupError, resolveSpendingLimits, type ArchivedAccount, type ArchivedCredential, type ArchivedHistory, type ArchivedRepository, type ArchivedRequest, type ArchivedRequestIssue, type ArchivedWorkItem, type ArchivedWorkItemLink, type ArchivedSpendingLimit, type ArchivedPerson, type LoginFiles } from './archive.js';
 import type { HistoryIds, RestoreDb, RestoreTarget } from './apply.js';
 import type { InstallFacts } from './clean.js';
 import {
@@ -327,6 +327,11 @@ export async function readInstall(selection: BackupSelection, options: ReadOptio
     // replaces the table, which would wipe every cap.
     spendingLimits.listLimits(),
   ]);
+  // A People that cannot be read is left out, not archived as nobody: an
+  // archive without the key leaves the people already there when restored.
+  const everyone = await Promise.resolve()
+    .then(() => people.listPeople())
+    .catch(() => null);
   const byId = new Map(crew.map((bot) => [bot.id, bot]));
 
   const credentialsByName: Record<string, ArchivedCredential> = {};
@@ -359,6 +364,7 @@ export async function readInstall(selection: BackupSelection, options: ReadOptio
   return {
     secrets,
     settings: effectiveSettings(stored, options.env),
+    ...(everyone ? { people: everyone.map((person): ArchivedPerson => ({ ...person })) } : {}),
     spendingLimits: limits.map((row) =>
       archiveSpendingLimit(
         row,
@@ -612,6 +618,72 @@ export function restoreDb(sql: Sql): UndoDb {
           JSON.stringify({ scope: write.scope, kind: write.kind, old: write.old, new: write.amountUsd }),
         ]);
       }
+    },
+
+    async putPeople(rows) {
+      // The lock every change to People takes (`people.ts`).
+      await sql.query('select pg_advisory_xact_lock(hashtext($1))', ['openadlc:users']);
+      for (const person of rows) {
+        // A row here that holds the same email or account under another id is
+        // the same person, kept under the archive's id.
+        await sql.query('delete from people where id <> $1 and (email = $2 or github_user_id = $3)', [person.id, person.email, person.githubUserId]);
+        await sql.query(
+          `insert into people (id, name, email, console_role, github_login, github_user_id, github_linked_at, approves, added_by, added_how, added_at, updated_at)
+           values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+           on conflict (id) do update set name = excluded.name, email = excluded.email, console_role = excluded.console_role,
+             github_login = excluded.github_login, github_user_id = excluded.github_user_id, github_linked_at = excluded.github_linked_at,
+             approves = excluded.approves, added_by = excluded.added_by, added_how = excluded.added_how, added_at = excluded.added_at,
+             updated_at = excluded.updated_at`,
+          [
+            person.id,
+            person.name,
+            person.email,
+            person.consoleRole,
+            person.githubLogin,
+            person.githubUserId,
+            person.githubLinkedAt,
+            person.approves && person.githubLogin !== null,
+            person.addedBy,
+            person.addedHow,
+            person.addedAt,
+            person.updatedAt,
+          ],
+        );
+      }
+    },
+
+    async approveArchivedHumans(humans, humanIds) {
+      await sql.query('select pg_advisory_xact_lock(hashtext($1))', ['openadlc:users']);
+      let pins: Record<string, unknown> = {};
+      try {
+        pins = humanIds ? (JSON.parse(humanIds) as Record<string, unknown>) : {};
+      } catch {
+        pins = {};
+      }
+      const seen = new Set<string>();
+      for (const raw of humans.split(',')) {
+        const login = raw.trim();
+        if (!login || seen.has(login.toLowerCase())) continue;
+        seen.add(login.toLowerCase());
+        const pin = pins[login.toLowerCase()];
+        const id = Number.isInteger(pin) ? (pin as number) : null;
+        // As 0162 moved them: the person holding that account, else the one
+        // holding that login, else a new GitHub-only person.
+        const held =
+          id !== null
+            ? await sql.query('select id from people where github_user_id = $1', [id])
+            : await sql.query('select id from people where lower(github_login) = lower($1) order by added_at limit 1', [login]);
+        const found = held.rows[0] as { id: string } | undefined;
+        if (found) {
+          await sql.query('update people set approves = true, github_login = coalesce(github_login, $2), updated_at = now() where id = $1', [found.id, login]);
+        } else {
+          await sql.query(
+            `insert into people (github_login, github_user_id, approves, added_by, added_how) values ($1, $2, true, $3, 'humans')`,
+            [login, id, RESTORED_BY],
+          );
+        }
+      }
+      await sql.query("delete from settings where key = 'humans'");
     },
 
     async setSetting(key, value) {

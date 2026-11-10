@@ -156,6 +156,27 @@ describe('what a gate decides and what each choice leads to', () => {
   });
 });
 
+describe('who answered a gate, as a person', () => {
+  it('records the person beside the identity, and forgets both when the answer is handed back', async () => {
+    vi.mocked(queryOne).mockResolvedValueOnce({ ...ROW, state: 'answered', answer: 'A', answered_by: 'jane', answered_by_person: 'p-1' });
+    const gate = await answerGate('gate-1', 'A', 'jane', 'p-1');
+    expect(gate).toMatchObject({ answeredBy: 'jane', answeredByPerson: 'p-1' });
+    const [sql, params] = vi.mocked(queryOne).mock.calls.at(-1)!;
+    expect(String(sql)).toContain('answered_by_person = $4');
+    expect(params).toEqual(['gate-1', 'A', 'jane', 'p-1']);
+
+    vi.mocked(queryOne).mockResolvedValueOnce({ id: 'gate-1' });
+    await reopenGate('gate-1', 'A', 'jane');
+    expect(String(vi.mocked(queryOne).mock.calls.at(-1)![0])).toContain('answered_by_person = null');
+  });
+
+  it('is no one when the answer came from someone not in People', async () => {
+    vi.mocked(queryOne).mockResolvedValueOnce({ ...ROW, state: 'answered' });
+    await answerGate('gate-1', 'A', 'stranger');
+    expect(vi.mocked(queryOne).mock.calls.at(-1)![1]).toEqual(['gate-1', 'A', 'stranger', null]);
+  });
+});
+
 describe('whether a gate put needs-human on its subject', () => {
   it('is stored as the bridge says, and as true when it says nothing, as for a gate opened before it was kept', async () => {
     vi.mocked(queryOne).mockResolvedValueOnce({ ...ROW, added_needs_human: false });

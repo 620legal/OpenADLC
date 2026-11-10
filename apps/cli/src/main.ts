@@ -139,7 +139,7 @@ openadlc — a crew of agents that takes a request to a reviewed, deployed chang
                                     admit them: appends user:EMAIL to console_members
                                     in the settings, saves them to the bucket and runs
                                     the apply that makes IAP enforce it (--no-apply
-                                    leaves the apply to you). Settings → Users still
+                                    leaves the apply to you). Settings → People still
                                     decides what they may do once they are in
   openadlc cloud validate          check the cloud module without touching the install
                                     Every cloud command takes --provider (gcp, the default)

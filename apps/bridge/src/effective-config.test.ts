@@ -5,9 +5,12 @@ import { settings } from '@openadlc/db';
 import { effectiveConfig, moveWebhookSecretToStore, storeWebhookSecret } from './effective-config.js';
 
 /** The settings table, as rows by key. */
-const table = vi.hoisted(() => ({ rows: {} as Record<string, string> }));
+const table = vi.hoisted(() => ({ rows: {} as Record<string, string>, approving: [] as string[] }));
 
 vi.mock('@openadlc/db', () => ({
+  people: {
+    approvers: vi.fn(async () => table.approving.map((login) => ({ githubLogin: login }))),
+  },
   settings: {
     allSettings: vi.fn(async () => ({ ...table.rows })),
     getSetting: vi.fn(async (key: string) => table.rows[key] ?? null),
@@ -37,6 +40,7 @@ const config = { organization: 'janedoe', gitHubClientId: '', webhookSecret: '',
 
 beforeEach(() => {
   table.rows = {};
+  table.approving = [];
   secrets = {};
   setSecretStore(memoryStore());
 });
@@ -152,5 +156,39 @@ describe('who made an address the environment gives', () => {
     expect((await effectiveConfig(given)).webhookMode).toBeNull();
     table.rows.webhookMode = 'tunnel';
     expect((await effectiveConfig(given)).webhookMode).toBe('tunnel');
+  });
+});
+
+describe('who approves', () => {
+  const withEnvironment = { ...config, humans: ['carol'] } as unknown as BridgeConfig;
+
+  it('is the logins of the people with Approves on, in the order they were added', async () => {
+    table.approving = ['alice', 'bob'];
+    expect(await effectiveConfig(withEnvironment)).toMatchObject({ humans: ['alice', 'bob'], humansFrom: 'people' });
+  });
+
+  it('is OPENADLC_HUMANS while nobody in People approves, as an unset humans was', async () => {
+    expect(await effectiveConfig(withEnvironment)).toMatchObject({ humans: ['carol'], humansFrom: 'environment' });
+  });
+
+  it('is OPENADLC_HUMANS when People cannot be read', async () => {
+    const { people } = await import('@openadlc/db');
+    vi.mocked(people.approvers).mockRejectedValueOnce(new Error('connection terminated'));
+    expect((await effectiveConfig(withEnvironment)).humans).toEqual(['carol']);
+  });
+
+  it('is OPENADLC_HUMANS when reading People throws rather than rejects, and the rest of the config is still read', async () => {
+    // A store without `people` (a partial mock of @openadlc/db) threw before
+    // a promise existed, and every caller of effectiveConfig failed with it.
+    const { people } = await import('@openadlc/db');
+    vi.mocked(people.approvers).mockImplementationOnce(() => {
+      throw new TypeError('people is not defined');
+    });
+    expect(await effectiveConfig(withEnvironment)).toMatchObject({ humans: ['carol'], organization: 'janedoe' });
+  });
+
+  it('does not read a humans settings row: 0162 deleted it, and Approves is what says', async () => {
+    table.rows.humans = 'mallory';
+    expect((await effectiveConfig(config)).humans).toEqual([]);
   });
 });

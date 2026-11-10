@@ -121,7 +121,9 @@ export async function permissionOn(
  * answer. One of `humans` counts only from the account its login was pinned
  * to (`isPinnedHuman`): the author's `id` has to be that account's. Without an
  * id, or from another account by that login, GitHub's answer about the login
- * is what decides.
+ * is what decides. Being in People is not access: a person there with no
+ * role on the repository is not acted for here, and may only answer a bot's
+ * question (`mayAnswerGates`, webhooks.ts; docs/adr/0034-one-list-of-people.md).
  */
 export async function actsForOn(input: {
   client: PermissionAsker | null;

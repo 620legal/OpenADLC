@@ -1101,22 +1101,42 @@ export type Role = 'admin' | 'user';
  */
 export type IdentityMode = 'local' | 'iap';
 
-/** A person in Settings → Users. */
-export interface ConsoleUser {
-  email: string;
-  role: Role;
+/**
+ * A person in Settings → People (`GET /v1/people`, the bridge's
+ * `people-routes.ts`): their console sign-in, their GitHub account, whether
+ * they approve, and the roles they hold.
+ */
+export interface Person {
+  id: string;
+  name: string;
+  /** The console sign-in; null for someone listed only by GitHub. */
+  email: string | null;
+  /** Null: they cannot sign in to the console. */
+  consoleRole: Role | null;
+  /** `confirmed` once the person linked it themselves; an admin's naming never confirms it. */
+  github: { login: string; id: number | null; confirmed: boolean } | null;
+  approves: boolean;
+  /** `environment`: OPENADLC_HUMANS (install.json's humans) names them, and Settings cannot change it. */
+  approvesFrom: 'people' | 'environment' | null;
+  /** The ids of the roles they hold. */
+  roles: string[];
   addedBy: string;
-  /** `added` by an admin, or one of the first admins, and from where. */
-  addedHow: 'added' | 'first' | 'admin-emails' | 'console-members';
   addedAt: string;
   /**
-   * Behind IAP only: whether IAP admits this address, judged from the
-   * console's own member list (the bridge's `roles.ts`). `absent` means IAP
-   * turns them away before the console loads; `unknown`, that a `group:` or
-   * `domain:` member may admit them. Absent from a local install's bridge,
-   * and from one older than this field.
+   * Behind IAP only: whether IAP admits their email, judged from the
+   * console's own member list. `absent` means IAP turns them away before the
+   * console loads; `unknown`, that a `group:` or `domain:` member may admit
+   * them.
    */
   iapAccess?: 'member' | 'absent' | 'unknown';
+  /** A login only OPENADLC_HUMANS names, with no person behind it: shown, never changed. */
+  virtual?: boolean;
+}
+
+export interface PeopleView {
+  people: Person[];
+  environment: { logins: string[]; inEffect: boolean };
+  identityMode: IdentityMode;
 }
 
 /**
@@ -1302,7 +1322,8 @@ export interface PersonRole {
  */
 export interface PersonRolesView {
   roles: PersonRole[];
-  humans: string[];
+  /** Everyone in People, by id, as they are called. */
+  people: { id: string; label: string }[];
 }
 
 /** A host as Settings → Hosts shows it (`GET /v1/hosts`, `hostsView` in the bridge). */
@@ -1363,7 +1384,7 @@ export const api = {
   backup: () => get<BackupInventory>('/v1/backup', { signal: AbortSignal.timeout(SECTION_READ_MS) }),
   egressHosts: () => get<EgressHostsView>('/v1/egress/hosts', { signal: AbortSignal.timeout(SECTION_READ_MS) }),
   peopleRoles: () => get<PersonRolesView>('/v1/people-roles', { signal: AbortSignal.timeout(SECTION_READ_MS) }),
-  users: () => get<{ users: ConsoleUser[] }>('/v1/users').then((body) => body.users),
+  people: () => get<PeopleView>('/v1/people', { signal: AbortSignal.timeout(SECTION_READ_MS) }),
   /** How long the bridge was away, and what the start after cost, until a person dismisses it; see `bridge-gap.ts` in the bridge. */
   bridgeGap: () => get<{ gap: BridgeGapReport | null }>('/v1/bridge/gap').then((body) => body.gap ?? null),
   /** Whether a person has paused new work from Settings; see `pause-work.ts` in the bridge. */

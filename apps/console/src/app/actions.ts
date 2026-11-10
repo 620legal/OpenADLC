@@ -828,38 +828,52 @@ export async function resumeWork(
   }
 }
 
-type UserChange = { ok: boolean; error?: string; user?: import('@/lib/api').ConsoleUser };
+type PersonChange = { ok: boolean; error?: string; person?: import('@/lib/api').Person };
 
-/** Settings → Users: lets a person in, as an admin or a user. Audited by the bridge. */
-export async function addUser(email: string, role: import('@/lib/api').Role): Promise<UserChange> {
+/** What a Settings → People form sends: any of a person's fields. */
+export type PersonFields = { name?: string; email?: string | null; consoleRole?: import('@/lib/api').Role | null; githubLogin?: string | null };
+
+async function personCall(path: string, method: 'POST' | 'PATCH', body: unknown, fallback: string): Promise<PersonChange> {
   try {
-    const result = await call<{ user: import('@/lib/api').ConsoleUser }>('/v1/users', 'POST', { email, role });
+    const result = await call<{ person?: import('@/lib/api').Person }>(path, method, body);
     revalidatePath('/settings');
-    return { ok: true, user: result.user };
+    return { ok: true, ...(result.person ? { person: result.person } : {}) };
   } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : 'could not add them' };
+    return { ok: false, error: error instanceof Error ? error.message : fallback };
   }
 }
 
-/** Gives someone another role. The bridge refuses to demote the last admin, and says so. */
-export async function setUserRole(email: string, role: import('@/lib/api').Role): Promise<UserChange> {
-  try {
-    const result = await call<{ user: import('@/lib/api').ConsoleUser }>(`/v1/users/${encodeURIComponent(email)}`, 'PATCH', { role });
-    revalidatePath('/settings');
-    return { ok: true, user: result.user };
-  } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : 'could not change their role' };
-  }
+/** Settings → People: adds a person. A login named here is checked on GitHub and never confirmed. Audited by the bridge. */
+export async function addPerson(fields: PersonFields): Promise<PersonChange> {
+  return personCall('/v1/people', 'POST', fields, 'could not add them');
 }
 
-/** Takes someone out of the console. The last admin cannot be. */
-export async function removeUser(email: string): Promise<{ ok: boolean; error?: string }> {
+/** Changes a person. A new GitHub login turns Approves off. The bridge refuses to demote the last admin, and says so. */
+export async function changePerson(id: string, fields: PersonFields): Promise<PersonChange> {
+  return personCall(`/v1/people/${encodeURIComponent(id)}`, 'PATCH', fields, 'could not change them');
+}
+
+/** Turns Approves on or off: the one switch that puts a person's login in humans. */
+export async function setApproves(id: string, on: boolean): Promise<PersonChange> {
+  return personCall(`/v1/people/${encodeURIComponent(id)}/approves`, 'POST', { on }, 'could not change Approves');
+}
+
+/** Merges one person into another: an email and a GitHub login that are the same person. */
+export async function mergePerson(id: string, into: string): Promise<PersonChange> {
+  return personCall(`/v1/people/${encodeURIComponent(id)}/merge`, 'POST', { into }, 'could not merge them');
+}
+
+/** Removes a person, and takes them off every role. The last admin cannot be. */
+export async function removePerson(id: string): Promise<{ ok: boolean; error?: string }> {
+  return personCall(`/v1/people/${encodeURIComponent(id)}/remove`, 'POST', undefined, 'could not remove them');
+}
+
+/** Whether GitHub has an account by this login, as an admin types it. Null when GitHub did not answer. */
+export async function checkGithubLogin(login: string): Promise<{ exists: boolean; login?: string } | null> {
   try {
-    await call(`/v1/users/${encodeURIComponent(email)}/remove`, 'POST');
-    revalidatePath('/settings');
-    return { ok: true };
-  } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : 'could not remove them' };
+    return await call<{ exists: boolean; login?: string }>(`/v1/people/github/${encodeURIComponent(login)}`, 'GET');
+  } catch {
+    return null;
   }
 }
 

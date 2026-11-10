@@ -18,7 +18,7 @@ import { PauseWorkCard } from '@/components/pause-work';
 import { SpendingSummary } from '@/components/spending-limits';
 import { AppearanceSection, SettingsCard } from '@/components/settings-sections';
 import { AdminsOnly } from '@/components/not-a-user';
-import { UsersSection } from '@/components/users-section';
+import { PeopleSection } from '@/components/people-section';
 import { api, readMe, type WorkPauses } from '@/lib/api';
 import { accountsFrom } from '@/lib/model-onboarding';
 import { colorMapOf } from '@/lib/repo-colors';
@@ -77,8 +77,8 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
       // Shown only where tasks leave through an egress proxy: a laptop has no list to widen.
       api.egressHosts().catch(() => null),
     ]);
-    const [users, notifications, personRoles] = await Promise.all([
-      api.users().catch(() => null),
+    const [people, notifications, personRoles] = await Promise.all([
+      api.people().catch(() => null),
       // Where notifications go, for its card; a bridge without the route leaves the card saying so.
       Promise.resolve()
         .then(() => api.notifications())
@@ -183,7 +183,12 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
 
             <PauseWorkCard initial={paused} repositories={repos.repos} />
 
-            <UsersSection initial={users} me={me?.known ? me.email : ''} identityMode={me?.known ? me.identityMode : undefined} />
+            <PeopleSection
+              initial={people}
+              roles={personRoles?.roles ?? []}
+              me={me?.known ? me.email : ''}
+              identityMode={me?.known ? me.identityMode : undefined}
+            />
 
             {personRoles && (
               <SettingsCard id="roles" title="Roles" line="Who in the install’s people holds each role. Nothing routes by them yet.">

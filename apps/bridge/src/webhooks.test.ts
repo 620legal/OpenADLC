@@ -45,6 +45,8 @@ import {
 const upserts: Record<string, unknown>[] = [];
 const store = vi.hoisted(() => ({
   bots: [] as Record<string, unknown>[],
+  /** People in People, by the account id a delivery names (0162). */
+  people: [] as { id: string; githubLogin: string; githubUserId: number; approves: boolean }[],
   qaTasks: [] as { subjectRef: string; state: string; botId?: string }[],
   lease: null as Record<string, unknown> | null,
   /** The issue as the board has it, for a handler that asks. */
@@ -256,6 +258,10 @@ vi.mock('@openadlc/db', () => ({
     leave: vi.fn(async () => undefined),
     enter: vi.fn(async () => undefined),
     entryFor: vi.fn(async () => (store.lineEntry ? { ...store.lineEntry } : null)),
+  },
+  people: {
+    approvers: vi.fn(async () => store.people.filter((one) => one.approves)),
+    personByGithubId: vi.fn(async (id: number) => store.people.find((one) => one.githubUserId === id) ?? null),
   },
   threads: {
     listOpenGates: vi.fn(async () => [{ id: 'gate-1', taskId: 'task-1' }] as { id: string; taskId: string; createdAt?: string }[]),
@@ -2100,6 +2106,97 @@ describe('an issue or pull request closed without a merge', () => {
  * into a 500 to GitHub, and a suite asserting on the response was asserting on
  * hostd.
  */
+describe('a person in People with Approves off, answering on GitHub', () => {
+  async function answering(needsApprover: boolean) {
+    const { threads } = await import('@openadlc/db');
+    vi.mocked(threads.listOpenGates).mockResolvedValue([{ id: 'gate-1', taskId: 'task-1', threadId: 'thread-1', options: [] }] as never);
+    vi.mocked(threads.addMessage).mockClear();
+    const answered: Record<string, unknown>[] = [];
+    const webhooks = new Webhooks(
+      {} as never,
+      {} as never,
+      {
+        needsApprover: async () => needsApprover,
+        answer: async (input: Record<string, unknown>) => {
+          answered.push(input);
+          return { answer: 'yes', taskId: null };
+        },
+      } as never,
+      { resume: async () => undefined } as never,
+      {} as never,
+      {} as never,
+    );
+    // Dana has only read access on the repository, and is in People by account 404.
+    permissions.readOnly.add('dana');
+    store.people = [{ id: 'p-dana', githubLogin: 'dana', githubUserId: 404, approves: false }];
+    const reply = (id: number) =>
+      ({
+        action: 'created',
+        repository: { name: 'openadlc', full_name: 'janedoe/openadlc' },
+        issue: { author_association: 'CONTRIBUTOR', number: 970 },
+        comment: { id: 9000 + id, author_association: 'CONTRIBUTOR', body: 'yes', user: { login: 'dana', id }, html_url: `https://github.test/c/${id}` },
+      }) as never;
+    return { webhooks, answered, reply, threads };
+  }
+
+  afterEach(async () => {
+    store.people = [];
+    permissions.readOnly.delete('dana');
+    const { threads } = await import('@openadlc/db');
+    vi.mocked(threads.listOpenGates).mockResolvedValue([{ id: 'gate-1', taskId: 'task-1' }] as never);
+  });
+
+  it('answers a bot’s question, recorded as them, as they could in the console', async () => {
+    const { webhooks, answered, reply } = await answering(false);
+    await webhooks.receive('issue_comment', reply(404), 'delivery-dana-question');
+    expect(answered).toEqual([expect.objectContaining({ answeredBy: 'dana', answeredByPerson: 'p-dana', via: 'github' })]);
+  });
+
+  it('is not taken from another account by that login: a login alone is never the person', async () => {
+    const { webhooks, answered, reply } = await answering(false);
+    await webhooks.receive('issue_comment', reply(405), 'delivery-dana-other');
+    expect(answered).toEqual([]);
+  });
+
+  // Being in People is not access to the repository: Dana's id let her
+  // through `actsForOn`, so her issues, edits and every comment were read as
+  // vouched for. Only answering a bot's question counts her place in People.
+  it('is not trusted for anything but answering a question', async () => {
+    const { webhooks, answered, reply } = await answering(false);
+    const onIssue = vi.spyOn(webhooks as never as { onIssue: () => Promise<void> }, 'onIssue');
+    await webhooks.receive(
+      'issues',
+      {
+        action: 'opened',
+        repository: { name: 'openadlc', full_name: 'janedoe/openadlc' },
+        sender: { login: 'dana', id: 404 },
+        issue: { author_association: 'CONTRIBUTOR', number: 971, title: 'Do this', body: 'please', user: { login: 'dana', id: 404 } },
+      } as never,
+      'delivery-dana-issue',
+    );
+    expect(onIssue).not.toHaveBeenCalled();
+
+    const wakeBuild = vi.spyOn(webhooks as never as { wakeBuild: () => Promise<void> }, 'wakeBuild');
+    const { threads } = await import('@openadlc/db');
+    vi.mocked(threads.listOpenGates).mockResolvedValue([] as never);
+    await webhooks.receive('issue_comment', reply(404), 'delivery-dana-no-question');
+    expect(wakeBuild).not.toHaveBeenCalled();
+    expect(answered).toEqual([]);
+
+    const input = { client: null, repoFullName: 'janedoe/openadlc', crew: [], humans: [] };
+    expect(await smokeStarterRefusal({ triggering_actor: { login: 'dana', type: 'User', id: 404 } }, input)).toContain('dana');
+  });
+
+  it('does not approve a plan change, and is told it takes Approves', async () => {
+    const { webhooks, answered, reply, threads } = await answering(true);
+    await webhooks.receive('issue_comment', reply(404), 'delivery-dana-plan');
+    expect(answered).toEqual([]);
+    expect(vi.mocked(threads.addMessage).mock.calls.map(([message]) => (message as { text: string }).text)).toEqual([
+      'dana replied on GitHub, and it was not taken as the answer: answering a plan change or the cost cap takes Approves in People, or triage or more on the repository.',
+    ]);
+  });
+});
+
 describe('a gate answered from GitHub', () => {
   it('stays answered, and the delivery succeeds, when the task cannot resume', async () => {
     const answered: unknown[] = [];
@@ -6258,6 +6355,7 @@ describe('somebody without access to the repository', () => {
       { gitHubClientId: '', webhookSecret: '', humans: [] } as never,
       { moveStage: async () => undefined } as never,
       {
+        needsApprover: async () => false,
         answer: async (input: unknown) => {
           answered.push(input);
           return { answer: 'answered', taskId: 'task-1' };
@@ -6422,20 +6520,20 @@ describe('somebody without access to the repository', () => {
       expect(answered).toEqual([]);
       expect(threads.addMessage).toHaveBeenCalledWith(
         expect.objectContaining({
-          text: 'reader replied on GitHub, and it was not taken as the answer: answering a gate takes triage or more on the repository, or a place in the install’s humans.',
+          text: 'reader replied on GitHub, and it was not taken as the answer: answering a question takes a place in People, or triage or more on the repository.',
         }),
       );
 
       // One of the install's humans answers whatever GitHub says of them, from
       // the account the login was pinned to; from another account by that
       // login, somebody who registered it after the person's went, it is not.
-      vi.mocked(settings.allSettings).mockResolvedValue({ humans: 'reader' } as never);
-      store.humanIds = JSON.stringify({ reader: 55 });
+      store.people = [{ id: 'p-reader', githubLogin: 'reader', githubUserId: 55, approves: true }];
       await webhooks.receive('issue_comment', reply('reader', 'COLLABORATOR', 66) as never, 'delivery-taken-over');
       expect(answered).toEqual([]);
       await webhooks.receive('issue_comment', reply('reader', 'COLLABORATOR', 55) as never, 'delivery-human');
-      expect(answered).toEqual([expect.objectContaining({ answeredBy: 'reader' })]);
+      expect(answered).toEqual([expect.objectContaining({ answeredBy: 'reader', answeredByPerson: 'p-reader' })]);
     } finally {
+      store.people = [];
       vi.mocked(settings.allSettings).mockResolvedValue({} as never);
       vi.mocked(threads.listOpenGates).mockResolvedValue([{ id: 'gate-1', taskId: 'task-1' }] as never);
     }
@@ -8565,6 +8663,7 @@ describe('an issue labelled openadlc:ignore', () => {
       {} as never,
       {} as never,
       {
+        needsApprover: async () => false,
         answer: async (input: unknown) => {
           answered.push(input);
           return { answer: 'yes', taskId: 'task-1' };
@@ -8598,7 +8697,7 @@ describe('an issue labelled openadlc:ignore', () => {
       expect(answered).toEqual([]);
       expect(resumed).toEqual([]);
       expect(vi.mocked(threads.addMessage).mock.calls.map(([message]) => (message as { text: string }).text)).toEqual([
-        'bob replied on GitHub, and it was not taken as the answer: answering a gate takes triage or more on the repository, or a place in the install’s humans.',
+        'bob replied on GitHub, and it was not taken as the answer: answering a question takes a place in People, or triage or more on the repository.',
         'alice replied on GitHub, and it was not taken as the answer: the issue is labelled openadlc:ignore, which the crew leaves alone; take the label off and reply again, or answer in the console.',
       ]);
       expect(threads.addMessage).toHaveBeenCalledWith(expect.objectContaining({ threadId: 'thread-1', kind: 'sys' }));

@@ -92,6 +92,11 @@ export function alreadyLanded(subjectRef: string): string {
 }
 
 /** What a continue held at a monthly cap says on the issue and in the thread. */
+/** A gate whose choices are a plan change's, looked up or not: treated as an approval whatever the lookup says. */
+function isPlanChangeShaped(options: readonly string[]): boolean {
+  return options.length === 2 && options[0] === PLAN_CHANGE_APPROVE && options[1] === PLAN_CHANGE_REFUSE;
+}
+
 function capHeldText(answeredBy: string, refusal: string): string {
   return (
     `**${answeredBy} answered** continue, but a monthly spending cap is reached: ${refusal}. ` +
@@ -194,6 +199,8 @@ interface AnswerRecord {
   /** A plan change's paths, so the audit log says what each decision covered. */
   paths?: readonly string[];
   decided?: GateDecider;
+  /** The person in People who answered, whichever way the answer came; null for someone not in People. */
+  person?: string | null;
 }
 
 /**
@@ -594,9 +601,21 @@ export class Gates {
      * change's `Approve` is ever given this way.
      */
     decided?: GateDecider;
+    /**
+     * The person in People who answered: from the console by their email (the
+     * operator on a local install), from GitHub by the delivery's account id.
+     * The same person answering either way is recorded as them
+     * (docs/adr/0034-one-list-of-people.md).
+     */
+    answeredByPerson?: string | null;
   }): Promise<{ answer: string; taskId: string | null; held?: boolean; github?: () => Promise<void> }> {
     const via = input.via ?? 'unknown';
-    const record = (grant: GateGrant): AnswerRecord => ({ via, grant, ...(input.deferGitHub ? { deferGitHub: true } : {}) });
+    const record = (grant: GateGrant): AnswerRecord => ({
+      via,
+      grant,
+      ...(input.deferGitHub ? { deferGitHub: true } : {}),
+      ...(input.answeredByPerson ? { person: input.answeredByPerson } : {}),
+    });
     const gate = await threads.getGate(input.gateId);
     if (!gate) throw new Error('unknown gate');
     if (gate.state !== 'open') throw new Error('gate is no longer open');
@@ -832,6 +851,18 @@ export class Gates {
     });
   }
 
+  /**
+   * Whether answering a gate from GitHub is an approval, which only a person
+   * with Approves on (or triage or more on the repository) may give: a plan
+   * change, or the cost-cap question, whose "continue" spends past a cap. Any
+   * other question a bot asks may be answered on GitHub by any person in
+   * People, as it may in the console (docs/adr/0034-one-list-of-people.md).
+   */
+  async needsApprover(gate: { id: string; options: string[] }): Promise<boolean> {
+    if (gate.options.some((option) => costCapAnswer(option, gate.options) !== null)) return true;
+    return (await this.planChangeOf(gate).catch(() => null)) !== null || isPlanChangeShaped(gate.options);
+  }
+
   private async planChangeOf(gate: { id: string; options: string[] }): Promise<leases.PlanChangeRecord | null> {
     // A plan-change gate always has exactly these two choices, so one that does
     // not is not looked up.
@@ -966,7 +997,7 @@ export class Gates {
      */
     afterClaim?: () => Promise<string | null>,
   ): Promise<{ answer: string; taskId: string | null; github?: () => Promise<void> }> {
-    const answered = await threads.answerGate(gate.id, answer, answeredBy);
+    const answered = await threads.answerGate(gate.id, answer, answeredBy, record.person ?? null);
     if (!answered) throw new Error('gate is no longer open');
     await this.audited(gate, answer, answeredBy, record);
     // A person answering the design's question takes the design: what it
@@ -1246,7 +1277,7 @@ export class Gates {
     comment: string,
     record: AnswerRecord,
   ): Promise<{ answer: string; taskId: string | null; github?: () => Promise<void> }> {
-    const answered = await threads.answerGate(gate.id, answer, answeredBy);
+    const answered = await threads.answerGate(gate.id, answer, answeredBy, record.person ?? null);
     if (!answered) throw new Error('gate is no longer open');
     await this.audited(gate, answer, answeredBy, record);
 

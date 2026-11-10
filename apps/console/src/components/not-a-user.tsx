@@ -13,7 +13,7 @@ export function NotAUser({ email, admins }: { email: string; admins: readonly st
       <h1 className="text-lg font-semibold">Ask an admin to add you</h1>
       <p className="mt-2 text-[13px] leading-relaxed text-muted">
         You’re signed in as <span className="font-mono text-soft">{email}</span>, which this install doesn’t know. Ask an admin to add
-        you in Settings → Users.
+        you in Settings → People.
       </p>
       {admins.length > 0 && (
         <div className="mt-4 text-[13px]">

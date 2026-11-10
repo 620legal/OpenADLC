@@ -20,6 +20,7 @@ import {
   stageMoves,
   tasks,
   threads,
+  people as peopleStore,
   withAdvisoryLock,
 } from '@openadlc/db';
 import {
@@ -406,14 +407,13 @@ export class Webhooks {
     const eventId = await recordEvent({ source: 'github', type, deliveryId, payload });
 
     try {
-      const attributed = (await this.fromSomeoneWithAccess(event, payload))
-        ? await this.attributed(event, payload)
-        : null;
+      const access = await this.fromSomeoneWithAccess(event, payload);
+      const attributed = access ? await this.attributed(event, payload) : null;
       if (!attributed?.counts) {
         await markEventProcessed(eventId);
         return;
       }
-      await this.dispatch(event, payload, attributed.signature);
+      await this.dispatch(event, payload, attributed.signature, access === 'question only');
       await markEventProcessed(eventId);
       // An issue labelled, moved, opened or closed, a pull request merged or
       // closed, a deploy that ships: each can let the next piece of work start.
@@ -589,8 +589,14 @@ export class Webhooks {
    * with no role here, so what the branch's owner can cause is judged by the
    * pull request's author (`BY_THE_BRANCH`). Deliveries about the repository's
    * own machinery — checks, runs, deployments — have no author to judge.
+   *
+   * A person in People with no role on the repository is not somebody with
+   * access: matched by account id, their comment is let through `'question
+   * only'`, to answer a bot's question and nothing else. Trusted as anybody
+   * with access, being in People read their issues, edits and comments as
+   * vouched for everywhere (docs/adr/0034-one-list-of-people.md).
    */
-  private async fromSomeoneWithAccess(event: string, payload: WebhookPayload): Promise<boolean> {
+  private async fromSomeoneWithAccess(event: string, payload: WebhookPayload): Promise<boolean | 'question only'> {
     const written =
       event === 'issue_comment' || event === 'pull_request_review_comment'
         ? payload.comment
@@ -620,6 +626,11 @@ export class Webhooks {
       if (await actsForOn({ client, repoFullName: payload.repository.full_name, author: { login: author, association: null, id: authorId }, crew, humans: live?.humans ?? [] })) {
         return true;
       }
+    }
+
+    if (event === 'issue_comment' && payload.action === 'created' && typeof authorId === 'number' && !isAppAccount(payload.comment?.user)) {
+      const person = await peopleStore.personByGithubId(authorId).catch(() => null);
+      if (person) return 'question only';
     }
 
     if (event === 'issue_comment' && author) {
@@ -685,12 +696,12 @@ export class Webhooks {
     return { counts: checked.counts, signature: { verified: checked.verified, seat: checked.seat, task: checked.task } };
   }
 
-  private async dispatch(event: string, payload: WebhookPayload, signature: CommentSignature | null = null): Promise<void> {
+  private async dispatch(event: string, payload: WebhookPayload, signature: CommentSignature | null = null, questionOnly = false): Promise<void> {
     switch (event) {
       case 'issues':
         return this.onIssue(payload);
       case 'issue_comment':
-        return this.onIssueComment(payload, signature);
+        return this.onIssueComment(payload, signature, questionOnly);
       case 'pull_request':
         return this.onPullRequest(payload);
       case 'pull_request_review':
@@ -1560,7 +1571,12 @@ export class Webhooks {
     return isDeclaredCommand(repo, body).catch(() => false);
   }
 
-  private async onIssueComment(payload: WebhookPayload, signature: CommentSignature | null = null): Promise<void> {
+  /**
+   * `questionOnly`: the author is a person in People with no role on the
+   * repository (`fromSomeoneWithAccess`), whose comment may answer an open
+   * question and do nothing else.
+   */
+  private async onIssueComment(payload: WebhookPayload, signature: CommentSignature | null = null, questionOnly = false): Promise<void> {
     const comment = payload.comment;
     const issue = payload.issue;
     const repoName = payload.repository?.name;
@@ -1633,7 +1649,9 @@ export class Webhooks {
     const openGates = await threads.listOpenGates();
     const relevant = await this.gateForSubject(openGates, subjectRef);
     if (!relevant) {
-      await this.wakeBuild(payload, repo, subjectRef);
+      // With no question open, a comment from someone in People without a role
+      // here does nothing: continuing a build is not answering a question.
+      if (!questionOnly) await this.wakeBuild(payload, repo, subjectRef);
       return;
     }
 
@@ -1642,14 +1660,29 @@ export class Webhooks {
     // access — COLLABORATOR is a read-only collaborator too, and on a public
     // repository MEMBER is any member of the organization — so the permission
     // is asked of GitHub, whatever the label says.
-    const may = await this.mayAnswerGates(payload.repository?.full_name ?? repo.fullName, comment.user.login, comment.user.id);
+    //
+    // A person in People, matched by the delivery's account id, may answer a
+    // bot's question here as they may in the console, Approves or not; an
+    // approval (a plan change, the cost-cap question) still takes Approves or
+    // triage (docs/adr/0034-one-list-of-people.md). A login alone never
+    // matches a person: GitHub frees a renamed account's login.
+    const approval = await Promise.resolve()
+      .then(() => this.gates.needsApprover(relevant))
+      .catch(() => true);
+    const person = typeof comment.user.id === 'number' ? await peopleStore.personByGithubId(comment.user.id).catch(() => null) : null;
+    const may = await this.mayAnswerGates(payload.repository?.full_name ?? repo.fullName, comment.user.login, comment.user.id, {
+      needsApprover: approval,
+      personId: person?.id ?? null,
+    });
     if (may !== true) {
       await this.answerNotTaken(
         payload,
         comment.user.login,
         may === null
           ? 'OpenADLC could not ask GitHub what they may do on the repository; they can reply again, or answer in the console'
-          : 'answering a gate takes triage or more on the repository, or a place in the install’s humans',
+          : approval
+            ? 'answering a plan change or the cost cap takes Approves in People, or triage or more on the repository'
+            : 'answering a question takes a place in People, or triage or more on the repository',
       );
       return;
     }
@@ -1692,6 +1725,8 @@ export class Webhooks {
       // No console role: a GitHub identity has none, so a reply never lets a
       // continue at the cost cap past a spent monthly cap (`Gates.answer`).
       via: 'github',
+      // The same person, whether they answer here or in the console.
+      ...(person ? { answeredByPerson: person.id } : {}),
     });
 
     // The answer is recorded by now. A resume that fails is hostd's problem to
@@ -1732,18 +1767,30 @@ export class Webhooks {
   }
 
   /**
-   * Whether a login may answer a gate from GitHub: one of the install's humans,
-   * from the account the login was pinned to (`isPinnedHuman`), or somebody
+   * Whether a login may answer a gate from GitHub: one of the install's humans
+   * (a person with Approves on), from the account the login was pinned to
+   * (`isPinnedHuman`); for a question, any person in People; or somebody
    * GitHub says holds triage or more on the repository. An empty `humans` is
    * not "nobody": it leaves the repository's own roles to decide. A login in
    * `humans` that someone else registered after its account was renamed or
    * deleted has another id, and is asked about like anyone else. Null when
    * GitHub could not be asked, which refuses too.
    */
-  private async mayAnswerGates(repoFullName: string, login: string, id: number | null | undefined): Promise<boolean | null> {
+  private async mayAnswerGates(
+    repoFullName: string,
+    login: string,
+    id: number | null | undefined,
+    /**
+     * The gate being answered, when it is one: a question that is not an
+     * approval may also be answered by any person in People whose account the
+     * delivery is (`personId`). Reviews and a build's continue pass none.
+     */
+    gate?: { needsApprover: boolean; personId: string | null },
+  ): Promise<boolean | null> {
     const live = await effectiveConfig(this.config).catch(() => null);
     const humans = live?.humans ?? this.config.humans ?? [];
     if (await isPinnedHuman(humans, login, id)) return true;
+    if (gate && !gate.needsApprover && gate.personId) return true;
     const client = await asAutomation(this.automation['actors'], this.config).catch(() => null);
     return repoAccess(client, repoFullName, login);
   }
@@ -1814,13 +1861,13 @@ export class Webhooks {
   private async gateForSubject(
     openGates: Awaited<ReturnType<typeof threads.listOpenGates>>,
     subjectRef: string,
-  ): Promise<{ id: string; threadId: string | null; createdAt: string | null } | null> {
+  ): Promise<{ id: string; threadId: string | null; createdAt: string | null; options: string[] } | null> {
     // Two reads, however many gates are open: a stranger's comment on any issue
     // of a public repository comes through here, and must not cost a read per gate.
     if (!openGates.some((gate) => gate.taskId)) return null;
     const onSubject = new Set((await tasks.listTasksOnSubjects([subjectRef])).map((task) => task.id));
     const gate = openGates.find((candidate) => candidate.taskId && onSubject.has(candidate.taskId));
-    return gate ? { id: gate.id, threadId: gate.threadId ?? null, createdAt: gate.createdAt ?? null } : null;
+    return gate ? { id: gate.id, threadId: gate.threadId ?? null, createdAt: gate.createdAt ?? null, options: gate.options } : null;
   }
 
   /**

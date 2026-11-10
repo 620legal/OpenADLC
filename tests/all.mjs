@@ -66,6 +66,15 @@ const suites = [
     needs: 'install',
   },
   {
+    // Migration 0162 on real Postgres, in schemas of its own: the install's
+    // database is all it uses, and it leaves nothing behind there.
+    name: 'people migration',
+    command: process.execPath,
+    args: [join(here, 'people-migration.mjs')],
+    cwd: root,
+    needs: 'install',
+  },
+  {
     name: 'concurrency',
     command: process.execPath,
     args: [join(here, 'concurrency.mjs')],

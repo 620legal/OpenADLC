@@ -1,4 +1,4 @@
-import { settings, type SettingKey } from '@openadlc/db';
+import { people, settings, type SettingKey } from '@openadlc/db';
 import { GcpSecretStore, getSecretStore, webhookSecretRef, type SecretStore } from '@openadlc/github';
 import { defaultInstallName } from '@openadlc/shared';
 import type { BridgeConfig } from './config.js';
@@ -47,7 +47,15 @@ export interface EffectiveConfig {
    * is `automation`. `automation-bot.ts` turns it into a bot.
    */
   automationBot: string | null;
+  /**
+   * Who approves: the GitHub logins of the people in People with Approves on
+   * (docs/adr/0034-one-list-of-people.md), or `OPENADLC_HUMANS` (which the CLI
+   * fills from install.json's `humans`) when nobody in People approves, as an
+   * unset `humans` row fell back to it before.
+   */
   humans: string[];
+  /** Where `humans` came from. */
+  humansFrom: 'people' | 'environment';
   /** Accounts an admin allowed beyond those the install works in already, lower-cased; see `app-reach.ts`. */
   allowedAccounts: string[];
   publicUrl: string;
@@ -89,9 +97,20 @@ export async function effectiveConfig(config: BridgeConfig): Promise<EffectiveCo
   // moved yet (`moveWebhookSecretToStore`), then the environment's.
   const inStore = await storedWebhookSecret().catch(() => null);
   const webhookSecret = inStore || stored.webhookSecret || config.webhookSecret;
-  const humans = stored.humans
-    ? stored.humans.split(',').map((entry) => entry.trim()).filter(Boolean)
-    : config.humans;
+  // A People that cannot be read leaves the environment's list, as a
+  // settings table that cannot be read leaves every other value. Whatever
+  // goes wrong reading it, thrown or rejected, lands here: a store module
+  // without `people` (a test's partial mock of @openadlc/db) threw before the
+  // promise existed, and took every caller of effectiveConfig with it.
+  const approving = await (async () => {
+    try {
+      const list = await people.approvers();
+      return (list ?? []).map((person) => person.githubLogin).filter((login): login is string => Boolean(login));
+    } catch {
+      return [] as string[];
+    }
+  })();
+  const humans = approving.length > 0 ? approving : config.humans;
 
   return {
     organization: stored.organization ?? config.organization,
@@ -109,6 +128,7 @@ export async function effectiveConfig(config: BridgeConfig): Promise<EffectiveCo
     gitHubClientId: clientId,
     automationBot: stored.automationBot ?? config.automationBot ?? null,
     humans,
+    humansFrom: approving.length > 0 ? 'people' : 'environment',
     allowedAccounts: (stored.allowedAccounts ?? '')
       .split(',')
       .map((entry) => entry.trim().toLowerCase())

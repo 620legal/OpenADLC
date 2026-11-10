@@ -15,6 +15,7 @@ import {
   getPool,
   issues,
   leases,
+  people,
   query,
   repos,
   settings,
@@ -972,10 +973,13 @@ async function main() {
   // and the COLLABORATOR label says nothing on its own. Each of the humans is
   // pinned to its GitHub account id, so a reply counts only from that account;
   // GitHub is not reachable here, so the pin is written as the bridge keeps it.
-  const humansBefore = await settings.getSetting('humans').catch(() => null);
-  const humanIdsBefore = await settings.getSetting('humanIds').catch(() => null);
-  await settings.setSetting('humans', 'alice', 'pipeline');
-  await settings.setSetting('humanIds', JSON.stringify({ alice: 4242 }), 'pipeline');
+  // The humans are the people with Approves on (#251): the `humans` and
+  // `humanIds` settings are no longer read, and writing them left the gate open.
+  // Alice is added to People for this check, or an alice left by an earlier run
+  // that stopped before its cleanup is reused, and is put back as she was.
+  const aliceBefore = await people.personByGithubId(4242);
+  const alice = aliceBefore ?? (await people.addPerson({ github: { login: 'alice', id: 4242 } }, 'pipeline'));
+  await people.setApproves(alice.id, true, 'pipeline');
   try {
     const notAllowed = await webhook('issue_comment', {
       ...forgedComment,
@@ -1004,9 +1008,8 @@ async function main() {
       `${afterSigned?.state ?? 'gone'} by ${afterSigned?.answeredBy ?? 'nobody'}`,
     );
   } finally {
-    // An empty value clears the setting, which is what it was when there was none.
-    await settings.setSetting('humans', humansBefore ?? '', 'pipeline');
-    await settings.setSetting('humanIds', humanIdsBefore ?? '', 'pipeline');
+    if (aliceBefore) await people.setApproves(alice.id, aliceBefore.approves, 'pipeline');
+    else await people.removePerson(alice.id, 'pipeline');
   }
 
   // ---------------------------------------- every delivered event is dealt with
