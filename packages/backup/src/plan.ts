@@ -1,5 +1,5 @@
 import { settings, type SettingKey } from '@openadlc/db';
-import { accessTokenRef, engineKeyRef, internalSecretRef, refreshTokenRef, signingKeyRef } from '@openadlc/github';
+import { accessTokenRef, engineKeyRef, internalSecretRef, isRetiredNotifyTargetRef, refreshTokenRef, signingKeyRef } from '@openadlc/github';
 import { ENGINES, isAvatar, isCrewColor, nameForLogin, sameLogin, seatForPersona } from '@openadlc/shared';
 import { BackupError, type ArchivedBot, type BackupContents, type BackupManifest } from './archive.js';
 import {
@@ -267,6 +267,9 @@ export function carriesSignIns(contents: Pick<BackupContents, 'manifest'>): bool
 /** Whether a secret in this archive is to be written back, or is a snapshot that was never meant to be. */
 function restorable(ref: string, contents: Pick<BackupContents, 'manifest'>): 'write' | 'stale' | 'never' {
   if (ref === internalSecretRef()) return 'never';
+  // An archive from before ADR 0049 holds ntfy, Slack or webhook targets:
+  // written back, they would be credentials nothing reads.
+  if (isRetiredNotifyTargetRef(ref)) return 'never';
   if (isGitHubRefreshTokenRef(ref) && !carriesSignIns(contents)) return 'stale';
   return 'write';
 }
@@ -603,7 +606,8 @@ export function planRestore(contents: BackupContents, current: InstallShape): Re
 
   for (const key of Object.keys(contents.settings).sort()) {
     // An archive written by a newer install can carry a key this one has never
-    // heard of. Reported and skipped: `setSetting` only takes the closed list.
+    // heard of, and one written before ADR 0049 the settings it retired.
+    // Reported and skipped: `setSetting` only takes the closed list.
     if (!settings.isSettingKey(key)) {
       plan.settings.unknown.push(key);
       continue;

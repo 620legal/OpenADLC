@@ -2700,8 +2700,9 @@ new since the page loaded: a reload does not replay what was already waiting,
 and two tabs of one browser do not both notify. All of it comes from an open
 console tab, which keeps reading the page every fifteen seconds in the
 background (a browser may slow that to about a minute). With no console tab
-open nothing arrives this way; the bridge's own notifications (#225) are what
-reach a person then. A bridge that does not answer changes none of it. See
+open nothing arrives this way; the bridge's own notifications, as push to the
+console app ([configuration](configuration.md#notifications-on-your-devices)), are
+what reach a person then. A bridge that does not answer changes none of it. See
 [ADR 0024](adr/0024-needs-you-alerts-are-raised-by-the-open-page.md).
 
 ### People from outside your Google Cloud organization
@@ -3447,6 +3448,18 @@ reads. Nothing is numbered until every repository is read, and the board keeps
 today's keys until then. `select numbered_at from work_item_backfill where
 repo_id is null` says when it finished. A repository added later is read the
 same way, and numbered after what is already numbered.
+
+**The release that retires ntfy, Slack and the webhook** (migration `0165`,
+[ADR 0049](adr/0049-push-is-the-only-notification-channel.md)) makes push to
+the console app OpenADLC's only notification channel. Its migration deletes
+the install's and each person's channel settings, and the bridge deletes their
+targets from the secret store at its first start. `OPENADLC_NOTIFY_WEBHOOK` is
+ignored from then on, with one warning at each start until you remove it.
+Admins: install the console as an app (on a phone, Share → **Add to Home
+Screen**; on a computer, the browser's **Install** button), open it, and press
+**Turn on notifications on this device** in **Settings → Notifications**. Until
+an admin does, the `notifications` card on the board says so, and nothing is
+pushed to anyone for what is for everyone.
 
 Migrations are applied by `openadlc up` and are forward-only. Take a database backup
 first; the platform database (`openadlc_db` locally, `fleet_db` on Cloud SQL)

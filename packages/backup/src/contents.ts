@@ -5,8 +5,7 @@ import {
   engineKeyRef,
   internalSecretRef,
   modelAccountRef,
-  notifyTargetRef,
-  PERSON_NOTIFY_TARGET_PREFIX,
+  isRetiredNotifyTargetRef,
   refreshTokenRef,
   registryTokenRef,
   signingKeyRef,
@@ -364,14 +363,12 @@ export function classifySecret(
   botNames: readonly string[],
   holders: readonly SignInHolder[] = [],
 ): SecretKind {
-  // The notification target goes with the install: without it a restored
-  // `notifyTransport` names a transport with nothing to send to.
-  if (ref === appPrivateKeyRef() || ref === webhookSecretRef() || ref === registryTokenRef() || ref === notifyTargetRef() || ref === ATTRIBUTION_KEY_REF) {
+  // ntfy, Slack and the webhook are retired (ADR 0049): a target the start
+  // has not deleted yet is a credential nothing reads, so a backup leaves it.
+  if (isRetiredNotifyTargetRef(ref)) return { group: 'never', reason: 'a notification channel OpenADLC no longer sends to' };
+  if (ref === appPrivateKeyRef() || ref === webhookSecretRef() || ref === registryTokenRef() || ref === ATTRIBUTION_KEY_REF) {
     return { group: 'install' };
   }
-  // Each person's own channel goes with the `personNotify` setting that names
-  // its kind, as the install's does with `notifyTransport`.
-  if (ref.startsWith(PERSON_NOTIFY_TARGET_PREFIX) && ref.length > PERSON_NOTIFY_TARGET_PREFIX.length) return { group: 'install' };
   if (ref === internalSecretRef()) return { group: 'never', reason: 'each install makes its own' };
   // Opens the backup an undo of the last restore puts back: this install's own, for a day.
   if (ref === 'restore-undo-key') return { group: 'never', reason: 'it opens this install’s own undo of its last restore' };

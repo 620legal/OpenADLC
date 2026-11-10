@@ -37,7 +37,7 @@ export const dynamic = 'force-dynamic';
  * install, Egress, the names its tasks may reach beyond the host's own list,
  * with a host a check found refused offered by `?allow-host=`; the spending
  * caps, summarised, with the amounts edited on their own page; a backup of the
- * install; where notifications go, changed on their own page; pausing new work, across the install or in
+ * install; notifications, changed on their own page; pausing new work, across the install or in
  * chosen repositories; who may use the console; the roles the install's people
  * hold; and how it looks: the color
  * mode, the console's name and logo, and each repository's and crew member's color.
@@ -77,16 +77,19 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
       // Shown only where tasks leave through an egress proxy: a laptop has no list to widen.
       api.egressHosts().catch(() => null),
     ]);
-    const [people, notifications, personRoles] = await Promise.all([
+    const [people, notifications, pushDevices, personRoles] = await Promise.all([
       api.people().catch(() => null),
-      // Where notifications go, for its card; a bridge without the route leaves the card saying so.
+      // Which kinds are off, for its card; a bridge without the route leaves the card without them.
       Promise.resolve()
         .then(() => api.notifications())
+        .catch(() => null),
+      // How many of the signed-in person's devices take push, for the same card.
+      Promise.resolve()
+        .then(() => api.pushDevices())
         .catch(() => null),
       // Left out, card and link, when the bridge cannot answer it.
       api.peopleRoles().catch(() => null),
     ]);
-    const now = new Date().toISOString();
     const asked = (await searchParams)['allow-host'];
     const offered = typeof asked === 'string' && asked.trim() ? asked.trim().toLowerCase() : null;
     // Hidden only where the bridge says tasks leave through no proxy. When
@@ -168,8 +171,8 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
               </Link>
             </SettingsCard>
 
-            {/* Changed on their own page, `/settings/notifications`, where Send a test is. */}
-            <NotificationsSummary view={notifications} now={now} />
+            {/* Changed on their own page, `/settings/notifications`, where each device is turned on and tested. */}
+            <NotificationsSummary view={notifications} devices={pushDevices ? pushDevices.devices.length : null} />
 
             {showEgress && egress && (
               <SettingsCard id="egress" title="Egress" line="The names this install’s tasks may reach beyond the cloud host’s own list.">

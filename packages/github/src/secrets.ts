@@ -180,27 +180,19 @@ export function registryTokenRef(): string {
 }
 
 /**
- * Where notifications go: the Slack incoming-webhook URL, the generic
- * webhook's URL, or the ntfy topic. Each is a credential: a Slack or webhook
- * URL lets whoever holds it post as the install, and on ntfy.sh anyone who
- * knows a topic can subscribe to it and read every notification. So the
- * `notifyTransport` setting says which kind and when it was set, and the
- * target itself lives only here; the console is shown it masked.
+ * Where the install's ntfy, Slack or webhook target was kept, before push to
+ * the console app became the only channel (ADR 0049). Nothing reads it: the
+ * bridge deletes it at start, a backup does not take it, and a restore of an
+ * older archive does not write it back.
  */
-export function notifyTargetRef(): string {
-  return 'notify-target';
-}
+export const RETIRED_NOTIFY_TARGET_REF = 'notify-target';
 
-/** Where every person's own channel is kept: `personNotifyTargetRef(id)` starts with it. */
-export const PERSON_NOTIFY_TARGET_PREFIX = 'notify-target:person:';
+/** Where each person's own ntfy or Slack target was kept (ADR 0035), retired with it. */
+export const RETIRED_PERSON_NOTIFY_PREFIX = 'notify-target:person:';
 
-/**
- * Where one person's own notifications go (`personNotify`, ADR 0035): the
- * same kind of credential as the install's `notifyTargetRef`, kept per person
- * id so removing the person removes it, and never shown back unmasked.
- */
-export function personNotifyTargetRef(personId: string): string {
-  return `${PERSON_NOTIFY_TARGET_PREFIX}${personId}`;
+/** Whether a ref is one of the retired channels' targets: the install's, or a person's by id. */
+export function isRetiredNotifyTargetRef(ref: string): boolean {
+  return ref === RETIRED_NOTIFY_TARGET_REF || (ref.startsWith(RETIRED_PERSON_NOTIFY_PREFIX) && ref.length > RETIRED_PERSON_NOTIFY_PREFIX.length);
 }
 
 /**

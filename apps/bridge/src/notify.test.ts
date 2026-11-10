@@ -1,25 +1,19 @@
 import { createECDH, randomBytes } from 'node:crypto';
+import { settings } from '@openadlc/db';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { addDevice, memoryPushStore } from './push-devices.js';
 import {
   isNotifiable,
   itemLink,
-  maskTarget,
   memoryNotifyStore,
   NOTIFIABLE,
   NOTIFY_SWITCHES,
+  notificationSettingsView,
   Notifier,
-  ntfyOrigin,
-  redactTarget,
-  requestFor,
-  forgetPersonalNotification,
-  parsePersonNotify,
-  personalNotificationView,
-  savePersonalNotification,
-  PERSONAL_KIND_REFUSAL,
-  PERSONAL_SERVER_REFUSAL,
+  RETIRED_CHANNEL_REFUSAL,
+  RETIRED_SETTING_KEYS,
+  retireOldChannels,
   saveNotificationSettings,
-  TEST_TEXT,
 } from './notify.js';
 
 /**
@@ -29,25 +23,40 @@ import {
  * including the ones that mattered. A failing health check is sent once and
  * again a day later, and its all-clear to whoever was told; a pull request
  * waiting on a person and a review that stopped are read from Needs you.
+ *
+ * Each goes as push to the console app and nowhere else (ADR 0049).
  */
-const configWith = (notifyWebhook: string) =>
-  ({ notifyWebhook, consoleUrl: 'http://127.0.0.1:47300' }) as never;
-
-const SLACK = 'https://hooks.slack.com/services/T000/B000/XyZsecretTOKENa1b2';
-const TOPIC = 'openadlc-private-topic-a1b2';
-
-const settingsTransport = (kind: 'ntfy' | 'slack' | 'webhook', target: string, setAt = '2026-11-02T00:00:00.000Z') =>
-  memoryNotifyStore({
-    settings: { notifyTransport: JSON.stringify({ kind, ...(kind === 'ntfy' ? { server: 'https://ntfy.sh' } : {}), setAt, setBy: 'janedoe' }) },
-    target,
-  });
+const CONFIG = { consoleUrl: 'http://127.0.0.1:47300' } as never;
 
 function answering(status: number) {
   return vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status }));
 }
 
+const browserKeys = () => {
+  const ecdh = createECDH('prime256v1');
+  ecdh.generateKeys();
+  return { p256dh: ecdh.getPublicKey().toString('base64url'), auth: randomBytes(16).toString('base64url') };
+};
+
+async function withDevices(owners: string[], admins: string[]) {
+  const push = memoryPushStore({ admins: admins.map((id) => ({ id, email: `${id}@example.com` })) });
+  for (const owner of owners) {
+    const added = await addDevice(push, owner, { subscription: { endpoint: `https://fcm.googleapis.com/fcm/send/${owner}-secret`, keys: browserKeys() }, name: owner });
+    expect(added.ok).toBe(true);
+  }
+  return push;
+}
+
+const pushedTo = (spy: ReturnType<typeof answering>) =>
+  spy.mock.calls
+    .map((call) => String(call[0]))
+    .filter((url) => url.startsWith('https://fcm.googleapis.com/'))
+    .map((url) => url.split('/').at(-1)!.replace(/-secret$/, ''))
+    .sort();
+
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 
 describe('only a few things are worth a notification', () => {
@@ -71,193 +80,72 @@ describe('only a few things are worth a notification', () => {
 
   it('will not send an event it does not recognise even when asked directly', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch');
-    const notifier = new Notifier(configWith('https://hooks.example.invalid/x'), memoryNotifyStore());
+    const push = await withDevices(['p-admin'], ['p-admin']);
+    const notifier = new Notifier(CONFIG, memoryNotifyStore({ push }));
 
-    const outcome = await notifier.send({
-      event: 'gate_answered' as never,
-      to: 'janedoe',
-      text: 'answered',
-      link: 'http://127.0.0.1:47300/',
-    });
+    const outcome = await notifier.send({ event: 'gate_answered' as never, to: 'janedoe', text: 'answered', link: 'http://127.0.0.1:47300/' });
 
     expect(outcome).toBe('refused');
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 });
 
-describe('an install with no transport carries on', () => {
+describe('an install with no device carries on', () => {
   it('logs the intent rather than failing', async () => {
-    const notifier = new Notifier(configWith(''), memoryNotifyStore());
-    const outcome = await notifier.send({
-      event: 'gate_opened',
-      to: 'janedoe',
-      text: 'waiting on an answer',
-      link: 'http://127.0.0.1:47300/?bot=mira',
-    });
+    const notifier = new Notifier(CONFIG, memoryNotifyStore({ push: memoryPushStore() }));
+    const outcome = await notifier.send({ event: 'gate_opened', to: 'janedoe', text: 'waiting on an answer', link: 'http://127.0.0.1:47300/?bot=mira' });
 
     // Logged, not sent and not refused: the path stays exercised in development
-    // rather than lying dormant until the day somebody configures it.
+    // rather than lying dormant until the day somebody turns on a device.
     expect(outcome).toBe('logged');
   });
 
-  it('does not fail the caller when the transport is down', async () => {
+  it('does not fail the caller when the push service is down', async () => {
     vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('connect ECONNREFUSED'));
-    const notifier = new Notifier(configWith('https://hooks.example.invalid/x'), memoryNotifyStore());
+    const push = await withDevices(['p-admin'], ['p-admin']);
+    const notifier = new Notifier(CONFIG, memoryNotifyStore({ push }));
 
-    // The gate is already on GitHub and on the board. A transport that is down
-    // must not take the platform with it.
+    // The gate is already on GitHub and on the board. A push service that is
+    // down must not take the platform with it.
     await expect(notifier.send({ event: 'gate_opened', to: null, text: 'x', link: 'y' })).resolves.toBe('logged');
   });
 });
 
-describe('each transport is sent the request it reads', () => {
-  const message = { event: 'gate_opened' as const, to: 'janedoe', text: 'Mira is waiting — ¿listo?', link: 'http://127.0.0.1:47300/?item=a%2312' };
-
-  it('publishes to ntfy as JSON at the server’s root, which carries text that is not ASCII', () => {
-    const { url, init } = requestFor({ kind: 'ntfy', target: TOPIC, server: 'https://ntfy.example.com/' }, message);
-    expect(url).toBe('https://ntfy.example.com/');
-    expect(init.method).toBe('POST');
-    expect(init.headers).toEqual({ 'content-type': 'application/json' });
-    expect(JSON.parse(init.body as string)).toEqual({
-      topic: TOPIC,
-      title: 'OpenADLC',
-      message: '@janedoe: Mira is waiting — ¿listo?',
-      click: message.link,
-      tags: ['gate_opened'],
-    });
+describe('push to the console app is the only channel (ADR 0049)', () => {
+  it('sends a routed item to its people’s devices, and calls nothing but their push services', async () => {
+    const spy = answering(201);
+    const push = await withDevices(['p-a', 'p-b', 'p-admin'], ['p-admin']);
+    const store = memoryNotifyStore({ push });
+    await expect(new Notifier(CONFIG, store).send({ event: 'gate_opened', to: null, text: 'q', link: 'l', people: ['p-a'] })).resolves.toBe('sent');
+    expect(pushedTo(spy)).toEqual(['p-a']);
+    expect(spy.mock.calls.every((call) => String(call[0]).startsWith('https://fcm.googleapis.com/'))).toBe(true);
+    expect(push.log.filter((event) => event.type === 'notify.delivery').map((event) => event.payload)).toEqual([
+      expect.objectContaining({ transport: 'push', source: 'device', person: 'p-a', ok: true, status: 201 }),
+    ]);
   });
 
-  it('defaults ntfy to ntfy.sh', () => {
-    expect(requestFor({ kind: 'ntfy', target: TOPIC }, message).url).toBe('https://ntfy.sh/');
+  it('sends an item for everyone to every admin’s devices and to no user’s, and calls nothing else', async () => {
+    const spy = answering(201);
+    const push = await withDevices(['p-a', 'p-admin', 'p-admin2'], ['p-admin', 'p-admin2']);
+    await expect(new Notifier(CONFIG, memoryNotifyStore({ push })).send({ event: 'cap_warning', to: null, text: 'spend', link: 'l' })).resolves.toBe('sent');
+    expect(pushedTo(spy)).toEqual(['p-admin', 'p-admin2']);
+    expect(spy.mock.calls.every((call) => String(call[0]).startsWith('https://fcm.googleapis.com/'))).toBe(true);
   });
 
-  it('posts Slack its text with the link as Slack writes one', () => {
-    const { url, init } = requestFor({ kind: 'slack', target: SLACK }, { ...message, to: null });
-    expect(url).toBe(SLACK);
-    expect(init.method).toBe('POST');
-    expect(JSON.parse(init.body as string)).toEqual({ text: `Mira is waiting — ¿listo?\n<${message.link}|Open in OpenADLC>` });
+  it('ignores OPENADLC_NOTIFY_WEBHOOK: an item for everyone goes only to admins’ devices', async () => {
+    vi.stubEnv('OPENADLC_NOTIFY_WEBHOOK', 'https://hooks.example.invalid/x');
+    const spy = answering(201);
+    const push = await withDevices(['p-admin'], ['p-admin']);
+    await expect(new Notifier(CONFIG, memoryNotifyStore({ push })).send({ event: 'check_failing', to: null, text: 'x', link: 'l' })).resolves.toBe('sent');
+    expect(spy.mock.calls.map((call) => String(call[0]))).not.toContain('https://hooks.example.invalid/x');
+    expect(pushedTo(spy)).toEqual(['p-admin']);
   });
 
-  it('escapes Slack’s formatting in the text, so the console’s is the only link', () => {
-    const { init } = requestFor({ kind: 'slack', target: SLACK }, { ...message, to: null, text: 'See <https://evil.example|here> & <!channel>' });
-    const { text } = JSON.parse(init.body as string) as { text: string };
-    expect(text).toBe(`See &lt;https://evil.example|here&gt; &amp; &lt;!channel&gt;\n<${message.link}|Open in OpenADLC>`);
-    expect(text.match(/</g)).toHaveLength(1);
-  });
-
-  it('posts the generic webhook the body it always had', () => {
-    const { url, init } = requestFor({ kind: 'webhook', target: 'https://hooks.example.com/in' }, message);
-    expect(url).toBe('https://hooks.example.com/in');
-    expect(JSON.parse(init.body as string)).toEqual({ text: '@janedoe: Mira is waiting — ¿listo?', link: message.link, event: 'gate_opened' });
-  });
-});
-
-describe('the target is a credential', () => {
-  it('is shown as its host and last four characters, never more', () => {
-    const pattern = /^(https?:\/\/[^/]+\/)?…[^/]{4}$/;
-    expect(maskTarget('slack', SLACK)).toBe('https://hooks.slack.com/…a1b2');
-    expect(maskTarget('webhook', 'https://hooks.example.com/in/secret-path-9z8y/')).toBe('https://hooks.example.com/…9z8y');
-    expect(maskTarget('ntfy', TOPIC)).toBe('…a1b2');
-    for (const masked of [maskTarget('slack', SLACK), maskTarget('ntfy', TOPIC)]) expect(masked).toMatch(pattern);
-  });
-
-  it('shows none of a short topic', () => {
-    expect(maskTarget('ntfy', 'abcde')).toBe('…');
-  });
-
-  it('is taken out of an error, whole or by its path', () => {
-    const error = `request to ${SLACK} failed; POST /services/T000/B000/XyZsecretTOKENa1b2 refused`;
-    const redacted = redactTarget(error, SLACK);
-    expect(redacted).not.toContain('XyZsecretTOKEN');
-    expect(redacted).toBe('request to … failed; POST … refused');
-    expect(redactTarget(`no topic ${TOPIC}`, TOPIC)).toBe('no topic …');
-  });
-});
-
-describe('the ntfy server is an address and nothing more', () => {
-  it('keeps only an origin', () => {
-    expect(ntfyOrigin('https://ntfy.example.com/')).toBe('https://ntfy.example.com');
-    expect(ntfyOrigin('http://10.0.0.5:8080')).toBe('http://10.0.0.5:8080');
-    for (const refused of ['https://user:pass@ntfy.example.com', 'https://token@ntfy.example.com', 'https://ntfy.sh/my-topic', 'https://ntfy.sh/?auth=x', 'https://ntfy.sh/#x', 'https://ntfy.sh?', 'ftp://ntfy.sh', 'ntfy.sh']) {
-      expect(ntfyOrigin(refused), refused).toBeNull();
-    }
-  });
-
-  it('refuses a server with a user, password or path, and keeps none of it', async () => {
-    const store = memoryNotifyStore();
-    for (const server of ['https://user:hunter2@ntfy.example.com', 'https://ntfy.sh/my-topic']) {
-      const saved = await saveNotificationSettings(store, { kind: 'ntfy', server, target: TOPIC }, 'janedoe');
-      expect(saved).toEqual({ ok: false, error: expect.stringContaining('no path, topic, user or password') });
-    }
-    expect(store.settings).toEqual({});
-    expect(store.secret).toBeNull();
-  });
-
-  it('stores the server as its origin', async () => {
-    const store = memoryNotifyStore();
-    const saved = await saveNotificationSettings(store, { kind: 'ntfy', server: 'HTTPS://Ntfy.Example.com/', target: TOPIC }, 'janedoe');
-    expect(saved).toMatchObject({ ok: true, change: { server: 'https://ntfy.example.com' } });
-    expect(JSON.parse(store.settings.notifyTransport!)).toMatchObject({ server: 'https://ntfy.example.com' });
-  });
-
-  it('takes a user and password out of any URL in an error', () => {
-    expect(redactTarget('connect to https://user:hunter2@ntfy.example.com/ failed', TOPIC)).toBe('connect to https://…@ntfy.example.com/ failed');
-  });
-});
-
-describe('each delivery is recorded', () => {
-  it('records an accepted send, without the target', async () => {
-    answering(204);
-    const store = settingsTransport('slack', SLACK);
-    const notifier = new Notifier(configWith(''), store);
-
-    await expect(notifier.send({ event: 'gate_opened', to: null, text: 'x', link: 'y' })).resolves.toBe('sent');
-
-    const delivery = store.events.find((event) => event.type === 'notify.delivery');
-    expect(delivery?.payload).toEqual({
-      event: 'gate_opened',
-      transport: 'slack',
-      source: 'settings',
-      setAt: '2026-11-02T00:00:00.000Z',
-      ok: true,
-      status: 204,
-      error: null,
-    });
-    expect(JSON.stringify(store.events)).not.toContain('XyZsecret');
-  });
-
-  it('records a refused send with its status', async () => {
-    answering(404);
-    const store = settingsTransport('ntfy', TOPIC);
-    const notifier = new Notifier(configWith(''), store);
-
-    await expect(notifier.test()).resolves.toMatchObject({ ok: false, status: 404 });
-    expect(store.events.filter((event) => event.type === 'notify.delivery')).toHaveLength(1);
-  });
-
-  it('records an unreachable endpoint with its error, the target taken out', async () => {
-    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error(`getaddrinfo ENOTFOUND for ${SLACK}`));
-    const store = settingsTransport('slack', SLACK);
-    const notifier = new Notifier(configWith(''), store);
-
-    const result = await notifier.test();
-    expect(result).toMatchObject({ ok: false, status: null });
-    expect(result?.error).toContain('ENOTFOUND');
-    expect(result?.error).not.toContain('XyZsecret');
-    expect(JSON.stringify(store.events)).not.toContain('XyZsecret');
-  });
-
-  it('sends Settings’ test with its own words and a link back to Settings', async () => {
-    const fetchSpy = answering(200);
-    const notifier = new Notifier(configWith(''), settingsTransport('ntfy', TOPIC));
-
-    await expect(notifier.test()).resolves.toEqual({ ok: true, status: 200, error: null });
-    const body = JSON.parse(fetchSpy.mock.calls[0]![1]!.body as string);
-    expect(body).toMatchObject({ message: TEST_TEXT, click: 'http://127.0.0.1:47300/settings/notifications', tags: ['test'] });
-  });
-
-  it('has nothing to test with no transport', async () => {
-    await expect(new Notifier(configWith(''), memoryNotifyStore()).test()).resolves.toBeNull();
+  it('logs a routed item whose people have no device, and does not send it to admins instead', async () => {
+    const spy = answering(201);
+    const push = await withDevices(['p-admin'], ['p-admin']);
+    await expect(new Notifier(CONFIG, memoryNotifyStore({ push })).send({ event: 'gate_opened', to: null, text: 'q', link: 'l', people: ['p-a'] })).resolves.toBe('logged');
+    expect(spy).not.toHaveBeenCalled();
   });
 });
 
@@ -266,62 +154,90 @@ describe('each kind can be switched off', () => {
     expect([...NOTIFY_SWITCHES].sort()).toEqual(['cap_warning', 'check_failing', 'gate_opened', 'merge_waiting', 'promote_waiting', 'review_stalled']);
   });
 
-  it('does not send a kind that is off, and records that it was', async () => {
-    const fetchSpy = answering(200);
-    const store = settingsTransport('slack', SLACK);
-    store.settings.notifyKinds = JSON.stringify({ gate_opened: false });
-    const notifier = new Notifier(configWith(''), store);
-
-    await expect(notifier.send({ event: 'gate_opened', to: null, text: 'x', link: 'y' })).resolves.toBe('off');
-    expect(fetchSpy).not.toHaveBeenCalled();
-    expect(store.events).toEqual([expect.objectContaining({ type: 'notify.gate_opened', payload: expect.objectContaining({ off: true }) })]);
-    expect(store.events.some((event) => event.type === 'notify.delivery')).toBe(false);
+  it('does not send a kind that is off to any device, and records that it was', async () => {
+    const spy = answering(201);
+    const push = await withDevices(['p-a', 'p-admin'], ['p-admin']);
+    const store = memoryNotifyStore({ settings: { notifyKinds: JSON.stringify({ gate_opened: false, cap_warning: false }) }, push });
+    const notifier = new Notifier(CONFIG, store);
+    await expect(notifier.send({ event: 'gate_opened', to: null, text: 'q', link: 'l', people: ['p-a'] })).resolves.toBe('off');
+    await expect(notifier.send({ event: 'cap_warning', to: null, text: 'q', link: 'l' })).resolves.toBe('off');
+    expect(spy).not.toHaveBeenCalled();
+    expect(store.events.map((event) => event.payload.off)).toEqual([true, true]);
   });
 
   it('holds back a check’s all-clear with its failure', async () => {
-    const fetchSpy = answering(200);
-    const store = settingsTransport('slack', SLACK);
-    store.settings.notifyKinds = JSON.stringify({ check_failing: false });
-    const notifier = new Notifier(configWith(''), store);
-
+    const spy = answering(201);
+    const push = await withDevices(['p-admin'], ['p-admin']);
+    const notifier = new Notifier(CONFIG, memoryNotifyStore({ settings: { notifyKinds: JSON.stringify({ check_failing: false }) }, push }));
     await expect(notifier.send({ event: 'check_fixed', to: null, text: 'x', link: 'y' })).resolves.toBe('off');
-    expect(fetchSpy).not.toHaveBeenCalled();
-  });
-
-  it('sends the kinds that are on', async () => {
-    answering(200);
-    const store = settingsTransport('slack', SLACK);
-    store.settings.notifyKinds = JSON.stringify({ gate_opened: false });
-    const notifier = new Notifier(configWith(''), store);
-
-    await expect(notifier.send({ event: 'cap_warning', to: null, text: 'x', link: 'y' })).resolves.toBe('sent');
+    expect(spy).not.toHaveBeenCalled();
   });
 });
 
-describe('the environment’s webhook is the fallback', () => {
-  it('posts today’s body to OPENADLC_NOTIFY_WEBHOOK when nothing is set in Settings', async () => {
-    const fetchSpy = answering(200);
-    const notifier = new Notifier(configWith('https://hooks.example.com/env'), memoryNotifyStore());
-
-    await notifier.send({ event: 'gate_opened', to: null, text: 'x', link: 'y' });
-    expect(fetchSpy.mock.calls[0]![0]).toBe('https://hooks.example.com/env');
-    expect(JSON.parse(fetchSpy.mock.calls[0]![1]!.body as string)).toEqual({ text: 'the owner: x', link: 'y', event: 'gate_opened' });
+describe('Settings → Notifications keeps the switches and nothing else', () => {
+  it('shows only the switches', async () => {
+    const notifier = new Notifier(CONFIG, memoryNotifyStore({ settings: { notifyKinds: JSON.stringify({ cap_warning: false }) } }));
+    const view = await notificationSettingsView(notifier);
+    expect(Object.keys(view)).toEqual(['switches']);
+    expect(view.switches.cap_warning).toBe(false);
+    expect(view.switches.gate_opened).toBe(true);
   });
 
-  it('gives way to Settings’ choice', async () => {
-    const fetchSpy = answering(200);
-    const notifier = new Notifier(configWith('https://hooks.example.com/env'), settingsTransport('slack', SLACK));
-
-    await notifier.send({ event: 'gate_opened', to: null, text: 'x', link: 'y' });
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
-    expect(fetchSpy.mock.calls[0]![0]).toBe(SLACK);
+  it('saves the switches, and says what changed', async () => {
+    const store = memoryNotifyStore();
+    const saved = await saveNotificationSettings(store, { switches: { cap_warning: false } }, 'janedoe');
+    expect(saved).toEqual({ ok: true, change: { switches: expect.objectContaining({ cap_warning: false, gate_opened: true }) } });
+    expect(store.settings.notifyKinds).toBe(JSON.stringify({ cap_warning: false }));
   });
 
-  it('is used when Settings names a kind whose target a restore left behind', async () => {
-    const store = settingsTransport('slack', SLACK);
-    store.secret = null;
-    const transport = await new Notifier(configWith('https://hooks.example.com/env'), store).transport();
-    expect(transport).toMatchObject({ kind: 'webhook', source: 'env' });
+  it('refuses a body that still names a channel, in words, and writes nothing', async () => {
+    for (const body of [{ kind: 'ntfy' }, { server: 'https://ntfy.sh' }, { target: 'https://hooks.slack.com/x', switches: { cap_warning: false } }]) {
+      const store = memoryNotifyStore();
+      await expect(saveNotificationSettings(store, body as never, 'janedoe')).resolves.toEqual({ ok: false, error: RETIRED_CHANNEL_REFUSAL });
+      expect(store.settings).toEqual({});
+    }
+  });
+
+  it('refuses a kind it does not know', async () => {
+    await expect(saveNotificationSettings(memoryNotifyStore(), { switches: { nope: true } as never }, 'janedoe')).resolves.toMatchObject({ ok: false });
+  });
+});
+
+describe('the retired channels’ settings', () => {
+  it('are no setting any more, so PATCH and a restore never write one', () => {
+    for (const key of RETIRED_SETTING_KEYS) expect(settings.isSettingKey(key), key).toBe(false);
+    expect(settings.isSettingKey('notifyKinds')).toBe(true);
+  });
+});
+
+describe('the retired channels’ targets', () => {
+  const secretStore = (refs: Record<string, string>) => ({
+    refs: { ...refs },
+    async list(prefix?: string) {
+      return Object.keys(this.refs).filter((ref) => !prefix || ref.startsWith(prefix));
+    },
+    async delete(ref: string) {
+      delete this.refs[ref];
+    },
+  });
+
+  it('are deleted at start, the install’s and each person’s, and nothing beside them; a second start deletes none', async () => {
+    const secrets = secretStore({
+      'notify-target': 'zzz-topic-zzz',
+      'notify-target:person:p1': 'https://hooks.slack.com/services/zzz1',
+      'notify-target:person:p2': 'zzz-p2-topic-zzz',
+      'push-vapid-key': 'zzz-vapid-zzz',
+    });
+    const recorded: { type: string; payload: Record<string, unknown> }[] = [];
+    const record = async (type: string, payload: Record<string, unknown>) => void recorded.push({ type, payload });
+
+    await expect(retireOldChannels(secrets, record)).resolves.toBe(3);
+    expect(Object.keys(secrets.refs)).toEqual(['push-vapid-key']);
+    expect(recorded).toEqual([{ type: 'notify.channels_retired', payload: { count: 3 } }]);
+    expect(JSON.stringify(recorded)).not.toContain('zzz');
+
+    await expect(retireOldChannels(secrets, record)).resolves.toBe(0);
+    expect(recorded).toHaveLength(1);
   });
 });
 
@@ -334,237 +250,17 @@ describe('a link about a piece of work opens its item', () => {
   });
 });
 
-/**
- * A channel per person (ADR 0035): an item routed to some people goes to each
- * one's own channel and not to the install's, which reaches everyone on it.
- * Each person's target is a credential, kept apart and shown masked.
- */
-describe('a person’s own channel', () => {
-  const ALICE_TOPIC = 'alice-own-topic-9z8y';
-  const withPeople = (people: Record<string, { kind: 'ntfy' | 'slack' | 'webhook'; target: string }>) =>
-    memoryNotifyStore({
-      settings: {
-        notifyTransport: JSON.stringify({ kind: 'slack', setAt: '2026-11-02T00:00:00.000Z', setBy: 'janedoe' }),
-        personNotify: JSON.stringify({
-          people: Object.fromEntries(
-            Object.entries(people).map(([id, one]) => [id, { kind: one.kind, setAt: '2026-11-03T00:00:00.000Z' }]),
-          ),
-        }),
-      },
-      target: SLACK,
-      personTargets: Object.fromEntries(Object.entries(people).map(([id, one]) => [id, one.target])),
-    });
-
-  it('sends a routed item to each of its people with a channel, once, and not to the install’s', async () => {
-    const fetchSpy = answering(200);
-    const store = withPeople({ 'p-a': { kind: 'ntfy', target: ALICE_TOPIC } });
-    const notifier = new Notifier(configWith(''), store);
-
-    await expect(notifier.send({ event: 'gate_opened', to: null, text: 'q', link: 'l', people: ['p-a', 'p-a', 'p-b'] })).resolves.toBe('sent');
-
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
-    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe('https://ntfy.sh/');
-    expect(JSON.parse(String(init.body))).toMatchObject({ topic: ALICE_TOPIC, message: 'q' });
-    const delivery = store.events.find((event) => event.type === 'notify.delivery');
-    expect(delivery?.payload).toMatchObject({ source: 'person', person: 'p-a', transport: 'ntfy', ok: true });
-    expect(store.events.find((event) => event.type === 'notify.gate_opened')?.payload).toMatchObject({ people: ['p-a', 'p-a', 'p-b'] });
-    expect(JSON.stringify(store.events)).not.toContain(ALICE_TOPIC);
-  });
-
-  it('sends nothing for a routed item whose people have no channel, and the install’s channel stays quiet', async () => {
-    const fetchSpy = answering(200);
-    const notifier = new Notifier(configWith(''), withPeople({}));
-    await expect(notifier.send({ event: 'gate_opened', to: null, text: 'q', link: 'l', people: ['p-b'] })).resolves.toBe('logged');
-    expect(fetchSpy).not.toHaveBeenCalled();
-  });
-
-  it('sends an item for everyone to the install’s channel, as it always did', async () => {
-    const fetchSpy = answering(200);
-    const notifier = new Notifier(configWith(''), withPeople({ 'p-a': { kind: 'ntfy', target: ALICE_TOPIC } }));
-    await notifier.send({ event: 'gate_opened', to: null, text: 'q', link: 'l' });
-    await notifier.send({ event: 'gate_opened', to: null, text: 'q', link: 'l', people: [] });
-    expect(fetchSpy.mock.calls.map(([url]) => url)).toEqual([SLACK, SLACK]);
-  });
-
-  it('keeps a switched-off kind off for a person’s channel too', async () => {
-    const fetchSpy = answering(200);
-    const store = withPeople({ 'p-a': { kind: 'ntfy', target: ALICE_TOPIC } });
-    store.settings.notifyKinds = JSON.stringify({ gate_opened: false });
-    await expect(new Notifier(configWith(''), store).send({ event: 'gate_opened', to: null, text: 'q', link: 'l', people: ['p-a'] })).resolves.toBe('off');
-    expect(fetchSpy).not.toHaveBeenCalled();
-  });
-
-  it('never counts a person’s delivery as the install channel’s', async () => {
-    answering(500);
-    const store = withPeople({ 'p-a': { kind: 'ntfy', target: ALICE_TOPIC } });
-    const notifier = new Notifier(configWith(''), store);
-    await notifier.send({ event: 'gate_opened', to: null, text: 'q', link: 'l', people: ['p-a'] });
-    const install = await notifier.transport();
-    expect(install && (await notifier.lastDelivery(install))).toBeNull();
-    expect((await personalNotificationView(notifier, 'p-a')).last).toMatchObject({ ok: false, status: 500 });
-  });
-
-  it('is saved with its kind in personNotify and its target only in the person’s secret, and shown masked', async () => {
-    const store = memoryNotifyStore();
-    const saved = await savePersonalNotification(store, 'p-a', { kind: 'ntfy', target: ALICE_TOPIC }, 'a@example.com', new Date('2026-11-10T00:00:00Z'));
-    expect(saved).toEqual({ ok: true, change: { kind: 'ntfy', targetChanged: true } });
-    expect(JSON.parse(store.settings.personNotify ?? '{}')).toEqual({ people: { 'p-a': { kind: 'ntfy', setAt: '2026-11-10T00:00:00.000Z' } } });
-    expect(store.settings.personNotify).not.toContain(ALICE_TOPIC);
-    expect(store.personSecrets['p-a']).toBe(ALICE_TOPIC);
-    expect(store.secret).toBeNull();
-    expect((await personalNotificationView(new Notifier(configWith(''), store), 'p-a')).target).toBe('…9z8y');
-
-    // Another person's save keeps the first one's entry.
-    await savePersonalNotification(store, 'p-b', { kind: 'slack', target: SLACK }, 'b@example.com');
-    expect(Object.keys(parsePersonNotify(store.settings.personNotify ?? null).people).sort()).toEqual(['p-a', 'p-b']);
-  });
-
-  it('refuses a save the install’s channel would refuse, in the same words', async () => {
-    const store = memoryNotifyStore();
-    await expect(savePersonalNotification(store, 'p-a', { kind: 'slack', target: 'https://example.com/x' }, 'a')).resolves.toMatchObject({ ok: false, error: expect.stringContaining('hooks.slack.com') });
-    await expect(savePersonalNotification(store, 'p-a', { kind: 'ntfy' }, 'a')).resolves.toEqual({ ok: false, error: 'Enter the ntfy topic' });
-    expect(store.settings.personNotify).toBeUndefined();
-  });
-
-  // Any signed-in person sets their own channel, and the bridge posts to it
-  // from inside the install: an address they chose could reach a metadata
-  // endpoint or a service beside the bridge.
-  it('refuses a webhook, a server of the person’s own, and a Slack URL that is not hooks.slack.com', async () => {
-    const store = memoryNotifyStore();
-    await expect(savePersonalNotification(store, 'p-a', { kind: 'webhook', target: 'http://169.254.169.254/latest' }, 'a')).resolves.toEqual({
-      ok: false,
-      error: PERSONAL_KIND_REFUSAL,
-    });
-    await expect(savePersonalNotification(store, 'p-a', { kind: 'ntfy', target: 'topic', server: 'http://10.0.0.5:8080' }, 'a')).resolves.toEqual({
-      ok: false,
-      error: PERSONAL_SERVER_REFUSAL,
-    });
-    for (const target of [
-      'http://hooks.slack.com/services/T/B/x',
-      'https://hooks.slack.com.evil.example/services/x',
-      'https://hooks.slack.com@169.254.169.254/x',
-      'https://user:pass@hooks.slack.com/services/x',
-      'https://hooks.slack.com:8443/services/x',
-      'https://evil.example/https://hooks.slack.com/',
-    ]) {
-      await expect(savePersonalNotification(store, 'p-a', { kind: 'slack', target }, 'a'), target).resolves.toMatchObject({ ok: false });
-    }
-    await expect(savePersonalNotification(store, 'p-a', { kind: 'ntfy', target: 'http://10.0.0.5/topic' }, 'a')).resolves.toMatchObject({ ok: false });
-    expect(store.settings.personNotify).toBeUndefined();
-    expect(store.personSecrets).toEqual({});
-  });
-
-  it('never posts to a channel a person may not set, however it was stored, and sends nothing to it on a test', async () => {
-    const fetchSpy = answering(200);
-    const store = withPeople({ 'p-a': { kind: 'webhook', target: 'http://169.254.169.254/latest' }, 'p-b': { kind: 'slack', target: 'https://evil.example/x' } });
-    const notifier = new Notifier(configWith(''), store);
-    await expect(notifier.send({ event: 'gate_opened', to: null, text: 'q', link: 'l', people: ['p-a', 'p-b'] })).resolves.toBe('logged');
-    await expect(notifier.testPerson('p-a')).resolves.toBeNull();
-    await expect(notifier.testPerson('p-b')).resolves.toBeNull();
-    expect(fetchSpy).not.toHaveBeenCalled();
-  });
-
-  it('sends a person’s ntfy topic to the install’s own ntfy server, and follows no redirect from a person’s channel', async () => {
-    const fetchSpy = answering(200);
-    const store = withPeople({ 'p-a': { kind: 'ntfy', target: ALICE_TOPIC } });
-    store.settings.notifyTransport = JSON.stringify({ kind: 'ntfy', server: 'https://ntfy.example.com', setAt: '2026-11-02T00:00:00.000Z', setBy: 'janedoe' });
-    await new Notifier(configWith(''), store).send({ event: 'gate_opened', to: null, text: 'q', link: 'l', people: ['p-a'] });
-    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe('https://ntfy.example.com/');
-    expect(init.redirect).toBe('error');
-  });
-
-  it('is stopped by the person, and forgotten when they are removed', async () => {
-    const store = memoryNotifyStore();
-    await savePersonalNotification(store, 'p-a', { kind: 'ntfy', target: ALICE_TOPIC }, 'a');
-    await savePersonalNotification(store, 'p-b', { kind: 'ntfy', target: 'bob-topic' }, 'b');
-    await expect(savePersonalNotification(store, 'p-a', { kind: null }, 'a')).resolves.toEqual({ ok: true, change: { kind: null, targetChanged: true } });
-    expect(store.personSecrets['p-a']).toBeUndefined();
-    await forgetPersonalNotification(store, 'p-b', 'admin@example.com');
-    expect(store.personSecrets['p-b']).toBeUndefined();
-    expect(store.settings.personNotify).toBeUndefined();
-  });
-
-  it('is read without entries for people who are gone, or of a kind it does not know', () => {
-    const raw = JSON.stringify({ people: { 'p-a': { kind: 'ntfy', setAt: 'x' }, 'p-gone': { kind: 'slack', setAt: 'x' }, 'p-odd': { kind: 'pager', setAt: 'x' } } });
-    expect(Object.keys(parsePersonNotify(raw, ['p-a', 'p-odd']).people)).toEqual(['p-a']);
-    expect(parsePersonNotify('not json').people).toEqual({});
-  });
-
-  it('is tested through the person’s own channel, and says when there is none', async () => {
-    const fetchSpy = answering(200);
-    const notifier = new Notifier(configWith(''), withPeople({ 'p-a': { kind: 'ntfy', target: ALICE_TOPIC } }));
-    await expect(notifier.testPerson('p-a')).resolves.toMatchObject({ ok: true });
-    expect(JSON.parse(String((fetchSpy.mock.calls[0] as [string, RequestInit])[1].body))).toMatchObject({ topic: ALICE_TOPIC });
-    await expect(notifier.testPerson('p-b')).resolves.toBeNull();
-  });
-});
-
-describe('each person’s devices, beside their channels (ADR 0048)', () => {
-  const browserKeys = () => {
-    const ecdh = createECDH('prime256v1');
-    ecdh.generateKeys();
-    return { p256dh: ecdh.getPublicKey().toString('base64url'), auth: randomBytes(16).toString('base64url') };
-  };
-  const withDevices = async (owners: string[], admins: string[]) => {
-    const push = memoryPushStore({ admins: admins.map((id) => ({ id, email: `${id}@example.com` })) });
-    for (const owner of owners) {
-      const added = await addDevice(push, owner, { subscription: { endpoint: `https://fcm.googleapis.com/fcm/send/${owner}-secret`, keys: browserKeys() }, name: owner });
-      expect(added.ok).toBe(true);
-    }
-    return push;
-  };
-  const pushedTo = (spy: ReturnType<typeof answering>) =>
-    spy.mock.calls
-      .map((call) => String(call[0]))
-      .filter((url) => url.startsWith('https://fcm.googleapis.com/'))
-      .map((url) => url.split('/').at(-1)!.replace(/-secret$/, ''))
-      .sort();
-
-  it('sends a routed item to its people’s devices and to no one else’s', async () => {
-    const spy = answering(201);
-    const push = await withDevices(['p-a', 'p-b', 'p-admin'], ['p-admin']);
-    const store = Object.assign(memoryNotifyStore(), { push });
-    await expect(new Notifier(configWith(''), store).send({ event: 'gate_opened', to: null, text: 'q', link: 'l', people: ['p-a'] })).resolves.toBe('sent');
-    expect(pushedTo(spy)).toEqual(['p-a']);
-    expect(push.log.filter((event) => event.type === 'notify.delivery').map((event) => event.payload)).toEqual([
-      expect.objectContaining({ transport: 'push', source: 'device', person: 'p-a', ok: true, status: 201 }),
-    ]);
-  });
-
-  it('sends what the install’s channel carries to every admin’s devices as well, and to no user’s', async () => {
-    const spy = answering(201);
-    const push = await withDevices(['p-a', 'p-admin', 'p-admin2'], ['p-admin', 'p-admin2']);
-    const store = Object.assign(memoryNotifyStore(), { push });
-    await expect(new Notifier(configWith('https://hooks.example.invalid/x'), store).send({ event: 'cap_warning', to: null, text: 'spend', link: 'l' })).resolves.toBe('sent');
-    expect(pushedTo(spy)).toEqual(['p-admin', 'p-admin2']);
-    expect(spy.mock.calls.map((call) => String(call[0]))).toContain('https://hooks.example.invalid/x');
-  });
-
-  it('counts a push that got through as sent when the install has no channel: a local install’s operator is its admin', async () => {
-    answering(201);
-    const push = await withDevices(['p-operator'], ['p-operator']);
-    const store = Object.assign(memoryNotifyStore(), { push });
-    await expect(new Notifier(configWith(''), store).send({ event: 'check_failing', to: null, text: 'x', link: 'l' })).resolves.toBe('sent');
-  });
-
-  it('keeps notifyKinds’ meaning: a kind switched off reaches no device', async () => {
-    const spy = answering(201);
+describe('whether an admin can be reached, as the health check reads it', () => {
+  it('counts the admins’ devices, and not a user’s', async () => {
     const push = await withDevices(['p-a', 'p-admin'], ['p-admin']);
-    const store = Object.assign(memoryNotifyStore({ settings: { notifyKinds: JSON.stringify({ gate_opened: false, cap_warning: false }) } }), { push });
-    const notifier = new Notifier(configWith(''), store);
-    await expect(notifier.send({ event: 'gate_opened', to: null, text: 'q', link: 'l', people: ['p-a'] })).resolves.toBe('off');
-    await expect(notifier.send({ event: 'cap_warning', to: null, text: 'q', link: 'l' })).resolves.toBe('off');
-    expect(spy).not.toHaveBeenCalled();
+    await expect(new Notifier(CONFIG, memoryNotifyStore({ push })).adminPush()).resolves.toEqual({ admins: 1, devices: 1, receiving: 1 });
   });
 
-  it('forgets a removed person’s devices with their channel', async () => {
-    const push = await withDevices(['p-a', 'p-b'], []);
-    const store = Object.assign(memoryNotifyStore(), { push });
-    await forgetPersonalNotification(store, 'p-a', 'admin@example.com');
-    expect(push.rows.map((row) => row.personId)).toEqual(['p-b']);
-    expect(Object.keys(push.secrets).filter((ref) => ref.startsWith('push-device:p-a:'))).toEqual([]);
-    expect(Object.keys(push.secrets).filter((ref) => ref.startsWith('push-device:p-b:'))).toHaveLength(1);
+  it('counts a device whose newest push failed as not receiving', async () => {
+    answering(500);
+    const push = await withDevices(['p-admin'], ['p-admin']);
+    const notifier = new Notifier(CONFIG, memoryNotifyStore({ push }));
+    await notifier.send({ event: 'cap_warning', to: null, text: 'x', link: 'l' });
+    await expect(notifier.adminPush()).resolves.toEqual({ admins: 1, devices: 1, receiving: 0 });
   });
 });

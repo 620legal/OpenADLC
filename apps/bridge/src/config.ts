@@ -47,8 +47,6 @@ export interface BridgeConfig {
    * nowhere to look.
    */
   testingUrl: string;
-  /** Where a notification is posted. Empty means the intent is logged instead. */
-  notifyWebhook: string;
   /** Where a notification's link points, so it opens the thread rather than the board. */
   consoleUrl: string;
   /**
@@ -132,13 +130,24 @@ export function loadBridgeConfig(): BridgeConfig {
     identityMode,
     iapAudience: envOr('OPENADLC_IAP_AUDIENCE', ''),
     testingUrl: envOr('OPENADLC_TESTING_URL', ''),
-    notifyWebhook: envOr('OPENADLC_NOTIFY_WEBHOOK', ''),
     // The port `openadlc up` gives the console, as the allowed origins read
     // it: a fixed 47300 sent every link of an install on another port to a
     // different install's console.
     consoleUrl: envOr('OPENADLC_CONSOLE_URL', `http://127.0.0.1:${envInt('OPENADLC_CONSOLE_PORT', DEFAULT_PORTS.console)}`),
     eventRetentionDays: eventRetentionDaysFrom(process.env.OPENADLC_EVENT_RETENTION_DAYS),
   };
+}
+
+export const RETIRED_WEBHOOK_WARNING =
+  'OPENADLC_NOTIFY_WEBHOOK is set and ignored: OpenADLC no longer posts notifications to a webhook. Remove it, and turn on notifications on a device in Settings → Notifications';
+
+/**
+ * What the bridge says once at start when the environment still names the
+ * retired webhook (ADR 0049), or null. Not a refusal: an install that set it
+ * before the upgrade must still start, and nothing it stored is lost.
+ */
+export function retiredEnvWarning(env: Record<string, string | undefined> = process.env): string | null {
+  return env.OPENADLC_NOTIFY_WEBHOOK?.trim() ? RETIRED_WEBHOOK_WARNING : null;
 }
 
 /**

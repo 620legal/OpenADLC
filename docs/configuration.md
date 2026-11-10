@@ -9,7 +9,7 @@ commands, [cli.md](cli.md).
 | Place | Holds | Written by |
 |---|---|---|
 | `$OPENADLC_HOME/install.json` | This machine's install: driver, database, ports, the App's client id, the humans, the webhook secret | `openadlc init`, `openadlc up` (the database password), or by hand. The console's walkthrough writes the settings table instead |
-| The `settings` table | What the console set: organization, client id, automation bot, operator email, public URL, install name, the engine update schedules and time zone, OpenADLC's own update (`selfUpdateSchedule`, and what the bridge records of it: `selfUpdateRun`, `selfUpdateLast`, `selfUpdateCandidate`), attribution mode, which repositories a person merges for (`bridgeMergeOff`, `ciMergeByPerson`), testing deploys, the CI minutes cap, pauses and holds, the console's name and logo (`consoleName`, `consoleLogo`), whether the bridge keeps its Mac awake (`keepAwake`), and the roles the install's people hold (`personRoles`), and where each person's own notifications go (`personNotify`). The closed list is `SETTING_KEYS` in `packages/db/src/store/settings.ts`. No credential: the webhook secret, the App's private key and its client secret, set through the console, go to the secret store | the console |
+| The `settings` table | What the console set: organization, client id, automation bot, operator email, public URL, install name, the engine update schedules and time zone, OpenADLC's own update (`selfUpdateSchedule`, and what the bridge records of it: `selfUpdateRun`, `selfUpdateLast`, `selfUpdateCandidate`), attribution mode, which repositories a person merges for (`bridgeMergeOff`, `ciMergeByPerson`), testing deploys, the CI minutes cap, pauses and holds, the console's name and logo (`consoleName`, `consoleLogo`), whether the bridge keeps its Mac awake (`keepAwake`), and the roles the install's people hold (`personRoles`). The closed list is `SETTING_KEYS` in `packages/db/src/store/settings.ts`. No credential: the webhook secret, the App's private key and its client secret, set through the console, go to the secret store | the console |
 | `config/*.yaml` | The crew, the repositories to seed, the caps, the review rules | you, in git |
 | Environment variables | Everything else, per service | you, or `openadlc up` |
 | `$OPENADLC_HOME/secrets/` | Refresh tokens, signing keys, model keys, the App's private key and client secret, the webhook secret, the internal secret | OpenADLC, never by hand |
@@ -692,28 +692,17 @@ OpenADLC's repository, where a maintainer writes them with
 
 ## Notifications
 
-The bridge tells a person when something needs them. **Settings →
-Notifications** (admins only) says where, which kinds, and proves it with
-**Send a test**.
+The bridge tells a person when something needs them, as push to the console
+app on the devices where they turned notifications on. It is OpenADLC's only
+notification channel: ntfy, Slack and the webhook are retired
+([ADR 0049](adr/0049-push-is-the-only-notification-channel.md)).
+`OPENADLC_NOTIFY_WEBHOOK` is ignored, with one warning in the bridge's log at
+each start until it is removed. **Settings → Notifications** is where everyone
+turns push on for their devices ([below](#notifications-on-your-devices)), and
+where an admin switches kinds off.
 
-**Where they go.** One of:
-
-| Kind | Target | What is posted |
-|---|---|---|
-| ntfy | a topic, and its server (`https://ntfy.sh` unless you give another): its address only, with no path, user or password | JSON to the server's root: `{ topic, title: "OpenADLC", message, click, tags: [event] }`. Subscribe to the topic in the ntfy app |
-| Slack | an incoming-webhook URL, `https://hooks.slack.com/…` | `{ text }`, with the link at its end; `&`, `<` and `>` in the text are escaped, so the console's is its only link |
-| Webhook | any `http(s)://` URL | `{ text, link, event }`, the body `OPENADLC_NOTIFY_WEBHOOK` always had |
-
-The target is a credential: a Slack or webhook URL lets anyone post as the
-install, and anyone who knows an ntfy topic can read it. It is kept only in
-the secret store (`notify-target`), and Settings shows it back as its host
-and last four characters. The `notifyTransport` setting holds the kind, the
-ntfy server and when it was set, never the target, and only `PUT
-/v1/settings/notifications` writes it. With nothing set there,
-`OPENADLC_NOTIFY_WEBHOOK` is used as the webhook.
-
-**What is sent.** Each kind has its own switch, on until a person turns it
-off (`notifyKinds`):
+**What is sent.** Each kind has its own switch, on until an admin turns it
+off (`notifyKinds`), for every device:
 
 | `event` | When |
 |---|---|
@@ -724,60 +713,36 @@ off (`notifyKinds`):
 | `promote_waiting` | a promote waits for its approval |
 | `check_failing`, `check_fixed` | a blocking health check has failed for five minutes, and again a day later; and its all-clear. One switch for both |
 
-Settings' test is `event: "test"`. A receiver that switches on `event` should
-ignore a value it does not know. `merge_waiting` and `review_stalled` are read
-from Needs you every minute, once per item and the time it started waiting:
-the same pull request waiting again later is sent again, and nothing that
-waited before the bridge's first look after an upgrade is sent, whether or not
-that look could read it. The look runs when the bridge starts. A kind that is off is not
-sent, and is still recorded as `notify.<event>` with `off: true`.
+`merge_waiting` and `review_stalled` are read from Needs you every minute,
+once per item and the time it started waiting: the same pull request waiting
+again later is sent again, and nothing that waited before the bridge's first
+look after an upgrade is sent, whether or not that look could read it. The
+look runs when the bridge starts. A kind that is off is not sent, and is still
+recorded as `notify.<event>` with `off: true`.
 
-**Whether they arrive.** Every send, real or a test, is recorded as a
-`notify.delivery` event: the kind, whether the endpoint answered 2xx, its
-status or error (with the target taken out). The `notifications` health check
-reads the newest one since the transport was set or changed and sends
-nothing itself. It is a warning card, with a button to Settings →
-Notifications, while that send failed or none has got through yet, and
-clears when one does. With nothing set it passes; with only
-`OPENADLC_NOTIFY_WEBHOOK` and nothing sent yet it has no answer.
+**Who it goes to.** A [Needs-you item routed](#needs-you-routing) to some
+people is pushed to their devices. Everything else (an item that fell back,
+`cap_warning`, `promote_waiting`, `check_failing` and `check_fixed`) goes to
+every admin's devices; on a local install, the operator's. Someone with no
+device gets nothing from the bridge; they still have the console's badge and
+desktop alert, and GitHub's own notification of a comment's mention.
 
-**Your channel.** On a cloud install, everyone signed in to the console can
-set a channel of their own in **Settings → Notifications → Your channel**: an
-ntfy topic or a Slack incoming webhook. There is no webhook and no server of
-your own: anyone signed in sets this, and the bridge posts to it from inside
-the install, so an address a person typed could reach a metadata endpoint or a
-service beside the bridge. A topic is sent to the install's own ntfy server
-(the one its channel uses when that is ntfy, `https://ntfy.sh` otherwise), and
-a Slack URL must be `https://hooks.slack.com/…`, with no user, password or
-port. Save and Send a test refuse anything else, a send skips a stored channel
-that does not pass, and a person's channel follows no redirect. A [Needs-you item routed](#needs-you-routing) to some people is
-sent to each of their own channels, and **not** to the install's. The
-install's channel is an admin's: it carries what is for everyone (an item that
-fell back, `cap_warning`, `promote_waiting`, `check_failing` and
-`check_fixed`).
+**The API.** `GET /v1/settings/notifications` answers `{switches}`, and
+`PUT /v1/settings/notifications` takes `{switches}` and audits
+`settings.notifications_changed` with them. A body that still carries `kind`,
+`server` or `target` is refused with what to do instead, and so is
+`notifyTransport` or `personNotify` through `PATCH /v1/install`.
+`POST /v1/settings/notifications/test` and each person's old
+`/v1/me/notifications` routes answer 410, `{code: "retired"}`, with the same
+words.
 
-- Someone with no channel of their own gets nothing from the bridge for an
-  item routed to them. They still have the console's badge and desktop alert,
-  and GitHub's own notification of the comment's mention.
-- The install's switches (`notifyKinds`) apply to both. There are no
-  per-person switches.
-- The target is kept only in the secret store, as
-  `notify-target:person:<person id>`, and shown back masked. The
-  `personNotify` setting holds each person's kind and when it was set:
-  `{"people": {"<person id>": {"kind": "ntfy", "setAt": "…"}}}`.
-  Only `PUT /v1/me/notifications` writes it, and `PATCH /v1/install` refuses it.
-- Each delivery is recorded as `notify.delivery` with `source: "person"` and
-  the person's id. The `notifications` health check counts only the install's
-  deliveries, so one person's broken topic never raises a card; they see their
-  own last delivery, and **Send a test**.
-- Removing a person, or merging them into someone else, deletes their channel
-  and its secret. Backup and restore carry both with the install.
-- The API, for any signed-in person, acting only on their own channel:
-  `GET /v1/me/notifications`, `PUT /v1/me/notifications` (`{kind, target?}`,
-  `kind` `ntfy` or `slack`; `kind: null` stops it) and `POST /v1/me/notifications/test`. Each
-  save is audited as `notify.personal_configured` with `{person, kind,
-  targetChanged}`, never the target. A local install refuses them: its one
-  person's channel is the install's.
+**Whether they arrive.** Every push, real or a test, is recorded as a
+`notify.delivery` event with the device's id. The `notifications` health check
+reads the admins' devices and sends nothing itself. It is a warning card, "No
+admin has a device that receives push", with a button to Settings →
+Notifications, while no admin has a device, or while the newest push to every
+admin's device failed. A device just added counts until a push to it fails, so
+the card clears within seconds of an admin turning notifications on.
 
 ### Notifications on your devices
 
@@ -807,14 +772,13 @@ have up to ten devices.
 
 **What arrives.**
 
-- Items routed to you, as on Your channel.
-- For an admin, also what the install's channel carries: an item that fell
-  back, `cap_warning`, `promote_waiting`, `check_failing` and `check_fixed`.
-  On a local install, the operator is the admin.
-- The install's switches (`notifyKinds`) apply to push as to every channel.
+- Items routed to you.
+- For an admin, also what is for everyone: an item that fell back,
+  `cap_warning`, `promote_waiting`, `check_failing` and `check_fixed`. On a
+  local install, the operator is the admin.
+- The install's switches (`notifyKinds`) apply to every device.
 
-A push does not replace a channel. Each person's channel and the install's
-keep working beside it. Tapping a notification opens the console on the item.
+Tapping a notification opens the console on the item.
 A device whose console tab is open and in front shows nothing for a push,
 because the page already says it.
 
@@ -866,9 +830,12 @@ Adds and removals are audited as `notify.device_added` and
 `notify.delivery` with `transport: "push"`, `source: "device"` and the
 device's id. A dropped device is `notify.device_dropped`.
 
-**Upgrading a cloud install.** Once people hold roles, the items routed to
-them stop going to the install's channel. Until each of them sets their own,
-the bridge sends them nothing for those items. A local install is unchanged.
+**Upgrading.** The release that retired ntfy, Slack and the webhook deletes
+their settings (`notifyTransport`, `personNotify`) by migration, and their
+targets (`notify-target`, `notify-target:person:<person id>`) from the secret
+store at the bridge's first start, and at every start after it until none is
+left. A backup made before it still restores, without them. Until an admin
+turns on notifications on a device, the `notifications` card says so.
 
 ## Needs-you routing
 
@@ -917,7 +884,7 @@ A routed card says "For Legal", "For approvers", "For admins" or "For you".
   and those for everyone.
 - **A local install** has one console identity, so nothing is routed: every
   item is that person's, its card says nothing of whom it is for, and
-  notifications go to the install's channel as before.
+  notifications go to the operator's devices.
 - **When People or the roles cannot be read**, nothing widens to everyone.
   The bridge uses the last read that worked; with none since it started,
   every item is for the admins, by the console role they signed in with, and
@@ -1087,7 +1054,7 @@ nothing sets a variable.
 | `OPENADLC_CONSOLE_URL` | `http://127.0.0.1:` and the console's port | Links in notifications and gates, and the browser origin allowed. Set it when people open the console at another address | |
 | `OPENADLC_CONSOLE_PORT` | 47300 | The port of the links and the allowed origin when `OPENADLC_CONSOLE_URL` is unset | ✔ |
 | `OPENADLC_TESTING_URL` | empty | Deprecated: the testing environment QA checks, for a repository whose `.github/openadlc.yml` and settings name none; empty and QA refuses | |
-| `OPENADLC_NOTIFY_WEBHOOK` | empty | The generic webhook notifications are posted to as `{ text, link, event }` when nothing is set in **Settings → Notifications**, which takes precedence; empty with nothing set there logs them. `event` is one of those [Notifications](#notifications) lists | |
+| `OPENADLC_NOTIFY_WEBHOOK` | — | Retired: ignored, with one warning at each start. Notifications are push to the console app ([Notifications](#notifications)) | |
 | `OPENADLC_STATUS_ISSUE` | unset | The issue the status job keeps up to date and reconcile reports drift on, as `<owner>/<name>#<number>`, in a repository the install manages. A bare number, another form, or a repository the install does not manage writes nothing, and the job's output line says what to set. The issue may be public, so its body publishes only the board counts, the month's spend and cap, the open gates and active leases, and each bot's name, role, engine and authorization with its work in that repository; a bot working elsewhere reads "working in another repository". It leaves out other repositories' subjects and host names. Reconcile's comments follow the same rule: that repository's drift, and only a count of the rest. The console's status view still shows everything | |
 | `OPENADLC_JOB_<JOB>_MINUTES` | per job | A scheduled job's interval; 0 turns it off. Any length works, a month or more included; the clock starts again when the bridge restarts. RECONCILE 15, STATUS 15, BUDGET 30, STAGES 60, MERGE 10, QA 1440, CREDENTIALS 720, DEPS 10080, DEPLOY 30, ENGINES 5, RELEASES 5 (OpenADLC's own update; [self-hosting](self-hosting.md#updating-openadlc)), ATTACHMENTS 60, EVENTS 1440 | |
 | `OPENADLC_EVENT_RETENTION_DAYS` | 30 | How many days a processed GitHub delivery is kept in the `events` table; the daily `events` job removes older ones, keeping the newest. 0 keeps them for good. A value that is not a whole number of days stops the bridge at start. A delivery for a repository the install does not manage keeps only its type, delivery id and repository name | |

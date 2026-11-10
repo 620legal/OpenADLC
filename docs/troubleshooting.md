@@ -49,7 +49,7 @@ that says it was done. It runs when the bridge starts, on its own interval, and
 soon after something it is about happens. A failing check is a card in the
 board's **Needs you** row with the thing to do and a button to where it is done,
 and it clears itself when the check passes. A blocking failure that lasts five
-minutes is also sent to `OPENADLC_NOTIFY_WEBHOOK` (or the bridge's log without one),
+minutes is also pushed to every admin's devices (or the bridge's log without one),
 and again a day later. A check that cannot get an answer neither raises a card
 nor clears one.
 
@@ -103,7 +103,7 @@ role alone before it has one (`botInWords`, `packages/shared/src/bot-words.ts`).
 | `repo-rules` | 60 min | Nothing the crew builds can land in `<repo>` | Apply the rules on the walkthrough's last step, or `openadlc github apply` |
 | `repo-config` | 30 min, and when a pull request merged into a default branch changes one of the files it reads | `<owner/repo>`’s AGENTS.md doesn’t say who approves its human-review paths yet — line N still has the template’s `@owner` · `<login>` is named as a reviewer in `<repo>`’s AGENTS.md, but there is no such GitHub account · … but `<login>` is an organization, not a person · … but cannot review: `<login>` is not a collaborator on `<repo>` (or has triage or read there) · `<login>` is one of this install’s people (OPENADLC_HUMANS), but there is no such GitHub account (a warning) | [A named reviewer does not exist or cannot review](#a-named-reviewer-does-not-exist-or-cannot-review) |
 | `repo-owner` | 15 min | Nothing builds in `<repo>`: no bot owns it | Set its `owner` in config/repos.yaml to a seat (`builder`) and run `openadlc seed`; a repository not listed there gets the builder when it is added again in Settings → Repositories |
-| `notifications` | 5 min, and when Settings → Notifications is saved or tested | Notifications are set up but have not been proved · The last notification did not reach ntfy (Slack, your webhook), with its status or error (a warning) | **Open Settings → Notifications**, check the topic or URL and press **Send a test**; it clears when a send gets through. It never sends anything itself. See [configuration](configuration.md#notifications) |
+| `notifications` | 5 min, and when a device is added or removed | No admin has a device that receives push: none has turned notifications on, or the newest push to each admin's device failed (a warning) | **Open Settings → Notifications** on a device an admin uses, install the console as an app (on a phone, Share → Add to Home Screen; on a computer, the browser's Install button) and press **Turn on notifications on this device**, or **Send a test** beside a device that failed. It clears within seconds of a device that takes push. It never sends anything itself. See [configuration](configuration.md#notifications) |
 | `push-egress` | 60 min | The bridge cannot reach `<host>`: push notifications through it are not delivered (a warning) | Allow the host on the network the bridge leaves through: `fcm.googleapis.com` (Chrome, Edge, Android), `updates.push.services.mozilla.com` (Firefox), `web.push.apple.com` (Safari, iPhone, iPad), or the `*.notify.windows.com` host a device uses. Any HTTP answer counts, so it clears as soon as the host answers at all. See [Push notifications do not arrive](#push-notifications-do-not-arrive) |
 | `deploy-dispatch` | 5 min | `<repo>`: `<workflow>` of `<sha>` has not been dispatched (a warning for a promote, blocking for a rollback) | Fix what GitHub said, shown on the card; the deploy sweep dispatches it again, or run the workflow from the repository's Actions. See [A merge did not deploy](#a-merge-did-not-deploy-or-production-did-not-wait) |
 | `testing-egress` | 15 min, and when Settings → Egress is saved | QA cannot reach `<repo>`’s testing environment: the egress proxy refuses `<host>` (a warning) | **Allow `<host>` in Settings**, which opens Settings → Egress with the host in the field, for an admin to allow; or add it to `extra_allowed_domains` and run `openadlc cloud apply`, which resets the host. Allow the host itself, not a domain above it ([self-hosting](self-hosting.md#what-the-hosts-tasks-may-reach)). Only on a cloud install, whose tasks leave through the egress proxy |
@@ -656,9 +656,8 @@ devices**, on the device that should get them.
   notifications on again on each device. No status at all says the bridge
   could not reach the push service. The `push-egress` card names the host.
 - **A test arrives, but nothing else does.** Push carries only what the
-  bridge would tell you: items routed to you and, for an admin, what the
-  install's channel carries. Check the switches under Settings →
-  Notifications, which apply to push too. A device whose console tab is open
+  bridge would tell you: items routed to you and, for an admin, what is for
+  everyone. Check the switches under Settings → Notifications. A device whose console tab is open
   and in front shows nothing, because the page shows it there.
 
 ## A named reviewer does not exist or cannot review

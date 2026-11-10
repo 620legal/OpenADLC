@@ -90,8 +90,8 @@ export interface HealthWiring {
   delivery?: Pick<DeliveryKnowledge, 'get'>;
   /** Whether this host can be held awake, which the sleep card's button follows; absent, it cannot. */
   keepAwake?: Pick<KeepAwake, 'state'>;
-  /** Where notifications go and what was last sent there; absent, read the same way from the store. */
-  notifier?: Pick<Notifier, 'transport' | 'lastDelivery'>;
+  /** Whether an admin has a device that receives push; absent, read the same way from the store. */
+  notifier?: Pick<Notifier, 'adminPush'>;
 }
 
 /** The public half of each stored key, by the private half's digest: ssh-keygen is not run every quarter hour. */

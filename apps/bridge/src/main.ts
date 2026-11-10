@@ -22,7 +22,7 @@ import { defaultBackupDeps, registerBackupRoutes } from './backup.js';
 import { sweepExpiredUndo } from './restore-into.js';
 import { Automation } from './automation.js';
 import { BotNames } from './bot-names.js';
-import { loadBridgeConfig } from './config.js';
+import { loadBridgeConfig, retiredEnvWarning } from './config.js';
 import { Context } from './context.js';
 import { DispatchGate } from './dispatch-gate.js';
 import { Gates, subjectClosed } from './gates.js';
@@ -30,7 +30,7 @@ import { readAudienceFacts } from './needs-you-audience.js';
 import { standingCoverFor } from './plan-changes.js';
 import { humanReviewReader } from './human-review-read.js';
 import { readDefaultBranch, syncDefaultBranches } from './default-branch.js';
-import { Notifier } from './notify.js';
+import { Notifier, retireOldChannels } from './notify.js';
 import { identityFromConfig } from './identity.js';
 import { HostdClient } from './hostd-client.js';
 import { NO_CLIENT_ID, registerInternalApi } from './internal-api.js';
@@ -85,9 +85,13 @@ import { consolePeopleBy } from './thread-messages.js';
 import { liveEgressDeps, registerEgressRoutes } from './egress-routes.js';
 import { livePeopleRolesDeps, registerPeopleRolesRoutes } from './people-roles-routes.js';
 import { TESTING_EGRESS_CHECK } from './health/checks/testing-egress.js';
+import { NOTIFICATIONS_CHECK } from './health/checks/notifications.js';
 
 async function main(): Promise<void> {
   const config = loadBridgeConfig();
+  // The webhook is retired (ADR 0049): said once, and the bridge starts.
+  const retiredEnv = retiredEnvWarning();
+  if (retiredEnv) console.warn(`[bridge] ${retiredEnv}`);
   await waitForDatabase();
   await costs.ensureBudget(costs.currentPeriod(), config.costs.monthlyCapUsd, config.costs.warningAt);
 
@@ -160,6 +164,14 @@ async function main(): Promise<void> {
       })
       .catch((error: unknown) => console.warn(`[bridge] could not sweep push subscriptions: ${error instanceof Error ? error.message : String(error)}`));
   }
+  // ntfy, Slack and the webhook are retired (ADR 0049), and a migration
+  // cannot reach the secret store: their targets go here, at every start. A
+  // store that refuses leaves them unread, and the next start tries again.
+  void retireOldChannels(getSecretStore(), (type, payload) => recordEvent({ source: 'platform', type, payload }).then(() => undefined))
+    .then((retired) => {
+      if (retired > 0) console.log(`[bridge] deleted ${retired} retired ntfy, Slack or webhook target(s) from the secret store`);
+    })
+    .catch((error: unknown) => console.warn(`[bridge] could not delete the retired notification targets: ${error instanceof Error ? error.message : String(error)}`));
   const gates = new Gates(actors, notifier, config.consoleUrl, config.costs.perTaskCapUsd, config.costs);
   // A standing approval on an issue settles its builder's later plan changes,
   // never one with a path under Human review on the base branch (#77); the
@@ -917,7 +929,8 @@ async function main(): Promise<void> {
     audit: auditEntry,
   });
   registerPeopleRoutes(router, livePeopleDeps(config, roles, consoleMembers));
-  registerMyNotificationsRoutes(router, liveMyNotificationsDeps(config.identityMode, notifier));
+  // A device added or removed may be what the `notifications` card waits on.
+  registerMyNotificationsRoutes(router, liveMyNotificationsDeps(config.identityMode, notifier, () => health.runSoon([NOTIFICATIONS_CHECK])));
   consolePeopleBy(config.identityMode);
   // Settings → Egress, put on the cloud host's proxy by hostd; the check
   // that says a testing URL is off the list asks again after each save.
