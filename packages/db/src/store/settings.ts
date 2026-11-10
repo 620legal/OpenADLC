@@ -137,6 +137,12 @@ export const SETTING_KEYS = [
   // /v1/people-roles and the prune when `humans` is saved write it. See the
   // bridge's `people-roles-routes.ts`.
   'personRoles',
+  // Each person's own notification channel, as JSON `{people: {[personId]:
+  // {kind, server?, setAt}}}`. The target (a URL, or the ntfy topic) is a
+  // credential and is never here: it is in the secret store as
+  // `notify-target:person:<id>`. Only /v1/me/notifications and removing a
+  // person write it. See the bridge's `notify.ts`.
+  'personNotify',
 ] as const;
 
 export type SettingKey = (typeof SETTING_KEYS)[number];

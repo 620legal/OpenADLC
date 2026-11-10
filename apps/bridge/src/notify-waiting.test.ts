@@ -57,6 +57,36 @@ describe('the merge-waiting and review-stopped notifications', () => {
     expect(send).not.toHaveBeenCalled();
   });
 
+  it('sends a routed merge to its people, once, and one for everyone without them', async () => {
+    const { send, notices, ready, set } = setUp([]);
+    await ready;
+    const routed = { ...MERGE, since: '2026-11-03T10:00:00.000Z', audience: { for: 'person' as const, name: 'Alice', people: ['p-a'] } };
+    const everyone = { ...STALL, since: '2026-11-03T10:00:00.000Z', audience: { for: 'everyone' as const, name: 'everyone', people: [], why: 'no one holds Engineering yet' } };
+    set([routed, everyone]);
+    await notices.pass();
+    await notices.pass();
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({ event: 'merge_waiting', people: ['p-a'] }));
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({ event: 'review_stalled' }));
+    expect((send.mock.calls.find(([sent]) => sent.event === 'review_stalled')?.[0] as { people?: unknown }).people).toBeUndefined();
+  });
+
+  it('sends nothing routed from a look whose people could not be read, and sends it once a later look reads them', async () => {
+    const { send, notices, ready, set } = setUp([]);
+    await ready;
+    const since = '2026-11-03T10:00:00.000Z';
+    set([{ ...MERGE, since, audience: { for: 'person', name: 'Alice', people: ['p-a'], unread: true } }]);
+    await notices.pass();
+    set([{ ...MERGE, since, audience: { for: 'admins', name: 'admins', people: [], unread: true } }]);
+    await notices.pass();
+    expect(send).not.toHaveBeenCalled();
+
+    set([{ ...MERGE, since, audience: { for: 'person', name: 'Alice', people: ['p-a'] } }]);
+    await notices.pass();
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({ event: 'merge_waiting', people: ['p-a'] }));
+  });
+
   it('sends a new waiting merge once, however many looks see it', async () => {
     const { send, notices, ready, set } = setUp([]);
     await ready;

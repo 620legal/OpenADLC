@@ -539,6 +539,9 @@ async function main(): Promise<void> {
             ...(asking.decision ? { decision: asking.decision } : {}),
             ...(asking.consequences.length > 0 ? { consequences: asking.consequences } : {}),
             ...(asking.addressedTo ? { addressedTo: asking.addressedTo } : {}),
+            // The person role it is for, by name: Needs you shows it only to
+            // that role's people. Dropped here, every question went to everyone.
+            ...(asking.role ? { role: asking.role } : {}),
             ...(asking.planChange ? { planChange: asking.planChange } : {}),
           });
           asked = true;

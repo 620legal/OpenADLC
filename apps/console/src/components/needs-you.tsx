@@ -35,7 +35,7 @@ import { Markdown } from '@/components/markdown';
 import { RepoBadge } from '@/components/repo-badge';
 import { Dialog, DialogClose, DialogTitle, SheetContent } from '@/components/ui/dialog';
 import { safeAction } from '@/lib/safe-action';
-import { CHOICES_ON_CARD, alarming, faceActions, groupCounts, groupOf, hasMore, plainDetail, stripItems, unblockedOf, waiting as waitingOf } from '@/lib/attention-card';
+import { CHOICES_ON_CARD, alarming, audienceLine, faceActions, groupCounts, groupOf, hasMore, plainDetail, stripItems, unblockedOf, waiting as waitingOf } from '@/lib/attention-card';
 import { IncidentSteps } from '@/components/incident-steps';
 import { PullActions } from '@/components/pull-panel';
 import { standsOut } from '@/lib/thread';
@@ -478,6 +478,13 @@ function NeedsCard({
         {somethingElse.label}
       </button>
     ) : null;
+  // Whom it is for, on a cloud install: "For Legal", or "For everyone: no one holds Legal yet".
+  const audience = audienceLine(item);
+  const audienceNote = audience && (
+    <p data-audience className="text-[11.5px] text-dim">
+      {audience}
+    </p>
+  );
   const subjectLine = (number || subject.title) && (
     <p className="truncate text-[12.5px] text-soft">
       {number && <span className="text-dim">{number} </span>}
@@ -514,6 +521,7 @@ function NeedsCard({
           {(showRepo || elsewhere) && subject.repo && <RepoBadge name={subject.repo} className="self-center" />}
           <span className="ml-auto shrink-0 text-[11.5px] text-dim">{ago(item.since, now)}</span>
         </div>
+        {audienceNote}
         {subjectLine}
         {item.context && (
           // What the question is about — intake's draft, before "Here's what I'll
@@ -637,6 +645,7 @@ function NeedsCard({
               {subject.repo && <RepoBadge name={subject.repo} />}
               <span>{ago(item.since, now)}</span>
             </div>
+            {audienceNote}
             {subjectLine}
             {item.context && (
               <div className="max-h-[50vh] overflow-auto rounded-md border border-edge px-3 py-2.5 text-[12.5px] leading-normal text-body">

@@ -124,6 +124,7 @@ const SETTING_LABELS: Record<string, string> = {
   notifyTransport: 'Where notifications go',
   notifyKinds: 'Which notifications are switched off',
   personRoles: 'The roles the install’s people hold',
+  personNotify: 'Where each person’s notifications go',
 };
 
 /** Labelled, but a JSON value nobody reads by eye, so only said to differ. */
@@ -142,6 +143,7 @@ const STRUCTURED_SETTINGS = new Set([
   'notifyTransport',
   'notifyKinds',
   'personRoles',
+  'personNotify',
 ]);
 
 /** The App's parts, which are taken or kept together: one app's client id with another's key is neither. */

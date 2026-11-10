@@ -26,6 +26,9 @@ import {
   FileSecretStore,
   internalSecretRef,
   modelAccountRef,
+  notifyTargetRef,
+  PERSON_NOTIFY_TARGET_PREFIX,
+  personNotifyTargetRef,
   webhookSecretRef,
 } from './secrets.js';
 
@@ -80,6 +83,21 @@ describe('the console secret', () => {
     expect(consoleSecretRef()).not.toBe(internalSecretRef());
     await ensureConsoleSecret(store);
     expect(await store.list()).toEqual(['console-api-secret']);
+  });
+});
+
+describe('a person’s own notification target', () => {
+  it('is kept per person, apart from the install’s, under a ref the store accepts', async () => {
+    const ref = personNotifyTargetRef('6f1c2d3e-0000-4000-8000-000000000001');
+    expect(ref).toBe('notify-target:person:6f1c2d3e-0000-4000-8000-000000000001');
+    expect(ref.startsWith(PERSON_NOTIFY_TARGET_PREFIX)).toBe(true);
+    expect(ref).not.toBe(notifyTargetRef());
+
+    const root = mkdtempSync(join(tmpdir(), 'openadlc-secrets-'));
+    const store = new FileSecretStore(root);
+    await store.set(ref, 'https://ntfy.sh/alice-topic');
+    expect(await store.get(ref)).toBe('https://ntfy.sh/alice-topic');
+    rmSync(root, { recursive: true, force: true });
   });
 });
 
