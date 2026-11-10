@@ -384,7 +384,7 @@ describe('the front of the line, green and up to date', () => {
 
     expect(await merge.advance('openadlc')).toMatchObject({ state: 'updating' });
 
-    expect(updating).toHaveBeenCalledWith({ repoName: 'openadlc', repoFullName: 'janedoe/openadlc', prNumber: 31, issue: 11, baseRef: 'main', headSha: HEAD });
+    expect(updating).toHaveBeenCalledWith({ repoName: 'openadlc', repoFullName: 'janedoe/openadlc', prNumber: 31, issue: 11, baseRef: 'main', headSha: HEAD, carry: true });
     expect(order).toEqual(['noted', 'merged']);
     expect(github.mergeIntoBranch).toHaveBeenCalledWith('janedoe/openadlc', 'agent/openadlc-atlas-janedoe/11-issue-11', 'main');
     expect(github.updateBranch).not.toHaveBeenCalled();
@@ -430,6 +430,130 @@ describe('the front of the line, green and up to date', () => {
     expect(github.updateBranch).toHaveBeenCalledWith('janedoe/openadlc', 31, HEAD);
     expect(github.mergeIntoBranch).not.toHaveBeenCalled();
     expect(made).not.toHaveBeenCalled();
+  });
+
+  describe('a stacked pull request brought up to date once what it was built on merged (`updateStacked`)', () => {
+    /** A branch one commit behind its base until a merge lands on it. */
+    function stackedLine(options: { updating?: () => Promise<boolean>; pull?: Record<string, unknown> } = {}) {
+      const built = line(options.pull ? { pull: options.pull } : {});
+      let mergedIn = false;
+      built.github.behindBy.mockImplementation(async () => (mergedIn ? 0 : 1));
+      built.github.mergeIntoBranch.mockImplementation(async () => {
+        mergedIn = true;
+        return { merged: true, conflict: false, sha: MADE, parents: [HEAD, 'main0000'], message: 'merged' };
+      });
+      const stacks = { waitingOn: vi.fn(async () => null), updating: vi.fn(options.updating ?? (async () => true)), made: vi.fn(async () => undefined) };
+      built.line.useStacking(stacks);
+      const start = vi.fn(async () => 'resolving' as const);
+      built.line.useConflictRounds({ start, unstarted: vi.fn(async () => null) });
+      const backToBuild = vi.fn(async () => undefined);
+      built.line.useSendBack(backToBuild);
+      return { ...built, stacks, start, backToBuild };
+    }
+    const quiet = () => vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    it('merges the base in, noting whether its approvals stand, and records the commit it made', async () => {
+      quiet();
+      const { line: merge, github, stacks } = stackedLine();
+
+      expect(await merge.updateStacked({ repoName: 'openadlc', prNumber: 31, carry: true, why: '#30 merged' })).toBe('updated');
+
+      expect(stacks.updating).toHaveBeenCalledWith(expect.objectContaining({ prNumber: 31, issue: 11, headSha: HEAD, carry: true }));
+      expect(github.mergeIntoBranch).toHaveBeenCalledWith('janedoe/openadlc', 'agent/openadlc-atlas-janedoe/11-issue-11', 'main');
+      expect(github.updateBranch).not.toHaveBeenCalled();
+      expect(stacks.made).toHaveBeenCalledWith({ repoName: 'openadlc', prNumber: 31, from: HEAD, to: MADE });
+      // Known for the line's push, not the builder's (#118).
+      expect(store.events).toEqual([{ source: 'platform', type: 'merge_line.branch_updated', payload: { subjectRef: 'openadlc#31', from: HEAD, to: MADE } }]);
+    });
+
+    it('notes an update before a first round as carrying no approvals', async () => {
+      quiet();
+      const { line: merge, stacks } = stackedLine();
+
+      await merge.updateStacked({ repoName: 'openadlc', prNumber: 31, carry: false, why: 'opened after #30 merged' });
+
+      expect(stacks.updating).toHaveBeenCalledWith(expect.objectContaining({ carry: false }));
+    });
+
+    it('opens the resolution round on a conflict, and starts no build otherwise', async () => {
+      quiet();
+      const { line: merge, github, start, backToBuild, stacks } = stackedLine();
+      github.mergeIntoBranch.mockResolvedValue({ merged: false, conflict: true, sha: null, parents: [], message: 'Merge conflict' });
+
+      expect(await merge.updateStacked({ repoName: 'openadlc', prNumber: 31, carry: true, why: '#30 merged' })).toBe('conflict');
+
+      expect(start).toHaveBeenCalledTimes(1);
+      expect(start).toHaveBeenCalledWith({ repoName: 'openadlc', prNumber: 31, baseRef: 'main' });
+      expect(backToBuild).not.toHaveBeenCalled();
+      expect(stacks.made).toHaveBeenCalledWith({ repoName: 'openadlc', prNumber: 31, from: HEAD, to: null });
+
+      const clean = stackedLine();
+      await clean.line.updateStacked({ repoName: 'openadlc', prNumber: 31, carry: true, why: '#30 merged' });
+      expect(clean.start).not.toHaveBeenCalled();
+      expect(clean.backToBuild).not.toHaveBeenCalled();
+    });
+
+    it('merges nothing into a branch already up to date', async () => {
+      const { line: merge, github, stacks } = stackedLine();
+      github.behindBy.mockResolvedValue(0);
+
+      expect(await merge.updateStacked({ repoName: 'openadlc', prNumber: 31, carry: true, why: '#30 merged' })).toBe('current');
+
+      expect(stacks.updating).not.toHaveBeenCalled();
+      expect(github.mergeIntoBranch).not.toHaveBeenCalled();
+      expect(github.updateBranch).not.toHaveBeenCalled();
+    });
+
+    it('leaves alone one that is not stacked, and says it cannot tell when the stack cannot be read', async () => {
+      quiet();
+      const plain = stackedLine({ updating: async () => false });
+      expect(await plain.line.updateStacked({ repoName: 'openadlc', prNumber: 31, carry: true, why: '#30 merged' })).toBe('not_stacked');
+      expect(plain.github.mergeIntoBranch).not.toHaveBeenCalled();
+      expect(plain.github.updateBranch).not.toHaveBeenCalled();
+
+      const unread = stackedLine({
+        updating: async () => {
+          throw new Error('the database went away');
+        },
+      });
+      expect(await unread.line.updateStacked({ repoName: 'openadlc', prNumber: 31, carry: true, why: '#30 merged' })).toBe('unreadable');
+      expect(unread.github.mergeIntoBranch).not.toHaveBeenCalled();
+      expect(unread.github.updateBranch).not.toHaveBeenCalled();
+    });
+
+    it('leaves alone one from a fork, onto another branch, or closed', async () => {
+      for (const pull of [{ headRepoFullName: 'someone/openadlc' }, { baseRef: 'release/1.x' }, { state: 'closed' }]) {
+        const { line: merge, github, stacks } = stackedLine({ pull });
+        expect(await merge.updateStacked({ repoName: 'openadlc', prNumber: 31, carry: true, why: '#30 merged' })).toBe('skipped');
+        expect(stacks.updating).not.toHaveBeenCalled();
+        expect(github.mergeIntoBranch).not.toHaveBeenCalled();
+      }
+    });
+
+    it('makes one merge when a merge is delivered twice at once', async () => {
+      quiet();
+      const { line: merge, github } = stackedLine();
+
+      const answers = await Promise.all([
+        merge.updateStacked({ repoName: 'openadlc', prNumber: 31, carry: true, why: '#30 merged' }),
+        merge.updateStacked({ repoName: 'openadlc', prNumber: 31, carry: true, why: '#30 merged' }),
+      ]);
+
+      expect(answers).toEqual(['updated', 'current']);
+      expect(github.mergeIntoBranch).toHaveBeenCalledTimes(1);
+    });
+
+    it('leaves the line no update to make once it was brought up to date, even advancing at the same time', async () => {
+      quiet();
+      const { line: merge, github, stacks } = stackedLine();
+      github.checksFor.mockResolvedValue([green(REVIEW_GATE_CHECK)]);
+
+      await Promise.all([merge.updateStacked({ repoName: 'openadlc', prNumber: 31, carry: true, why: '#30 merged' }), merge.advance('openadlc')]);
+
+      expect(github.mergeIntoBranch).toHaveBeenCalledTimes(1);
+      expect(github.updateBranch).not.toHaveBeenCalled();
+      expect(stacks.updating).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe('what the line records of an update it made', () => {
