@@ -27,6 +27,7 @@ const world = vi.hoisted(() => ({
   /** Uploads: `subjectRef` null until sent with something. */
   files: [] as { id: string; name: string; sizeBytes: number; uploadedBy: string; subjectRef: string | null; messageId: string | null }[],
   events: [] as Record<string, unknown>[],
+  audits: [] as Record<string, unknown>[],
   /** Work items: none until a test numbers the install. */
   numbered: false,
   organization: null as string | null,
@@ -51,6 +52,7 @@ vi.mock('@openadlc/db', () => ({
     }),
   },
   bots: { listBots: vi.fn(async () => CREW) },
+  audit: vi.fn(async (entry: Record<string, unknown>) => void world.audits.push(entry)),
   recordEvent: vi.fn(async (event: Record<string, unknown>) => void world.events.push(event)),
   workItems: {
     isNumbered: vi.fn(async () => world.numbered),
@@ -139,6 +141,7 @@ beforeEach(async () => {
   world.gates = [];
   world.files = [];
   world.events = [];
+  world.audits = [];
   world.numbered = false;
   world.organization = null;
   world.items = [];
@@ -218,6 +221,31 @@ describe('reading a work item', () => {
     const response = await send('api#12', { text: 'Keep it per round.' });
     expect(await response.json()).toMatchObject({ answered: false, bot: 'lead-reviewer', subject: 'api#31' });
     expect(comments).toEqual([expect.objectContaining({ repo: 'acme/api', number: 31, as: 'lead-reviewer' })]);
+  });
+
+  it('discusses a held Human-review approval with the lead reviewer on the pull request, audits it, and decides nothing', async () => {
+    const head = '692cd1f88f3e45093ad9ba4e68e84d590af3b595';
+    const about = { kind: 'human_review', repo: 'api', pr: 31, login: 'janedoe', head };
+    const response = await send('api#31', { text: 'Why does this touch infra/?', role: 'review_lead', about });
+
+    expect(await response.json()).toMatchObject({ answered: false, bot: 'lead-reviewer', subject: 'api#31' });
+    expect(comments).toEqual([expect.objectContaining({ repo: 'acme/api', number: 31, as: 'lead-reviewer' })]);
+    expect(world.audits).toEqual([
+      {
+        actor: 'jane@acme.test',
+        action: 'pull.human_review_discussed',
+        target: 'api#31',
+        payload: expect.objectContaining({ repo: 'api', pr: 31, login: 'janedoe', head, role: 'review_lead', by: 'jane@acme.test', commentUrl: expect.stringContaining('github.com/acme/api') }),
+      },
+    ]);
+    // Nothing about it answers a question or sends anything back: the decision stays open.
+    expect(answered).toEqual([]);
+    expect(world.events.filter((event) => event.type === 'review.submitted_on' || event.type === 'review.round_opened')).toEqual([]);
+
+    // A message about nothing in particular, or with a malformed about, writes no such row.
+    await send('api#31', { text: 'Another thought.', role: 'review_lead' });
+    await send('api#31', { text: 'And another.', role: 'review_lead', about: { kind: 'human_review', pr: 31, login: 'janedoe', head: 'abc' } });
+    expect(world.audits).toHaveLength(1);
   });
 
   it('is not shown, from any of its members, once its issue is labelled openadlc:ignore', async () => {

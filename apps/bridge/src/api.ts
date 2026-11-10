@@ -114,7 +114,7 @@ import { NOTIFICATIONS_CHECK } from './health/checks/notifications.js';
 import { bridgeStopReason, stoppedByTheBridge, THE_BRIDGE } from './bridge-stops.js';
 import { asAutomation } from './automation-bot.js';
 import { livePersonGitHubDeps, PersonFlows, registerPersonGitHubRoutes } from './person-github.js';
-import { livePullCommands, registerPullRoutes } from './pull-routes.js';
+import { liveHumanReviewDecisions, livePullCommands, registerPullRoutes } from './pull-routes.js';
 import { DeployKnowledge, isTestingDeployChoice, testingDeployChoice, testingDeployStored } from './deploys.js';
 import { deploysNothingHere } from './deploy-pipeline.js';
 import { releaseEventsOf } from './health/checks/ships-by-release.js';
@@ -1063,7 +1063,9 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
   const personFlows = new PersonFlows(personGitHub);
   const pullCommands = livePullCommands({ reader: () => asAutomation(deps.actors, config), person: personGitHub, flows: personFlows });
   registerPersonGitHubRoutes(router, personGitHub, personFlows);
-  registerPullRoutes(router, pullCommands, personFlows);
+  // A held Human-review approval decided from the console (`human-review-decide.ts`).
+  const humanReview = liveHumanReviewDecisions({ reader: () => asAutomation(deps.actors, config), person: personGitHub, flows: personFlows, sendBack: deps.sendBack ?? null });
+  registerPullRoutes(router, pullCommands, personFlows, undefined, humanReview);
   // hostd signs a subscription in and checks an account, where the bots think.
   registerModelAccountRoutes(router, {
     ...defaultModelAccountDeps(hostd),
@@ -1123,7 +1125,7 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
       return out;
     },
   };
-  registerAttentionRoutes(router, attentionDeps);
+  registerAttentionRoutes(router, attentionDeps, (identity, login) => humanReview.mayDecide(identity, login));
   const waitingNotices = deps.notifier
     ? new WaitingNotices({
         notifier: deps.notifier,

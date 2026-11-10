@@ -1758,6 +1758,47 @@ The bridge records the wait where the gate is settled (`review.person_awaited`,
 once per head), on a review delivery and on the gate sweep, so a pull request
 already waiting gets its card on the next sweep.
 
+### Deciding it from the console
+
+The card describes the decision, so you can make it without opening GitHub. It shows:
+- **What it does**, from the issue's Outcome;
+- **Why you are asked**, the paths and the Human review rule that names you;
+- **What the reviewers found**, each crew review on the head, with a link to it and to the diff.
+
+The crew's reviews are recorded with the wait. A wait recorded before this
+change shows **Read the reviews on GitHub** instead.
+
+Under each button is what it does next.
+
+- **Approve** shows a one-time code. Approve it on GitHub as the account you
+  linked in Settings → Your GitHub account, and OpenADLC posts *your own*
+  approving review of the head the card showed, from that account, with a
+  token it uses once and revokes
+  ([security](security.md#a-persons-sign-off)). It counts exactly as a review
+  you submit on GitHub, and once CI passes the merge line merges it. The card
+  goes when GitHub's review delivery arrives. A code approved as another
+  account posts nothing.
+- **Reject** asks for a reason, and stays disabled until you write one.
+  OpenADLC says the reason on the pull request, then sends the pull request
+  back to Build with your reason as the finding, as a request for changes on
+  GitHub does. The lead reviews the fix, and you are asked again on the new
+  head. A second Reject of the same head is refused.
+- **Discuss** opens a message box addressed to the lead reviewer, or to the
+  builder if you pick it. The message goes on the pull request and starts that
+  role's work to answer it. The decision stays open.
+
+Approve and Reject are only there for the person the card waits on, as the
+bridge reads it from the account you linked: your linked account id must be
+the named login's. Anyone else sees the description and Discuss. The bridge
+refuses Approve and Reject from anyone else even when they are called
+directly. If you have not linked an account, the card says so and links to
+Settings → Your GitHub account.
+
+If the pull request moved to a new head while the card was open, Approve and
+Reject are refused with "reload". Nothing is posted; reload and decide on the
+new head. Each decision writes an audit row: `pull.human_review_approved`,
+`pull.human_review_rejected` or `pull.human_review_discussed`.
+
 ## A pull request waits on "GitHub Actions minutes this month reached the cap"
 
 The card in Review reads "Checks running before it merges" though no CI run

@@ -10413,7 +10413,12 @@ describe('a person’s approval GitHub moves onto the merge line’s update of t
       headline: "Pull request #118 needs @janedoe's approval again, on 692cd1f",
       subject: { repo: 'openadlc', number: 118 },
       since: asks[0]!.at,
-      actions: [{ kind: 'open_url', label: 'Review it on GitHub', url: 'https://github.com/janedoe/openadlc/pull/118/files' }],
+      actions: [
+        { kind: 'human_review_approve', label: 'Approve', subject: 'openadlc#118', login: 'janedoe', head: B },
+        { kind: 'human_review_reject', label: 'Reject', subject: 'openadlc#118', login: 'janedoe', head: B },
+        { kind: 'human_review_discuss', label: 'Discuss', subject: 'openadlc#118', login: 'janedoe', head: B },
+        { kind: 'open_url', label: 'Review it on GitHub', url: 'https://github.com/janedoe/openadlc/pull/118/files' },
+      ],
     });
     expect(card?.detail).toBe(
       "GitHub shows @janedoe's approval on 692cd1f, but it was given on b789079, whose diff is another, so it counts for nothing. OpenADLC does not merge it until @janedoe approves 692cd1f.",
@@ -10561,13 +10566,37 @@ describe('a crew pull request the lead approved that waits on a person under Hum
 
     expect(statuses.at(-1)).toEqual({ sha: HEAD, state: 'pending', description: 'waiting on @janedoe' });
     expect(log.filter((event) => event.type === 'review.person_awaited').map((event) => event.payload)).toEqual([
-      { subjectRef: 'openadlc#40', login: 'janedoe', head: HEAD, repo: 'openadlc', pr: 40, issue: 39, paths: ['infra/'] },
+      {
+        subjectRef: 'openadlc#40',
+        login: 'janedoe',
+        head: HEAD,
+        repo: 'openadlc',
+        pr: 40,
+        issue: 39,
+        paths: ['infra/'],
+        // What the reviewers found, for her card: the lead's review, its markers taken out.
+        reviews: [
+          {
+            login: LEAD,
+            seat: 'lead-reviewer',
+            state: 'approved',
+            summary: 'Lead review: approve.',
+            url: 'https://github.com/janedoe/openadlc/pull/40#pullrequestreview-900',
+          },
+        ],
+      },
     ]);
     expect(needsYou()).toEqual([
       expect.objectContaining({
         id: 'approval:openadlc#40@janedoe',
         headline: "Pull request #40 waits for @janedoe's approval",
-        actions: [{ kind: 'open_url', label: 'Review it on GitHub', url: 'https://github.com/janedoe/openadlc/pull/40/files' }],
+        actions: [
+          { kind: 'human_review_approve', label: 'Approve', subject: 'openadlc#40', login: 'janedoe', head: HEAD },
+          { kind: 'human_review_reject', label: 'Reject', subject: 'openadlc#40', login: 'janedoe', head: HEAD },
+          { kind: 'human_review_discuss', label: 'Discuss', subject: 'openadlc#40', login: 'janedoe', head: HEAD },
+          { kind: 'open_url', label: 'Review it on GitHub', url: 'https://github.com/janedoe/openadlc/pull/40/files' },
+        ],
+        decision: expect.objectContaining({ login: 'janedoe', head: HEAD, reviews: [expect.objectContaining({ summary: 'Lead review: approve.' })] }),
       }),
     ]);
   });

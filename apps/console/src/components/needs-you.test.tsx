@@ -2,15 +2,29 @@ import { isValidElement, type ReactElement, type ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Dialog } from '@/components/ui/dialog';
-import { adminOnly, keyOf, NeedsYou, Recoveries } from './needs-you';
+import { adminOnly, HumanReviewDecisionPanel, keyOf, NeedsYou, Recoveries } from './needs-you';
 import type { AttentionItem } from '@/lib/api';
 
 /** What the card sent the gate-answer route. */
 const answers = vi.hoisted(() => [] as { gateId: string; answer: string }[]);
 /** What was run again, what was dismissed, and which signing keys were acted on. */
 const pressed = vi.hoisted(() => ({ retried: [] as string[], stopped: [] as string[], dismissed: [] as string[], revoked: [] as string[] }));
+/** What a held Human-review approval's buttons asked the bridge. */
+const decided = vi.hoisted(() => [] as { what: string; subject: string; input: Record<string, unknown> }[]);
 
 vi.mock('@/app/actions', () => ({
+  approveHumanReview: vi.fn(async (subject: string, input: Record<string, unknown>) => {
+    decided.push({ what: 'approve', subject, input });
+    return { ok: true, flow: { flowId: 'f', userCode: 'ABCD-1234', verificationUri: 'https://github.com/login/device', expiresInSeconds: 900 } };
+  }),
+  rejectHumanReview: vi.fn(async (subject: string, input: Record<string, unknown>) => {
+    decided.push({ what: 'reject', subject, input });
+    return { ok: true, sentBack: true };
+  }),
+  sendItemMessage: vi.fn(async (subject: string, input: Record<string, unknown>) => {
+    decided.push({ what: 'discuss', subject, input });
+    return { ok: true };
+  }),
   answerGate: vi.fn(async (gateId: string, answer: string) => {
     answers.push({ gateId, answer });
     return { ok: true };
@@ -72,6 +86,8 @@ vi.mock('react', async (original) => ({
   useState: (initial: unknown) => [typeof initial === 'function' ? (initial as () => unknown)() : initial, () => undefined],
   useTransition: () => [false, (work: () => unknown) => void work()],
   useRef: (initial: unknown) => ({ current: initial }),
+  // Nothing runs after a first drawing: a sign-in's flow is read only in a browser.
+  useEffect: () => undefined,
   // No provider above a card called as a function: the context's default, an admin.
   useContext: (context: { _currentValue: unknown }) => context._currentValue,
 }));
@@ -115,6 +131,7 @@ beforeEach(() => {
   pressed.stopped.length = 0;
   pressed.dismissed.length = 0;
   pressed.revoked.length = 0;
+  decided.length = 0;
 });
 
 type Pressable = ReactElement<{ onClick?: () => void; children?: ReactNode }>;
@@ -759,5 +776,103 @@ describe('what an item unblocks', () => {
   it('says nothing of it when nothing waits behind it', () => {
     const { unblocks: _none, ...alone } = ROOT;
     expect(needs([alone])).not.toContain('data-unblocks');
+  });
+});
+
+/**
+ * A held Human-review approval, decided from its card (#254): what the change
+ * does, why the person is asked, what the reviewers found and a link to the
+ * diff, and Approve, Reject and Discuss with what each does next.
+ */
+describe('a held Human-review approval', () => {
+  const HEAD = '692cd1f88f3e45093ad9ba4e68e84d590af3b595';
+  const decision = {
+    repo: 'openadlc',
+    pr: 40,
+    head: HEAD,
+    login: 'janedoe',
+    change: 'Limit each client to 60 requests a minute.',
+    why: "The lead approved 692cd1f. It changes `infra/`, which AGENTS.md's Human review names @janedoe for, so OpenADLC does not merge it until @janedoe approves it.",
+    reviews: [{ login: 'reviewer-bot', seat: 'lead-reviewer', state: 'approved', summary: 'The limit is per client.', url: 'https://github.com/janedoe/openadlc/pull/40#pullrequestreview-5' }],
+    prUrl: 'https://github.com/janedoe/openadlc/pull/40',
+    diffUrl: 'https://github.com/janedoe/openadlc/pull/40/files',
+    next: {
+      approve: 'Posts your approval of 692cd1f on GitHub as @janedoe, after you approve a one-time code. OpenADLC merges it once CI passes.',
+      reject: 'Sends it back to the builder with your reason. The lead reviews the fix, and you are asked again.',
+      discuss: 'Sends your message to the lead reviewer, or the builder, who answers on the pull request. The decision stays open.',
+    },
+  };
+  const HELD = (over: Partial<typeof decision> & { yours?: boolean; notYours?: string; settingsUrl?: string } = {}): AttentionItem => ({
+    id: 'approval:openadlc#40@janedoe',
+    kind: 'merge_waiting',
+    headline: "Pull request #40 waits for @janedoe's approval",
+    subject: { repo: 'openadlc', number: 39, title: 'Rate-limit', ref: 'openadlc#39', url: null, item: 'openadlc#39' },
+    bot: null,
+    since: '2026-09-24T11:00:00.000Z',
+    detail: 'The lead approved 692cd1f.',
+    actions: [
+      { kind: 'human_review_approve', label: 'Approve', subject: 'openadlc#40', login: 'janedoe', head: HEAD },
+      { kind: 'human_review_reject', label: 'Reject', subject: 'openadlc#40', login: 'janedoe', head: HEAD },
+      { kind: 'human_review_discuss', label: 'Discuss', subject: 'openadlc#40', login: 'janedoe', head: HEAD },
+      { kind: 'open_url', label: 'Review it on GitHub', url: 'https://github.com/janedoe/openadlc/pull/40/files' },
+    ],
+    awaiting: { login: 'janedoe', again: false, paths: ['infra/'] },
+    decision: { ...decision, ...over },
+  });
+  const words = (html: string) => html.replace(/<[^>]+>/g, ' ').replace(/&#x27;/g, "'").replace(/\s+/g, ' ');
+
+  it('describes the decision: what it does, why you, what the reviewers found, the diff, and what each button does next', () => {
+    const html = needs([HELD({ yours: true })]);
+    const text = words(html);
+    expect(text).toContain('What it does: Limit each client to 60 requests a minute.');
+    expect(text).toContain("Why you are asked: The lead approved 692cd1f. It changes `infra/`, which AGENTS.md's Human review names @janedoe for");
+    expect(text).toContain('lead-reviewer approved');
+    expect(text).toContain('The limit is per client.');
+    expect(html).toContain('href="https://github.com/janedoe/openadlc/pull/40/files"');
+    for (const next of Object.values(decision.next)) expect(text).toContain(next);
+    expect([...html.matchAll(/data-decide="(\w+)"/g)].map((match) => match[1])).toEqual(['approve', 'reject', 'discuss']);
+  });
+
+  it('gives anyone else Discuss alone, and says whose it is', () => {
+    const html = needs([HELD({ yours: false, notYours: "This is @janedoe's to decide; you can Discuss it." })]);
+    expect([...html.matchAll(/data-decide="(\w+)"/g)].map((match) => match[1])).toEqual(['discuss']);
+    expect(words(html)).toContain("This is @janedoe's to decide; you can Discuss it.");
+    // A bridge that does not say whose it is: not yours.
+    expect([...needs([HELD()]).matchAll(/data-decide="(\w+)"/g)].map((match) => match[1])).toEqual(['discuss']);
+  });
+
+  it('points a person with no linked account to where to link it', () => {
+    const html = needs([HELD({ yours: false, notYours: 'You have not linked a GitHub account. Link it in Settings → Your GitHub account.', settingsUrl: '/settings#your-github' })]);
+    expect(html).toContain('href="/settings#your-github"');
+    expect(words(html)).toContain('Link your GitHub account');
+  });
+
+  it('links to the reviews on GitHub when none were recorded with the wait', () => {
+    const html = needs([HELD({ yours: true, reviews: null as never })]);
+    expect(words(html)).toContain('Read the reviews on GitHub');
+  });
+
+  it('asks the bridge to approve the head shown, as the person it waits on', () => {
+    press(buttonsIn(<HumanReviewDecisionPanel item={HELD({ yours: true })} />), `Approve${decision.next.approve}`);
+    expect(decided).toEqual([{ what: 'approve', subject: 'openadlc#40', input: { head: HEAD, login: 'janedoe' } }]);
+  });
+
+  it('holds Send it back until the reason has text', () => {
+    const empty = renderToStaticMarkup(<HumanReviewDecisionPanel item={HELD({ yours: true })} initialStep={{ kind: 'reject', reason: '  ' }} />);
+    expect(empty).toMatch(/<button type="submit" disabled=""[^>]*>Send it back<\/button>/);
+    const written = renderToStaticMarkup(<HumanReviewDecisionPanel item={HELD({ yours: true })} initialStep={{ kind: 'reject', reason: 'Keep the old timeout.' }} />);
+    expect(written).not.toMatch(/disabled=""[^>]*>Send it back/);
+  });
+
+  it('addresses Discuss to the lead reviewer by default, with the builder to pick', () => {
+    const html = renderToStaticMarkup(<HumanReviewDecisionPanel item={HELD({ yours: false })} initialStep={{ kind: 'discuss', text: '', role: 'review_lead' }} />);
+    expect(html).toContain('<option value="review_lead" selected="">the lead reviewer</option>');
+    expect(html).toContain('<option value="implement">the builder</option>');
+  });
+
+  it('keeps the decision buttons off the generic row: only the way to GitHub is beside them', () => {
+    const html = needs([HELD({ yours: true })]);
+    expect(html.match(/Review it on GitHub/g)).toHaveLength(1);
+    expect(html).not.toContain('data-clamp="detail"');
   });
 });

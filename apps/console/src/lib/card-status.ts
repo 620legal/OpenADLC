@@ -114,7 +114,13 @@ export interface CardContext {
   /** A plan change approved on the card that waits for other work to let go of its paths, as Needs you has it (`heldApprovalsOf`). */
   heldApproval?: HeldApproval | null;
   /** The people a Review card's pull request waits on for their approval, as Needs you has it (`awaitedApprovalsOf`). */
-  awaitedApproval?: readonly string[];
+  awaitedApproval?: readonly (string | AwaitedApproval)[];
+}
+
+/** A person a pull request waits on for their approval, and whether that person is the viewer (`decision.yours`). */
+export interface AwaitedApproval {
+  login: string;
+  yours: boolean;
 }
 
 export interface HeldApproval {
@@ -161,17 +167,28 @@ export function heldApprovalsOf(attention: readonly AttentionItem[]): ReadonlyMa
  * under Human review. An approval again is left out: it is asked while the
  * lead may not have approved the new diff yet, so "Approved" would be wrong.
  */
-export function awaitedApprovalsOf(attention: readonly AttentionItem[]): ReadonlyMap<string, readonly string[]> {
-  const awaited = new Map<string, string[]>();
+export function awaitedApprovalsOf(attention: readonly AttentionItem[]): ReadonlyMap<string, readonly AwaitedApproval[]> {
+  const awaited = new Map<string, AwaitedApproval[]>();
   for (const item of attention) {
     if (item.kind !== 'merge_waiting' || !item.awaiting || item.awaiting.again) continue;
     const login = item.awaiting.login;
+    // The viewer's own, as the bridge says from their linked account: the card says it waits on them.
+    const yours = item.decision?.yours === true;
     for (const ref of new Set([item.subject.ref, item.subject.item].filter((one): one is string => Boolean(one)))) {
       const was = awaited.get(ref) ?? [];
-      if (!was.some((one) => one.toLowerCase() === login.toLowerCase())) awaited.set(ref, [...was, login]);
+      if (!was.some((one) => one.login.toLowerCase() === login.toLowerCase())) awaited.set(ref, [...was, { login, yours }]);
     }
   }
   return awaited;
+}
+
+/** "your", "@a's", "your and @a's", "@a and @b's": whose approval a card waits for. */
+export function awaitedInWords(awaited: readonly (string | AwaitedApproval)[]): string {
+  const people = awaited.map((one) => (typeof one === 'string' ? { login: one, yours: false } : one));
+  const others = people.filter((one) => !one.yours).map((one) => one.login);
+  const yours = people.some((one) => one.yours);
+  if (!yours) return `${loginsInWords(others)}'s`;
+  return others.length > 0 ? `your and ${loginsInWords(others)}'s` : 'your';
 }
 
 /** `@a`, `@a and @b`, `@a, @b and @c`. */
@@ -604,7 +621,7 @@ export function cardStatus(card: BoardCard, context: CardContext): CardStatus {
       // The reviewers approved and the merge waits on a person: said before
       // the line, which a crew pull request held on a person never joins.
       const awaited = context.awaitedApproval ?? [];
-      if (awaited.length > 0) return { text: `Approved · waiting for ${loginsInWords(awaited)}'s approval`, tone: 'attention', mark: 'dot' };
+      if (awaited.length > 0) return { text: `Approved · waiting for ${awaitedInWords(awaited)} approval`, tone: 'attention', mark: 'dot' };
       return inLine(card, context.mergeLine) ?? { text: 'Waiting for the reviewers', tone: 'muted', mark: null };
     }
     case 'build': {

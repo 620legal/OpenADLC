@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { attentionItems, type AttentionInput } from './attention.js';
-import { followWaits, MAX_WAIT_DEPTH, personWaitsOf, type FollowInput, type WaitChain, type WaitFacts } from './wait-chain.js';
+import { followWaits, MAX_WAIT_DEPTH, personAwaitFrom, personWaitsOf, type FollowInput, type WaitChain, type WaitFacts } from './wait-chain.js';
 import { waitingCards, waitingOf, type CardWaiting, type WaitingContext } from './waiting.js';
 import { isActive, type IssueFacts, type TaskFacts } from './work.js';
 
@@ -296,5 +296,20 @@ describe('a root names its Needs you card', () => {
     const input = base({ issues, tasks, gates, ...facts });
     expect(personWaitsOf(input).map((wait) => wait.attentionId)).toEqual(['approval:OpenADLC#213@orzelig']);
     expect(attentionItems(input).map((item) => item.id)).toContain('plan-change:gate-217');
+  });
+});
+
+describe('a wait on a person carries what the reviewers found', () => {
+  const payload = { subjectRef: 'api#40', repo: 'api', pr: 40, issue: 39, login: 'janedoe', head: 'abc', paths: ['infra/'] };
+
+  it('reads the reviews recorded with it, and leaves out one that is malformed', () => {
+    const review = { login: 'reviewer-bot', seat: 'lead-reviewer', state: 'approved', summary: 'Fine.', url: 'https://github.com/a/api/pull/40#pullrequestreview-1' };
+    const wait = personAwaitFrom({ at: '2026-11-10T00:00:00Z', payload: { ...payload, reviews: [review, { login: 'x' }, { ...review, seat: 7 }] } });
+    expect(wait?.reviews).toEqual([review, { ...review, seat: null }]);
+  });
+
+  it('reads a wait recorded before reviews were as having none recorded', () => {
+    expect(personAwaitFrom({ at: '2026-11-10T00:00:00Z', payload })?.reviews).toBeNull();
+    expect(personAwaitFrom({ at: '2026-11-10T00:00:00Z', payload: { ...payload, reviews: [] } })?.reviews).toEqual([]);
   });
 });

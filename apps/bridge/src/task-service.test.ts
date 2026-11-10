@@ -108,6 +108,8 @@ import {
   UsageRefusedError,
   awaitPeople,
   awaitedPeople,
+  crewReviewsOn,
+  reviewSummary,
   heldAtCap,
   heldForRestart,
   humanReviewPathsFor,
@@ -136,6 +138,42 @@ beforeEach(() => {
     subjectRef: 'openadlc#155',
     skill: 'implement',
   } as never);
+});
+
+describe("the crew's reviews a held approval's card shows", () => {
+  const HEAD = '692cd1f88f3e45093ad9ba4e68e84d590af3b595';
+  const crew = [{ githubLogin: 'reviewer-bot' }, { githubLogin: 'security-bot' }];
+  const review = (id: number, over: Partial<{ user: string; state: string; body: string; submittedAt: string; commitId: string }> = {}) => ({
+    id,
+    user: 'reviewer-bot',
+    state: 'APPROVED',
+    body: 'Fine.',
+    submittedAt: `2026-11-10T0${id}:00:00Z`,
+    commitId: HEAD,
+    ...over,
+  });
+
+  it('strips the markers and signature, and cuts a long body on a word', () => {
+    expect(reviewSummary('Looks right.\n\n<!-- openadlc:{"event":"review_posted"} -->\n<!-- openadlc-seat:lead-reviewer -->\n<!-- openadlc-sig:v1.abc.def -->')).toBe('Looks right.');
+    const long = reviewSummary(`${'word '.repeat(200)}end`);
+    expect(long.length).toBeLessThanOrEqual(601);
+    expect(long.endsWith('word…')).toBe(true);
+    expect(long).not.toContain('<!--');
+  });
+
+  it('takes the newest of each seat on the head, from the crew only, oldest first', () => {
+    const listed = [
+      review(1, { body: 'First pass.\n<!-- openadlc-seat:lead-reviewer -->', state: 'CHANGES_REQUESTED' }),
+      review(2, { body: 'Second look.\n<!-- openadlc-seat:second-reviewer -->' }),
+      review(3, { body: 'Now right.\n<!-- openadlc-seat:lead-reviewer -->' }),
+      review(4, { user: 'janedoe', body: 'A person’s own review.' }),
+      review(5, { commitId: 'b7890794b365dd3ec75b81f761f1889dfb11674a', body: 'On an older head.' }),
+    ];
+    expect(crewReviewsOn(listed, { head: HEAD, crew, repoFullName: 'acme/openadlc', prNumber: 40 })).toEqual([
+      { login: 'reviewer-bot', seat: 'second-reviewer', state: 'approved', summary: 'Second look.', url: 'https://github.com/acme/openadlc/pull/40#pullrequestreview-2' },
+      { login: 'reviewer-bot', seat: 'lead-reviewer', state: 'approved', summary: 'Now right.', url: 'https://github.com/acme/openadlc/pull/40#pullrequestreview-3' },
+    ]);
+  });
 });
 
 describe('resuming a task hostd will not start', () => {
@@ -2144,7 +2182,7 @@ describe('a crew pull request the lead approved that waits on a person', () => {
 
     expect(await awaitPeople(subject, standing('waiting on @janedoe'), read)).toEqual(["openadlc#40: waits on @janedoe's approval of 692cd1f"]);
     expect(store.awaited.map((event) => event.payload)).toEqual([
-      { subjectRef: 'openadlc#40', login: 'janedoe', head: HEAD, repo: 'openadlc', pr: 40, issue: 39, paths: ['infra/'] },
+      { subjectRef: 'openadlc#40', login: 'janedoe', head: HEAD, repo: 'openadlc', pr: 40, issue: 39, paths: ['infra/'], reviews: [] },
     ]);
     expect(await awaitPeople(subject, standing('waiting on @janedoe'), read)).toEqual([]);
     expect(store.awaited).toHaveLength(1);
@@ -2157,6 +2195,19 @@ describe('a crew pull request the lead approved that waits on a person', () => {
     files.mockClear();
     await awaitPeople(subject, standing('waiting on lead-reviewer'), read);
     expect(files).not.toHaveBeenCalled();
+  });
+
+  it('records the crew reviews on the head with the wait, and none when they cannot be read', async () => {
+    const reviews = [{ login: 'reviewer-bot', seat: 'lead-reviewer', state: 'approved', summary: 'Looks right.', url: 'https://github.com/x/y/pull/40#pullrequestreview-1' }];
+    await awaitPeople(subject, standing('waiting on @janedoe'), { files: async () => [], rules: async () => rules, reviews: async () => reviews });
+    await awaitPeople({ ...subject, prNumber: 41 }, standing('waiting on @janedoe'), {
+      files: async () => [],
+      rules: async () => rules,
+      reviews: async () => {
+        throw new Error('GitHub did not answer');
+      },
+    });
+    expect(store.awaited.map((event) => event.payload.reviews)).toEqual([reviews, []]);
   });
 
   it('records nothing for a pull request with no issue of its own', async () => {

@@ -2,7 +2,7 @@ import { audit, bots, costs, hasEventOfType, health, hosts, lastEventAt, leases,
 import { githubDidNotAnswer } from '@openadlc/github';
 import { attachmentsForTask } from './attachment-routes.js';
 import { stoppedByTheBridge } from './bridge-stops.js';
-import { botAtStart, headerFor, leaseExpiryFrom, maxTasksOf, pathMatches, resolveBotRef, sameLogin, type ContextDocument, type HumanReviewRule, type Task, type TaskKind } from '@openadlc/shared';
+import { botAtStart, headerFor, leaseExpiryFrom, maxTasksOf, pathMatches, resolveBotRef, sameLogin, seatOf, type ContextDocument, type HumanReviewRule, type Task, type TaskKind } from '@openadlc/shared';
 import type { BridgeConfig } from './config.js';
 import type { Context } from './context.js';
 import { effectiveConfig } from './effective-config.js';
@@ -1686,6 +1686,66 @@ export function humanReviewPathsFor(login: string, files: readonly string[], rul
   return paths;
 }
 
+/** A crew review a held approval's card shows (`PERSON_AWAITED`'s `reviews`), so the person reads what the reviewers found without GitHub. */
+export interface AwaitedReview {
+  /** The account that posted it. */
+  login: string;
+  /** The seat it names (`withSeat`), on an account seats share; null when it names none. */
+  seat: string | null;
+  state: string;
+  summary: string;
+  url: string;
+}
+
+/** How much of a review's body a card keeps: enough to read the verdict, not the whole review. */
+export const REVIEW_SUMMARY_CHARS = 600;
+
+/**
+ * A review's body as a card says it: its HTML comments (the header marker, the
+ * seat tag, the signature) taken out, and cut on a word at
+ * `REVIEW_SUMMARY_CHARS`. A signature left in read as a line of base64.
+ */
+export function reviewSummary(body: string, limit = REVIEW_SUMMARY_CHARS): string {
+  const text = body
+    .replace(/<!--[\s\S]*?(?:-->|$)/g, '')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  if (text.length <= limit) return text;
+  const cut = text.slice(0, limit);
+  const space = cut.search(/\s\S*$/);
+  return `${(space > limit / 2 ? cut.slice(0, space) : cut).trimEnd()}…`;
+}
+
+/**
+ * The crew's reviews on `head`, the newest of each seat (or account, where a
+ * review names no seat), oldest first, as a held approval's card shows them. A
+ * person's own review is not one: the card is what the crew found.
+ */
+export function crewReviewsOn(
+  listed: readonly { id: number; user: string; state: string; body: string; submittedAt: string | null; commitId: string | null }[],
+  input: { head: string; crew: readonly { githubLogin?: string | null }[]; repoFullName: string; prNumber: number },
+): AwaitedReview[] {
+  const newest = new Map<string, { review: (typeof listed)[number]; seat: string | null }>();
+  for (const review of listed) {
+    if (review.commitId !== input.head || !input.crew.some((bot) => sameLogin(bot.githubLogin, review.user))) continue;
+    if (review.state === 'PENDING') continue;
+    const seat = seatOf(review.body);
+    const key = `${review.user.toLowerCase()}/${seat ?? ''}`;
+    const seen = newest.get(key);
+    if (!seen || Date.parse(review.submittedAt ?? '') >= Date.parse(seen.review.submittedAt ?? '')) newest.set(key, { review, seat });
+  }
+  return [...newest.values()]
+    .sort((a, b) => Date.parse(a.review.submittedAt ?? '') - Date.parse(b.review.submittedAt ?? ''))
+    .map(({ review, seat }) => ({
+      login: review.user,
+      seat,
+      state: review.state.toLowerCase(),
+      summary: reviewSummary(review.body),
+      url: `https://github.com/${input.repoFullName}/pull/${input.prNumber}#pullrequestreview-${review.id}`,
+    }));
+}
+
 /**
  * Records each person a crew pull request waits on for a first approval,
  * once the lead's approval counts (`awaitedPeople`), as `PERSON_AWAITED`,
@@ -1696,29 +1756,33 @@ export function humanReviewPathsFor(login: string, files: readonly string[], rul
  * pull request with its own issue: on a person's own the named person often
  * wrote it. Once for each head, as `askPeopleAgain` asks; the files and rules
  * are read only when something is recorded, and a read that fails records
- * the wait with no paths rather than none. Says each one it recorded.
+ * the wait with no paths rather than none. The crew's reviews on the head go
+ * with it (`crewReviewsOn`), so the card says what they found without a
+ * GitHub call on each read of Needs you; a read that fails records none.
+ * Says each one it recorded.
  */
 export async function awaitPeople(
   subject: { repoName: string; prNumber: number; issue: number | null; head: string },
   standing: AwaitedStanding,
-  read: { files(): Promise<string[] | null>; rules(): Promise<HumanReviewRule[] | null> },
+  read: { files(): Promise<string[] | null>; rules(): Promise<HumanReviewRule[] | null>; reviews?(): Promise<AwaitedReview[] | null> },
 ): Promise<string[]> {
   if (subject.issue === null) return [];
   const subjectRef = `${subject.repoName}#${subject.prNumber}`;
-  let reads: Promise<{ files: string[] | null; rules: HumanReviewRule[] | null }> | null = null;
+  let reads: Promise<{ files: string[] | null; rules: HumanReviewRule[] | null; reviews: AwaitedReview[] | null }> | null = null;
   const facts = () =>
-    (reads ??= Promise.all([(async () => read.files())().catch(() => null), (async () => read.rules())().catch(() => null)]).then(([files, rules]) => ({
-      files,
-      rules,
-    })));
+    (reads ??= Promise.all([
+      (async () => read.files())().catch(() => null),
+      (async () => read.rules())().catch(() => null),
+      (async () => (read.reviews ? read.reviews() : null))().catch(() => null),
+    ]).then(([files, rules, reviews]) => ({ files, rules, reviews })));
   const recorded: string[] = [];
   for (const login of awaitedPeople(standing)) {
     const fields = { subjectRef, login, head: subject.head };
     const had = await (async () => hasEventOfType(PERSON_AWAITED, new Date(Date.now() - ASKED_AGAIN_WINDOW_MS), fields))().catch(() => true);
     if (had) continue;
-    const { files, rules } = await facts();
+    const { files, rules, reviews } = await facts();
     const paths = files && rules ? humanReviewPathsFor(login, files, rules) : [];
-    const payload = { ...fields, repo: subject.repoName, pr: subject.prNumber, issue: subject.issue, paths };
+    const payload = { ...fields, repo: subject.repoName, pr: subject.prNumber, issue: subject.issue, paths, reviews: reviews ?? [] };
     const ok = await (async () => recordEvent({ source: 'platform', type: PERSON_AWAITED, payload }))().then(
       () => true,
       (error: unknown) => {

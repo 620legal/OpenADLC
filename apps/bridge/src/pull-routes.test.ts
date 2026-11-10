@@ -2,6 +2,7 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { PersonFlows } from './person-github.js';
+import { HumanReviewDecisions } from './human-review-decide.js';
 import type { PullCommands } from './pull-commands.js';
 import { livePullOf, pullTargetOf, registerPullRoutes, type PullOf } from './pull-routes.js';
 import { Router } from './router.js';
@@ -84,6 +85,73 @@ describe('the pull panel’s routes', () => {
     expect(Buffer.from(await served.arrayBuffer()).equals(PNG)).toBe(true);
     expect(image).toHaveBeenCalledWith(REPO, 46, 12, 0);
     expect((await fetch(`${url}/v1/items/${encodeURIComponent('www#12')}/pull/images/x/0`, { headers: as })).status).toBe(400);
+  });
+});
+
+describe('deciding a held Human-review approval', () => {
+  async function serveDecisions(decisions: HumanReviewDecisions | null) {
+    const router = new Router(undefined, undefined, undefined, async () => 'user');
+    registerPullRoutes(router, {} as PullCommands, {} as PersonFlows, async (subject) => (subject === 'www#46' ? { repo: REPO, number: 46 } : null), decisions);
+    server = createServer((request, response) => void router.handle(request, response));
+    await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve));
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const post = (what: 'approve' | 'reject', body: unknown, identity = 'jane@example.com') =>
+      fetch(`${url}/v1/items/${encodeURIComponent('www#46')}/pull/human-review/${what}`, {
+        method: 'POST',
+        headers: { 'x-openadlc-identity': identity, 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+    return { post };
+  }
+
+  it('hands Approve and Reject the pull request, the head, the login and the person asking', async () => {
+    const approve = vi.fn(async () => ({ flow: { flowId: 'f', userCode: 'C', verificationUri: 'u', expiresInSeconds: 900 } }));
+    const reject = vi.fn(async () => ({ state: 'sent_back', commentUrl: 'https://github.com/c' }));
+    const { post } = await serveDecisions({ approve, reject } as never);
+
+    expect(await (await post('approve', { head: HEAD, login: 'janedoe' })).json()).toEqual({ flow: { flowId: 'f', userCode: 'C', verificationUri: 'u', expiresInSeconds: 900 } });
+    expect(approve).toHaveBeenCalledWith({ repo: REPO, number: 46, login: 'janedoe', head: HEAD, identity: 'jane@example.com' });
+    expect(await (await post('reject', { head: HEAD, login: 'janedoe', reason: 'Not this way.' })).json()).toEqual({ state: 'sent_back', commentUrl: 'https://github.com/c' });
+    expect(reject).toHaveBeenCalledWith({ repo: REPO, number: 46, login: 'janedoe', head: HEAD, identity: 'jane@example.com', reason: 'Not this way.' });
+
+    // A body that names no head or login is refused before anything is asked.
+    expect((await post('approve', { login: 'janedoe' })).status).toBe(400);
+    expect((await post('reject', { head: HEAD, login: 'not a login' })).status).toBe(400);
+    expect(approve).toHaveBeenCalledTimes(1);
+    expect(reject).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a direct call from anyone but the awaited person, not only by hiding the buttons', async () => {
+    const start = vi.fn();
+    const commentAsApp = vi.fn();
+    const decisions = new HumanReviewDecisions({
+      linkOf: async (identity) => (identity === 'jane@example.com' ? { githubLogin: 'janedoe', githubUserId: 1 } : { githubLogin: 'bob', githubUserId: 2 }),
+      userIdOf: async (login) => (login === 'janedoe' ? 1 : 2),
+      standing: async () => ({ head: HEAD }),
+      pull: async () => ({ open: true, head: HEAD, url: 'https://github.com/620legal/www/pull/46' }),
+      flows: { start, state: vi.fn() } as never,
+      isCrew: async () => false,
+      postReviewAsPerson: vi.fn(),
+      commentAsApp,
+      rejected: async () => false,
+      audit: vi.fn(),
+      sendBack: vi.fn(),
+    });
+    const { post } = await serveDecisions(decisions);
+
+    const approve = await post('approve', { head: HEAD, login: 'janedoe' }, 'bob@example.com');
+    expect(approve.status).toBe(403);
+    expect(((await approve.json()) as { error: string }).error).toBe("This is @janedoe's to decide; you can Discuss it.");
+    expect((await post('reject', { head: HEAD, login: 'janedoe', reason: 'No.' }, 'bob@example.com')).status).toBe(403);
+    expect(start).not.toHaveBeenCalled();
+    expect(commentAsApp).not.toHaveBeenCalled();
+  });
+
+  it('says so on a bridge that does not decide them', async () => {
+    const { post } = await serveDecisions(null);
+    const refused = await post('approve', { head: HEAD, login: 'janedoe' });
+    expect(refused.status).toBe(503);
+    expect(((await refused.json()) as { error: string }).error).toContain('approve it on GitHub');
   });
 });
 

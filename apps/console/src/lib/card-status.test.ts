@@ -169,6 +169,15 @@ describe('a card’s status line', () => {
     expect(cardStatus(approved, { ...CONTEXT, awaitedApproval: [] }).text).toBe('Waiting for the reviewers');
   });
 
+  it('says it waits on you when you are the person it waits on, and on them by name for anyone else', () => {
+    const approved = card({ stage: 'review', prNumber: 40, reviewRound: 1 });
+    expect(cardStatus(approved, { ...CONTEXT, awaitedApproval: [{ login: 'janedoe', yours: true }] }).text).toBe('Approved · waiting for your approval');
+    expect(cardStatus(approved, { ...CONTEXT, awaitedApproval: [{ login: 'janedoe', yours: false }] }).text).toBe("Approved · waiting for @janedoe's approval");
+    expect(cardStatus(approved, { ...CONTEXT, awaitedApproval: [{ login: 'janedoe', yours: true }, { login: 'someone-else', yours: false }] }).text).toBe(
+      "Approved · waiting for your and @someone-else's approval",
+    );
+  });
+
   it('reads the people each card waits on for a first approval from Needs you, not one again', () => {
     const subject = (ref: string) => ({ repo: 'openadlc', number: Number(ref.split('#')[1]), title: null, ref, url: null, item: ref });
     const waits = (ref: string, login: string, again: boolean) => ({
@@ -192,9 +201,16 @@ describe('a card’s status line', () => {
       waits('openadlc#40', 'janedoe', true),
       { ...waits('openadlc#41', 'janedoe', false), id: 'merge:openadlc#41', awaiting: undefined },
     ]);
-    expect(awaited.get('openadlc#39')).toEqual(['janedoe', 'someone-else']);
+    expect(awaited.get('openadlc#39')).toEqual([
+      { login: 'janedoe', yours: false },
+      { login: 'someone-else', yours: false },
+    ]);
     expect(awaited.has('openadlc#40')).toBe(false);
     expect(awaited.has('openadlc#41')).toBe(false);
+
+    // The bridge says which is the viewer's, from their linked account.
+    const mine = awaitedApprovalsOf([{ ...waits('openadlc#39', 'janedoe', false), decision: { yours: true } as never }]);
+    expect(mine.get('openadlc#39')).toEqual([{ login: 'janedoe', yours: true }]);
   });
 
   it('puts what needs the person first: a question, an OK, a review loop that gave up', () => {

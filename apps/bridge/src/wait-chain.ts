@@ -163,7 +163,31 @@ export interface PersonAwait {
   head: string;
   /** The Human review paths it touches that name them; none when they could not be read. */
   paths: string[];
+  /**
+   * The crew's reviews on the head as the wait was recorded (`crewReviewsOn`);
+   * null on a wait recorded before they were, whose card links to GitHub instead.
+   */
+  reviews: PersonAwaitReview[] | null;
   at: string;
+}
+
+/** One crew review a wait carries, as its card shows it. */
+export interface PersonAwaitReview {
+  login: string;
+  seat: string | null;
+  state: string;
+  summary: string;
+  url: string;
+}
+
+function awaitReviewsOf(value: unknown): PersonAwaitReview[] | null {
+  if (!Array.isArray(value)) return null;
+  return value.flatMap((one): PersonAwaitReview[] => {
+    const review = (one ?? {}) as Record<string, unknown>;
+    const { login, state, summary, url } = review;
+    if (typeof login !== 'string' || typeof state !== 'string' || typeof summary !== 'string' || typeof url !== 'string') return [];
+    return [{ login, seat: typeof review.seat === 'string' ? review.seat : null, state, summary, url }];
+  });
 }
 
 export function personAwaitFrom(event: { at: string; payload: unknown }): PersonAwait | null {
@@ -171,7 +195,7 @@ export function personAwaitFrom(event: { at: string; payload: unknown }): Person
   const { repo, pr, issue, login, head } = payload;
   if (typeof repo !== 'string' || typeof pr !== 'number' || typeof issue !== 'number' || typeof login !== 'string' || typeof head !== 'string') return null;
   const paths = Array.isArray(payload.paths) ? payload.paths.filter((path): path is string => typeof path === 'string') : [];
-  return { repo, pr, issue, login, head, paths, at: event.at };
+  return { repo, pr, issue, login, head, paths, reviews: awaitReviewsOf(payload.reviews), at: event.at };
 }
 
 /**

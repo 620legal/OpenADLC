@@ -82,6 +82,12 @@ describe('every console route says who may call it', () => {
     expect(Object.keys(ROUTE_ROLES).filter((key) => !served.has(key))).toEqual([]);
   });
 
+  it('lets any console user ask to decide a held Human-review approval, which the bridge checks against their linked account', () => {
+    for (const key of ['POST /v1/items/:subject/pull/human-review/approve', 'POST /v1/items/:subject/pull/human-review/reject']) {
+      expect(ROUTE_ROLES[key], key).toBe('user');
+    }
+  });
+
   it('needs an admin for a route nobody classified', () => {
     expect(roleFor('POST', '/v1/something/new')).toBe('admin');
   });
