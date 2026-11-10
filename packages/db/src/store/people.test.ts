@@ -63,6 +63,26 @@ const client = {
     if (sql.includes('from people where id = $1 for update')) return { rows: byId(params[0]) ? [{ ...byId(params[0]) }] : [] };
     if (sql.includes('from people where email = $1 for update')) return { rows: db.rows.filter((one) => one.email === params[0]) };
     if (sql.includes('from people where github_user_id = $1 for update')) return { rows: db.rows.filter((one) => one.github_user_id === params[0]) };
+    if (sql.includes('from people where github_user_id is null and lower(github_login) = lower($1)')) {
+      const login = String(params[0]).toLowerCase();
+      return { rows: db.rows.filter((one) => one.github_user_id === null && one.github_login?.toLowerCase() === login).slice(0, 1) };
+    }
+    if (sql.startsWith('update people set github_login = $2, github_user_id = $3, approves = true')) {
+      const row = byId(params[0])!;
+      Object.assign(row, { github_login: params[1], github_user_id: params[2], approves: true });
+      return { rows: [{ ...row }] };
+    }
+    if (sql.startsWith('insert into people (github_login, github_user_id, approves')) {
+      const row = person({ id: `p-${++db.next}`, github_login: params[0] as string, github_user_id: params[1] as number, approves: true });
+      db.rows.push(row);
+      return { rows: [row] };
+    }
+    if (sql === 'select id, github_login from people where approves') return { rows: db.rows.filter((one) => one.approves) };
+    if (sql.startsWith('update people set approves = false, updated_at = now() where id = $1')) {
+      byId(params[0])!.approves = false;
+      return { rows: [] };
+    }
+    if (sql.includes('from people where approves order by')) return { rows: db.rows.filter((one) => one.approves) };
     if (sql.startsWith("insert into people (email, console_role, added_by, added_how) values ($1, 'admin'")) {
       const row = person({ id: `p-${++db.next}`, email: params[0] as string, console_role: 'admin', added_how: params[2] as string });
       db.rows.push(row);
@@ -138,7 +158,7 @@ vi.mock('../client.js', () => ({
   withTransaction: vi.fn(async (fn: (c: typeof client) => Promise<unknown>) => fn(client)),
 }));
 
-import { AccountLinkedElsewhere, addPerson, bootstrapAdmins, linkAccount, mergePeople, removePerson, setApproves, updatePerson } from './people.js';
+import { AccountLinkedElsewhere, addPerson, bootstrapAdmins, linkAccount, mergePeople, removePerson, setApprovers, setApproves, updatePerson } from './people.js';
 import { UserChangeRefused } from './users.js';
 
 beforeEach(() => {
@@ -212,6 +232,48 @@ describe('Approves', () => {
   it('is refused for someone with no GitHub account', async () => {
     db.rows = [person({ id: 'p-1', email: 'jane@example.com' })];
     await expect(setApproves('p-1', true, 'a')).rejects.toThrow('Give jane@example.com a GitHub login first');
+  });
+});
+
+describe('setting the approvers from a list of logins', () => {
+  it('pins a migrated approver that had no pin, rather than adding them twice', async () => {
+    // What 0162 makes of a `humans` login with no `humanIds` pin.
+    db.rows = [person({ id: 'p-gh', github_login: 'carol', github_user_id: null, approves: true, added_how: 'humans' })];
+    const approving = await setApprovers([{ login: 'Carol', id: 7 }], 'admin@example.com');
+    expect(db.rows).toHaveLength(1);
+    expect(db.rows[0]).toMatchObject({ id: 'p-gh', github_login: 'Carol', github_user_id: 7, approves: true });
+    expect(approving.map((one) => one.id)).toEqual(['p-gh']);
+    expect(audited()).toEqual([['admin@example.com', 'person.changed', 'p-gh']]);
+  });
+
+  it('turns an unpinned, non-approving person on by login, audited', async () => {
+    db.rows = [person({ id: 'p-1', email: 'jane@example.com', github_login: 'janedoe' })];
+    await setApprovers([{ login: 'janedoe', id: 5 }], 'admin@example.com');
+    expect(db.rows).toHaveLength(1);
+    expect(db.rows[0]).toMatchObject({ github_user_id: 5, approves: true });
+    expect(audited().map(([, action]) => action)).toEqual(['person.changed', 'person.approves_on']);
+  });
+
+  it('takes the login GitHub spells now for a pinned account that was renamed', async () => {
+    db.rows = [person({ id: 'p-1', github_login: 'oldname', github_user_id: 5, approves: true })];
+    await setApprovers([{ login: 'newname', id: 5 }], 'admin@example.com');
+    expect(db.rows[0]).toMatchObject({ github_login: 'newname', github_user_id: 5, approves: true });
+    expect(audited().map(([, action]) => action)).toEqual(['person.changed']);
+  });
+
+  it('does not take a pinned row by login: that login now belongs to another account', async () => {
+    db.rows = [person({ id: 'p-old', github_login: 'carol', github_user_id: 5, approves: true })];
+    await setApprovers([{ login: 'carol', id: 9 }], 'admin@example.com');
+    expect(db.rows).toHaveLength(2);
+    expect(db.rows.find((one) => one.id === 'p-old')).toMatchObject({ github_user_id: 5, approves: false });
+    expect(db.rows.find((one) => one.id !== 'p-old')).toMatchObject({ github_login: 'carol', github_user_id: 9, approves: true });
+  });
+
+  it('changes nothing for an approver already pinned under the same login', async () => {
+    db.rows = [person({ id: 'p-1', github_login: 'carol', github_user_id: 7, approves: true })];
+    await setApprovers([{ login: 'carol', id: 7 }], 'admin@example.com');
+    expect(audited()).toEqual([]);
+    expect(db.sent.some((one) => one.sql.startsWith('update people'))).toBe(false);
   });
 });
 

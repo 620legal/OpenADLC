@@ -126,26 +126,6 @@ function refusedWords(error: unknown, bot: Bot, where: string): string {
   return `GitHub did not take it (${said}). Try again`;
 }
 
-/**
- * A person's answer to a question from the console — a card, a work item, a
- * bot's panel — answered once the question is claimed.
- *
- * With `afterwards`, what is left is done after the answer, in this order: the
- * answer's GitHub writes (`deferGitHub` on `Gates.answer`), then the resume,
- * since a resumed session reads the answer from the issue. A resume hostd
- * refuses fails the task with why, on its card and in its thread
- * (`TaskService.resume`); one that never ran is owed by the answer, which the
- * sweep of answered tasks reads (`resumeAnswered`). Without it, as before,
- * all of it is done first.
- *
- * The same answer from the same person to a question it already answered is
- * that answer again — a second press, a second tab — and changes nothing.
- * Anybody else's, or other words, is refused as a question already answered.
- *
- * `ended` is an answer that stopped its task — a refused plan change, a hand
- * off or an abandon at the cost cap, work that had already landed — so the
- * console does not say it goes on.
- */
 let consoleMode: 'local' | 'iap' = 'iap';
 
 /** Set once at start-up (`main.ts`): how a console identity is a person. */
@@ -168,6 +148,26 @@ export async function consolePersonOf(identity: string): Promise<string | null> 
   }
 }
 
+/**
+ * A person's answer to a question from the console — a card, a work item, a
+ * bot's panel — answered once the question is claimed.
+ *
+ * With `afterwards`, what is left is done after the answer, in this order: the
+ * answer's GitHub writes (`deferGitHub` on `Gates.answer`), then the resume,
+ * since a resumed session reads the answer from the issue. A resume hostd
+ * refuses fails the task with why, on its card and in its thread
+ * (`TaskService.resume`); one that never ran is owed by the answer, which the
+ * sweep of answered tasks reads (`resumeAnswered`). Without it, as before,
+ * all of it is done first.
+ *
+ * The same answer from the same person to a question it already answered is
+ * that answer again — a second press, a second tab — and changes nothing.
+ * Anybody else's, or other words, is refused as a question already answered.
+ *
+ * `ended` is an answer that stopped its task — a refused plan change, a hand
+ * off or an abandon at the cost cap, work that had already landed — so the
+ * console does not say it goes on.
+ */
 export async function answerFromConsole(
   deps: { gates: Gates; taskService: Pick<TaskService, 'resume'>; afterwards?: Afterwards },
   input: { gateId: string; reply: string; answeredBy: string; role?: Role; via: GateChannel },

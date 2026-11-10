@@ -328,6 +328,35 @@ export async function setApprovers(accounts: readonly { login: string; id: numbe
       const found = await client.query<Row>(`select ${COLUMNS} from people where github_user_id = $1 for update`, [account.id]);
       let row = found.rows[0];
       if (!row) {
+        // 0162 brings a `humans` login that had no `humanIds` pin over with
+        // Approves on and no account id. Matching by id alone missed it, so the
+        // walkthrough naming that login added a second person for the same
+        // account and turned the migrated one off. Only an unpinned row is
+        // taken by login: a pinned one is someone else's account under a login
+        // GitHub has since given away.
+        const byLogin = await client.query<Row>(
+          `select ${COLUMNS} from people where github_user_id is null and lower(github_login) = lower($1)
+            order by approves desc, added_at, id limit 1 for update`,
+          [account.login],
+        );
+        row = byLogin.rows[0];
+      }
+      if (row && (Number(row.github_user_id) !== account.id || row.github_login !== account.login || !row.approves)) {
+        // Pins an unpinned row, and takes GitHub's spelling of the login now,
+        // so a renamed account does not keep showing (and deriving `humans`
+        // from) the login it gave up.
+        const before = fromRow(row);
+        const updated = await client.query<Row>(
+          `update people set github_login = $2, github_user_id = $3, approves = true, updated_at = now() where id = $1 returning ${COLUMNS}`,
+          [row.id, account.login, account.id],
+        );
+        row = updated.rows[0] as Row;
+        const changed: Record<string, { from: unknown; to: unknown }> = {};
+        if (before.githubLogin !== account.login) changed.githubLogin = { from: before.githubLogin, to: account.login };
+        if (before.githubUserId !== account.id) changed.githubUserId = { from: before.githubUserId, to: account.id };
+        if (Object.keys(changed).length > 0) await audit(client, by, 'person.changed', row.id, changed);
+        if (!before.approves) await audit(client, by, 'person.approves_on', row.id, { login: account.login, why: 'humans' });
+      } else if (!row) {
         const added = await client.query<Row>(
           `insert into people (github_login, github_user_id, approves, added_by, added_how) values ($1, $2, true, $3, 'added') returning ${COLUMNS}`,
           [account.login, account.id, by],
@@ -335,9 +364,6 @@ export async function setApprovers(accounts: readonly { login: string; id: numbe
         row = added.rows[0] as Row;
         await audit(client, by, 'person.added', row.id, { githubLogin: account.login });
         await audit(client, by, 'person.approves_on', row.id, { login: account.login, why: 'humans' });
-      } else if (!row.approves) {
-        await client.query('update people set approves = true, updated_at = now() where id = $1', [row.id]);
-        await audit(client, by, 'person.approves_on', row.id, { login: row.github_login, why: 'humans' });
       }
       kept.add(row.id);
     }
