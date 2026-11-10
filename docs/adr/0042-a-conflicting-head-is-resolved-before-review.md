@@ -36,12 +36,19 @@ the conflicted files, and it does not count against `maxRounds`.
   minute.** `MergeabilityWait` re-reads every 5 s. A definite answer decides
   as above. After 60 s of unknown answers, the reviews start as they would
   have. The wait is recorded as `review.mergeability_waiting` and
-  `review.mergeability_decided`. At start-up, an open wait is resumed and
-  decided from one read.
+  `review.mergeability_decided`. The waiting event keeps the pull request as
+  the push delivered it, so a restart that cannot read GitHub still opens the
+  reviews. A decision is recorded only after it was acted on; a failure is
+  retried, and a restart decides an unrecorded one again. At start-up, an
+  open wait is resumed and decided from one read.
 - A round that waits on a busy builder starts when the builder's seat frees,
   through the `StageRunner`. The recovery runs a failed `resolve-conflict`
   task again with its card in Build.
 - Every patch round on a pull request that conflicts is given `conflict.md`.
+- A pull request with a resolution round open is not checked again: its
+  later pushes hold the reviews until the round resolves. A stale round, one
+  whose task failed and was not run again, would hold them on every push; it
+  is the recovery's to run again (`cardHoldsIt`), not this check's to clear.
 
 ## What this rules out
 

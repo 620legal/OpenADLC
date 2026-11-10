@@ -556,10 +556,15 @@ none yet, says its kind of work instead ("writing the change").
      definite answer decides as above. Once 60 s have passed since the first
      unknown read, the reviews start as before. A head that moved, closed or
      went to draft meanwhile is left to the newer delivery. It records
-     `review.mergeability_waiting` `{repo, repoFullName, pr, head, at}` and
-     `review.mergeability_decided`
+     `review.mergeability_waiting` `{repo, repoFullName, pr, head, seen, at}`,
+     where `seen` is the pull request as the push delivered it (head and base
+     branch, draft, labels), and `review.mergeability_decided`
      `{repo, pr, head, answer: conflicting | mergeable | unknown | moved, waitedMs, at}`.
-     At start-up, a wait with no decision is read once and decided at once.
+     The decision is recorded only once acting on it worked. A failure is
+     tried again from a fresh read 5 s on, up to three times, and then left
+     undecided for the next restart. At start-up, a wait with no decision is
+     read once and decided at once; when GitHub cannot be read, its reviews
+     open from `seen`.
 
    A head that GitHub reports conflicting only after its wait timed out is
    caught by the next push, by the patch-round notice below, or by the merge

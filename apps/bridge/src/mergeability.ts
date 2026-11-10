@@ -27,6 +27,14 @@ export const MERGEABILITY_RECHECK_MS = 5_000;
 /** And no longer than this after the first unknown read: then the reviews start as they would have. */
 export const MERGEABILITY_WAIT_MS = 60_000;
 
+/**
+ * How many times acting on an answer is tried before the hold is left
+ * undecided for a restart to pick up: a hold recorded as decided before its
+ * reviews opened was never tried again, and left its head with a pending gate
+ * and no reviews until the next push (#271's review).
+ */
+export const MERGEABILITY_DECIDE_TRIES = 3;
+
 export const MERGEABILITY_WAITING = 'review.mergeability_waiting';
 export const MERGEABILITY_DECIDED = 'review.mergeability_decided';
 
@@ -61,6 +69,19 @@ export interface MergeabilityHold {
   repoFullName: string;
   pr: number;
   head: string;
+  /**
+   * The pull request as the push delivered it. A restart rebuilds it from
+   * this when GitHub cannot be read: without it, a failed read at start-up
+   * had nothing to open the reviews on.
+   */
+  seen?: SeenPull;
+}
+
+export interface SeenPull {
+  headRef: string;
+  baseRef: string;
+  draft: boolean;
+  labels: string[];
 }
 
 /** What a hold ends in. `moved` (the head moved, or the pull request closed or went to draft) calls nothing: the newer delivery owns it. */
@@ -73,6 +94,7 @@ interface WaitingPayload {
   repoFullName: string;
   pr: number;
   head: string;
+  seen?: SeenPull;
   at: string;
 }
 
@@ -92,7 +114,7 @@ export interface MergeabilityWaitDeps {
 
 export class MergeabilityWait {
   /** One hold per `repo#pr@head`: a redelivery of the same push adds no second timer. */
-  private readonly held = new Map<string, { timer: unknown }>();
+  private readonly held = new Map<string, { timer: unknown; failures: number }>();
   private stopped = false;
 
   constructor(private readonly deps: MergeabilityWaitDeps) {}
@@ -131,8 +153,15 @@ export class MergeabilityWait {
   async hold(hold: MergeabilityHold, decide: Decide, since: number = this.now()): Promise<boolean> {
     const key = keyOf(hold);
     if (this.stopped || this.held.has(key)) return false;
-    this.held.set(key, { timer: null });
-    await this.record(MERGEABILITY_WAITING, { repo: hold.repo, repoFullName: hold.repoFullName, pr: hold.pr, head: hold.head, at: new Date(since).toISOString() });
+    this.held.set(key, { timer: null, failures: 0 });
+    await this.record(MERGEABILITY_WAITING, {
+      repo: hold.repo,
+      repoFullName: hold.repoFullName,
+      pr: hold.pr,
+      head: hold.head,
+      ...(hold.seen ? { seen: hold.seen } : {}),
+      at: new Date(since).toISOString(),
+    });
     this.log(`[bridge] ${hold.repoFullName}#${hold.pr}: GitHub has not said whether ${hold.head.slice(0, 7)} conflicts; its reviews wait for it`);
     this.next(hold, decide, since);
     return true;
@@ -152,25 +181,63 @@ export class MergeabilityWait {
     if (!this.held.has(key) || this.stopped) return;
     const pull = await this.deps.read(hold.repoFullName, hold.pr).catch(() => null);
     const waited = this.now() - since;
-    if (pull && movedOn(pull, hold.head)) return this.end(hold, 'moved', waited, null, decide);
+    if (pull && movedOn(pull, hold.head)) {
+      await this.end(hold, 'moved', waited, null, decide, since);
+      return;
+    }
     const answer = pull ? mergeabilityOf(pull) : 'unknown';
-    if (answer !== 'unknown') return this.end(hold, answer, waited, pull, decide);
-    if (waited >= (this.deps.waitMs ?? MERGEABILITY_WAIT_MS)) return this.end(hold, 'unknown', waited, pull, decide);
+    if (answer !== 'unknown' || waited >= (this.deps.waitMs ?? MERGEABILITY_WAIT_MS)) {
+      await this.end(hold, answer, waited, pull, decide, since);
+      return;
+    }
     this.next(hold, decide, since);
   }
 
-  private async end(hold: MergeabilityHold, answer: Decided, waitedMs: number, pull: PullNow | null, decide: Decide): Promise<void> {
-    this.held.delete(keyOf(hold));
+  /**
+   * Acts on the answer, then records it. The record comes after: a restart
+   * passes over a decided head, so one recorded before `decide` failed was
+   * never acted on again. A failed `decide` is tried again from a fresh read
+   * a few seconds on, up to `MERGEABILITY_DECIDE_TRIES`, and then left
+   * undecided for the next restart. True once decided.
+   */
+  private async end(
+    hold: MergeabilityHold,
+    answer: Decided,
+    waitedMs: number,
+    pull: PullNow | null,
+    decide: Decide,
+    since: number,
+  ): Promise<boolean> {
+    const key = keyOf(hold);
+    const failures = this.held.get(key)?.failures ?? 0;
+    this.held.delete(key);
+    if (answer !== 'moved') {
+      const failed = await decide(answer, pull, hold).then(
+        () => null,
+        (error: unknown) => (error instanceof Error ? error.message : String(error)),
+      );
+      if (failed !== null) {
+        const tries = failures + 1;
+        const again = !this.stopped && tries < MERGEABILITY_DECIDE_TRIES;
+        this.log(
+          `[bridge] ${hold.repoFullName}#${hold.pr}: what to do once GitHub said ${answer} failed (${tries} of ${MERGEABILITY_DECIDE_TRIES}): ${failed}; ${
+            again ? 'trying again shortly' : 'left undecided, so a restart decides it again'
+          }`,
+        );
+        if (again) {
+          this.held.set(key, { timer: null, failures: tries });
+          this.next(hold, decide, since);
+        }
+        return false;
+      }
+    }
     await this.record(MERGEABILITY_DECIDED, { repo: hold.repo, pr: hold.pr, head: hold.head, answer, waitedMs, at: new Date(this.now()).toISOString() });
     this.log(
       answer === 'moved'
         ? `[bridge] ${hold.repoFullName}#${hold.pr}: moved on from ${hold.head.slice(0, 7)} while GitHub had not said whether it conflicts; the newer push decides`
         : `[bridge] ${hold.repoFullName}#${hold.pr}: ${hold.head.slice(0, 7)} is ${answer === 'unknown' ? 'still unknown after the wait; its reviews start' : answer} (${Math.round(waitedMs / 1000)} s)`,
     );
-    if (answer === 'moved') return;
-    await decide(answer, pull, hold).catch((error: unknown) =>
-      this.log(`[bridge] ${hold.repoFullName}#${hold.pr}: what to do once GitHub said ${answer} failed: ${error instanceof Error ? error.message : error}`),
-    );
+    return true;
   }
 
   /**
@@ -196,18 +263,27 @@ export class MergeabilityWait {
     }
     const lines: string[] = [];
     for (const { payload } of newest.values()) {
-      const hold: MergeabilityHold = { repo: payload.repo, repoFullName: payload.repoFullName, pr: payload.pr, head: payload.head };
+      const hold: MergeabilityHold = {
+        repo: payload.repo,
+        repoFullName: payload.repoFullName,
+        pr: payload.pr,
+        head: payload.head,
+        ...(payload.seen ? { seen: payload.seen } : {}),
+      };
       if (done.has(keyOf(hold)) || this.held.has(keyOf(hold))) continue;
       const pull = await this.deps.read(hold.repoFullName, hold.pr).catch(() => null);
-      const waited = this.now() - Date.parse(payload.at);
+      const since = Date.parse(payload.at);
+      const waited = this.now() - since;
       if (pull && movedOn(pull, hold.head)) {
-        await this.end(hold, 'moved', waited, null, decide);
+        await this.end(hold, 'moved', waited, null, decide, since);
         lines.push(`${hold.repo}#${hold.pr}: moved on since its wait`);
         continue;
       }
+      // A read that fails is decided as unknown, with no pull: `decide`
+      // rebuilds it from `seen`, or fails and is tried again.
       const answer = pull ? mergeabilityOf(pull) : 'unknown';
-      await this.end(hold, answer, waited, pull, decide);
-      lines.push(`${hold.repo}#${hold.pr}: ${answer} after a restart`);
+      const decided = await this.end(hold, answer, waited, pull, decide, since);
+      lines.push(`${hold.repo}#${hold.pr}: ${answer} after a restart${decided ? '' : ', not yet acted on; tried again shortly'}`);
     }
     return lines;
   }

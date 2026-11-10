@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   MERGEABILITY_DECIDED,
+  MERGEABILITY_DECIDE_TRIES,
   MERGEABILITY_RECHECK_MS,
   MERGEABILITY_WAIT_MS,
   MERGEABILITY_WAITING,
@@ -82,7 +83,7 @@ function harness(answers: (PullNow | null)[], events: { type: string; at: string
       timers.shift();
       clock = due.at;
       due.fn();
-      for (let i = 0; i < 10; i++) await Promise.resolve();
+      for (let i = 0; i < 50; i++) await Promise.resolve();
     }
     clock = until;
   };
@@ -189,5 +190,75 @@ describe('MergeabilityWait', () => {
     expect(decide).toHaveBeenCalledWith('unknown', expect.objectContaining({ headSha: 'abc1234' }), expect.objectContaining({ pr: 7 }));
     expect(lines).toHaveLength(1);
     expect(timers).toHaveLength(0);
+  });
+
+  it('records a decision only once acting on it worked, and tries a failure again from a fresh read', async () => {
+    const { wait, read, recorded, advance, timers } = harness([pull({ mergeable: true, mergeableState: 'clean' })]);
+    const decide = vi.fn().mockRejectedValueOnce(new Error('GitHub is down')).mockResolvedValue(undefined);
+
+    await wait.hold(HOLD, decide);
+    await advance(MERGEABILITY_RECHECK_MS);
+
+    expect(decide).toHaveBeenCalledTimes(1);
+    expect(recorded.map((event) => event.type)).toEqual([MERGEABILITY_WAITING]);
+    expect(wait.holding(HOLD)).toBe(true);
+
+    await advance(MERGEABILITY_RECHECK_MS);
+
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(decide).toHaveBeenCalledTimes(2);
+    expect(recorded.map((event) => event.type)).toEqual([MERGEABILITY_WAITING, MERGEABILITY_DECIDED]);
+    expect(timers).toHaveLength(0);
+  });
+
+  it('leaves a head undecided for the next restart once acting on it has failed every try', async () => {
+    const { wait, recorded, advance, timers } = harness([pull({ mergeable: true, mergeableState: 'clean' })]);
+    const decide = vi.fn().mockRejectedValue(new Error('GitHub is down'));
+
+    await wait.hold(HOLD, decide);
+    await advance(MERGEABILITY_RECHECK_MS * (MERGEABILITY_DECIDE_TRIES + 2));
+
+    expect(decide).toHaveBeenCalledTimes(MERGEABILITY_DECIDE_TRIES);
+    expect(recorded.map((event) => event.type)).toEqual([MERGEABILITY_WAITING]);
+    expect(timers).toHaveLength(0);
+    expect(wait.holding(HOLD)).toBe(false);
+  });
+
+  it('records what the push delivered with the wait, so a restart can rebuild it', async () => {
+    const seen = { headRef: 'agent/builder/3-x', baseRef: 'main', draft: false, labels: ['safety'] };
+    const { wait, recorded } = harness([pull()]);
+
+    await wait.hold({ ...HOLD, seen }, vi.fn(async () => undefined));
+
+    expect(recorded[0]?.payload).toMatchObject({ seen });
+  });
+
+  it('decides a wait a restart cut short even when GitHub cannot be read, with what the wait recorded', async () => {
+    const seen = { headRef: 'agent/builder/3-x', baseRef: 'main', draft: false, labels: [] };
+    const waiting = { type: MERGEABILITY_WAITING, at: '2026-11-10T11:59:30.000Z', payload: { ...HOLD, seen, at: '2026-11-10T11:59:30.000Z' } };
+    const { wait, recorded } = harness([null], [waiting]);
+    const decide = vi.fn(async () => undefined);
+
+    const lines = await wait.resume(decide);
+
+    expect(decide).toHaveBeenCalledWith('unknown', null, expect.objectContaining({ pr: 7, seen }));
+    expect(recorded.at(-1)).toMatchObject({ type: MERGEABILITY_DECIDED, payload: { answer: 'unknown' } });
+    expect(lines).toEqual([`${HOLD.repo}#7: unknown after a restart`]);
+  });
+
+  it('tries a restart’s decision again when acting on it fails, and records it only once it works', async () => {
+    const waiting = { type: MERGEABILITY_WAITING, at: '2026-11-10T11:59:30.000Z', payload: { ...HOLD, at: '2026-11-10T11:59:30.000Z' } };
+    const { wait, recorded, advance } = harness([null, pull()], [waiting]);
+    const decide = vi.fn().mockRejectedValueOnce(new Error('nothing to rebuild it from')).mockResolvedValue(undefined);
+
+    const lines = await wait.resume(decide);
+
+    expect(lines).toEqual([`${HOLD.repo}#7: unknown after a restart, not yet acted on; tried again shortly`]);
+    expect(recorded.filter((event) => event.type === MERGEABILITY_DECIDED)).toEqual([]);
+
+    await advance(MERGEABILITY_WAIT_MS);
+
+    expect(decide).toHaveBeenLastCalledWith('unknown', expect.objectContaining({ headSha: 'abc1234' }), expect.objectContaining({ pr: 7 }));
+    expect(recorded.at(-1)).toMatchObject({ type: MERGEABILITY_DECIDED, payload: { answer: 'unknown' } });
   });
 });

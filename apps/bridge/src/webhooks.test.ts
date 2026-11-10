@@ -11724,4 +11724,74 @@ describe('a crew pull request whose head conflicts with its base, before any sea
     expect(lines).toEqual(['openadlc#31: mergeable after a restart']);
     expect(reviews()).toHaveLength(1);
   });
+
+  it('still opens the reviews after a restart when GitHub cannot be read, from what the wait recorded', async () => {
+    const { webhooks, reviews, github, rounds } = bridge([CLEAN]);
+    const at = new Date().toISOString();
+    const decided: unknown[] = [];
+    const seen = { headRef: PULL.head.ref, baseRef: 'main', draft: false, labels: [] };
+    const wait = new MergeabilityWait({
+      read: async () => {
+        throw new Error('GitHub is down');
+      },
+      record: async (type, payload) => {
+        if (type === 'review.mergeability_decided') decided.push(payload);
+      },
+      events: async (type) =>
+        type === 'review.mergeability_waiting' ? [{ at, payload: { repo: 'openadlc', repoFullName: 'janedoe/openadlc', pr: 31, head: HEAD, seen, at } }] : [],
+      log: () => undefined,
+    });
+    webhooks.useMergeabilityWait(wait);
+
+    let lines: string[] = [];
+    await quietly(async () => {
+      lines = await webhooks.resumeMergeabilityWaits();
+    });
+
+    expect(lines).toEqual(['openadlc#31: unknown after a restart']);
+    expect(reviews()).toHaveLength(1);
+    expect(rounds.start).not.toHaveBeenCalled();
+    expect(github.getPullRequest).not.toHaveBeenCalled();
+    expect(decided).toEqual([expect.objectContaining({ head: HEAD, answer: 'unknown' })]);
+  });
+
+  it('records a pushed head with the wait, so a restart can open its reviews without GitHub', async () => {
+    const { webhooks, recorded } = bridge([UNKNOWN]);
+
+    await opened(webhooks);
+
+    expect(recorded[0]).toMatchObject({
+      type: 'review.mergeability_waiting',
+      payload: { pr: 31, head: HEAD, seen: { headRef: PULL.head.ref, baseRef: 'main', draft: false } },
+    });
+  });
+
+  it('leaves a restart’s wait undecided when GitHub cannot be read and nothing was recorded to open it on', async () => {
+    const { webhooks, reviews } = bridge([CLEAN]);
+    const at = new Date().toISOString();
+    const decided: unknown[] = [];
+    const wait = new MergeabilityWait({
+      read: async () => {
+        throw new Error('GitHub is down');
+      },
+      record: async (type, payload) => {
+        if (type === 'review.mergeability_decided') decided.push(payload);
+      },
+      events: async (type) =>
+        type === 'review.mergeability_waiting' ? [{ at, payload: { repo: 'openadlc', repoFullName: 'janedoe/openadlc', pr: 31, head: HEAD, at } }] : [],
+      setTimer: () => 1,
+      clearTimer: () => undefined,
+      log: () => undefined,
+    });
+    webhooks.useMergeabilityWait(wait);
+
+    let lines: string[] = [];
+    await quietly(async () => {
+      lines = await webhooks.resumeMergeabilityWaits();
+    });
+
+    expect(lines).toEqual(['openadlc#31: unknown after a restart, not yet acted on; tried again shortly']);
+    expect(reviews()).toEqual([]);
+    expect(decided).toEqual([]);
+  });
 });

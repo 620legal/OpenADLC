@@ -2606,7 +2606,16 @@ export class Webhooks {
       state: 'pending',
       description: `waiting for GitHub to say whether it conflicts with ${base}`,
     });
-    await this.mergeability!.hold({ repo: repo.name, repoFullName, pr: pr.number, head: pr.head.sha }, this.decideMergeability(repo, pr, forIssue));
+    await this.mergeability!.hold(
+      {
+        repo: repo.name,
+        repoFullName,
+        pr: pr.number,
+        head: pr.head.sha,
+        seen: { headRef: pr.head.ref, baseRef: base, draft: pr.draft, labels: pr.labels.map((label) => label.name) },
+      },
+      this.decideMergeability(repo, pr, forIssue),
+    );
     return true;
   }
 
@@ -2663,18 +2672,28 @@ export class Webhooks {
   async resumeMergeabilityWaits(): Promise<string[]> {
     if (!this.mergeability) return [];
     return this.mergeability.resume(async (answer, now, hold) => {
-      if (!now) return;
-      const repo = await repos.getRepoByName(hold.repo).catch(() => null);
+      // GitHub could not be read: the pull request as the push delivered it,
+      // recorded with the wait. Returning here instead, as this once did,
+      // recorded the head decided with no reviews opened, and no restart
+      // looked at it again (#271's review). With nothing recorded either, it
+      // fails, so the wait tries again and a later restart does too.
+      const seen = now
+        ? { headRef: now.headRef, baseRef: now.baseRef, draft: now.draft, labels: now.labels, headSha: now.headSha }
+        : hold.seen
+          ? { ...hold.seen, headSha: hold.head }
+          : null;
+      if (!seen) throw new Error(`${hold.repoFullName}#${hold.pr} could not be read from GitHub, and its wait recorded nothing to open its reviews on`);
+      const repo = await repos.getRepoByName(hold.repo);
       if (!repo) return;
-      const forIssue = issueNumberFromBranch(now.headRef);
+      const forIssue = issueNumberFromBranch(seen.headRef);
       if (!forIssue) return;
       const pr: NonNullable<WebhookPayload['pull_request']> = {
-        number: now.number,
+        number: hold.pr,
         title: '',
-        draft: now.draft,
-        head: { sha: now.headSha, ref: now.headRef },
-        base: { ref: now.baseRef },
-        labels: now.labels.map((name) => ({ name })),
+        draft: seen.draft,
+        head: { sha: seen.headSha, ref: seen.headRef },
+        base: { ref: seen.baseRef },
+        labels: seen.labels.map((name) => ({ name })),
         html_url: '',
       };
       await this.decideMergeability(repo, pr, forIssue)(answer, now, hold);
