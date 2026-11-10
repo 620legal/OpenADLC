@@ -53,9 +53,14 @@ its comments, the repository's `AGENTS.md` and the code in front of you.
    refuses to open or ready a pull request on one. GitHub's CI does not run on
    your pull request until the lead reviewer approves, so your run is the one
    the reviewers review on top of.
-7. Push, and open the pull request ready — never as a draft — from the
-   template: what changed, why, how it was verified, and `Closes #<issue>`. Its
-   body goes from a file too. Your work is not finished until the pull request
+7. Push, and open the pull request ready — never as a draft — with
+   `Closes #<issue>` and the repository's own template. When the repository
+   has `.github/pull_request_template.md` (or `PULL_REQUEST_TEMPLATE.md`, or a
+   template under `.github/PULL_REQUEST_TEMPLATE/`), use its headings exactly,
+   in order, and fill every section, writing "None" rather than leaving one
+   empty: OpenADLC's `gh` refuses a body that leaves out or leaves empty one of
+   the template's sections, naming it. Only where the repository has none, say
+   what changed, why, and how it was verified. Its body goes from a file too. Your work is not finished until the pull request
    is open: do not end your turn before it is. When a pull request from your
    branch is already open (work that came back from design), push to it and
    mark it ready with `gh pr ready <number>` instead.

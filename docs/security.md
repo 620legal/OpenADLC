@@ -715,7 +715,21 @@ none of it.
   approves or asks for changes. A skill that denies `pr review` (a builder, QA,
   spec, intake) is refused that same `gh api` verdict, not only `gh pr review`;
   a `COMMENT` review through `gh api` still goes through for it, on purpose,
-  since a comment approves nothing. `apps/hostd/src/gh-shim-run.test.ts` runs the
+  since a comment approves nothing. In a task's session (any skill), where the
+  worktree has a pull request template (`pull_request_template.md` in
+  `.github/`, at the root or in `docs/`, in any case; else the `.md` files under
+  `.github/PULL_REQUEST_TEMPLATE/`, any one of which a body may satisfy), it
+  refuses a `gh pr create` or `gh pr edit` whose body leaves out one of the
+  template's headings, or leaves one empty, and names each such section. A
+  heading is an ATX heading outside HTML comments and code fences, matched by
+  level and text. A section runs to the next template heading, so the author's
+  sub-headings count as content, and is empty when only whitespace is left once
+  HTML comments (placeholders, OpenADLC's markers) are out. A `gh pr create`
+  with no body to read (`--fill`) is refused; a `gh pr edit` with none passes.
+  The order of sections and their placeholder prose are not checked
+  (docs/adr/0045-a-pull-request-body-is-held-to-the-repositorys-template.md).
+  This is a guard for the repository's CI, which runs only after the lead
+  approves, not a boundary. `apps/hostd/src/gh-shim-run.test.ts` runs the
   script itself against a stand-in `gh`, so a refusal it stops calling fails.
 
 **Local CI is recorded by hostd, never by the session.** `openadlc-ci` asks the

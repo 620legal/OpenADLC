@@ -682,3 +682,151 @@ describe('what a skill denies a session', () => {
     }
   });
 });
+
+describe('a pull request body held to the repository’s template', () => {
+  const guard = shim as unknown as {
+    templateRefusal: (args: string[], body: string | null, templates: { path: string; text: string }[]) => string | null;
+    templateHeadings: (text: string) => string[];
+    givenBody: (args: string[], io: { read: (f: string) => string; stdin: () => string }) => string | null;
+    prTemplates: (root: string, io: { list: (dir: string) => string[]; read: (path: string) => string }) => { path: string; text: string }[];
+  };
+  const TEMPLATE = [
+    '<!-- SPDX-License-Identifier: Apache-2.0 -->',
+    'Closes #',
+    '',
+    '## A',
+    '',
+    '<!-- What changed. -->',
+    '',
+    '## B',
+    '',
+    '<!--',
+    'How to see it.',
+    '-->',
+    '',
+    '## C',
+    '',
+    '<!-- What is not proven. -->',
+    '',
+  ].join('\n');
+  const templates = [{ path: '.github/pull_request_template.md', text: TEMPLATE }];
+  const create = ['pr', 'create', '--title', 't', '--body-file', 'body.md'];
+
+  it('names a heading the body leaves out, and the template it is from', () => {
+    const refused = guard.templateRefusal(create, 'Closes #9\n\n## A\n\nThis.\n\n## C\n\nNone\n', templates);
+    expect(refused).toContain('leaves out "## B"');
+    expect(refused).toContain('.github/pull_request_template.md');
+    expect(refused).not.toContain('"## A"');
+  });
+
+  it('names a section left with only the template’s comment in it as empty', () => {
+    const refused = guard.templateRefusal(create, '## A\n\nThis.\n\n## B\n\n<!--\nHow to see it.\n-->\n\n## C\n\nNone\n', templates);
+    expect(refused).toContain('leaves "## B" empty');
+    expect(refused).not.toContain('leaves out');
+  });
+
+  it('names every missing and every empty section in one message', () => {
+    const refused = guard.templateRefusal(create, '## A\n\n\n## C\n', templates);
+    expect(refused).toMatch(/leaves out "## B" and leaves "## A", "## C" empty/);
+  });
+
+  it('counts a section holding only the pr_opened marker as empty', () => {
+    const body = '## A\n\nThis.\n\n## B\n\nRan it.\n\n## C\n\n<!-- openadlc:{"event":"pr_opened"} -->\n';
+    expect(guard.templateRefusal(create, body, templates)).toContain('leaves "## C" empty');
+  });
+
+  it('lets through a body that fills every section, None and the builder’s own sub-headings included', () => {
+    const body = 'Closes #9\n\n## A\n\n### note\n\nThis.\n\n## B\n\nRan it.\n\n## C\n\nNone\n\n<!-- openadlc:{"event":"pr_opened"} -->\n';
+    expect(guard.templateRefusal(create, body, templates)).toBeNull();
+  });
+
+  it('counts a sub-heading alone as content, and does not take it for the next section', () => {
+    expect(guard.templateRefusal(create, '## A\n\n### note\n\n## B\n\nx\n\n## C\n\nNone\n', templates)).toBeNull();
+  });
+
+  it('matches a heading by its level and text, whitespace collapsed, case kept', () => {
+    expect(guard.templateRefusal(create, '##   A  ##\n\nx\n\n## B\n\nx\n\n## C\n\nx\n', templates)).toBeNull();
+    expect(guard.templateRefusal(create, '### A\n\nx\n\n## B\n\nx\n\n## C\n\nx\n', templates)).toContain('leaves out "## A"');
+    expect(guard.templateRefusal(create, '## a\n\nx\n\n## B\n\nx\n\n## C\n\nx\n', templates)).toContain('leaves out "## A"');
+  });
+
+  it('does not take a heading inside a code fence in the body for the section', () => {
+    expect(guard.templateRefusal(create, '## A\n\nx\n\n```\n## B\n```\n\n## C\n\nx\n', templates)).toContain('leaves out "## B"');
+  });
+
+  it('checks a pr edit that gives a body, and lets one that gives none through', () => {
+    expect(guard.templateRefusal(['pr', 'edit', '7', '--body', '## A\n\nx'], '## A\n\nx', templates)).toContain('leaves out "## B", "## C"');
+    expect(guard.templateRefusal(['pr', 'edit', '7', '--title', 'x'], null, templates)).toBeNull();
+  });
+
+  it('refuses a pr create that gives no body to read, naming the template to fill', () => {
+    const refused = guard.templateRefusal(['pr', 'create', '--fill'], null, templates);
+    expect(refused).toContain('--body-file');
+    expect(refused).toContain('.github/pull_request_template.md');
+    expect(guard.templateRefusal(['pr', '-R', 'o/r', 'create', '--fill'], null, templates)).not.toBeNull();
+  });
+
+  it('holds nothing but pr create and pr edit to the template', () => {
+    expect(guard.templateRefusal(['issue', 'create', '--title', 't'], 'x', templates)).toBeNull();
+    expect(guard.templateRefusal(['pr', 'comment', '7'], 'x', templates)).toBeNull();
+  });
+
+  it('lets any body through in a repository with no template, or one with no headings', () => {
+    expect(guard.templateRefusal(create, 'anything', [])).toBeNull();
+    expect(guard.templateRefusal(['pr', 'create', '--fill'], null, [])).toBeNull();
+    expect(guard.templateRefusal(create, 'anything', [{ path: 'pull_request_template.md', text: 'Closes #\n\n<!-- ## A -->\n' }])).toBeNull();
+  });
+
+  it('passes a body that fills any one of several templates, and measures a refusal against the closest', () => {
+    const several = [
+      { path: '.github/PULL_REQUEST_TEMPLATE/bug.md', text: '## Bug\n\n## Fix\n\n## Risk\n' },
+      { path: '.github/PULL_REQUEST_TEMPLATE/feature.md', text: '## Feature\n\n## Tests\n' },
+    ];
+    expect(guard.templateRefusal(create, '## Bug\n\nx\n\n## Fix\n\ny\n\n## Risk\n\nNone\n', several)).toBeNull();
+    expect(guard.templateRefusal(create, '## Feature\n\nx\n\n## Tests\n\ny\n', several)).toBeNull();
+    const refused = guard.templateRefusal(create, '## Feature\n\nx\n', several);
+    expect(refused).toContain('leaves out "## Tests"');
+    expect(refused).toContain('feature.md');
+  });
+
+  it('does not ask for a template heading inside an HTML comment or a code fence', () => {
+    const text = '## A\n<!--\n## Hidden\n-->\n```md\n## Fenced\n```\n~~~\n# Also\n~~~\n## B ##\n#nospace\n';
+    expect(guard.templateHeadings(text)).toEqual(['## A', '## B']);
+  });
+
+  it('reads the body as rewrite reads it, from --body, --body-file or stdin', () => {
+    const files = { read: (f: string) => (f === 'b.md' ? 'from file' : ''), stdin: () => 'from stdin' };
+    expect(guard.givenBody(['pr', 'create', '--body', 'inline'], files)).toBe('inline');
+    expect(guard.givenBody(['pr', 'create', '--body-file=b.md'], files)).toBe('from file');
+    expect(guard.givenBody(['pr', 'create', '-F', '-'], files)).toBe('from stdin');
+    expect(guard.givenBody(['pr', 'edit', '7', '--title', 'x'], files)).toBeNull();
+  });
+
+  it('finds the template where GitHub does: .github, the root, docs, then the template folder', () => {
+    const tree: Record<string, string[]> = {
+      '/r': ['PULL_REQUEST_TEMPLATE.md', '.github', 'docs'],
+      '/r/.github': ['PULL_REQUEST_TEMPLATE', 'workflows'],
+      '/r/.github/PULL_REQUEST_TEMPLATE': ['b.md', 'a.md', 'notes.txt'],
+      '/r/docs': ['pull_request_template.md'],
+    };
+    const io = { list: (dir: string) => tree[dir] ?? [], read: (path: string) => `text of ${path}` };
+    expect(guard.prTemplates('/r', io)).toEqual([{ path: 'PULL_REQUEST_TEMPLATE.md', text: 'text of /r/PULL_REQUEST_TEMPLATE.md' }]);
+    tree['/r/.github']!.push('pull_request_template.md');
+    expect(guard.prTemplates('/r', io).map((one) => one.path)).toEqual(['.github/pull_request_template.md']);
+    tree['/r/.github']!.pop();
+    tree['/r'] = ['docs'];
+    expect(guard.prTemplates('/r', io).map((one) => one.path)).toEqual(['docs/pull_request_template.md']);
+    tree['/r'] = ['.github'];
+    tree['/r/docs'] = [];
+    expect(guard.prTemplates('/r', io).map((one) => one.path)).toEqual(['.github/PULL_REQUEST_TEMPLATE/a.md', '.github/PULL_REQUEST_TEMPLATE/b.md']);
+    expect(guard.prTemplates('/empty', io)).toEqual([]);
+  });
+
+  it('reads this repository’s own template, and holds it to itself unfilled', () => {
+    const text = readFileSync(join(import.meta.dirname, '..', '..', '..', '.github', 'pull_request_template.md'), 'utf8');
+    expect(guard.templateHeadings(text)).toEqual(['## What changed', '## How to see it', '## What is not proven here']);
+    expect(guard.templateRefusal(create, text, [{ path: '.github/pull_request_template.md', text }])).toContain(
+      'leaves "## What changed", "## How to see it", "## What is not proven here" empty',
+    );
+  });
+});

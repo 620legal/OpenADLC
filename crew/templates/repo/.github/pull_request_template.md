@@ -33,6 +33,7 @@ read the code and do not run it, so say what you saw.
 ## What is not proven here
 
 <!--
-What you could not check, and what it would take. Delete this section only if
-there is genuinely nothing — that is rarer than it looks.
+What you could not check, and what it would take. Write None rather than
+deleting this section when there is genuinely nothing — that is rarer than it
+looks. OpenADLC's `gh` refuses a body that leaves a section out or empty.
 -->
