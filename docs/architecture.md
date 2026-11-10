@@ -723,14 +723,30 @@ none yet, says its kind of work instead ("writing the change").
      before its build starts, which does not start without it, and read with
      no time window. Its own pull request does not join the line until the
      dependency has merged, however long that takes; while the stack cannot
-     be read, it does not join either. The line then merges the base into its branch itself, through
-     GitHub's merges endpoint, which answers with the commit it made. The
+     be read, it does not join either.
+   - The base is merged into its branch as soon as the dependency merges
+     (`MergeLine.updateStacked`, from the merge's delivery), so its reviewers
+     read its own change and not the dependency's again: through GitHub's
+     merges endpoint, which answers with the commit it made, in the line's
+     queue for the repository, so a second delivery or a line step finds it
+     up to date and merges nothing. One held (`openadlc:paused`) is updated
+     when it is let go, and one its builder is still working on is updated
+     at its next push. A stacked pull request opened, or pushed by its
+     builder with a local CI pass, after its dependency shipped is brought up
+     to date before its first round instead, and that round opens on the
+     merged head. The line still updates a stacked branch before it lands it
+     if the base has moved since.
+   - Across the update made at the dependency's merge, or the line's, the
      approvals stand only for a push to that exact SHA, whose first parent is
-     the head the line read, and only once (`stack.updated`). Any other push,
-     even one from the same head touching only files it already changed, is
-     reviewed as any push is. When the update conflicts, the line records
-     that it made nothing, and the builder's resolution goes to a resolution
-     round with that round's re-review.
+     the head the line read, and only once (`stack.updated`). Across one made
+     before a first round (`stack.updating` with `carry: false`) none do:
+     there were none, and the push is the line's, reviewed with no local CI
+     asked of it. It opens the round even when the diff against the base
+     fingerprints as before (`Stacking.opensRound`). Any other push, even one from the same head touching only
+     files it already changed, is reviewed as any push is. When the update
+     conflicts, nothing is recorded as made, and the builder's resolution
+     goes to a resolution round with that round's re-review; that is the
+     only time a builder is started for it.
    - If the dependency is sent back to build, or closed without merging, the
      stacked issue is held (`openadlc:paused`) with a note, once per stacking
      (`stacks.paused_at`). The hold goes by itself once the dependency is
@@ -746,7 +762,8 @@ none yet, says its kind of work instead ("writing the change").
      (`stack_held`) whose Resume lets it go; a hold a person put on is theirs.
    - It is one level only, and on unless the repository sets
      `stacking: false`. It records `stack.started`, `stack.updating` (the
-     head about to be updated), `stack.made` `{repo, pr, from, to, at}` (the
+     head about to be updated, and `carry`, whether the approvals stand
+     across it; absent reads true), `stack.made` `{repo, pr, from, to, at}` (the
      commit the update made, `to: null` when it conflicted, failed or landed
      on a head that had moved), `stack.updated`, `stack.paused` and
      `stack.let_go` `{repo, issue, on, onHead, merged, redo, at}`.
