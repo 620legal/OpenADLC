@@ -468,14 +468,54 @@ export function securityVerdictOn(
   seat: string,
   onThisDiff: (commitId: string | null) => boolean,
 ): string | null {
-  let verdict: string | null = null;
+  return seatVerdictOn(reviews, crew, seat, onThisDiff)?.verdict ?? null;
+}
+
+/**
+ * A seat's latest verdict on this diff, and the review that gave it, read as
+ * `securityVerdictOn` reads the security seat's. A review with neither an
+ * approval nor a marker verdict — a plain comment — leaves the earlier one
+ * standing. Null when the seat gave none.
+ */
+export function seatVerdictOn(
+  reviews: readonly { id?: number; user: string | null; state: string; body?: string | null; commitId?: string | null; submittedAt?: string | null }[],
+  crew: readonly { name: string; slot?: string; githubLogin: string | null }[],
+  seat: string,
+  onThisDiff: (commitId: string | null) => boolean,
+): { verdict: string; reviewId: number | null; submittedAt: string | null } | null {
+  let found: { verdict: string; reviewId: number | null; submittedAt: string | null } | null = null;
   for (const review of reviews) {
     const author = whoWrote(review.user, crew, { bot: seatOf(review.body) });
     if (author.kind !== 'openadlc' || author.bot?.name !== seat || !onThisDiff(review.commitId ?? null)) continue;
     const said = ownReviewMarker(review.body);
-    verdict = review.state === 'APPROVED' ? 'approve' : typeof said?.verdict === 'string' ? said.verdict : verdict;
+    const verdict = review.state === 'APPROVED' ? 'approve' : typeof said?.verdict === 'string' ? said.verdict : null;
+    if (verdict) found = { verdict, reviewId: review.id ?? null, submittedAt: review.submittedAt ?? null };
   }
-  return verdict;
+  return found;
+}
+
+/**
+ * Whether review `a` came after review `b`: by `submittedAt` when both have
+ * one, otherwise by GitHub's review id, which increases.
+ */
+export function reviewedAfter(
+  a: { reviewId: number | null; submittedAt: string | null },
+  b: { reviewId: number | null; submittedAt: string | null },
+): boolean {
+  if (a.submittedAt && b.submittedAt) {
+    const left = Date.parse(a.submittedAt);
+    const right = Date.parse(b.submittedAt);
+    if (!Number.isNaN(left) && !Number.isNaN(right) && left !== right) return left > right;
+  }
+  if (a.reviewId !== null && b.reviewId !== null) return a.reviewId > b.reviewId;
+  return false;
+}
+
+/** A request for changes a seat gave after the lead's latest review of this diff, while the lead approves it. */
+export interface LateAsk {
+  seat: string;
+  reviewId: number | null;
+  submittedAt: string | null;
 }
 
 /** Each login's latest verdict, a comment being none. */
@@ -750,6 +790,24 @@ function lastPostedBy<M extends { name: string; slot?: string; githubLogin: stri
     const author = whoWrote(review.user, crew, { bot: seatOf(review.body) });
     if (author.kind !== 'openadlc' || !author.bot || !seats.includes(author.bot.name) || !review.submittedAt) continue;
     if (!last || Date.parse(review.submittedAt) > Date.parse(last)) last = review.submittedAt;
+  }
+  return last;
+}
+
+/** A seat's latest review among these, whatever it said; null when it posted none. */
+function lastReviewBy<M extends { name: string; slot?: string; githubLogin: string | null }>(
+  reviews: readonly { id?: number; user: string | null; state: string; body?: string | null; submittedAt?: string | null }[],
+  crew: readonly M[],
+  seat: string,
+): { reviewId: number | null; submittedAt: string | null } | null {
+  let last: { reviewId: number | null; submittedAt: string | null } | null = null;
+  for (const review of reviews) {
+    if (review.state.toUpperCase() === 'PENDING') continue;
+    const author = whoWrote(review.user, crew, { bot: seatOf(review.body) });
+    if (author.kind !== 'openadlc' || author.bot?.name !== seat) continue;
+    const here = { reviewId: review.id ?? null, submittedAt: review.submittedAt ?? null };
+    // Reviews come oldest first: a later one wins unless it is known to be earlier.
+    if (!last || !reviewedAfter(last, here)) last = here;
   }
   return last;
 }
@@ -1704,15 +1762,40 @@ export function reviewLimits(raw: unknown): Pick<ReviewRules, 'maxRounds' | 'sen
   };
 }
 
+/**
+ * A closing issue's labels that some seat's `trigger.labels` names, and only
+ * those (`Automation.closingIssueLabels`). Kept apart from the pull request's
+ * own labels: an issue's `revert` or `deps` must not reach the fast path or
+ * scope, which read the pull request's alone.
+ */
+export interface IssueLabels {
+  number: number;
+  labels: string[];
+}
+
+/** The first closing issue carrying one of a seat's trigger labels, and which label. */
+function issueTrigger(labels: readonly string[], issues: readonly IssueLabels[]): { number: number; label: string } | null {
+  for (const issue of [...issues].sort((a, b) => a.number - b.number)) {
+    const label = labels.find((one) => issue.labels.includes(one));
+    if (label) return { number: issue.number, label };
+  }
+  return null;
+}
+
 /** Why a reviewer seat is asked on a pull request, or null when it is not. */
 function triggeredBy(
   entry: ReviewerSeat,
-  input: { labels: readonly string[]; changedFiles: readonly string[]; sample: number },
+  input: { labels: readonly string[]; issueLabels?: readonly IssueLabels[]; changedFiles: readonly string[]; sample: number },
 ): string | null {
   // The lead decides every pull request, whatever trigger it was given.
   if (entry.lead) return 'lead review is required on every pull request';
   if (entry.trigger === 'always') return `the ${entry.lens} lens reviews every pull request`;
   if (entry.trigger.labels.some((label) => input.labels.includes(label))) return `labels put this in the ${entry.lens} lens`;
+  // A `safety` label intake or design put on the issue asked for nothing
+  // while only the pull request's labels were read: a builder's pull request
+  // carries none, so the security seat was asked only by path or by sample.
+  const fromIssue = issueTrigger(entry.trigger.labels, input.issueLabels ?? []);
+  if (fromIssue) return `label ${fromIssue.label} on #${fromIssue.number} put this in the ${entry.lens} lens`;
   if (entry.trigger.paths.some((path) => input.changedFiles.some((file) => file.startsWith(path)))) {
     return `touches a path in the ${entry.lens} lens`;
   }
@@ -1721,9 +1804,13 @@ function triggeredBy(
 }
 
 /** Whether a seat is asked only by default: on every pull request, or by the sample. */
-function askedByDefault(entry: ReviewerSeat, input: { labels: readonly string[]; changedFiles: readonly string[] }): boolean {
+function askedByDefault(
+  entry: ReviewerSeat,
+  input: { labels: readonly string[]; issueLabels?: readonly IssueLabels[]; changedFiles: readonly string[] },
+): boolean {
   if (entry.trigger === 'always') return true;
-  const byLabel = entry.trigger.labels.some((label) => input.labels.includes(label));
+  const byLabel =
+    entry.trigger.labels.some((label) => input.labels.includes(label)) || issueTrigger(entry.trigger.labels, input.issueLabels ?? []) !== null;
   const byPath = entry.trigger.paths.some((path) => input.changedFiles.some((file) => file.startsWith(path)));
   return !byLabel && !byPath;
 }
@@ -1818,6 +1905,49 @@ export class Automation {
   }
 
   /**
+   * The labels on the issues a pull request closes that some seat's
+   * `trigger.labels` names, for `decideReviewers`' `issueLabels`. Read from
+   * GitHub on every decision, as the rest of it is, so a label put on the
+   * issue after the pull request opened counts the next time seats are
+   * chosen. This repository's issues only, as `scopeFacts` reads them.
+   *
+   * Never throws: an issue that cannot be read counts as unlabelled, so seats
+   * fall back to the pull request's own labels and nothing is held for it.
+   */
+  async closingIssueLabels(
+    client: Pick<GitHubClient, 'closingIssues' | 'getIssue'>,
+    repoFullName: string,
+    prNumber: number,
+  ): Promise<IssueLabels[]> {
+    const triggers = new Set(
+      this.reviewRules([]).reviewers.flatMap((entry) => (entry.lead || entry.trigger === 'always' ? [] : entry.trigger.labels)),
+    );
+    if (triggers.size === 0) return [];
+    let numbers: number[];
+    try {
+      numbers = await client.closingIssues(repoFullName, prNumber);
+    } catch (error) {
+      console.warn(
+        `[review] could not read the issues ${repoFullName}#${prNumber} closes; its seats are chosen from its own labels: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return [];
+    }
+    const read = await Promise.all(
+      (numbers ?? []).map(async (number): Promise<IssueLabels | null> => {
+        try {
+          const issue = await client.getIssue(repoFullName, number);
+          if (!issue || issue.pullRequest) return null;
+          const labels = (issue.labels ?? []).filter((label) => triggers.has(label));
+          return labels.length > 0 ? { number, labels } : null;
+        } catch {
+          return null;
+        }
+      }),
+    );
+    return read.filter((one): one is IssueLabels => one !== null);
+  }
+
+  /**
    * Decides who reviews a pull request, from the rules, not from a bot's choice.
    *
    * Given the crew, the reviewers come back as the names those bots go by, so
@@ -1826,7 +1956,13 @@ export class Automation {
    */
   decideReviewers(
     input: {
+      /** The pull request's own labels: every rule reads these. */
       labels: string[];
+      /**
+       * The trigger labels on the issues it closes (`closingIssueLabels`).
+       * Only a seat's trigger reads them; nothing else does.
+       */
+      issueLabels?: readonly IssueLabels[];
       changedFiles: string[];
       /** Labelled `revert`: the one change the lead may review alone. */
       isRevert: boolean;
@@ -1853,11 +1989,12 @@ export class Automation {
     for (const entry of rules.reviewers) {
       const why = triggeredBy(entry, input);
       if (!why || reviewers.includes(entry.seat)) continue;
-      // A revert drops only the seats there by default. One its own label or
-      // path asked for still reads it — the security seat on its paths — and
-      // so does a blocking seat: the revert went to the lead alone whatever it
-      // touched, and the label was one a session could put on its own pull
-      // request to choose one-model review.
+      // A revert drops only the seats there by default. A seat asked for by
+      // the revert's own label, a closing issue's label or its paths (the
+      // security seat on its paths) still reads it, and so does a blocking
+      // seat: the revert went to the lead alone whatever it touched, and the
+      // label was one a session could put on its own pull request to choose
+      // one-model review.
       if (input.isRevert && !entry.lead && !entry.blocking && askedByDefault(entry, input)) continue;
       reviewers.push(entry.seat);
       reasons[entry.seat] = entry.lead && input.isRevert ? 'fast path: revert' : why;
@@ -2107,7 +2244,13 @@ export class Automation {
      * `changesRequested`, but the merge waits on it all the same.
      */
     securityAsks: string | null;
-    leadDue: { seat: string; since: string | null } | null;
+    /**
+     * Other seats asked whose latest verdict on this diff asks for changes,
+     * given after the lead's latest review of it while the lead approves: the
+     * gate holds and the lead is asked again (docs/adr/0038).
+     */
+    lateAsks?: LateAsk[];
+    leadDue: { seat: string; since: string | null; lateAsks?: LateAsk[] } | null;
     /**
      * Approvers with no review of this diff whose approval GitHub shows counts
      * for nothing on it: each is asked again when its turn comes, the task
@@ -2140,6 +2283,8 @@ export class Automation {
     const ciKeys = client
       ? await ciKeysChanged(changedFiles, (path, ref) => client.readFileIfPresent(repoFullName, path, ref), { base: pr.baseRef, head: pr.head.sha })
       : undefined;
+    // As the opened path and `mergeFacts` read them, so all three ask the same seats.
+    const issueLabels = client ? await this.closingIssueLabels(client, repoFullName, pr.number) : [];
 
     const crew = await bots.listBots();
     // Whatever the attribution mode: on a shared account, a lead-tagged post
@@ -2156,6 +2301,7 @@ export class Automation {
     const decision = this.decideReviewers(
       {
         labels,
+        issueLabels,
         changedFiles,
         isRevert: fastPathOf(labels, pr.head.ref),
         humanReviewPaths: [],
@@ -2262,12 +2408,62 @@ export class Automation {
     }
 
     const others = asked.filter((seat) => seat !== decision.lead);
+    // A request for changes from another seat, given after the lead's latest
+    // review of this diff while the lead approves it, reopens the lead's
+    // decision (docs/adr/0038). On #253 the security seat found a blocker
+    // after the lead approved, nothing read it, and a person had to send the
+    // pull request back by hand. Signed reviews only, when signatures can be
+    // checked; when nothing can check one, a crew-authored verdict counts,
+    // since here it only holds the merge and never releases it.
+    const lateAsks: LateAsk[] = [];
+    if (approving.includes(decision.lead)) {
+      const readable = checked ? onDiff.filter((review) => signedIds.has(review.id)) : onDiff;
+      const leadLast = lastReviewBy(onDiff, crew, decision.lead);
+      for (const seat of others) {
+        const said = seatVerdictOn(readable, crew, seat, () => true);
+        if (said?.verdict !== 'request_changes') continue;
+        if (leadLast && !reviewedAfter(said, leadLast)) continue;
+        lateAsks.push({ seat, reviewId: said.reviewId, submittedAt: said.submittedAt });
+      }
+    }
+    if (lateAsks.length > 0 && gate.state === 'success') {
+      gate = {
+        state: 'pending',
+        description: fitStatus(`changes requested by ${lateAsks.map((ask) => ask.seat).join(', ')} after ${decision.lead} approved; ${decision.lead} asked again`),
+      };
+    }
+
     const othersIn = others.every((seat) => posted.includes(seat) || cannot.has(seat.toLowerCase()));
     const due = !pr.draft && othersIn && !posted.includes(decision.lead) && !cannot.has(decision.lead.toLowerCase());
+    const dueAgain = !pr.draft && lateAsks.length > 0 && !cannot.has(decision.lead.toLowerCase());
+    // Asked again once per late ask: a lead task opened since the latest of
+    // them is that review (`openLeadReview`).
+    const askedAt = lateAsks.flatMap((ask) => (ask.submittedAt ? [ask.submittedAt] : []));
     const leadDue = due
-      ? { seat: decision.lead, since: await this.leadAskedSince(repoFullName, pr.number, lastPostedBy(onDiff, crew, others), resolution.at) }
-      : null;
-    return { gate, decision, posted, approved: approving, changesRequested: asking, securityAsks, leadDue, notCounted, peopleNotCounted: people };
+      ? {
+          seat: decision.lead,
+          since: await this.leadAskedSince(repoFullName, pr.number, lastPostedBy(onDiff, crew, others), resolution.at),
+          ...(lateAsks.length > 0 ? { lateAsks } : {}),
+        }
+      : dueAgain
+        ? {
+            seat: decision.lead,
+            since: askedAt.length > 0 ? askedAt.reduce((latest, at) => (Date.parse(at) > Date.parse(latest) ? at : latest)) : null,
+            lateAsks,
+          }
+        : null;
+    return {
+      gate,
+      decision,
+      posted,
+      approved: approving,
+      changesRequested: asking,
+      securityAsks,
+      ...(lateAsks.length > 0 ? { lateAsks } : {}),
+      leadDue,
+      notCounted,
+      peopleNotCounted: people,
+    };
   }
 
   /**
@@ -2503,7 +2699,7 @@ export class Automation {
     const client = await this.automationClient();
     if (!client) return null;
     const repoFullName = repo.fullName;
-    const [files, onGitHub, runs, statuses, crew, gate, mode] = await Promise.all([
+    const [files, onGitHub, runs, statuses, crew, gate, mode, issueLabels] = await Promise.all([
       client.listEveryPullFile(repoFullName, pull.number),
       client.listReviews(repoFullName, pull.number),
       client.checkRunsFor(repoFullName, pull.headSha),
@@ -2514,6 +2710,9 @@ export class Automation {
       effectiveConfig(this.config)
         .then((live) => live.attributionMode)
         .catch(() => 'audit' as const),
+      // The seats the gate and the opened path ask; never throws. Not
+      // `scopeFacts`' read, which is of crew branches only and comes later.
+      this.closingIssueLabels(client, repoFullName, pull.number),
     ]);
     // From the default branch: a pull request into another branch could have
     // been opened against a copy with the human paths taken out.
@@ -2528,6 +2727,7 @@ export class Automation {
     const decision = this.decideReviewers(
       {
         labels: pull.labels,
+        issueLabels,
         changedFiles: files.files,
         isRevert: fastPathOf(pull.labels, pull.headRef),
         humanReviewPaths: [],

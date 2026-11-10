@@ -3449,7 +3449,7 @@ describe('a blocking seat still asking for changes on a head the lead approved',
   };
   const verdict = (user: string, state: string, at: string, commitId = HEAD) => ({ id: at.length + user.length, user, state, body: '', submittedAt: at, commitId });
 
-  function bridge(reviews: Record<string, unknown>[], options: { config?: unknown; files?: string[]; attribution?: unknown } = {}) {
+  function bridge(reviews: Record<string, unknown>[], options: { config?: unknown; files?: string[]; attribution?: unknown; openLeadReview?: (input: never) => Promise<string | null>; notes?: string } = {}) {
     const files = options.files ?? ['apps/bridge/src/api.ts'];
     const github = {
       listPullCommits: vi.fn(async () => []),
@@ -3458,7 +3458,7 @@ describe('a blocking seat still asking for changes on a head the lead approved',
       listEveryPullFile: vi.fn(async () => ({ files, complete: true, renamedFrom: [] })),
       listPullFilesAsNamed: vi.fn(async () => files),
       listReviews: vi.fn(async () => reviews),
-      readFileAtRef: vi.fn(async () => '# Agent notes\n'),
+      readFileAtRef: vi.fn(async () => options.notes ?? '# Agent notes\n'),
       requestReviewers: vi.fn(async () => undefined),
       getPullRequest: vi.fn(async () => ({ labels: [] })),
       addLabels: vi.fn(async () => undefined),
@@ -3472,9 +3472,10 @@ describe('a blocking seat still asking for changes on a head the lead approved',
     const used = options.config ?? config;
     const automation = new Automation(used as never, { asBot: vi.fn(async () => github), attribution: options.attribution } as never);
     const taskService = taskServiceOpening(vi.fn(async () => ({ taskId: 'task-patch', session: 'patch-1' })));
+    if (options.openLeadReview) taskService.openLeadReview = options.openLeadReview as never;
     const mergeLine = { enter: vi.fn(async () => undefined), advance: vi.fn(async () => null), leave: vi.fn(async () => undefined) };
     const webhooks = new Webhooks(used as never, automation, {} as never, taskService as never, {} as never, mergeLine as never);
-    return { webhooks, taskService };
+    return { webhooks, taskService, github, mergeLine };
   }
 
   beforeEach(() => {
@@ -3488,22 +3489,22 @@ describe('a blocking seat still asking for changes on a head the lead approved',
     store.botTasks = [];
   });
 
-  async function stallsAfter(reviews: Record<string, unknown>[], by: string, state: string, options: Parameters<typeof bridge>[1] = {}) {
+  async function stallsAfter(reviews: Record<string, unknown>[], by: string, state: string, options: Parameters<typeof bridge>[1] & { pull?: unknown } = {}) {
     const { recordEvent } = await import('@openadlc/db');
     vi.mocked(recordEvent).mockClear();
-    const { webhooks, taskService } = bridge(reviews, options);
+    const { webhooks, taskService, github, mergeLine } = bridge(reviews, options);
     const quiet = [vi.spyOn(console, 'warn').mockImplementation(() => undefined), vi.spyOn(console, 'log').mockImplementation(() => undefined)];
     try {
       await webhooks.receive(
         'pull_request_review',
-        { action: 'submitted', review: { author_association: 'COLLABORATOR', state, user: { login: by }, body: '' }, pull_request: PULL, repository: REPOSITORY } as never,
+        { action: 'submitted', review: { author_association: 'COLLABORATOR', state, user: { login: by }, body: '' }, pull_request: options.pull ?? PULL, repository: REPOSITORY } as never,
         `delivery-${by}-${state}`,
       );
     } finally {
       for (const spy of quiet) spy.mockRestore();
     }
     const stalls = vi.mocked(recordEvent).mock.calls.map(([event]) => event).filter((event) => event.type === 'review.stalled');
-    return { stalls, taskService };
+    return { stalls, taskService, github, mergeLine };
   }
 
   it('records one stall naming the seat when the lead approves over it', async () => {
@@ -3572,6 +3573,61 @@ describe('a blocking seat still asking for changes on a head the lead approved',
 
     expect(stalls).toHaveLength(1);
     expect(stalls[0]?.payload).toMatchObject({ heldBy: [SECURITY], bot: SECURITY, botId: 'bot-security' });
+  });
+
+  describe('a request for changes from another seat after the lead approved', () => {
+    // On #253 the security seat found a blocker after the lead approved; a
+    // person had to send the pull request back by hand. The lead decides
+    // again instead (docs/adr/0038).
+    const marked = (user: string, at: string, verdict: string, id: number) => ({
+      id,
+      user,
+      state: 'COMMENTED',
+      body: `Findings.\n\n<!-- openadlc:{"event":"review_posted","verdict":"${verdict}"} -->`,
+      submittedAt: at,
+      commitId: HEAD,
+    });
+    // Human review rules that name nothing this changes: the gate is the reviews'.
+    const notes = '# Agent notes\n\n## Human review\n\n- `config/` @janedoe\n';
+    // The crew's own branch: a fork's pull request has no seat asked.
+    const pull = { ...PULL, head: { ...PULL.head, repo: { full_name: REPOSITORY.full_name } } };
+    const before = (id: number) => [
+      marked(SECOND, '2026-09-24T09:00:00Z', 'approve', 1),
+      { ...verdict(SECURITY, 'APPROVED', '2026-09-24T09:05:00Z'), id: 2 },
+      { ...verdict(LEAD, 'APPROVED', '2026-09-24T10:00:00Z'), id },
+    ];
+
+    it('holds the gate, keeps the pull request out of the line, records no stall, and asks the lead again with the request', async () => {
+      const openLeadReview = vi.fn(async () => null);
+      const { stalls, github, mergeLine } = await stallsAfter([...before(3), marked(SECOND, '2026-09-24T11:00:00Z', 'request_changes', 4)], SECOND, 'commented', {
+        openLeadReview,
+        notes,
+        pull,
+      });
+
+      expect(github.setCommitStatus).toHaveBeenLastCalledWith(
+        'janedoe/openadlc',
+        HEAD,
+        expect.objectContaining({ context: 'review-gate', state: 'pending', description: expect.stringContaining(`changes requested by ${SECOND} after ${LEAD} approved`) }),
+      );
+      expect(mergeLine.enter).not.toHaveBeenCalled();
+      expect(stalls).toEqual([]);
+      expect(openLeadReview).toHaveBeenCalledWith(
+        expect.objectContaining({ seat: LEAD, since: '2026-09-24T11:00:00Z', lateAsks: [{ seat: SECOND, reviewId: 4, submittedAt: '2026-09-24T11:00:00Z' }] }),
+      );
+    });
+
+    it('changes nothing on a later approval, or a plain comment: into the line, and the lead is not asked', async () => {
+      for (const late of [marked(SECOND, '2026-09-24T11:00:00Z', 'approve', 4), { ...verdict(SECOND, 'COMMENTED', '2026-09-24T11:00:00Z'), id: 4 }]) {
+        const openLeadReview = vi.fn(async () => null);
+        const { stalls, github, mergeLine } = await stallsAfter([...before(3), late], SECOND, 'commented', { openLeadReview, notes, pull });
+
+        expect(github.setCommitStatus).toHaveBeenLastCalledWith('janedoe/openadlc', HEAD, expect.objectContaining({ context: 'review-gate', state: 'success' }));
+        expect(mergeLine.enter).toHaveBeenCalledWith(expect.objectContaining({ prNumber: 31 }));
+        expect(openLeadReview).not.toHaveBeenCalled();
+        expect(stalls).toEqual([]);
+      }
+    });
   });
 
   it('records nothing for a request for changes on a diff since replaced', async () => {
@@ -5359,6 +5415,7 @@ describe('a pull request for an issue', () => {
         actors: { asBot: async () => null },
         moveStage: async (input: unknown) => (moved.push(input), { moved: true }),
         decideReviewers: () => ({ reviewers: ['openadlc-cipher-janedoe'], reasons: {}, humanReviewRequired: false }),
+        closingIssueLabels: async () => [],
         requestReviewers: async () => undefined,
         humansRequiredFor: async () => ({ rules: null, required: [] }),
         setHumanReviewLabels: async () => undefined,
@@ -5412,6 +5469,7 @@ describe('a pull request for an issue', () => {
           actors: { asBot: async () => null },
           moveStage: async (input: unknown) => (moved.push(input), { moved: true }),
           decideReviewers: () => ({ reviewers: ['openadlc-cipher-janedoe', 'openadlc-sydney-janedoe'], lead: 'openadlc-sydney-janedoe', reasons: {}, humanReviewRequired: false }),
+          closingIssueLabels: async () => [],
           requestReviewers: async () => undefined,
           humansRequiredFor: async () => ({ rules: null, required: [] }),
           setHumanReviewLabels: async () => undefined,
@@ -5501,6 +5559,7 @@ describe('a pull request for an issue', () => {
         actors: { asBot: async () => null },
         moveStage: async () => ({ moved: true }),
         decideReviewers: () => ({ reviewers: ['openadlc-cipher-janedoe', 'openadlc-sydney-janedoe'], lead: 'openadlc-sydney-janedoe', reasons: {}, humanReviewRequired: false }),
+        closingIssueLabels: async () => [],
         requestReviewers: async () => undefined,
         humansRequiredFor: async () => ({ rules: null, required: [] }),
         setHumanReviewLabels: async () => undefined,
@@ -5547,6 +5606,7 @@ describe('a pull request for an issue', () => {
         {
           actors: { asBot: async () => client },
           moveStage: async () => (did.push('moveStage'), { moved: true }),
+          closingIssueLabels: async () => [],
           decideReviewers: () => ({
             reviewers: ['openadlc-cipher-janedoe', 'openadlc-vega-janedoe', 'openadlc-sydney-janedoe'],
             lead: 'openadlc-sydney-janedoe',
@@ -5682,6 +5742,7 @@ describe('a pull request for an issue', () => {
         {
           actors,
           decideReviewers: () => ({ reviewers: ['lead-reviewer'], lead: 'lead-reviewer', reasons: {}, humanReviewRequired: false }),
+          closingIssueLabels: async () => [],
           requestReviewers: async () => during.requesting(),
           humansRequiredFor: async () => ({ rules: null, required: [] }),
           setHumanReviewLabels: async () => undefined,
@@ -5900,6 +5961,7 @@ describe('a pull request for an issue', () => {
         actors: { asBot: async () => null },
         moveStage: async () => ({ moved: true }),
         decideReviewers: () => ({ reviewers: ['openadlc-cipher-janedoe'], reasons: {}, humanReviewRequired: false }),
+        closingIssueLabels: async () => [],
         requestReviewers: async () => undefined,
         humansRequiredFor: async () => ({ rules: [{ path: 'config/', logins: ['janedoe'] }], required: ['janedoe'] }),
         setHumanReviewLabels: async () => {
@@ -6896,6 +6958,7 @@ describe('a pull request from a fork', () => {
       setReviewGate: vi.fn(async (input: unknown) => input),
       dismissStaleApprovals: vi.fn(async () => []),
       decideReviewers: vi.fn(() => ({ reviewers: ['second', LEAD], lead: LEAD, approvers: [LEAD], reasons: {}, humanReviewRequired: false })),
+      closingIssueLabels: vi.fn(async () => []),
       humansRequiredFor: vi.fn(async () => ({ rules: [], required: [] })),
       setHumanReviewLabels: vi.fn(async () => undefined),
       dropUnneededHumanRequests: vi.fn(async () => undefined),
@@ -9178,6 +9241,7 @@ describe('a crew pull request with no local CI pass on its head', () => {
       moveStage: vi.fn(async () => ({ moved: true })),
       comment: vi.fn(async () => 'https://github.test/c/1'),
       decideReviewers: vi.fn(() => ({ reviewers: ['second'], lead: 'lead', approvers: ['lead'], reasons: {}, humanReviewRequired: false })),
+      closingIssueLabels: vi.fn(async () => []),
     };
     const taskService = { open: vi.fn(async () => ({ taskId: 'task-patch', session: 'p' })), gateDescription: async (text: string) => text };
     const webhooks = new Webhooks(
@@ -9225,6 +9289,129 @@ describe('a crew pull request with no local CI pass on its head', () => {
     await opened(webhooks).catch(() => undefined);
 
     expect(automation.decideReviewers).toHaveBeenCalled();
+  });
+});
+
+describe('the seats a crew pull request’s closing issues’ labels ask for', () => {
+  const HEAD = 'c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2';
+  const PULL = {
+    author_association: 'COLLABORATOR',
+    number: 31,
+    title: 'Rate-limit the webhook route',
+    draft: false,
+    head: { sha: HEAD, ref: 'agent/openadlc-atlas-janedoe/11-issue-11', repo: { full_name: 'janedoe/openadlc' } },
+    base: { ref: 'main' },
+    labels: [],
+    html_url: 'https://github.test/janedoe/openadlc/pull/31',
+    user: { login: 'openadlc-atlas-janedoe' },
+  };
+  const config = {
+    automationBot: null,
+    humans: [],
+    review: {
+      reviewers: [
+        { seat: 'lead-reviewer', lens: 'lead', lead: true, blocking: false, trigger: 'always' },
+        // Never sampled, and on no path this changes: only a label asks it.
+        { seat: 'security-reviewer', lens: 'security', lead: false, blocking: false, trigger: { labels: ['safety'], paths: ['.github/workflows/'], samplePercent: 0 } },
+      ],
+      maxRounds: 3,
+    },
+  };
+
+  function bridge(closing: () => Promise<number[]>, labels: string[] = ['safety']) {
+    const github = {
+      listPullFiles: vi.fn(async () => ['src/a.ts']),
+      listPullFilesAsNamed: vi.fn(async () => ['src/a.ts']),
+      listEveryPullFile: vi.fn(async () => ({ files: ['src/a.ts'], complete: true, renamedFrom: [] })),
+      listReviews: vi.fn(async () => []),
+      readFileAtRef: vi.fn(async () => '# Agent notes\n'),
+      readFileIfPresent: vi.fn(async () => null),
+      closingIssues: vi.fn(closing),
+      getIssue: vi.fn(async (_repo: string, n: number) => ({ number: n, labels, pullRequest: false, state: 'open' })),
+    };
+    const actors = { asBot: async () => github };
+    const requested: string[][] = [];
+    // The real seat decision and lookup, with what the round writes to GitHub stubbed.
+    const automation = Object.assign(Object.create(new Automation(config as never, actors as never)), {
+      actors,
+      setReviewGate: vi.fn(async (input: unknown) => input),
+      moveStage: vi.fn(async () => ({ moved: true })),
+      comment: vi.fn(async () => 'https://github.test/c/1'),
+      requestReviewers: vi.fn(async (_repo: string, _n: number, seats: string[]) => void requested.push(seats)),
+    });
+    const decide = vi.spyOn(automation, 'decideReviewers');
+    const taskService = { open: vi.fn(async () => ({ taskId: 'task-review', session: 'r' })), gateDescription: async (text: string) => text };
+    const webhooks = new Webhooks(config as never, automation as never, {} as never, taskService as never, {} as never, { leave: async () => undefined } as never);
+    return { webhooks, github, requested, decide, automation };
+  }
+
+  beforeEach(() => {
+    store.bots = [
+      { id: 'bot-builder', name: 'openadlc-atlas-janedoe', slot: 'builder', role: 'implement', githubLogin: 'openadlc-atlas-janedoe' },
+      { id: 'bot-lead', name: 'openadlc-sydney-janedoe', slot: 'lead-reviewer', role: 'review_lead', githubLogin: 'openadlc-sydney-janedoe' },
+      { id: 'bot-security', name: 'openadlc-cipher-janedoe', slot: 'security-reviewer', role: 'review_security', githubLogin: 'openadlc-cipher-janedoe' },
+    ];
+    store.lease = { id: 'lease-11', botId: 'bot-builder', declaredPaths: ['src/a.ts'] };
+    store.botTasks = [];
+    store.localCiPasses = new Set([HEAD]);
+  });
+
+  async function deliver(webhooks: Webhooks, payload: Record<string, unknown>) {
+    const quiet = [vi.spyOn(console, 'log').mockImplementation(() => undefined), vi.spyOn(console, 'warn').mockImplementation(() => undefined)];
+    try {
+      await webhooks
+        .receive('pull_request', { pull_request: PULL, repository: { name: 'openadlc', full_name: 'janedoe/openadlc' }, sender: { login: 'openadlc-atlas-janedoe' }, ...payload } as never, `delivery-${Math.random()}`)
+        .catch(() => undefined);
+    } finally {
+      for (const spy of quiet) spy.mockRestore();
+    }
+  }
+
+  it('asks the security seat of a pull request with no labels whose closing issue is labelled safety', async () => {
+    const { webhooks, github, requested, decide } = bridge(async () => [251]);
+
+    await deliver(webhooks, { action: 'opened' });
+
+    expect(github.closingIssues).toHaveBeenCalledWith('janedoe/openadlc', 31);
+    expect(requested[0]).toEqual(['openadlc-sydney-janedoe', 'openadlc-cipher-janedoe']);
+    expect(decide.mock.results[0]?.value).toMatchObject({ reasons: { 'openadlc-cipher-janedoe': 'label safety on #251 put this in the security lens' } });
+  });
+
+  it('asks as before for an issue label no trigger names', async () => {
+    const { webhooks, requested } = bridge(async () => [251], ['priority:p2']);
+
+    await deliver(webhooks, { action: 'opened' });
+
+    expect(requested[0]).toEqual(['openadlc-sydney-janedoe']);
+  });
+
+  it('chooses from its own labels when its closing issues cannot be read, and holds nothing for it', async () => {
+    const unread = bridge(async () => {
+      throw new Error('502: Bad Gateway');
+    });
+    const none = bridge(async () => []);
+
+    await deliver(unread.webhooks, { action: 'opened' });
+    await deliver(none.webhooks, { action: 'opened' });
+
+    expect(unread.requested).toEqual(none.requested);
+    expect(unread.requested[0]).toEqual(['openadlc-sydney-janedoe']);
+    expect(unread.automation.setReviewGate.mock.calls).toEqual(none.automation.setReviewGate.mock.calls);
+    expect(unread.automation.setReviewGate).not.toHaveBeenCalledWith(expect.objectContaining({ state: 'failure' }));
+  });
+
+  it('reads them once for the decision, and counts the labels of every issue it closes', async () => {
+    const { webhooks, github, decide } = bridge(async () => [251, 252]);
+
+    await deliver(webhooks, { action: 'opened' });
+
+    expect(github.closingIssues).toHaveBeenCalledTimes(1);
+    expect(decide.mock.calls.map(([input]) => (input as { issueLabels?: unknown }).issueLabels)).toEqual([
+      [
+        { number: 251, labels: ['safety'] },
+        { number: 252, labels: ['safety'] },
+      ],
+    ]);
   });
 });
 
@@ -9311,6 +9498,7 @@ describe('a push that changed the diff, whoever made it', () => {
       moveStage: vi.fn(async () => ({ moved: true })),
       comment: vi.fn(async () => 'https://github.test/c/1'),
       decideReviewers: vi.fn(() => ({ reviewers: [SECOND.name, LEAD.name], lead: LEAD.name, approvers: [LEAD.name], reasons: {}, humanReviewRequired: false })),
+      closingIssueLabels: vi.fn(async () => []),
       requestReviewers: vi.fn(async () => []),
       humansRequiredFor: vi.fn(async () => ({ rules: [], required: [] })),
       setHumanReviewLabels: vi.fn(async () => undefined),
@@ -9572,6 +9760,7 @@ describe('a push to a stacked pull request', () => {
       moveStage: vi.fn(async () => ({ moved: true })),
       comment: vi.fn(async () => 'https://github.test/c/1'),
       decideReviewers: vi.fn(() => ({ reviewers: ['second'], lead: 'lead', approvers: ['lead'], reasons: {}, humanReviewRequired: false })),
+      closingIssueLabels: vi.fn(async () => []),
     };
     const taskService = {
       open: vi.fn(async () => ({ taskId: 'task-patch', session: 'p' })),
@@ -9732,14 +9921,17 @@ describe('a conflict resolution the lead re-checks alone', () => {
       now: () => Date.parse('2026-10-02T12:00:20.000Z'),
     });
     const open = vi.fn(async () => ({ taskId: 'task-recheck', session: 'r' }));
+    const automation = {
+      actors: { asBot: async () => github },
+      setReviewGate: vi.fn(async (input: unknown) => input),
+      moveStage: vi.fn(async () => ({ moved: true })),
+      decideReviewers: vi.fn((_input: unknown) => ({ reviewers: [LEAD.name], lead: LEAD.name, approvers: [LEAD.name], reasons: {}, humanReviewRequired: false })),
+      // The re-check chooses its seat from the same issue labels as every other decision.
+      closingIssueLabels: vi.fn(async () => [{ number: 5, labels: ['safety'] }]),
+    };
     const webhooks = new Webhooks(
       { automationBot: null, humans: [], review: { maxRounds: 3 } } as never,
-      {
-        actors: { asBot: async () => github },
-        setReviewGate: vi.fn(async (input: unknown) => input),
-        moveStage: vi.fn(async () => ({ moved: true })),
-        decideReviewers: vi.fn(() => ({ reviewers: [LEAD.name], lead: LEAD.name, approvers: [LEAD.name], reasons: {}, humanReviewRequired: false })),
-      } as never,
+      automation as never,
       {} as never,
       taskServiceOpening(open as never),
       {} as never,
@@ -9759,6 +9951,7 @@ describe('a conflict resolution the lead re-checks alone', () => {
     }
 
     expect(log.find((event) => event.type === CONFLICT_RESOLVED)?.payload).toMatchObject({ review: 'lead-only', from: BEFORE, to: RESOLVED });
+    expect(automation.decideReviewers).toHaveBeenCalledWith(expect.objectContaining({ issueLabels: [{ number: 5, labels: ['safety'] }] }), expect.anything());
     expect(open).toHaveBeenCalledTimes(1);
     expect(open).toHaveBeenCalledWith(
       expect.objectContaining({ bot: LEAD.name, subjectRef: 'openadlc#31', extraContext: [expect.objectContaining({ name: 'resolution-check.md' })] }),
@@ -9823,6 +10016,7 @@ describe('a push that resolves a conflict in shared files', () => {
       dismissStaleApprovals: vi.fn(async () => []),
       moveStage: vi.fn(async () => ({ moved: true })),
       decideReviewers: vi.fn(() => ({ reviewers: ['lead'], lead: 'lead', approvers: ['lead'], reasons: {}, humanReviewRequired: false })),
+      closingIssueLabels: vi.fn(async () => []),
     };
     const open = vi.fn(async () => ({ taskId: 'task-recheck', session: 'r' }));
     const webhooks = new Webhooks(

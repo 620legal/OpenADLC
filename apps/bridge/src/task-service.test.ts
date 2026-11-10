@@ -1909,6 +1909,43 @@ describe('a bot that must be able to work before a task starts', () => {
       expect(open).toHaveBeenCalledTimes(1);
     });
 
+    it('is asked again, once, with what was asked after its approval to read (docs/adr/0038)', async () => {
+      // The lead's own task approved at 09:30; a seat asked for changes at 10:00.
+      const { tasksService } = readyService();
+      const open = vi.spyOn(tasksService, 'open').mockResolvedValue({ taskId: 'task-3', session: 's' });
+      const quiet = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+      const lateAsks = [{ seat: 'second-reviewer', reviewId: 44, submittedAt: '2026-09-30T10:00:00Z' }];
+
+      try {
+        store.reviewTasks = [{ botId: LEAD.id, subjectRef: 'openadlc#2', state: 'done', createdAt: '2026-09-30T09:00:00Z' } as never];
+        expect(await tasksService.openLeadReview({ ...input, lateAsks })).toMatch(/second-reviewer having asked for changes after it approved/);
+        // A lead task opened since the ask is that review: not asked twice.
+        store.reviewTasks = [{ botId: LEAD.id, subjectRef: 'openadlc#2', state: 'done', createdAt: '2026-09-30T10:01:00Z' } as never];
+        expect(await tasksService.openLeadReview({ ...input, lateAsks })).toBeNull();
+      } finally {
+        quiet.mockRestore();
+      }
+      expect(open).toHaveBeenCalledTimes(1);
+      expect(open).toHaveBeenCalledWith(
+        expect.objectContaining({
+          bot: LEAD.name,
+          extraContext: [expect.objectContaining({ name: 'asked-again.md', content: expect.stringContaining('- second-reviewer, review 44, at 2026-09-30T10:00:00Z') })],
+        }),
+      );
+    });
+
+    it('carries no brief when nothing was asked after its approval', async () => {
+      const { tasksService } = readyService();
+      const open = vi.spyOn(tasksService, 'open').mockResolvedValue({ taskId: 'task-2', session: 's' });
+      const quiet = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+      try {
+        await tasksService.openLeadReview({ ...input, lateAsks: [] });
+      } finally {
+        quiet.mockRestore();
+      }
+      expect(open).toHaveBeenCalledWith(expect.not.objectContaining({ extraContext: expect.anything() }));
+    });
+
     it('is asked again by the sweep when the lead was busy', async () => {
       const { tasksService } = readyService();
       vi.spyOn(tasksService, 'open').mockRejectedValue(new BotBusyError(LEAD.name));

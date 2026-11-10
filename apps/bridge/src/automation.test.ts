@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { GitHubApiError, ReviewerStandings, type PullCommit } from '@openadlc/github';
-import { Automation, BLOCKED_READ_TIMEOUT_MS, CI_RUN_LAG_MS, CI_RUN_READ_TIMEOUT_MS, COMMITS_LISTED, FORBIDDEN_PUSH, LABEL_READ_BACKOFF_MS, ciKeysChanged, contentChanged, dismissalRefused, fastPathOf, mergeBlockers, mergeDecision, personMayMergeOver, requestsTakenAway, reviewSample, seatsWaitedOn, standingApprovals, type BlockedFacts, type MergeBlockerKind, type MergeFacts } from './automation.js';
+import { Automation, BLOCKED_READ_TIMEOUT_MS, CI_RUN_LAG_MS, CI_RUN_READ_TIMEOUT_MS, COMMITS_LISTED, FORBIDDEN_PUSH, LABEL_READ_BACKOFF_MS, ciKeysChanged, contentChanged, dismissalRefused, fastPathOf, mergeBlockers, mergeDecision, personMayMergeOver, requestsTakenAway, reviewSample, reviewedAfter, seatsWaitedOn, standingApprovals, type BlockedFacts, type MergeBlockerKind, type MergeFacts } from './automation.js';
 import { Attribution } from './attribution.js';
 import type { BridgeConfig } from './config.js';
 import { ConflictRounds } from './conflict-round.js';
@@ -340,6 +340,113 @@ describe('who reviews a pull request', () => {
     const fast = automation.decideReviewers({ labels: ['revert'], changedFiles: ['pnpm-lock.yaml'], isRevert: true, humanReviewPaths: [], sample: 1 });
     expect(fast.reviewers).toEqual(['lead-reviewer']);
     expect(fast.approvers).toEqual(['lead-reviewer']);
+  });
+});
+
+describe('the seats a pull request’s closing issues’ labels ask for', () => {
+  const ask = (input: { labels?: string[]; issueLabels?: { number: number; labels: string[] }[]; isRevert?: boolean }) =>
+    automation.decideReviewers({
+      labels: input.labels ?? [],
+      issueLabels: input.issueLabels,
+      changedFiles: ['README.md'],
+      isRevert: input.isRevert ?? false,
+      humanReviewPaths: [],
+      sample: 99,
+    });
+
+  it('asks the security seat of a pull request with no labels whose issue is labelled safety, and names the issue', () => {
+    // A builder's pull request carries no labels: the `safety` intake put on
+    // the issue asked for nothing, and the security seat came only by path or sample.
+    const decision = ask({ issueLabels: [{ number: 251, labels: ['safety'] }] });
+
+    expect(decision.reviewers).toEqual(['lead-reviewer', 'second-reviewer', 'security-reviewer']);
+    expect(decision.reasons['security-reviewer']).toBe('label safety on #251 put this in the security lens');
+  });
+
+  it('decides as before for issue labels no trigger names', () => {
+    expect(ask({ issueLabels: [{ number: 251, labels: ['priority:p2', 'area:general'] }] })).toEqual(ask({ issueLabels: [] }));
+    expect(ask({ issueLabels: [] })).toEqual(ask({}));
+  });
+
+  it('gives the pull request’s own label the reason when both carry it, and the lowest issue number otherwise', () => {
+    expect(ask({ labels: ['safety'], issueLabels: [{ number: 251, labels: ['safety'] }] }).reasons['security-reviewer']).toBe(
+      'labels put this in the security lens',
+    );
+    expect(
+      ask({ issueLabels: [{ number: 300, labels: ['deps'] }, { number: 251, labels: ['safety'] }] }).reasons['security-reviewer'],
+    ).toBe('label safety on #251 put this in the security lens');
+  });
+
+  it('keeps on a revert the seat its issue’s label asked for, as its own label would', () => {
+    expect(ask({ isRevert: true, issueLabels: [{ number: 251, labels: ['safety'] }] }).reviewers).toContain('security-reviewer');
+    expect(ask({ isRevert: true }).reviewers).toEqual(['lead-reviewer']);
+  });
+
+  it('never takes an issue’s labels for the pull request’s: an issue’s revert is no fast path', () => {
+    // Only the caller's `labels` reach `fastPathOf`; an issue label reaches a trigger at most.
+    const decision = ask({ issueLabels: [{ number: 251, labels: ['revert'] }] });
+    expect(decision.reviewers).toEqual(['lead-reviewer', 'second-reviewer']);
+    expect(decision.reasons['lead-reviewer']).toBe('lead review is required on every pull request');
+  });
+
+  describe('reading them from GitHub', () => {
+    const client = (issues: Record<number, string[] | Error>, closing: number[] | Error = Object.keys(issues).map(Number)) => ({
+      closingIssues: vi.fn(async () => {
+        if (closing instanceof Error) throw closing;
+        return closing;
+      }),
+      getIssue: vi.fn(async (_repo: string, n: number) => {
+        const labels = issues[n];
+        if (labels instanceof Error) throw labels;
+        return { number: n, labels, pullRequest: false } as never;
+      }),
+    });
+
+    it('keeps only the labels a seat’s trigger names', async () => {
+      const github = client({ 251: ['revert', 'deps', 'safety', 'priority:p2'], 252: ['priority:p2'] });
+
+      expect(await automation.closingIssueLabels(github, 'exampleco/app', 70)).toEqual([{ number: 251, labels: ['deps', 'safety'] }]);
+      expect(github.closingIssues).toHaveBeenCalledWith('exampleco/app', 70);
+    });
+
+    it('counts an unreadable list as no issues, and an unreadable issue as unlabelled', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      try {
+        expect(await automation.closingIssueLabels(client({}, new Error('502: Bad Gateway')), 'exampleco/app', 70)).toEqual([]);
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(String(warn.mock.calls[0]?.[0])).toContain('exampleco/app#70');
+      } finally {
+        warn.mockRestore();
+      }
+      expect(await automation.closingIssueLabels(client({ 251: new Error('404'), 252: ['touches:security'] }), 'exampleco/app', 70)).toEqual([
+        { number: 252, labels: ['touches:security'] },
+      ]);
+      // A client that has no such method is not a reason to throw either.
+      expect(await automation.closingIssueLabels({} as never, 'exampleco/app', 70)).toEqual([]);
+    });
+
+    it('skips a pull request the issues API answered for', async () => {
+      const github = { closingIssues: vi.fn(async () => [251]), getIssue: vi.fn(async () => ({ number: 251, labels: ['safety'], pullRequest: true }) as never) };
+      expect(await automation.closingIssueLabels(github, 'exampleco/app', 70)).toEqual([]);
+    });
+
+    it('asks GitHub nothing when no seat has trigger labels', async () => {
+      const pathsOnly = new Automation(
+        {
+          review: reviewRulesSchema.parse({
+            reviewers: [
+              { seat: 'lead-reviewer', lens: 'lead', lead: true },
+              { seat: 'sre', lens: 'workflows', trigger: { paths: ['.github/workflows/'] } },
+            ],
+          }),
+        } as BridgeConfig,
+        { asBot: async () => null } as never,
+      );
+      const github = client({ 251: ['safety'] });
+
+      expect(await pathsOnly.closingIssueLabels(github, 'exampleco/app', 70)).toEqual([]);
+      expect(github.closingIssues).not.toHaveBeenCalled();
+    });
   });
 });
 
@@ -1687,6 +1794,39 @@ describe('the reviews on this diff, and the lead’s turn', () => {
     expect(result.approved).toEqual([]);
   });
 
+  it('asks the seat a label put on its closing issue after it opened calls for, the next time it is read, and holds the lead for it', async () => {
+    world.crew = [
+      { id: 'b-lead', name: 'lead-reviewer', slot: 'lead-reviewer', role: 'review_lead', githubLogin: 'exampleco-lead' },
+      { id: 'b-second', name: 'second-reviewer', slot: 'second-reviewer', role: 'review_second', githubLogin: 'exampleco-second' },
+      { id: 'b-security', name: 'security-reviewer', slot: 'security-reviewer', role: 'review_security', githubLogin: 'exampleco-security' },
+    ];
+    let issueLabels: string[] = [];
+    const github = {
+      listEveryPullFile: vi.fn(async () => ({ files: ['apps/console/src/page.tsx'], complete: true, renamedFrom: [] })),
+      listReviews: vi.fn(async () => [
+        { id: 1, user: 'exampleco-second', state: 'COMMENTED', body: seat('second-reviewer'), submittedAt: '2026-09-30T10:00:00Z', commitId: 'head' },
+      ]),
+      readFileAtRef: vi.fn(async () => '# Agent notes\n'),
+      diffFingerprint: vi.fn(async () => 'the diff'),
+      closingIssues: vi.fn(async () => [251]),
+      getIssue: vi.fn(async () => ({ number: 251, labels: issueLabels, pullRequest: false })),
+    };
+    const attribution = { countable: vi.fn(async (posts: unknown[]) => [...posts]), reviewsThatCount: vi.fn(async (_r: string, _n: number, posts: unknown[]) => posts) };
+    const reading = new Automation(config, { asBot: vi.fn(async () => github), attribution } as never);
+    const read = () => reading.reviewStanding('exampleco/app', { number: 70, draft: false, labels: [], head: { sha: 'head', ref: 'agent/builder/251-fix' }, baseRef: 'main' });
+
+    const before = await read();
+    expect(before.decision.reviewers).not.toContain('security-reviewer');
+    expect(before.leadDue?.seat).toBe('lead-reviewer');
+
+    issueLabels = ['safety'];
+    const after = await read();
+    expect(after.decision.reviewers).toContain('security-reviewer');
+    expect(after.decision.reasons['security-reviewer']).toBe('label safety on #251 put this in the security lens');
+    expect(after.leadDue).toBeNull();
+    expect(after.gate).toEqual({ state: 'pending', description: 'waiting on security-reviewer' });
+  });
+
   it('is not the lead’s turn while another seat has not posted, nor once the lead has', async () => {
     expect((await standing([])).leadDue).toBeNull();
     const done = await standing([
@@ -1771,6 +1911,136 @@ describe('the reviews on this diff, and the lead’s turn', () => {
       posts.filter((post) => (post as { user: string }).user !== 'exampleco-security'),
     );
     expect((await reading.reviewStanding('exampleco/app', pr)).gate).toEqual({ state: 'pending', description: 'not approved yet by security-reviewer' });
+  });
+});
+
+describe('a request for changes that comes after the lead’s approval', () => {
+  // On #253 the security seat found a blocker after the lead approved;
+  // nothing read it, and a person had to send the pull request back by hand.
+  const said = (name: string, verdict: string | null) =>
+    `Findings.\n\n<!-- openadlc:{"event":"review_posted"${verdict ? `,"verdict":"${verdict}"` : ''}} -->\n\n<!-- openadlc-seat:${name} -->`;
+  const plain = (name: string) => `A note.\n\n<!-- openadlc-seat:${name} -->`;
+  const LEAD = (id: number, at: string | null, state = 'APPROVED') => ({ id, user: 'exampleco-lead', state, body: said('lead-reviewer', 'approve'), submittedAt: at, commitId: 'head' });
+  const SECOND = (id: number, at: string | null, body: string, state = 'COMMENTED') => ({ id, user: 'exampleco-second', state, body, submittedAt: at, commitId: 'head' });
+  const BEFORE = '2026-11-10T10:00:00Z';
+  const APPROVED_AT = '2026-11-10T10:05:00Z';
+  const AFTER = '2026-11-10T10:10:00Z';
+
+  function standing(
+    reviews: Record<string, unknown>[],
+    options: { labels?: string[]; signed?: (review: { id: number; user: string }) => boolean; attribution?: boolean } = {},
+  ) {
+    world.crew = [
+      { id: 'b-lead', name: 'lead-reviewer', slot: 'lead-reviewer', role: 'review_lead', githubLogin: 'exampleco-lead' },
+      { id: 'b-second', name: 'second-reviewer', slot: 'second-reviewer', role: 'review_second', githubLogin: 'exampleco-second' },
+      { id: 'b-security', name: 'security-reviewer', slot: 'security-reviewer', role: 'review_security', githubLogin: 'exampleco-security' },
+    ];
+    const github = {
+      listEveryPullFile: vi.fn(async () => ({ files: ['apps/console/src/page.tsx'], complete: true, renamedFrom: [] })),
+      listReviews: vi.fn(async () => reviews),
+      readFileAtRef: vi.fn(async () => '# Agent notes\n\n## Human review\n\n- `config/` @janedoe\n'),
+      diffFingerprint: vi.fn(async () => 'the diff'),
+    };
+    const signed = options.signed ?? (() => true);
+    const attribution = {
+      countable: vi.fn(async (posts: unknown[]) => [...posts]),
+      reviewsThatCount: vi.fn(async (_repo: string, _n: number, posts: { id: number; user: string }[]) => posts.filter(signed)),
+    };
+    const reading = new Automation(config, { asBot: vi.fn(async () => github), ...(options.attribution === false ? {} : { attribution }) } as never);
+    const labels = (options.labels ?? []).map((name) => ({ name }));
+    return reading.reviewStanding('exampleco/app', { number: 70, draft: false, labels, head: { sha: 'head', ref: 'agent/builder/42-fix' }, baseRef: 'main' });
+  }
+
+  const UNCHANGED = { state: 'success', description: 'every requested review has been posted' };
+
+  it('holds the gate on an advisory seat’s request after the lead approved, and asks the lead again from it', async () => {
+    const result = await standing([SECOND(1, BEFORE, said('second-reviewer', 'approve')), LEAD(2, APPROVED_AT), SECOND(3, AFTER, said('second-reviewer', 'request_changes'))]);
+
+    expect(result.gate).toEqual({ state: 'pending', description: 'changes requested by second-reviewer after lead-reviewer approved; lead-reviewer asked again' });
+    expect(result.lateAsks).toEqual([{ seat: 'second-reviewer', reviewId: 3, submittedAt: AFTER }]);
+    expect(result.leadDue).toEqual({ seat: 'lead-reviewer', since: AFTER, lateAsks: [{ seat: 'second-reviewer', reviewId: 3, submittedAt: AFTER }] });
+  });
+
+  it('holds on the security seat’s late request on a change that is not to how CI runs', async () => {
+    const security = (id: number, at: string, verdict: string) => ({ id, user: 'exampleco-security', state: 'COMMENTED', body: said('security-reviewer', verdict), submittedAt: at, commitId: 'head' });
+    const result = await standing(
+      [SECOND(1, BEFORE, said('second-reviewer', 'approve')), security(2, BEFORE, 'approve'), LEAD(3, APPROVED_AT), security(4, AFTER, 'request_changes')],
+      { labels: ['touches:security'] },
+    );
+
+    expect(result.decision.reviewers).toContain('security-reviewer');
+    expect(result.securityAsks).toBeNull();
+    expect(result.gate.state).toBe('pending');
+    expect(result.gate.description).toContain('changes requested by security-reviewer after lead-reviewer approved');
+    expect(result.leadDue).toMatchObject({ seat: 'lead-reviewer', since: AFTER, lateAsks: [{ seat: 'security-reviewer', reviewId: 4 }] });
+  });
+
+  it('changes nothing on a later approval, in a marker or as GitHub’s', async () => {
+    for (const late of [SECOND(3, AFTER, said('second-reviewer', 'approve')), SECOND(3, AFTER, plain('second-reviewer'), 'APPROVED')]) {
+      const result = await standing([SECOND(1, BEFORE, said('second-reviewer', 'approve')), LEAD(2, APPROVED_AT), late]);
+      expect(result.gate).toEqual(UNCHANGED);
+      expect(result.lateAsks).toBeUndefined();
+      expect(result.leadDue).toBeNull();
+    }
+  });
+
+  it('changes nothing on a later plain comment, nor on one after a request the lead had read', async () => {
+    const after = await standing([SECOND(1, BEFORE, said('second-reviewer', 'approve')), LEAD(2, APPROVED_AT), SECOND(3, AFTER, plain('second-reviewer'))]);
+    expect(after.gate).toEqual(UNCHANGED);
+    expect(after.leadDue).toBeNull();
+
+    // The request is the seat's verdict still, but it was given before the
+    // lead's approval: the comment after it is no new one.
+    const read = await standing([SECOND(1, BEFORE, said('second-reviewer', 'request_changes')), LEAD(2, APPROVED_AT), SECOND(3, AFTER, plain('second-reviewer'))]);
+    expect(read.gate).toEqual(UNCHANGED);
+    expect(read.leadDue).toBeNull();
+  });
+
+  it('does not hold on a request the lead read before it approved, nor once the lead approves again', async () => {
+    const before = await standing([SECOND(1, BEFORE, said('second-reviewer', 'request_changes')), LEAD(2, APPROVED_AT)]);
+    expect(before.gate).toEqual(UNCHANGED);
+    expect(before.lateAsks).toBeUndefined();
+    expect(before.leadDue).toBeNull();
+
+    const again = await standing([
+      SECOND(1, BEFORE, said('second-reviewer', 'approve')),
+      LEAD(2, APPROVED_AT),
+      SECOND(3, AFTER, said('second-reviewer', 'request_changes')),
+      LEAD(4, '2026-11-10T10:20:00Z'),
+    ]);
+    expect(again.gate).toEqual(UNCHANGED);
+    expect(again.leadDue).toBeNull();
+  });
+
+  it('orders by review id when a review has no time, both ways', async () => {
+    const late = await standing([SECOND(1, null, said('second-reviewer', 'approve')), LEAD(2, null), SECOND(3, null, said('second-reviewer', 'request_changes'))]);
+    expect(late.gate.state).toBe('pending');
+    expect(late.leadDue).toEqual({ seat: 'lead-reviewer', since: null, lateAsks: [{ seat: 'second-reviewer', reviewId: 3, submittedAt: null }] });
+
+    const early = await standing([SECOND(1, null, said('second-reviewer', 'request_changes')), LEAD(2, APPROVED_AT)]);
+    expect(early.gate).toEqual(UNCHANGED);
+    expect(early.leadDue).toBeNull();
+  });
+
+  it('counts only a signed late request when signatures can be checked, and a crew one when nothing can check it', async () => {
+    const reviews = [SECOND(1, BEFORE, said('second-reviewer', 'approve')), LEAD(2, APPROVED_AT), SECOND(3, AFTER, said('second-reviewer', 'request_changes'))];
+
+    const unsigned = await standing(reviews, { signed: (review) => review.id !== 3 });
+    expect(unsigned.gate).toEqual(UNCHANGED);
+    expect(unsigned.leadDue).toBeNull();
+
+    const unchecked = await standing(reviews, { attribution: false });
+    expect(unchecked.gate.state).toBe('pending');
+    expect(unchecked.lateAsks).toEqual([{ seat: 'second-reviewer', reviewId: 3, submittedAt: AFTER }]);
+  });
+});
+
+describe('which of two reviews came later', () => {
+  it('compares times, and review ids when a time is missing or the same', () => {
+    expect(reviewedAfter({ reviewId: 1, submittedAt: '2026-11-10T10:10:00Z' }, { reviewId: 2, submittedAt: '2026-11-10T10:00:00Z' })).toBe(true);
+    expect(reviewedAfter({ reviewId: 3, submittedAt: null }, { reviewId: 2, submittedAt: '2026-11-10T10:00:00Z' })).toBe(true);
+    expect(reviewedAfter({ reviewId: 3, submittedAt: '2026-11-10T10:00:00Z' }, { reviewId: 2, submittedAt: '2026-11-10T10:00:00Z' })).toBe(true);
+    expect(reviewedAfter({ reviewId: 1, submittedAt: null }, { reviewId: 2, submittedAt: null })).toBe(false);
   });
 });
 
@@ -2825,6 +3095,34 @@ describe('what the bridge reads before it merges', () => {
     expect(appGate.standing).toHaveBeenCalledWith('exampleco/app', 'head');
   });
 
+  it('waits on the approval of a blocking seat its closing issue’s label asked for', async () => {
+    const blocking = {
+      ...config,
+      review: reviewRulesSchema.parse({
+        reviewers: [
+          { seat: 'lead-reviewer', lens: 'lead', lead: true },
+          { seat: 'second-reviewer', lens: 'second' },
+          { seat: 'security-reviewer', lens: 'security', blocking: true, trigger: { labels: ['safety'] } },
+        ],
+      }),
+    } as BridgeConfig;
+    const labelled = (labels: string[]) => ({
+      closingIssues: vi.fn(async () => [251]),
+      getIssue: vi.fn(async () => ({ number: 251, labels, pullRequest: false }) as never),
+    });
+    const repo = { fullName: 'exampleco/app', defaultBranch: 'main' };
+
+    const unlabelled = reading(labelled(['priority:p2']));
+    const asked = reading(labelled(['safety']));
+    // A seat with no account connected is asked for nothing.
+    world.crew = [...world.crew, { id: 'b-security', name: 'security-reviewer', slot: 'security-reviewer', role: 'review_security', githubLogin: 'exampleco-security' }];
+    const plain = new Automation(blocking, unlabelled.automation['actors'], unlabelled.appGate as never);
+    const safety = new Automation(blocking, asked.automation['actors'], asked.appGate as never);
+
+    expect((await plain.mergeFacts(repo, PULL))?.requestedReviewers).toEqual(['lead-reviewer']);
+    expect((await safety.mergeFacts(repo, PULL))?.requestedReviewers).toEqual(['lead-reviewer', 'security-reviewer']);
+  });
+
   it('holds a pull request retargeted onto main whose green ci ran before the retarget, as GitHub answers for one', async () => {
     // As GitHub answered for a real one (vercel/next.js#100307): a push at
     // 16:33:41, its run made at 16:33:45, the base changed at 16:34:01, and
@@ -3193,7 +3491,9 @@ describe('what the bridge reads before it merges', () => {
       const facts = await automation.mergeFacts({ fullName: 'exampleco/app', defaultBranch: 'main' }, CREW_PULL);
 
       expect(facts?.scope).toEqual({ crewBranch: true, issue: 11, closes: [11], declared: ['src/ui/button.tsx'], crossCutting: false });
-      expect(github.getIssue).not.toHaveBeenCalled();
+      // Read once, for the seats its labels ask (`closingIssueLabels`); its
+      // body is never where the paths come from.
+      expect(github.getIssue.mock.calls).toEqual([['exampleco/app', 11]]);
       expect(mergeDecision(facts as MergeFacts)).toMatchObject({ land: false, sendBack: { files: ['src/billing/charge.ts'] } });
     });
 
@@ -3231,7 +3531,8 @@ describe('what the bridge reads before it merges', () => {
       const facts = await automation.mergeFacts({ fullName: 'exampleco/app', defaultBranch: 'main' }, { ...CREW_PULL, headRef: 'system/revert-deadbeef' });
 
       expect(facts?.scope?.crewBranch).toBe(false);
-      expect(github.closingIssues).not.toHaveBeenCalled();
+      // Once, for the seats its closing issues' labels ask; not again for scope.
+      expect(github.closingIssues).toHaveBeenCalledTimes(1);
     });
   });
 

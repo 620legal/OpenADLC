@@ -2578,10 +2578,14 @@ export class Webhooks {
       await issues.setPullRequestPaths(repo.id, ownIssue, changedFiles).catch(() => undefined);
     }
 
+    // The trigger labels on the issues it closes, read once for both
+    // decisions below, as the gate and the merge read them. Never throws.
+    const issueLabels = client ? await this.automation.closingIssueLabels(client, repoFullName, pr.number) : [];
+
     if (resolution) {
       const crewNow = await bots.listBots();
       const leadSeat = this.automation.decideReviewers(
-        { labels, changedFiles, isRevert: false, humanReviewPaths: [], sample: reviewSample(repoFullName, pr.number) },
+        { labels, issueLabels, changedFiles, isRevert: false, humanReviewPaths: [], sample: reviewSample(repoFullName, pr.number) },
         crewNow,
       ).lead;
       await this.automation.setReviewGate({
@@ -2617,6 +2621,7 @@ export class Webhooks {
     const decision = this.automation.decideReviewers(
       {
         labels,
+        issueLabels,
         changedFiles,
         isRevert: fastPathOf(labels, pr.head.ref),
         // The repository's own AGENTS.md decides this now, and is read below.
@@ -3354,6 +3359,8 @@ export class Webhooks {
           seat: standing.leadDue.seat,
           since: standing.leadDue.since,
           notCounted: standing.notCounted,
+          // Asked again, with what came after its approval to read (docs/adr/0038).
+          ...(standing.leadDue.lateAsks ? { lateAsks: standing.leadDue.lateAsks } : {}),
         });
       }
       // A reviewer the gate waits on with nothing in hand would be waited on
@@ -3402,7 +3409,9 @@ export class Webhooks {
     // no card for anyone.
     const blocking = decision.approvers.filter((seat) => seat !== decision.lead && (standing.changesRequested ?? []).includes(seat));
     const security = standing.securityAsks && !blocking.includes(standing.securityAsks) ? [standing.securityAsks] : [];
-    const held = standing.approved.includes(decision.lead) ? [...blocking, ...security] : [];
+    // While the lead is due — asked again on a late request for changes
+    // (docs/adr/0038) — the lead is deciding, not a person: no stall.
+    const held = standing.approved.includes(decision.lead) && !standing.leadDue ? [...blocking, ...security] : [];
     if (held.length > 0 && repo) {
       const blocker = crew.find((bot) => bot.name === held[0]) ?? null;
       console.log(`[bridge] ${repoFullName}#${pr.number}: the lead approved and ${held.join(', ')} still asks for changes; the merge is held for a person`);

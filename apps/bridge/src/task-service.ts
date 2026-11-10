@@ -10,11 +10,37 @@ import { asAutomation } from './automation-bot.js';
 import { alreadyLanded, endsWithSubject, subjectClosed, wasRefused } from './gates.js';
 import { blockersOf, waitingOnBlocked, type Blocker } from './health/checks/crew.js';
 import type { HostdClient, ReviewMode } from './hostd-client.js';
-import { reviewRulesOf, seatsWaitedOn, type NotCounted, type PersonNotCounted } from './automation.js';
+import { reviewRulesOf, seatsWaitedOn, type LateAsk, type NotCounted, type PersonNotCounted } from './automation.js';
 import { requestPrefixOf } from './request-context.js';
 import { readSeatPauses, seatPausedWords, type SeatPause } from './seat-pause.js';
 import { heldWords } from './item-hold.js';
 import { PERSON_ASKED_AGAIN, PERSON_AWAITED, RESUME_WAITS_ON_GITHUB, REVIEW_ASKED_AGAIN, REVIEW_ROUND_OPENED, parseRef } from './work.js';
+
+/**
+ * What a lead asked again reads beside the reviews (`openLeadReview`): that it
+ * approved, who asked for changes after that, and that it decides again. The
+ * verdicts themselves are in `reviews.md`.
+ */
+export function askedAgainBrief(lead: string, lateAsks: readonly LateAsk[]): ContextDocument {
+  return {
+    name: 'asked-again.md',
+    title: 'Why you are asked again',
+    content: [
+      '# Asked again',
+      '',
+      `You (${lead}) approved this diff. After that, these seats asked for changes on it:`,
+      '',
+      ...lateAsks.map(
+        (ask) =>
+          `- ${ask.seat}${ask.reviewId !== null ? `, review ${ask.reviewId}` : ''}${ask.submittedAt ? `, at ${ask.submittedAt}` : ''}`,
+      ),
+      '',
+      'Their reviews are in `reviews.md`. The merge is held until you decide again:',
+      'approve again to merge over them, or request changes to send the work back.',
+      '',
+    ].join('\n'),
+  };
+}
 
 /**
  * A seat running all the tasks it may at once (`bots.max_tasks`, Crew →
@@ -701,8 +727,11 @@ export class TaskService {
     extraContext?: ContextDocument[];
     /** Approvals GitHub shows that count for nothing on this diff (`ReviewStanding.notCounted`). */
     notCounted?: readonly NotCounted[];
+    /** Requests for changes given after the lead approved this diff (`ReviewStanding.lateAsks`): the lead decides again. */
+    lateAsks?: readonly LateAsk[];
   }): Promise<string | null> {
     const subjectRef = `${input.repo.name}#${input.prNumber}`;
+    const extraContext = [...(input.extraContext ?? []), ...(input.lateAsks && input.lateAsks.length > 0 ? [askedAgainBrief(input.seat, input.lateAsks)] : [])];
     const lead = (await bots.listBots().catch(() => [])).find((bot) => bot.name === input.seat);
     if (!lead?.githubLogin) return null;
     const had = await tasks.listTasksForSubjects('review', [subjectRef]).catch(() => null);
@@ -732,8 +761,13 @@ export class TaskService {
         branch: input.branch,
         issueNumber: input.issueNumber,
         checkoutExistingBranch: true,
-        ...(input.extraContext ? { extraContext: input.extraContext } : {}),
+        ...(extraContext.length > 0 ? { extraContext } : {}),
       });
+      if (input.lateAsks && input.lateAsks.length > 0) {
+        const seats = input.lateAsks.map((ask) => ask.seat).join(', ');
+        console.log(`[bridge] ${subjectRef}: ${seats} asked for changes after ${lead.name} approved; ${lead.name} asked again (asked-again)`);
+        return `${subjectRef}: started ${lead.name}’s review again, ${seats} having asked for changes after it approved${opened.error ? ` (${opened.error.slice(0, 80)})` : ''}`;
+      }
       console.log(`[bridge] ${subjectRef}: every other review is in; ${lead.name} reviews last`);
       return `${subjectRef}: started ${lead.name}’s review, the lead’s, last${opened.error ? ` (${opened.error.slice(0, 80)})` : ''}`;
     } catch (error) {
