@@ -3993,9 +3993,16 @@ describe('a merge', () => {
       noClientForTheGate?: boolean;
       /** The stage each issue is stored in; a move the forward rules refuse is refused unless it records the outcome. */
       stored?: Record<number, StageKey>;
+      /** The stacked pull requests built on it, as `Stacking.stackedOnMerged` finds them: an Error when the stacks cannot be read. */
+      stacked?: { issue: number; prNumber: number }[] | Error;
     } = {},
   ) {
     const moves: { issueNumber: number; to: string }[] = [];
+    const updateStacked = vi.fn(async (_input: { repoName: string; prNumber: number; carry: boolean; why: string }) => 'updated');
+    const stackedOnMerged = vi.fn(async (_repo: string, _pr: number, _closed: readonly number[]) => {
+      if (pull.stacked instanceof Error) throw pull.stacked;
+      return pull.stacked ?? [];
+    });
     vi.mocked(issues.getIssue).mockImplementation((async (_repoId: string, number: number) =>
       !pull.tracked || pull.tracked.includes(number) ? { number } : null) as never);
     vi.mocked(issues.setPullRequestNumber).mockClear();
@@ -4057,8 +4064,9 @@ describe('a merge', () => {
         },
       } as never,
       {} as never,
-      { leave: async () => undefined, advance: async () => null } as never,
+      { leave: async () => undefined, advance: async () => null, updateStacked } as never,
     );
+    if (pull.stacked) webhooks.useStacking({ pushed: vi.fn(), stackedOnMerged, stackedOn: vi.fn(), waitingOn: vi.fn() } as never);
     if (pull.pipeline) {
       webhooks.useDelivery(pull.pipeline as never, pull.delivery ?? ({ get: async () => ({ rules: pull.rules }), forget: () => undefined } as never));
     }
@@ -4095,7 +4103,7 @@ describe('a merge', () => {
           } as never,
           'delivery-merge',
         );
-    return { delivered, moves, opened, client };
+    return { delivered, moves, opened, client, updateStacked, stackedOnMerged };
   }
 
   beforeEach(() => {
@@ -4219,6 +4227,66 @@ describe('a merge', () => {
     expect(moves).toEqual([{ issueNumber: 5, to: 'merged' }]);
     expect(onMerged).toHaveBeenCalledWith(expect.objectContaining({ name: expect.any(String) }), 12, 'fed9876');
     expect(opened).toEqual([]);
+  });
+
+  describe('with a pull request built on it', () => {
+    it('brings each stacked pull request up to date as soon as it merges, its approvals standing', async () => {
+      const onMerged = vi.fn(async () => 'dispatched deploy-testing');
+      const { delivered, updateStacked, stackedOnMerged, opened } = merge([], {
+        pipeline: { onMerged },
+        rules: DEFAULT_DELIVERY_RULES,
+        closing: [7],
+        stacked: [
+          { issue: 6, prNumber: 31 },
+          { issue: 8, prNumber: 33 },
+        ],
+      });
+      await delivered;
+
+      // Its own issue, from its branch, and the ones it closes.
+      expect(stackedOnMerged).toHaveBeenCalledWith('openadlc', 12, [5, 7]);
+      expect(updateStacked.mock.calls.map(([input]) => input)).toEqual([
+        { repoName: 'openadlc', prNumber: 31, carry: true, why: '#12, which it was built on, merged' },
+        { repoName: 'openadlc', prNumber: 33, carry: true, why: '#12, which it was built on, merged' },
+      ]);
+      // The bridge makes the update; no builder is started for it.
+      expect(opened).toEqual([]);
+      expect(onMerged).toHaveBeenCalled();
+    });
+
+    it('updates nothing with no stacked pull request on it', async () => {
+      const { delivered, updateStacked } = merge([], { pipeline: { onMerged: vi.fn(async () => 'dispatched') }, rules: DEFAULT_DELIVERY_RULES, stacked: [] });
+      await delivered;
+
+      expect(updateStacked).not.toHaveBeenCalled();
+    });
+
+    it('updates nothing when the stacks cannot be read, says so, and still dispatches the testing deploy', async () => {
+      const onMerged = vi.fn(async () => 'dispatched deploy-testing');
+      const { delivered, updateStacked } = merge([], { pipeline: { onMerged }, rules: DEFAULT_DELIVERY_RULES, stacked: new Error('the database went away') });
+      await delivered;
+
+      expect(updateStacked).not.toHaveBeenCalled();
+      expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('the stacks could not be read (the database went away)'));
+      expect(onMerged).toHaveBeenCalled();
+    });
+
+    it('still dispatches the testing deploy when an update fails', async () => {
+      const onMerged = vi.fn(async () => 'dispatched deploy-testing');
+      const { delivered, updateStacked } = merge([], { pipeline: { onMerged }, rules: DEFAULT_DELIVERY_RULES, stacked: [{ issue: 6, prNumber: 31 }] });
+      updateStacked.mockRejectedValueOnce(new Error('GitHub answered 502'));
+      await delivered;
+
+      expect(onMerged).toHaveBeenCalled();
+    });
+
+    it('updates nothing for a merge into another branch, where nothing shipped', async () => {
+      const { delivered, updateStacked, stackedOnMerged } = merge([], { base: 'release/1.x', stacked: [{ issue: 6, prNumber: 31 }] });
+      await delivered;
+
+      expect(stackedOnMerged).not.toHaveBeenCalled();
+      expect(updateStacked).not.toHaveBeenCalled();
+    });
   });
 
   describe('merged by a crew account around review-gate (unreviewed)', () => {
@@ -9761,24 +9829,35 @@ describe('a push to a stacked pull request', () => {
       comment: vi.fn(async () => 'https://github.test/c/1'),
       decideReviewers: vi.fn(() => ({ reviewers: ['second'], lead: 'lead', approvers: ['lead'], reasons: {}, humanReviewRequired: false })),
       closingIssueLabels: vi.fn(async () => []),
+      // What opening a round asks, for the tests that get that far.
+      requestReviewers: vi.fn(async () => undefined),
+      humansRequiredFor: vi.fn(async () => ({ rules: [], required: [] })),
+      setHumanReviewLabels: vi.fn(async () => undefined),
+      dropUnneededHumanRequests: vi.fn(async () => undefined),
+      computeReviewGate: vi.fn(() => ({ state: 'pending', description: 'waiting on second' })),
+      cannotReviewHere: vi.fn(async () => []),
     };
     const taskService = {
       open: vi.fn(async () => ({ taskId: 'task-patch', session: 'p' })),
       openLeadReview: vi.fn(async () => null),
       gateDescription: async (text: string) => text,
     };
+    const updateStacked = vi.fn(async (_input: { repoName: string; prNumber: number; carry: boolean; why: string }): Promise<string> => 'updated');
     const webhooks = new Webhooks(
       { automationBot: null, humans: [], review: { maxRounds: 3 } } as never,
       automation as never,
       {} as never,
       taskService as never,
       {} as never,
-      { leave: async () => undefined } as never,
+      { leave: async () => undefined, updateStacked } as never,
     );
+    // Stacked on #4, which has merged: the stack's own reads are `stacking.test.ts`'s.
+    vi.spyOn(stacking, 'stackedOn').mockResolvedValue(4);
+    vi.spyOn(stacking, 'waitingOn').mockResolvedValue(null);
     webhooks.useStacking(stacking);
     webhooks.useConflictRounds(rounds);
     vi.spyOn(rounds, 'pushed');
-    return { webhooks, automation, taskService, gates, log, stacking, github, rounds };
+    return { webhooks, automation, taskService, gates, log, stacking, github, rounds, updateStacked };
   }
 
   beforeEach(() => {
@@ -9862,12 +9941,125 @@ describe('a push to a stacked pull request', () => {
   });
 
   it('is reviewed as any push when it is not the commit the line made', async () => {
-    const { webhooks, automation, gates } = bridge([noted, { type: STACK_MADE, payload: { repo: 'openadlc', pr: 31, from: NOTED, to: 'd3'.repeat(20) } }]);
+    const { webhooks, automation, gates, updateStacked } = bridge([noted, { type: STACK_MADE, payload: { repo: 'openadlc', pr: 31, from: NOTED, to: 'd3'.repeat(20) } }]);
 
     await pushed(webhooks);
 
     expect(automation.dismissStaleApprovals).toHaveBeenCalled();
     expect(gates).toEqual([{ state: 'pending', description: 'no local CI pass for c2c2c2c: the builder runs openadlc-ci on it and pushes again' }]);
+    // With no local CI pass, it goes back to run it, not up to date: the update's push would be the line's, which no pass is asked of.
+    expect(updateStacked).not.toHaveBeenCalled();
+  });
+
+  describe('opened after what it was built on merged', () => {
+    async function opened(webhooks: Webhooks, action = 'opened') {
+      const quiet = [vi.spyOn(console, 'log').mockImplementation(() => undefined), vi.spyOn(console, 'warn').mockImplementation(() => undefined)];
+      try {
+        await webhooks.receive(
+          'pull_request',
+          { action, pull_request: PULL, repository: { name: 'openadlc', full_name: 'janedoe/openadlc' }, sender: { login: BUILDER } } as never,
+          'delivery-opened',
+        );
+      } finally {
+        for (const spy of quiet) spy.mockRestore();
+      }
+    }
+    const roundsOpened = async () => {
+      const { recordEvent } = await import('@openadlc/db');
+      return vi.mocked(recordEvent).mock.calls.filter(([event]) => (event as { type: string }).type === 'review.round_opened').map(([event]) => event.payload);
+    };
+
+    beforeEach(async () => {
+      store.localCiPasses = new Set([PUSHED]);
+      store.events = [];
+      const { recordEvent } = await import('@openadlc/db');
+      vi.mocked(recordEvent).mockClear();
+    });
+
+    it('is brought up to date with the base before any review opens, and its round is left to that push', async () => {
+      const { webhooks, taskService, automation, updateStacked } = bridge([]);
+
+      await opened(webhooks);
+
+      expect(updateStacked).toHaveBeenCalledWith(expect.objectContaining({ repoName: 'openadlc', prNumber: 31, carry: false }));
+      expect(taskService.open).not.toHaveBeenCalled();
+      expect(automation.requestReviewers).not.toHaveBeenCalled();
+      expect(await roundsOpened()).toEqual([]);
+    });
+
+    it('starts no builder and opens no review on a conflict: the resolution round’s push opens the round', async () => {
+      const { webhooks, taskService, updateStacked } = bridge([]);
+      updateStacked.mockResolvedValue('conflict');
+
+      await opened(webhooks, 'ready_for_review');
+
+      expect(updateStacked).toHaveBeenCalledTimes(1);
+      expect(taskService.open).not.toHaveBeenCalled();
+      expect(await roundsOpened()).toEqual([]);
+    });
+
+    it('opens its round as before when it was already up to date', async () => {
+      const { webhooks, taskService, updateStacked } = bridge([]);
+      updateStacked.mockResolvedValue('current');
+
+      await opened(webhooks);
+
+      expect(taskService.open).toHaveBeenCalledWith(expect.objectContaining({ bot: 'second', kind: 'review', subjectRef: 'openadlc#31' }));
+      expect(await roundsOpened()).toEqual([{ subjectRef: 'openadlc#31', sha: PUSHED }]);
+    });
+
+    it('is left as it is while what it was built on has not merged, or when it was not stacked', async () => {
+      const waiting = bridge([]);
+      vi.mocked(waiting.stacking.waitingOn).mockResolvedValue(4);
+      await opened(waiting.webhooks);
+      expect(waiting.updateStacked).not.toHaveBeenCalled();
+      expect(waiting.taskService.open).toHaveBeenCalledWith(expect.objectContaining({ kind: 'review' }));
+
+      const plain = bridge([]);
+      vi.mocked(plain.stacking.stackedOn).mockResolvedValue(null);
+      await opened(plain.webhooks);
+      expect(plain.updateStacked).not.toHaveBeenCalled();
+      expect(plain.taskService.open).toHaveBeenCalledWith(expect.objectContaining({ kind: 'review' }));
+
+      const unread = bridge([]);
+      vi.mocked(unread.stacking.stackedOn).mockRejectedValue(new Error('the database went away'));
+      await opened(unread.webhooks);
+      expect(unread.updateStacked).not.toHaveBeenCalled();
+    });
+
+    it('opens its round on the merged head that update pushed, as the line’s push, not a forbidden one or one held for local CI', async () => {
+      // The update from NOTED made PUSHED, noted as carrying no approvals.
+      const { webhooks, automation, taskService, gates, log, updateStacked } = bridge([
+        { ...noted, payload: { ...noted.payload, carry: false } },
+        { type: STACK_MADE, payload: { repo: 'openadlc', pr: 31, from: NOTED, to: PUSHED } },
+      ]);
+      store.events = [{ type: 'merge_line.branch_updated', payload: { subjectRef: 'openadlc#31', from: NOTED, to: PUSHED } }];
+      // The line's merge commit has no local CI pass, and the builder's account pushed it.
+      store.localCiPasses = new Set();
+
+      await pushed(webhooks);
+
+      expect(log.some((event) => event.type === STACK_UPDATED)).toBe(false);
+      expect(automation.dismissStaleApprovals).toHaveBeenCalled();
+      expect(store.events.some((event) => event.type === 'pr.forbidden_push')).toBe(false);
+      expect(gates.some((gate) => gate.description.includes('no local CI pass'))).toBe(false);
+      expect(await roundsOpened()).toEqual([{ subjectRef: 'openadlc#31', sha: PUSHED }]);
+      expect(taskService.open).toHaveBeenCalledWith(expect.objectContaining({ bot: 'second', kind: 'review', subjectRef: 'openadlc#31' }));
+      expect(updateStacked).not.toHaveBeenCalled();
+    });
+
+    it('keeps its approvals as before for the update made when what it was built on merged', async () => {
+      const { webhooks, automation, taskService, updateStacked } = bridge([
+        { ...noted, payload: { ...noted.payload, carry: true } },
+        { type: STACK_MADE, payload: { repo: 'openadlc', pr: 31, from: NOTED, to: PUSHED } },
+      ]);
+
+      await pushed(webhooks);
+
+      expect(automation.dismissStaleApprovals).not.toHaveBeenCalled();
+      expect(taskService.open).not.toHaveBeenCalled();
+      expect(updateStacked).not.toHaveBeenCalled();
+    });
   });
 });
 

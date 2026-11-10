@@ -288,6 +288,8 @@ async function main(): Promise<void> {
     // to its builder first when that changed its files.
     gate: (repoFullName, sha) => automation.publishedGate(repoFullName, sha),
     rebuild: (input) => sendBack.backToBuild(input),
+    // One let go because what it was built on merged is brought up to date before its reviews start.
+    update: (input) => mergeLine.updateStacked(input),
   });
   mergeLine.useStacking(stacking);
   // Approvals stand across a lead-only resolution and a stacked update; after

@@ -30,9 +30,14 @@ import { forgetHold, readHolds, recordHold, type ItemHold } from './item-hold.js
  * longest wait in the flow: an issue B that needs A was idle all of it. Now B
  * is leased to A's builder and its build starts from A's branch, so B's work
  * already has A's in it. B's pull request does not join the merge line until
- * A has merged; the line then merges the base into B's branch itself, and B's
- * approvals stand across that one commit, matched by the SHA GitHub answered
- * the line with. Every other push to B is reviewed as any push is: one from
+ * A has merged. The bridge merges the base into B's branch as soon as A
+ * merges (`MergeLine.updateStacked`), and B's approvals stand across that one
+ * commit, matched by the SHA GitHub answered with. Made only when the line
+ * took B, the update came after every seat had read B with A's whole diff in
+ * it: #256 was read so, and the security seat stopped at its cap. A B opened,
+ * or pushed by its builder, after A merged is brought up to date before its
+ * first round instead, and that update carries no approval (`carry: false`):
+ * its round opens on the merged head. Every other push to B is reviewed as any push is: one from
  * the same head that touches the same files is still not the line's, since
  * the builder holds a token that can push anything, and a conflicted update
  * goes to a resolution round with its own re-review. If A is sent back to
@@ -104,6 +109,13 @@ interface UpdatingPayload {
   on: number;
   from: string;
   files: string[];
+  /**
+   * Whether the approvals stand across this update. False for one made
+   * before a stacked pull request's first round: nothing was reviewed on the
+   * head it replaces. Absent in a note written before it was, which was
+   * always the line's update, and reads as true.
+   */
+  carry?: boolean;
   at: string;
 }
 
@@ -165,8 +177,15 @@ export interface StackingDeps {
    * round is with the builder, else why not. Absent, a person is asked.
    */
   rebuild?: (input: { repoName: string; prNumber: number; reason: string }) => Promise<string | null>;
+  /**
+   * Merges the base into a stacked pull request's branch now
+   * (`MergeLine.updateStacked`), and answers what came of it. A change let go
+   * because what it was built on merged is brought up to date before its
+   * reviews start, not after its reviewers read the other's diff in it too.
+   */
+  update?: (input: { repoName: string; prNumber: number; carry: boolean; why: string }) => Promise<string>;
   /** Says a line in a card's timeline (`sayOnCard`). */
-  say?: (subjects: readonly string[], text: string, payload: Record<string, unknown>) => Promise<boolean>;
+  say?:(subjects: readonly string[], text: string, payload: Record<string, unknown>) => Promise<boolean>;
   record?: (input: { type: string; payload: unknown }) => Promise<unknown>;
   events?: (type: string, since: Date) => Promise<{ at: string; payload: unknown }[]>;
   now?: () => number;
@@ -180,6 +199,9 @@ export function builderOfBranch(ref: string): string | null {
 
 /** The labels that keep an issue from the dispatcher, as `listRoutableIssues` reads them. */
 const HELD_FOR_SOMEONE: readonly string[] = ['needs-human', 'needs-triage', 'do:human'];
+
+/** A task's states while it is not over, as `countUnfinishedImplementTasks` counts them. */
+const UNFINISHED: readonly string[] = ['queued', 'running', 'paused'];
 
 /** Where a dependency in review is when it was sent back: any stage before review. */
 const SENT_BACK_TO: readonly string[] = ['intake', 'spec', 'build'];
@@ -503,6 +525,16 @@ export class Stacking {
       const say = this.deps.say ?? sayOnCard;
 
       if (!open || !redo) {
+        // Merged: the base is merged in first, so the reviews the gate sweep
+        // starts next read this change alone (#256 was read with its
+        // dependency's whole diff in it). What it answers is said; nothing
+        // here waits on it, and the line still updates it before it lands.
+        if (open && base.merged && this.deps.update) {
+          const answer = await this.deps
+            .update({ repoName: repo.name, prNumber: open.number, carry: true, why: `let go: #${on} merged` })
+            .catch((error: unknown) => `failed: ${error instanceof Error ? error.message : String(error)}`);
+          done.push(`${key}: brought up to date with ${open.baseRef} before its reviews: ${answer}`);
+        }
         const next = open ? 'its reviews start now' : 'it goes on where it was';
         await client.comment(repo.fullName, issue.number, `**Let go.** ${settled}, so this goes on: ${next}.`).catch(() => undefined);
         await say(subjects, `Let go by itself: ${settled}. ${open ? 'Its reviews start now.' : 'It goes on where it was.'}`, {
@@ -595,7 +627,16 @@ export class Stacking {
    * `mergeIntoBranch` so it knows the commit it made (`made`). Noted first,
    * so a push that arrives before the line has GitHub's answer waits for it.
    */
-  async updating(input: { repoName: string; prNumber: number; issue: number | null; repoFullName: string; baseRef: string; headSha: string }): Promise<boolean> {
+  async updating(input: {
+    repoName: string;
+    prNumber: number;
+    issue: number | null;
+    repoFullName: string;
+    baseRef: string;
+    headSha: string;
+    /** Whether the approvals stand across it (`UpdatingPayload.carry`); true unless said. */
+    carry?: boolean;
+  }): Promise<boolean> {
     if (!input.issue) return false;
     const on = await this.stackedOn(input.repoName, input.issue);
     if (!on || (await this.waitingOn(input.repoName, input.issue))) return false;
@@ -609,9 +650,38 @@ export class Stacking {
       on,
       from: input.headSha,
       files,
+      carry: input.carry ?? true,
       at: this.at(),
     } satisfies UpdatingPayload);
     return true;
+  }
+
+  /**
+   * The stacked pull requests to bring up to date now that `prNumber` merged:
+   * each open one built on it, or on an issue it closed, that is not held
+   * (`openadlc:paused`; its let-go updates it) and has no build or patch
+   * round unfinished on it (a push under a running builder breaks its next
+   * push; that push is updated before its round instead). Throws when the
+   * stacks cannot be read.
+   */
+  async stackedOnMerged(repoName: string, prNumber: number, closedIssues: readonly number[]): Promise<Array<{ issue: number; prNumber: number }>> {
+    const repo = await repos.getRepoByName(repoName);
+    if (!repo) return [];
+    const found: Array<{ issue: number; prNumber: number }> = [];
+    for (const stack of await stacks.listStacks(repo.id)) {
+      if (stack.onPr !== prNumber && !closedIssues.includes(stack.onIssue)) continue;
+      const issue = await issues.getIssue(repo.id, stack.issue).catch(() => null);
+      if (!issue?.prNumber || hasPausedLabel(issue.labels) || issue.stage === 'merged' || issue.stage === 'done') continue;
+      const subjects = [`${repoName}#${stack.issue}`, `${repoName}#${issue.prNumber}`];
+      const working = await tasks.listTasksOnSubjects(subjects).then(
+        (found) => found.some((task) => (task.kind === 'implement' || task.kind === 'patch') && UNFINISHED.includes(task.state)),
+        // Not knowing whether a builder is on it is not knowing it is free.
+        () => true,
+      );
+      if (working) continue;
+      found.push({ issue: stack.issue, prNumber: issue.prNumber });
+    }
+    return found;
   }
 
   /**
@@ -643,6 +713,11 @@ export class Stacking {
         (row) => row.payload.pr === input.prNumber && row.payload.from === input.before,
       );
       if (!noted) return false;
+      // Made before the first round: no approval of the head it replaced, and
+      // the push opens the round on the merged head. Asked after `madeFor`,
+      // which waits for the update to be recorded, so the push is known for
+      // the line's (`BRANCH_UPDATED_BY_LINE`) by the time it is reviewed.
+      if (noted.payload.carry === false) return false;
       // Never more files than before: a merge of the base can only take some out.
       const before = new Set(noted.payload.files);
       if (!input.prFiles.every((file) => before.has(file))) return false;
@@ -785,7 +860,7 @@ export function stackBrief(on: { issue: number; pr: number; branch: string }): C
     content: [
       `This issue depends on #${on.issue}, whose pull request #${on.pr} is in review. Your branch starts from its branch, \`${on.branch}\`, so its work is already here: build on it, and do not change its files beyond what this issue needs.`,
       '',
-      `Open your pull request against the default branch as usual, and say in its description: "Stacked on #${on.pr}: until it merges, this diff includes its commits." It does not join the merge line until #${on.pr} has merged; the line then brings it up to date.`,
+      `Open your pull request against the default branch as usual, and say in its description: "Stacked on #${on.pr}: until it merges, this diff includes its commits." It does not join the merge line until #${on.pr} has merged; OpenADLC brings it up to date with the default branch as soon as #${on.pr} merges.`,
     ].join('\n'),
   };
 }
