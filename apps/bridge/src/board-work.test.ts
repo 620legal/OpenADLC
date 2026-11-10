@@ -346,6 +346,29 @@ describe('an issue whose work was sent back', () => {
     expect(work.byRef.get('api#7')?.sentBack).toBe(2);
     expect(work.byRef.get('api#8')?.sentBack).toBe(0);
   });
+
+  // ADR 0046: a sent-back Build card says why, with its round running too.
+  it('says why a Build card came back from Review, while its round runs, and nothing of it on a Review card', () => {
+    const base = { repoId: 'repo-1', repoName: 'api', title: 'Cache the price list', url: null, updatedAt: minutesAgo(5) };
+    const building = { ...base, number: 7, stage: 'build' as const, prNumber: 31, labels: ['adlc:build'] };
+    const reviewing = { ...base, number: 8, stage: 'review' as const, prNumber: 32, labels: ['adlc:review'] };
+    const why = { by: 'lead-reviewer', kind: 'send_back' as const, at: minutesAgo(10), pr: 31, words: 'Handle the empty cart', reason: 'Handle the empty cart.' };
+    const patching = { ...triage('api#31', 'running'), id: 'task-patch', botId: 'bot-builder', kind: 'patch' } as TaskFacts;
+    const work = boardWork({
+      issues: [building, reviewing],
+      tasks: [patching],
+      bots: [{ id: 'bot-builder', name: 'builder', role: 'implement', maxTasks: 1 }],
+      repos: [{ id: 'repo-1', name: 'api', fullName: 'exampleco/api', stageModes: {} }],
+      gates: [],
+      stallEvents: [],
+      requests: [],
+      now: NOW,
+      waiting: { sentBacks: new Map([['api#7', why], ['api#8', why]]) },
+    });
+    expect(work.byRef.get('api#7')?.sendBack).toEqual(why);
+    expect(work.byRef.get('api#7')?.active.map((task) => task.kind)).toEqual(['patch']);
+    expect(work.byRef.get('api#8')).not.toHaveProperty('sendBack');
+  });
 });
 
 describe('one card per work item', () => {
