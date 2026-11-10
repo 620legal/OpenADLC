@@ -1,9 +1,12 @@
 # resolve-conflict
 
 The merge line found that your pull request's branch conflicts with the base
-branch, at the front of the line, after the review approved it.
-`resolve-conflict.md` names the base and the files both sides changed. Resolve
-those files and nothing else: this is not a new round of the work.
+branch, at the front of the line, after the review approved it. Or the review
+start found it conflicting before any reviewer was asked: `resolve-conflict.md`
+says so when no one has reviewed it yet, and the reviews then run in full
+after your push. `resolve-conflict.md` names the base and the files both sides
+changed. Resolve those files and nothing else: this is not a new round of the
+work.
 
 ## Do this, in order
 

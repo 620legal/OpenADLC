@@ -67,7 +67,10 @@ its comments, the repository's `AGENTS.md` and the code in front of you.
 9. On a review round, address every finding with a commit or a stated reason,
    run `openadlc-ci` on the new head, and push. The review loop stops after
    the install's limit (`maxRounds`) and asks a person itself; you do not
-   count rounds.
+   count rounds. When `conflict.md` is in your context, your branch conflicts
+   with the base it names: merge that base in first (`git merge
+   origin/<base>`, not a rebase) and resolve the conflicts, keeping what both
+   sides meant, then do the rest of the round.
 
 ## Posting to GitHub
 

@@ -126,8 +126,13 @@ function cardHoldsIt(task: { kind: TaskKind; skill?: string | null; branch?: str
     return issue.stage === 'done' || heldFromTheCrew(issue.labels);
   }
   // A conflict resolution round is a patch the merge line opens on a pull
-  // request in Review: read as Build work, it was never run again.
-  const stage = task.kind === 'patch' && task.skill === 'resolve-conflict' ? 'review' : stageOfTask(task.kind);
+  // request in Review: read as Build work, it was never run again. The review
+  // start opens one too, before any seat is asked, with the card still in
+  // Build (ADR 0042): read as Review work, that one was never run again.
+  if (task.kind === 'patch' && task.skill === 'resolve-conflict') {
+    return (issue.stage !== 'review' && issue.stage !== 'build') || heldFromTheCrew(issue.labels);
+  }
+  const stage = stageOfTask(task.kind);
   // Moved on, there is nothing for it to hold up; moved back, a person or a
   // send-back wants the earlier stage done first.
   return issue.stage !== stage || heldFromTheCrew(issue.labels);

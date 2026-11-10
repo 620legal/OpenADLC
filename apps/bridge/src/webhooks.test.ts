@@ -20,6 +20,7 @@ import { DeployPipeline } from './deploy-pipeline.js';
 import { DeliveryKnowledge } from './delivery-rules.js';
 import { PullRules, useDeclaredCommands } from './pull-commands.js';
 import { CONFLICT_RESOLVED, CONFLICT_RESOLVING, ConflictRounds } from './conflict-round.js';
+import { MERGEABILITY_RECHECK_MS, MERGEABILITY_WAIT_MS, MergeabilityWait, type PullNow } from './mergeability.js';
 import { STACK_MADE, STACK_UPDATED, STACK_UPDATING, Stacking } from './stacking.js';
 import {
   deployFailedOnTesting,
@@ -11694,5 +11695,333 @@ describe('a release delivery', () => {
     const { onPublished, receive } = delivering();
     await receive('published', { name: 'openadlc', full_name: 'someone-else/openadlc' });
     expect(onPublished).not.toHaveBeenCalled();
+  });
+});
+
+describe('a crew pull request whose head conflicts with its base, before any seat is asked', () => {
+  // #257 conflicted with main once #256 merged: three seats reviewed it on two
+  // heads, and each time the lead's only blocker was "not mergeable".
+  const HEAD = 'c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4';
+  const BUILDER = 'openadlc-atlas-janedoe';
+  const PULL = {
+    author_association: 'COLLABORATOR',
+    number: 31,
+    title: 'Cache the price list',
+    draft: false,
+    head: { sha: HEAD, ref: `agent/${BUILDER}/11-issue-11`, repo: { full_name: 'janedoe/openadlc' } },
+    base: { ref: 'main' },
+    labels: [],
+    html_url: 'https://github.test/janedoe/openadlc/pull/31',
+    user: { login: BUILDER },
+  };
+  const now = (mergeable: boolean | null, mergeableState: string | null, overrides: Partial<PullNow> = {}): PullNow => ({
+    number: 31,
+    state: 'open',
+    draft: false,
+    headRef: PULL.head.ref,
+    headSha: HEAD,
+    baseRef: 'main',
+    labels: [],
+    mergeable,
+    mergeableState,
+    ...overrides,
+  });
+  const CLEAN = now(true, 'clean');
+  const DIRTY = now(false, 'dirty');
+  const UNKNOWN = now(null, 'unknown');
+
+  function bridge(answers: PullNow[], options: { rounds?: boolean; resolving?: boolean } = {}) {
+    const gates: { state: string; description: string }[] = [];
+    const reads = [...answers];
+    const github = {
+      getPullRequest: vi.fn(async (_repo: string, _number: number) => (reads.length > 1 ? reads.shift()! : reads[0]!)),
+      getIssue: vi.fn(async () => ({ number: 31, state: 'open', labels: [], pullRequest: true })),
+      listPullFiles: async () => ['src/a.ts'],
+      listPullFilesAsNamed: async () => ['src/a.ts'],
+      listEveryPullFile: async () => ({ files: ['src/a.ts'], complete: true, renamedFrom: [] }),
+      readFileIfPresent: async () => null,
+    };
+    const automation = {
+      actors: { asBot: async () => github },
+      setReviewGate: vi.fn(async (input: { state: string; description: string }) => (gates.push({ state: input.state, description: input.description }), input)),
+      moveStage: vi.fn(async () => ({ moved: true })),
+      comment: vi.fn(async () => 'https://github.test/c/1'),
+      decideReviewers: vi.fn(() => ({ reviewers: ['second', 'lead'], lead: 'lead', approvers: ['lead'], reasons: {}, humanReviewRequired: false })),
+      closingIssueLabels: vi.fn(async () => []),
+      requestReviewers: vi.fn(async () => undefined),
+      humansRequiredFor: vi.fn(async () => ({ rules: [], required: [] })),
+      setHumanReviewLabels: vi.fn(async () => undefined),
+      dropUnneededHumanRequests: vi.fn(async () => undefined),
+      computeReviewGate: vi.fn(() => ({ state: 'pending', description: 'waiting on second' })),
+      cannotReviewHere: vi.fn(async () => []),
+    };
+    const taskService = { open: vi.fn(async (_input: unknown) => ({ taskId: 'task-1', session: 's' })), gateDescription: async (text: string) => text };
+    const webhooks = new Webhooks(
+      { automationBot: null, humans: [], review: { maxRounds: 3 } } as never,
+      automation as never,
+      {} as never,
+      taskService as never,
+      {} as never,
+      { leave: async () => undefined } as never,
+    );
+    const rounds = {
+      pushed: vi.fn(async () => null),
+      resolving: vi.fn(async () => Boolean(options.resolving)),
+      start: vi.fn(async (_input: unknown) => 'resolving' as const),
+    };
+    if (options.rounds !== false) webhooks.useConflictRounds(rounds);
+
+    // The real wait, on a clock the test moves.
+    let clock = Date.parse('2026-11-10T12:00:00.000Z');
+    const timers: { at: number; fn: () => void }[] = [];
+    const recorded: { type: string; payload: Record<string, unknown> }[] = [];
+    const wait = new MergeabilityWait({
+      read: async (repoFullName, number) => github.getPullRequest(repoFullName, number),
+      now: () => clock,
+      setTimer: (fn, ms) => timers.push({ at: clock + ms, fn }),
+      record: async (type, payload) => void recorded.push({ type, payload: payload as Record<string, unknown> }),
+      events: async () => [],
+      log: () => undefined,
+    });
+    webhooks.useMergeabilityWait(wait);
+    const advance = async (ms: number) => {
+      const until = clock + ms;
+      for (;;) {
+        timers.sort((a, b) => a.at - b.at);
+        const due = timers[0];
+        if (!due || due.at > until) break;
+        timers.shift();
+        clock = due.at;
+        due.fn();
+        // What the timer started reads, records and opens tasks: let it all settle.
+        for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve));
+      }
+      clock = until;
+    };
+    const reviews = () => taskService.open.mock.calls.filter(([input]) => (input as { kind: string }).kind === 'review');
+    return { webhooks, automation, taskService, github, gates, rounds, timers, recorded, advance, reviews };
+  }
+
+  beforeEach(() => {
+    store.bots = [{ id: 'bot-builder', name: BUILDER, slot: 'builder', role: 'implement', githubLogin: BUILDER }];
+    store.lease = { id: 'lease-11', botId: 'bot-builder', declaredPaths: ['src/a.ts'] };
+    store.botTasks = [];
+    store.localCiPasses = new Set([HEAD]);
+  });
+
+  async function quietly(run: () => Promise<void>) {
+    const quiet = [vi.spyOn(console, 'log').mockImplementation(() => undefined), vi.spyOn(console, 'warn').mockImplementation(() => undefined)];
+    try {
+      await run();
+    } finally {
+      for (const spy of quiet) spy.mockRestore();
+    }
+  }
+
+  async function opened(webhooks: Webhooks, pull: Record<string, unknown> = PULL) {
+    await quietly(() =>
+      webhooks.receive(
+        'pull_request',
+        { action: 'opened', pull_request: pull, repository: { name: 'openadlc', full_name: 'janedoe/openadlc' }, sender: { login: BUILDER } } as never,
+        `delivery-${Math.random()}`,
+      ),
+    );
+  }
+
+  it('asks no seat and opens the resolution round when GitHub says it conflicts, by either sign', async () => {
+    for (const answer of [now(false, 'blocked'), now(null, 'dirty')]) {
+      const { webhooks, automation, rounds, gates, reviews } = bridge([answer]);
+
+      await opened(webhooks);
+
+      expect(rounds.start).toHaveBeenCalledWith({ repoName: 'openadlc', prNumber: 31, baseRef: 'main', beforeReview: true });
+      expect(reviews()).toEqual([]);
+      expect(automation.requestReviewers).not.toHaveBeenCalled();
+      expect(automation.moveStage).not.toHaveBeenCalledWith(expect.objectContaining({ to: 'review' }));
+      expect(gates.at(-1)).toEqual({ state: 'pending', description: 'conflicts with main: the builder merges it in before review' });
+    }
+  });
+
+  it('is reviewed at once, with no wait, when GitHub says it is mergeable', async () => {
+    const { webhooks, rounds, reviews, timers, recorded, automation } = bridge([CLEAN]);
+
+    await opened(webhooks);
+
+    expect(reviews().map(([input]) => (input as { bot: string }).bot)).toEqual(['second']);
+    expect(automation.moveStage).toHaveBeenCalledWith(expect.objectContaining({ to: 'review' }));
+    expect(rounds.start).not.toHaveBeenCalled();
+    expect(timers).toHaveLength(0);
+    expect(recorded).toEqual([]);
+  });
+
+  it('waits off the delivery while GitHub has not said, and is reviewed once it says mergeable', async () => {
+    const { webhooks, rounds, reviews, gates, advance, recorded } = bridge([UNKNOWN, CLEAN]);
+
+    await opened(webhooks);
+
+    expect(reviews()).toEqual([]);
+    expect(gates.at(-1)).toEqual({ state: 'pending', description: 'waiting for GitHub to say whether it conflicts with main' });
+    expect(recorded.map((event) => event.type)).toEqual(['review.mergeability_waiting']);
+
+    await quietly(() => advance(MERGEABILITY_RECHECK_MS));
+
+    expect(reviews().map(([input]) => (input as { bot: string }).bot)).toEqual(['second']);
+    expect(rounds.start).not.toHaveBeenCalled();
+    expect(recorded.at(-1)).toMatchObject({ type: 'review.mergeability_decided', payload: { answer: 'mergeable' } });
+  });
+
+  it('waits, and opens the resolution round and no seat, when GitHub then says it conflicts', async () => {
+    const { webhooks, rounds, reviews, advance } = bridge([UNKNOWN, UNKNOWN, DIRTY]);
+
+    await opened(webhooks);
+    await quietly(() => advance(MERGEABILITY_RECHECK_MS * 2));
+
+    expect(rounds.start).toHaveBeenCalledWith(expect.objectContaining({ prNumber: 31, beforeReview: true }));
+    expect(reviews()).toEqual([]);
+  });
+
+  it('starts the reviews as before once a minute has passed with GitHub saying nothing, and holds them no longer', async () => {
+    const { webhooks, rounds, reviews, advance, timers, recorded } = bridge([UNKNOWN]);
+
+    await opened(webhooks);
+    await quietly(() => advance(MERGEABILITY_WAIT_MS - MERGEABILITY_RECHECK_MS));
+    expect(reviews()).toEqual([]);
+    await quietly(() => advance(MERGEABILITY_RECHECK_MS));
+
+    expect(reviews()).toHaveLength(1);
+    expect(rounds.start).not.toHaveBeenCalled();
+    expect(timers).toHaveLength(0);
+    expect(recorded.at(-1)?.payload).toMatchObject({ answer: 'unknown' });
+  });
+
+  it('decides nothing for a head pushed over during the wait: the newer push does', async () => {
+    const { webhooks, rounds, reviews, advance } = bridge([UNKNOWN, now(true, 'clean', { headSha: 'd5'.repeat(20) })]);
+
+    await opened(webhooks);
+    await quietly(() => advance(MERGEABILITY_RECHECK_MS));
+
+    expect(reviews()).toEqual([]);
+    expect(rounds.start).not.toHaveBeenCalled();
+  });
+
+  it('opens no second round on a pull request a resolution round is already open on', async () => {
+    const { webhooks, rounds, reviews, github, gates } = bridge([DIRTY], { resolving: true });
+
+    await opened(webhooks);
+
+    expect(rounds.start).not.toHaveBeenCalled();
+    expect(github.getPullRequest).not.toHaveBeenCalled();
+    expect(reviews()).toEqual([]);
+    expect(gates.at(-1)?.description).toContain('conflicts with main');
+  });
+
+  it('goes back to build as a patch round when no resolution rounds are wired', async () => {
+    const { webhooks, taskService, reviews } = bridge([DIRTY], { rounds: false });
+
+    await opened(webhooks);
+
+    expect(reviews()).toEqual([]);
+    expect(taskService.open).toHaveBeenCalledWith(expect.objectContaining({ kind: 'patch', bot: BUILDER }));
+  });
+
+  it('reviews a crew branch with no issue as before, whatever GitHub says', async () => {
+    const { webhooks, rounds, github, automation } = bridge([DIRTY]);
+
+    await opened(webhooks, { ...PULL, head: { ...PULL.head, ref: 'docs/adr-0042' } });
+
+    expect(github.getPullRequest).not.toHaveBeenCalled();
+    expect(rounds.start).not.toHaveBeenCalled();
+    expect(automation.requestReviewers).toHaveBeenCalled();
+  });
+
+  it('decides at once, after a restart, a head left waiting', async () => {
+    const { webhooks, reviews, github } = bridge([CLEAN]);
+    const at = new Date().toISOString();
+    const wait = new MergeabilityWait({
+      read: async (repoFullName, number) => github.getPullRequest(repoFullName, number),
+      record: async () => undefined,
+      events: async (type) =>
+        type === 'review.mergeability_waiting' ? [{ at, payload: { repo: 'openadlc', repoFullName: 'janedoe/openadlc', pr: 31, head: HEAD, at } }] : [],
+      log: () => undefined,
+    });
+    webhooks.useMergeabilityWait(wait);
+
+    let lines: string[] = [];
+    await quietly(async () => {
+      lines = await webhooks.resumeMergeabilityWaits();
+    });
+
+    expect(lines).toEqual(['openadlc#31: mergeable after a restart']);
+    expect(reviews()).toHaveLength(1);
+  });
+
+  it('still opens the reviews after a restart when GitHub cannot be read, from what the wait recorded', async () => {
+    const { webhooks, reviews, github, rounds } = bridge([CLEAN]);
+    const at = new Date().toISOString();
+    const decided: unknown[] = [];
+    const seen = { headRef: PULL.head.ref, baseRef: 'main', draft: false, labels: [] };
+    const wait = new MergeabilityWait({
+      read: async () => {
+        throw new Error('GitHub is down');
+      },
+      record: async (type, payload) => {
+        if (type === 'review.mergeability_decided') decided.push(payload);
+      },
+      events: async (type) =>
+        type === 'review.mergeability_waiting' ? [{ at, payload: { repo: 'openadlc', repoFullName: 'janedoe/openadlc', pr: 31, head: HEAD, seen, at } }] : [],
+      log: () => undefined,
+    });
+    webhooks.useMergeabilityWait(wait);
+
+    let lines: string[] = [];
+    await quietly(async () => {
+      lines = await webhooks.resumeMergeabilityWaits();
+    });
+
+    expect(lines).toEqual(['openadlc#31: unknown after a restart']);
+    expect(reviews()).toHaveLength(1);
+    expect(rounds.start).not.toHaveBeenCalled();
+    expect(github.getPullRequest).not.toHaveBeenCalled();
+    expect(decided).toEqual([expect.objectContaining({ head: HEAD, answer: 'unknown' })]);
+  });
+
+  it('records a pushed head with the wait, so a restart can open its reviews without GitHub', async () => {
+    const { webhooks, recorded } = bridge([UNKNOWN]);
+
+    await opened(webhooks);
+
+    expect(recorded[0]).toMatchObject({
+      type: 'review.mergeability_waiting',
+      payload: { pr: 31, head: HEAD, seen: { headRef: PULL.head.ref, baseRef: 'main', draft: false } },
+    });
+  });
+
+  it('leaves a restart’s wait undecided when GitHub cannot be read and nothing was recorded to open it on', async () => {
+    const { webhooks, reviews } = bridge([CLEAN]);
+    const at = new Date().toISOString();
+    const decided: unknown[] = [];
+    const wait = new MergeabilityWait({
+      read: async () => {
+        throw new Error('GitHub is down');
+      },
+      record: async (type, payload) => {
+        if (type === 'review.mergeability_decided') decided.push(payload);
+      },
+      events: async (type) =>
+        type === 'review.mergeability_waiting' ? [{ at, payload: { repo: 'openadlc', repoFullName: 'janedoe/openadlc', pr: 31, head: HEAD, at } }] : [],
+      setTimer: () => 1,
+      clearTimer: () => undefined,
+      log: () => undefined,
+    });
+    webhooks.useMergeabilityWait(wait);
+
+    let lines: string[] = [];
+    await quietly(async () => {
+      lines = await webhooks.resumeMergeabilityWaits();
+    });
+
+    expect(lines).toEqual(['openadlc#31: unknown after a restart, not yet acted on; tried again shortly']);
+    expect(reviews()).toEqual([]);
+    expect(decided).toEqual([]);
   });
 });

@@ -783,7 +783,31 @@ describe('what the merge decides on, read to its end', () => {
       headRepoFullName: 'mallory/openadlc-testbed',
       requestedReviewers: ['janedoe'],
       requestedTeams: ['maintainers'],
+      mergeable: null,
     });
+  });
+
+  it('reads whether GitHub says a pull request’s head conflicts', async () => {
+    const pull = (mergeable: boolean | null) => ({
+      number: 7,
+      draft: false,
+      merged: false,
+      state: 'open',
+      head: { ref: 'agent/builder/7-x', sha: 'abc' },
+      base: { ref: 'main' },
+      labels: [],
+      mergeable,
+      mergeable_state: mergeable === false ? 'dirty' : mergeable ? 'clean' : 'unknown',
+    });
+    const read = (mergeable: boolean | null) =>
+      new GitHubClient({
+        token: 't',
+        actingAs: 'openadlc-app',
+        fetchImpl: (async () => new Response(JSON.stringify(pull(mergeable)), { status: 200 })) as typeof fetch,
+      }).getPullRequest('janedoe/openadlc-testbed', 7);
+    expect(await read(false)).toMatchObject({ mergeable: false, mergeableState: 'dirty' });
+    expect(await read(true)).toMatchObject({ mergeable: true, mergeableState: 'clean' });
+    expect(await read(null)).toMatchObject({ mergeable: null, mergeableState: 'unknown' });
   });
 
   it('names the app behind each check run, and the workflow run behind a check suite: what it ran, for which branch, and when', async () => {
