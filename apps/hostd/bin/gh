@@ -19,7 +19,7 @@
 // Plain Node with no dependencies: it runs inside the bot's image, beside the
 // engines, and is read from hostd's own checkout at whatever version hostd is.
 import { spawnSync } from 'node:child_process';
-import { accessSync, constants, existsSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { accessSync, constants, existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 
@@ -494,6 +494,158 @@ export async function bridgePassed(sha, env = process.env, fetchImpl = globalThi
   }
 }
 
+/**
+ * The body a command gives, read as `rewrite` reads it — `--body`/`-b`,
+ * `--body-file`/`-F`, `-` for stdin — or null when it gives none.
+ */
+export function givenBody(args, io) {
+  let body = null;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    const eq = arg.indexOf('=');
+    const name = arg.startsWith('--') && eq > 0 ? arg.slice(0, eq) : arg;
+    const inline = arg.startsWith('--') && eq > 0 ? arg.slice(eq + 1) : undefined;
+    const value = () => (inline !== undefined ? inline : args[++i]);
+    if (name === '--body' || name === '-b') {
+      body = value() ?? '';
+    } else if (name === '--body-file' || name === '-F') {
+      const file = value() ?? '';
+      body = file === '-' ? io.stdin() : io.read(file);
+    }
+  }
+  return body;
+}
+
+const TEMPLATE_NAME = /^pull_request_template\.md$/i;
+
+/**
+ * The repository's pull request templates, as `[{ path, text }]` with `path`
+ * relative to `root`, looked up in GitHub's order: `pull_request_template.md`
+ * in `.github/`, at the root, then in `docs/`, the name in any case; failing
+ * those, every `.md` under `.github/PULL_REQUEST_TEMPLATE/`. `io.list(dir)`
+ * names a folder's entries (none when it is not there), `io.read(path)` reads
+ * a file and throws when it cannot.
+ */
+export function prTemplates(root, io) {
+  for (const dir of ['.github', '', 'docs']) {
+    const name = io.list(dir ? join(root, dir) : root).find((entry) => TEMPLATE_NAME.test(entry));
+    if (!name) continue;
+    const path = dir ? `${dir}/${name}` : name;
+    try {
+      return [{ path, text: io.read(join(root, path)) }];
+    } catch {}
+  }
+  const folder = io.list(join(root, '.github')).find((entry) => /^pull_request_template$/i.test(entry));
+  if (!folder) return [];
+  const found = [];
+  for (const name of io.list(join(root, '.github', folder)).filter((entry) => /\.md$/i.test(entry)).sort()) {
+    const path = `.github/${folder}/${name}`;
+    try {
+      found.push({ path, text: io.read(join(root, path)) });
+    } catch {}
+  }
+  return found;
+}
+
+const HTML_COMMENT = /<!--[\s\S]*?(?:-->|$)/g;
+const ATX_HEADING = /^ {0,3}(#{1,6})[ \t]+(.*?)(?:[ \t]+#+)?[ \t]*$/;
+const FENCE = /^ {0,3}(`{3,}|~{3,})/;
+
+/**
+ * A markdown text's lines with HTML comments taken out, each with the heading
+ * it is (`## What changed`: level and text, whitespace collapsed) or null.
+ * A `#` line inside a fenced block is code, not a heading.
+ */
+function headedLines(text) {
+  // A comment's own line breaks are kept, so the line after one is not joined to the line before it.
+  const lines = String(text).replace(/\r\n?/g, '\n').replace(HTML_COMMENT, (comment) => comment.replace(/[^\n]/g, '')).split('\n');
+  let fence = null;
+  return lines.map((line) => {
+    const opens = FENCE.exec(line);
+    if (fence) {
+      if (opens && opens[1][0] === fence[0] && opens[1].length >= fence.length && line.trim() === opens[1]) fence = null;
+      return { line, heading: null };
+    }
+    if (opens) {
+      fence = opens[1];
+      return { line, heading: null };
+    }
+    const match = ATX_HEADING.exec(line);
+    const words = match ? match[2].replace(/\s+/g, ' ').trim() : '';
+    return { line, heading: match && words ? `${match[1]} ${words}` : null };
+  });
+}
+
+/** The headings a template asks for, in its order: ATX headings outside HTML comments and fenced code. */
+export function templateHeadings(text) {
+  return headedLines(text)
+    .map((one) => one.heading)
+    .filter((heading, i, all) => heading && all.indexOf(heading) === i);
+}
+
+/**
+ * Which of a template's headings a body leaves out, and which it leaves empty.
+ * A section runs from the heading to the next line that is one of the
+ * template's headings, so the builder's own sub-headings stay inside it; it is
+ * empty when only whitespace is left once HTML comments are out, which takes
+ * the template's placeholders and OpenADLC's markers with them.
+ */
+export function bodySections(body, headings) {
+  const lines = headedLines(body);
+  const wanted = new Set(headings);
+  const missing = [];
+  const empty = [];
+  for (const heading of headings) {
+    const at = lines.findIndex((one) => one.heading === heading);
+    if (at < 0) {
+      missing.push(heading);
+      continue;
+    }
+    let content = '';
+    for (let i = at + 1; i < lines.length && !wanted.has(lines[i].heading); i++) content += lines[i].line;
+    if (!content.trim()) empty.push(heading);
+  }
+  return { missing, empty };
+}
+
+/**
+ * Why a pull request's body may not go to GitHub: it leaves out, or leaves
+ * empty, a section of the repository's pull request template.
+ *
+ * A managed repository's CI held a builder's body to its template, and its
+ * builders wrote OpenADLC's own list instead: on 2026-11-09 that CI failed on
+ * six empty sections after the lead had approved, since GitHub's CI on a crew
+ * pull request runs only then. So it is checked here, before the pull request
+ * opens, on `pr create` and on a `pr edit` that gives a body. A `pr create`
+ * with no body (`--fill`, `--template`) cannot be read and is refused. With
+ * several templates, a body that satisfies any one passes, and a refusal is
+ * measured against the one it misses least. Null with no template, or one
+ * with no headings. The order of sections and their placeholder prose are not
+ * checked (docs/adr/0045-a-pull-request-body-is-held-to-the-repositorys-template.md).
+ */
+export function templateRefusal(args, body, templates) {
+  const [group, verb] = commandWords(args);
+  if (group !== 'pr' || (verb !== 'create' && verb !== 'edit')) return null;
+  if (templates.length === 0) return null;
+  if (body === null) {
+    return verb === 'create'
+      ? `this repository has a pull request template: give the body with --body-file, filled from ${templates[0].path}`
+      : null;
+  }
+  let closest = null;
+  for (const template of templates) {
+    const found = bodySections(body, templateHeadings(template.text));
+    const misses = found.missing.length + found.empty.length;
+    if (misses === 0) return null;
+    if (!closest || misses < closest.misses) closest = { ...found, misses, path: template.path };
+  }
+  const quoted = (headings) => headings.map((heading) => `"${heading}"`).join(', ');
+  const parts = [];
+  if (closest.missing.length) parts.push(`leaves out ${quoted(closest.missing)}`);
+  if (closest.empty.length) parts.push(`leaves ${quoted(closest.empty)} empty`);
+  return `the body ${parts.join(' and ')}, which ${closest.path} has: add each section in the template's order, and write None under one with nothing to say`;
+}
+
 /** Flags that name labels on `gh issue|pr create|edit`, each taking a comma-separated list. */
 const LABEL_FLAGS = new Set(['--add-label', '--remove-label', '--label', '-l']);
 
@@ -830,6 +982,33 @@ async function main() {
     process.stderr.write(`gh: not running — ${unchecked}\n`);
     process.exit(1);
   }
+  // Standard input can be read once, and both the template check and `rewrite` want a body given on it.
+  let stdinText = null;
+  const stdin = () => (stdinText ??= readFileSync(0, 'utf8'));
+  // Only a task's session: a person's own shell is not held to the template.
+  if (process.env.OPENADLC_TASK_ID) {
+    const top = spawnSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' });
+    const root = top.status === 0 && top.stdout.trim() ? top.stdout.trim() : process.cwd();
+    const list = (folder) => {
+      try {
+        return readdirSync(folder);
+      } catch {
+        return [];
+      }
+    };
+    const argv = process.argv.slice(2);
+    const [group, verb] = commandWords(argv);
+    if (group === 'pr' && (verb === 'create' || verb === 'edit')) {
+      const templates = prTemplates(root, { list, read: (path) => readFileSync(path, 'utf8') });
+      const unfilled = templates.length
+        ? templateRefusal(argv, givenBody(argv, { read: (file) => readFileSync(file, 'utf8'), stdin }), templates)
+        : null;
+      if (unfilled) {
+        process.stderr.write(`gh: not running — ${unfilled}\n`);
+        process.exit(1);
+      }
+    }
+  }
   const relabel = stageLabelRefusal(process.argv.slice(2));
   if (relabel) {
     process.stderr.write(`gh: not running — ${relabel}\n`);
@@ -853,7 +1032,7 @@ async function main() {
   const argv = process.argv.slice(2);
   const args = rewrite(argv, header, {
     read: (file) => readFileSync(file, 'utf8'),
-    stdin: () => readFileSync(0, 'utf8'),
+    stdin,
     write: (text) => {
       dir ??= mkdtempSync(join(tmpdir(), 'openadlc-gh-'));
       const file = join(dir, 'body.md');
