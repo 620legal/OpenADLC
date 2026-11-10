@@ -4290,6 +4290,39 @@ describe('a merge', () => {
     });
   });
 
+  describe('recorded as outside the merge line (ADR 0047)', () => {
+    afterEach(async () => {
+      const { lastAudit } = await import('@openadlc/db');
+      vi.mocked(lastAudit).mockImplementation(async () => null);
+    });
+
+    it('is recorded by the reconciler when the delivery never came', async () => {
+      const { audit } = await import('@openadlc/db');
+      vi.mocked(audit).mockClear();
+      const { delivered } = merge([], { mergedBy: 'janedoe', unheard: true });
+      await delivered;
+
+      const outside = vi.mocked(audit).mock.calls.filter(([entry]) => (entry as { action: string }).action === 'merge.outside_line');
+      expect(outside).toEqual([
+        [expect.objectContaining({ actor: 'janedoe', target: 'janedoe/openadlc#12', payload: expect.objectContaining({ sha: 'abc123', method: null }) })],
+      ]);
+    });
+
+    it('is not recorded again by the reconciler after the delivery recorded it', async () => {
+      const { audit, lastAudit } = await import('@openadlc/db');
+      vi.mocked(audit).mockClear();
+      vi.mocked(lastAudit).mockImplementation((async (action: string, target: string) =>
+        action === 'merge.outside_line' && target === 'janedoe/openadlc#12'
+          ? { id: 1, actor: 'janedoe', action, target, payload: { sha: 'abc123' }, at: '' }
+          : null) as never);
+      const { delivered, client } = merge([], { mergedBy: 'janedoe', unheard: true });
+      await delivered;
+
+      expect(vi.mocked(audit).mock.calls.filter(([entry]) => (entry as { action: string }).action === 'merge.outside_line')).toEqual([]);
+      expect(client.comment).not.toHaveBeenCalled();
+    });
+  });
+
   describe('merged by a crew account around review-gate (unreviewed)', () => {
     const BUILDER = 'openadlc-atlas-janedoe';
     beforeEach(() => {
@@ -4435,7 +4468,8 @@ describe('a merge', () => {
 
     expect(moves).toEqual([{ issueNumber: 5, to: 'done' }]);
     expect(opened).toEqual([]);
-    expect(client.request).not.toHaveBeenCalled();
+    // The merge commit is read for how it merged (ADR 0047); the workflows are not asked for.
+    expect(client.request.mock.calls.filter(([, path]) => String(path).includes('/workflows'))).toEqual([]);
     expect(vi.mocked(leases.releaseForPullRequest)).toHaveBeenCalledWith('repo-1', 12, 'merged, and the repository deploys nothing');
   });
 
@@ -4446,7 +4480,7 @@ describe('a merge', () => {
 
     expect(moves).toEqual([{ issueNumber: 5, to: 'merged' }]);
     expect(opened).toEqual([{ kind: 'deploy', subjectRef: 'openadlc#12' }]);
-    expect(client.request).not.toHaveBeenCalled();
+    expect(client.request.mock.calls.filter(([, path]) => String(path).includes('/workflows'))).toEqual([]);
     expect(vi.mocked(leases.releaseForPullRequest)).not.toHaveBeenCalled();
   });
 
@@ -6074,10 +6108,33 @@ describe('an unreviewed merge', () => {
   // merging raised nothing.
   async function mergedBy(
     merger: string,
-    gate: { status?: { state: string; creator: string }; checkRun?: 'success' | 'pending' | null; app?: boolean },
+    gate: {
+      status?: { state: string; creator: string };
+      checkRun?: 'success' | 'pending' | null;
+      app?: boolean;
+      /** GitHub Actions' `ci` check runs on the head; an Error when they cannot be read. */
+      ci?: { id: number; status?: string; conclusion: string | null; app?: string }[] | Error;
+      /** A commit status named `ci` on the head, which anyone who may write statuses can set. */
+      ciStatus?: string;
+      /** How many parents the merge commit has. */
+      parents?: number;
+      /** The deploy pipeline the bridge is wired with. */
+      onMerged?: (...args: unknown[]) => Promise<string>;
+      /** Delivered again under a new id, after this one. */
+      redelivered?: boolean;
+    },
   ) {
-    const { audit } = await import('@openadlc/db');
+    const { audit, lastAudit } = await import('@openadlc/db');
     vi.mocked(audit).mockClear();
+    // As the store would answer: the newest audit of an action and target.
+    vi.mocked(lastAudit).mockImplementation(async (action: string, target: string) => {
+      const found = vi
+        .mocked(audit)
+        .mock.calls.map(([entry]) => entry as { action: string; target: string; payload?: Record<string, unknown> })
+        .filter((entry) => entry.action === action && entry.target === target)
+        .at(-1);
+      return found ? ({ id: 1, actor: 'x', action, target, payload: found.payload ?? null, at: '' } as never) : null;
+    });
     store.bots = [
       { id: 'b-builder', name: 'builder', role: 'implement', githubLogin: 'exampleco-builder' },
       { id: 'b-flow', name: 'automation', role: 'automation', githubLogin: 'exampleco-crew' },
@@ -6085,9 +6142,29 @@ describe('an unreviewed merge', () => {
     const client = {
       request: vi.fn(async (_method: string, path: string) =>
         path.includes('/status')
-          ? { statuses: gate.status ? [{ context: 'review-gate', state: gate.status.state, creator: { login: gate.status.creator } }] : [] }
-          : { workflows: [] },
+          ? {
+              statuses: [
+                ...(gate.status ? [{ context: 'review-gate', state: gate.status.state, creator: { login: gate.status.creator } }] : []),
+                ...(gate.ciStatus ? [{ context: 'ci', state: gate.ciStatus, creator: { login: merger } }] : []),
+              ],
+            }
+          : path.endsWith('/commits/fed9876')
+            ? { sha: 'fed9876', parents: Array.from({ length: gate.parents ?? 1 }, (_, i) => ({ sha: `p${i}` })) }
+            : { workflows: [] },
       ),
+      checkRunsFor: vi.fn(async () => {
+        if (gate.ci instanceof Error) throw gate.ci;
+        // Green unless a test says otherwise: most of these are about the gate.
+        return (gate.ci ?? [{ id: 1, conclusion: 'success' }]).map((run) => ({
+          id: run.id,
+          name: 'ci',
+          status: run.status ?? 'completed',
+          conclusion: run.conclusion,
+          app: run.app ?? 'github-actions',
+          headSha: 'abc123',
+          suiteId: null,
+        }));
+      }),
       viewer: vi.fn(async () => ({ login: 'exampleco-crew', id: 1 })),
       comment: vi.fn(async () => undefined),
       addLabels: vi.fn(async () => undefined),
@@ -6098,6 +6175,7 @@ describe('an unreviewed merge', () => {
     const appGate = {
       standing: vi.fn(async () => (gate.checkRun ? { state: gate.checkRun, description: '' } : null)),
       appId: vi.fn(async () => (gate.app ? 7 : null)),
+      botLogin: vi.fn(async () => 'openadlc-app[bot]'),
     };
     const actors = { asBot: async () => client };
     // The real gate reading, with the stage move the merge also makes stubbed.
@@ -6113,28 +6191,33 @@ describe('an unreviewed merge', () => {
       {} as never,
       { leave: async () => undefined, advance: async () => null } as never,
     );
-    await webhooks.receive(
-      'pull_request',
-      {
-        action: 'closed',
-        repository: { name: 'openadlc', full_name: 'janedoe/openadlc' },
-        sender: { login: merger },
-        pull_request: {
-          author_association: 'COLLABORATOR',
-          number: 12,
-          merged: true,
-          merged_by: { login: merger },
-          draft: false,
-          head: { ref: 'agent/builder/5-issue-5', sha: 'abc123', repo: { full_name: 'janedoe/openadlc' } },
-          base: { ref: 'main' },
-          merge_commit_sha: 'fed9876',
-          labels: [],
-        },
-      } as never,
-      `delivery-unreviewed-${merger}-${Math.random()}`,
-    );
+    if (gate.onMerged) {
+      webhooks.useDelivery({ onMerged: gate.onMerged } as never, { get: async () => ({ rules: DEFAULT_DELIVERY_RULES }), forget: () => undefined } as never);
+    }
+    const payload = {
+      action: 'closed',
+      repository: { name: 'openadlc', full_name: 'janedoe/openadlc' },
+      sender: { login: merger },
+      pull_request: {
+        author_association: 'COLLABORATOR',
+        number: 12,
+        merged: true,
+        merged_by: { login: merger },
+        draft: false,
+        head: { ref: 'agent/builder/5-issue-5', sha: 'abc123', repo: { full_name: 'janedoe/openadlc' } },
+        base: { ref: 'main' },
+        merge_commit_sha: 'fed9876',
+        labels: [],
+      },
+    };
+    await webhooks.receive('pull_request', payload as never, `delivery-unreviewed-${merger}-${Math.random()}`);
+    if (gate.redelivered) await webhooks.receive('pull_request', payload as never, `delivery-again-${merger}-${Math.random()}`);
     const audited = vi.mocked(audit).mock.calls.filter(([entry]) => (entry as { action: string }).action === 'merge.unreviewed');
-    return { audited, client };
+    const outside = vi
+      .mocked(audit)
+      .mock.calls.map(([entry]) => entry as { action: string; actor: string; target: string; payload: Record<string, unknown> })
+      .filter((entry) => entry.action === 'merge.outside_line');
+    return { audited, outside, client, webhooks };
   }
 
   beforeEach(() => {
@@ -6142,7 +6225,9 @@ describe('an unreviewed merge', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    const { lastAudit } = await import('@openadlc/db');
+    vi.mocked(lastAudit).mockImplementation(async () => null);
     vi.mocked(console.log).mockRestore();
     vi.mocked(console.warn).mockRestore();
   });
@@ -6169,12 +6254,126 @@ describe('an unreviewed merge', () => {
     expect(client.addLabels).not.toHaveBeenCalled();
   });
 
-  it('is not raised for a merge by a person, or by the app', async () => {
-    for (const merger of ['janedoe', 'openadlc-app[bot]']) {
-      const { audited, client } = await mergedBy(merger, {});
-      expect(audited).toEqual([]);
+  it('is not raised for a merge by a person, which is recorded as outside the line instead', async () => {
+    const { audited, outside, client } = await mergedBy('janedoe', { ci: [{ id: 98, conclusion: 'success' }] });
+    expect(audited).toEqual([]);
+    expect(outside).toHaveLength(1);
+    expect(client.addLabels).not.toHaveBeenCalled();
+  });
+
+  it('records nothing and says nothing for the merge line’s own merge, as the app', async () => {
+    const { audited, outside, client } = await mergedBy('openadlc-app[bot]', { ci: [{ id: 99, conclusion: 'failure' }] });
+    expect(audited).toEqual([]);
+    expect(outside).toEqual([]);
+    expect(client.comment).not.toHaveBeenCalled();
+    expect(client.addLabels).not.toHaveBeenCalled();
+  });
+
+  describe('outside the merge line', () => {
+    // #276: a person merged a crew pull request over a red `ci` on a plan
+    // with no branch rules; it deployed to testing three minutes later, and
+    // nothing on the audit log, the pull request or the board said who had.
+    it('audits a person’s merge over a red ci and says so on the pull request, without naming who merged', async () => {
+      const onMerged = vi.fn(async () => 'dispatched deploy-testing');
+      const { outside, client } = await mergedBy('janedoe', { ci: [{ id: 99, conclusion: 'failure' }], onMerged });
+
+      expect(outside).toEqual([
+        {
+          actor: 'janedoe',
+          action: 'merge.outside_line',
+          target: 'janedoe/openadlc#12',
+          payload: {
+            merger: 'janedoe',
+            method: 'squash_or_rebase',
+            sha: 'abc123',
+            mergeCommit: 'fed9876',
+            base: 'main',
+            reviewGate: null,
+            ci: { verdict: 'red', conclusion: 'failure', url: 'https://github.com/janedoe/openadlc/runs/99' },
+          },
+        },
+      ]);
+      expect(client.comment).toHaveBeenCalledTimes(1);
+      const [, , body] = client.comment.mock.calls[0] as unknown as [string, number, string];
+      expect(body).toContain('`ci`');
+      expect(body).toContain('`abc123`');
+      expect(body).toContain('/runs/99');
+      expect(body).toContain('`review-gate` was never set');
+      // The owner shares the merger's login here; outside the repository's name it is not in the text.
+      expect(body.replaceAll('janedoe/openadlc', '')).not.toContain('janedoe');
+      // What follows the merge is as it was.
+      expect(onMerged).toHaveBeenCalledWith(expect.objectContaining({ name: expect.any(String) }), 12, 'fed9876');
       expect(client.addLabels).not.toHaveBeenCalled();
-    }
+    });
+
+    it('audits a person’s merge over a green ci, and says nothing', async () => {
+      const onMerged = vi.fn(async () => 'dispatched deploy-testing');
+      const { outside, client } = await mergedBy('janedoe', { ci: [{ id: 98, conclusion: 'success' }], parents: 2, onMerged });
+
+      expect(outside).toHaveLength(1);
+      expect(outside[0]!.payload).toMatchObject({ method: 'merge', ci: { verdict: 'green', conclusion: 'success' } });
+      expect(client.comment).not.toHaveBeenCalled();
+      expect(onMerged).toHaveBeenCalledWith(expect.objectContaining({ name: expect.any(String) }), 12, 'fed9876');
+    });
+
+    it('reads the newest ci run: a rerun that passed is green', async () => {
+      const { outside, client } = await mergedBy('janedoe', {
+        ci: [
+          { id: 97, conclusion: 'failure' },
+          { id: 98, conclusion: 'success' },
+        ],
+      });
+      expect(outside[0]!.payload).toMatchObject({ ci: { verdict: 'green', url: 'https://github.com/janedoe/openadlc/runs/98' } });
+      expect(client.comment).not.toHaveBeenCalled();
+    });
+
+    it('reads red under a ci commit status set green, and ignores a ci check run from another app', async () => {
+      const { outside, client } = await mergedBy('janedoe', {
+        ci: [
+          { id: 99, conclusion: 'failure' },
+          { id: 100, conclusion: 'success', app: 'someone-else' },
+        ],
+        ciStatus: 'success',
+      });
+      expect(outside[0]!.payload).toMatchObject({ ci: { verdict: 'red', url: 'https://github.com/janedoe/openadlc/runs/99' } });
+      expect(client.comment).toHaveBeenCalledTimes(1);
+    });
+
+    it('says ci never ran, with the commit’s checks, or was still running', async () => {
+      const never = await mergedBy('janedoe', { ci: [] });
+      expect(never.outside[0]!.payload).toMatchObject({ ci: { verdict: 'missing', url: 'https://github.com/janedoe/openadlc/commit/abc123/checks' } });
+      expect(never.client.comment).toHaveBeenCalledWith('janedoe/openadlc', 12, expect.stringContaining('never ran on `abc123`'));
+      expect(never.client.comment).toHaveBeenCalledWith('janedoe/openadlc', 12, expect.stringContaining('/commit/abc123/checks'));
+
+      const running = await mergedBy('janedoe', { ci: [{ id: 99, status: 'in_progress', conclusion: null }] });
+      expect(running.outside[0]!.payload).toMatchObject({ ci: { verdict: 'pending' } });
+      expect(running.client.comment).toHaveBeenCalledWith('janedoe/openadlc', 12, expect.stringContaining('still running'));
+    });
+
+    it('audits a merge whose ci cannot be read, and says nothing on a guess', async () => {
+      const { outside, client } = await mergedBy('janedoe', { ci: new Error('GitHub answered 502') });
+      expect(outside[0]!.payload).toMatchObject({ ci: { verdict: null } });
+      expect(client.comment).not.toHaveBeenCalled();
+    });
+
+    it('holds a crew account’s unreviewed merge as before, and records it as outside the line too', async () => {
+      const onMerged = vi.fn(async () => 'dispatched deploy-testing');
+      const { audited, outside, client } = await mergedBy('exampleco-builder', { ci: [{ id: 98, conclusion: 'success' }], onMerged });
+
+      expect(audited).toHaveLength(1);
+      expect(client.comment).toHaveBeenCalledTimes(1);
+      expect(client.comment).toHaveBeenCalledWith('janedoe/openadlc', 12, expect.stringContaining('merged without its reviews'));
+      expect(client.addLabels).toHaveBeenCalledWith('janedoe/openadlc', 12, ['needs-human']);
+      expect(onMerged).not.toHaveBeenCalled();
+      expect(outside).toHaveLength(1);
+      expect(outside[0]!).toMatchObject({ actor: 'exampleco-builder', payload: { merger: 'exampleco-builder', ci: { verdict: 'green' } } });
+    });
+
+    it('writes and says nothing more on a redelivery of the same merge', async () => {
+      const { outside, client } = await mergedBy('janedoe', { ci: [{ id: 99, conclusion: 'failure' }], redelivered: true });
+      expect(outside).toHaveLength(1);
+      expect(client.comment).toHaveBeenCalledTimes(1);
+    });
   });
 });
 
