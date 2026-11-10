@@ -19,7 +19,8 @@ describe('the header’s spend and the subscription estimate', () => {
   });
 
   it('colours the bar from billed spend alone', () => {
-    expect(spendLevel({ spentUsd: 10, capUsd: 100, estimateUsd: 5000 })).toMatchObject({ width: 10, tone: 'signal' });
+    const spend = headerData({ repos: [], crew: [], budget: { spentUsd: 10, capUsd: 100, estimateUsd: 5000 }, needsYou: 0 }).spend!;
+    expect(spendLevel(spend)).toMatchObject({ width: 10, tone: 'signal' });
   });
 });
 
