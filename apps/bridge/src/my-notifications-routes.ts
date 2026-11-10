@@ -6,6 +6,7 @@ import {
   type Notifier,
   type PersonalNotificationInput,
 } from './notify.js';
+import { addDevice, devicesView, removeDevice, type PushStore } from './push-devices.js';
 import { HttpFailure, type Router } from './router.js';
 
 /**
@@ -23,6 +24,8 @@ export interface MyNotificationsDeps {
   notifier: Notifier | null;
   /** The person in People who signed in as this identity, or null. */
   personOf(identity: string): Promise<{ id: string } | null>;
+  /** On a local install every identity is the operator, whose devices these are. */
+  operator?(): Promise<{ id: string } | null>;
   /** Writes the audit entry of a save: never the target. */
   audit?(entry: { actor: string; action: string; target: string; payload: Record<string, unknown> }): Promise<void>;
 }
@@ -32,6 +35,7 @@ export function liveMyNotificationsDeps(identityMode: IdentityMode, notifier: No
     identityMode,
     notifier,
     personOf: (identity) => peopleStore.personByEmail(usersStore.normalizeEmail(identity)),
+    operator: () => peopleStore.operator(),
     audit: async (entry) => {
       await audit(entry);
     },
@@ -83,6 +87,60 @@ export function registerMyNotificationsRoutes(router: Router, deps: MyNotificati
     const { notifier, personId } = await mine(identity);
     const result = await notifier.testPerson(personId);
     if (!result) throw new HttpFailure(400, 'Nothing to test: choose where to notify you first');
+    return result;
+  });
+
+  // ---------------------------------------------------------------- this device (ADR 0048)
+  //
+  // Push to each device the person turned notifications on in. Unlike Your
+  // channel, a local install has these too: its one person is the operator,
+  // and the computer the console runs on can take push over 127.0.0.1. The
+  // subscription goes to the secret store; only the device's name, when it
+  // was added and its push service's host come back or reach the audit log.
+  const myDevices = async (identity: string): Promise<{ notifier: Notifier; push: PushStore; personId: string }> => {
+    if (!deps.notifier?.push) throw new HttpFailure(503, 'this bridge sends no notifications: it was started without a notifier');
+    const person = deps.identityMode === 'local' ? await (deps.operator ?? (async () => null))() : await deps.personOf(identity);
+    if (!person) throw new HttpFailure(403, 'You are not a person in People: ask an admin to add you under Settings → People', { code: 'not-a-person' });
+    return { notifier: deps.notifier, push: deps.notifier.push, personId: person.id };
+  };
+
+  router.get('/v1/me/push', async ({ identity }) => {
+    const { push, personId } = await myDevices(identity);
+    return devicesView(push, personId);
+  });
+
+  router.post('/v1/me/push/devices', async ({ body, identity }) => {
+    const { push, personId } = await myDevices(identity);
+    const raw = await body<Record<string, unknown> | null>();
+    if (!raw || typeof raw !== 'object') throw new HttpFailure(400, 'send {subscription: {endpoint, keys: {p256dh, auth}}, name}');
+    const added = await addDevice(push, personId, { subscription: raw.subscription, name: raw.name });
+    if (!added.ok) throw new HttpFailure(400, added.error);
+    await deps.audit?.({
+      actor: identity,
+      action: 'notify.device_added',
+      target: `person:${personId}`,
+      payload: { person: personId, device: added.device.id, name: added.device.name, service: added.service },
+    });
+    return added.device;
+  });
+
+  router.add('DELETE', '/v1/me/push/devices/:id', async ({ params, identity }) => {
+    const { push, personId } = await myDevices(identity);
+    const removed = await removeDevice(push, personId, params.id ?? '');
+    if (!removed) throw new HttpFailure(404, 'You have no device by that id: it may have been removed already');
+    await deps.audit?.({
+      actor: identity,
+      action: 'notify.device_removed',
+      target: `person:${personId}`,
+      payload: { person: personId, device: removed.id, name: removed.name, service: removed.service },
+    });
+    return { removed: removed.id };
+  });
+
+  router.post('/v1/me/push/devices/:id/test', async ({ params, identity }) => {
+    const { notifier, personId } = await myDevices(identity);
+    const result = await notifier.testDevice(personId, params.id ?? '');
+    if (!result) throw new HttpFailure(404, 'You have no device by that id: turn notifications on there again');
     return result;
   });
 }

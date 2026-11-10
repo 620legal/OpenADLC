@@ -104,6 +104,7 @@ role alone before it has one (`botInWords`, `packages/shared/src/bot-words.ts`).
 | `repo-config` | 30 min, and when a pull request merged into a default branch changes one of the files it reads | `<owner/repo>`’s AGENTS.md doesn’t say who approves its human-review paths yet — line N still has the template’s `@owner` · `<login>` is named as a reviewer in `<repo>`’s AGENTS.md, but there is no such GitHub account · … but `<login>` is an organization, not a person · … but cannot review: `<login>` is not a collaborator on `<repo>` (or has triage or read there) · `<login>` is one of this install’s people (OPENADLC_HUMANS), but there is no such GitHub account (a warning) | [A named reviewer does not exist or cannot review](#a-named-reviewer-does-not-exist-or-cannot-review) |
 | `repo-owner` | 15 min | Nothing builds in `<repo>`: no bot owns it | Set its `owner` in config/repos.yaml to a seat (`builder`) and run `openadlc seed`; a repository not listed there gets the builder when it is added again in Settings → Repositories |
 | `notifications` | 5 min, and when Settings → Notifications is saved or tested | Notifications are set up but have not been proved · The last notification did not reach ntfy (Slack, your webhook), with its status or error (a warning) | **Open Settings → Notifications**, check the topic or URL and press **Send a test**; it clears when a send gets through. It never sends anything itself. See [configuration](configuration.md#notifications) |
+| `push-egress` | 60 min | The bridge cannot reach `<host>`: push notifications through it are not delivered (a warning) | Allow the host on the network the bridge leaves through: `fcm.googleapis.com` (Chrome, Edge, Android), `updates.push.services.mozilla.com` (Firefox), `web.push.apple.com` (Safari, iPhone, iPad), or the `*.notify.windows.com` host a device uses. Any HTTP answer counts, so it clears as soon as the host answers at all. See [Push notifications do not arrive](#push-notifications-do-not-arrive) |
 | `deploy-dispatch` | 5 min | `<repo>`: `<workflow>` of `<sha>` has not been dispatched (a warning for a promote, blocking for a rollback) | Fix what GitHub said, shown on the card; the deploy sweep dispatches it again, or run the workflow from the repository's Actions. See [A merge did not deploy](#a-merge-did-not-deploy-or-production-did-not-wait) |
 | `testing-egress` | 15 min, and when Settings → Egress is saved | QA cannot reach `<repo>`’s testing environment: the egress proxy refuses `<host>` (a warning) | **Allow `<host>` in Settings**, which opens Settings → Egress with the host in the field, for an admin to allow; or add it to `extra_allowed_domains` and run `openadlc cloud apply`, which resets the host. Allow the host itself, not a domain above it ([self-hosting](self-hosting.md#what-the-hosts-tasks-may-reach)). Only on a cloud install, whose tasks leave through the egress proxy |
 | `cloud-names` | 60 min | This cloud install still has the names from before the rename to OpenADLC (a warning) | Rename it, with no task running, by [runbooks/rename-gcp-host.md](runbooks/rename-gcp-host.md): copy each `fleet-` secret to its `openadlc-` name, apply the module, which resets the host, check it, then delete the old secrets, which clears the card. Only on an install whose secrets are in Secret Manager |
@@ -628,6 +629,37 @@ them `openadlc:ignore`) or **Close** (closed as not planned, with a comment
 saying who closed it, by name and never by address, and the reason they gave).
 Until then intake's overlap check leaves them out, as it does any issue labelled
 `openadlc:ignore`.
+
+## Push notifications do not arrive
+
+Start in **Settings → Notifications**, under **Notifications on your
+devices**, on the device that should get them.
+
+- **The page says to add OpenADLC to the Home Screen.** On an iPhone or iPad,
+  Safari gives push only to a site opened from the Home Screen. Tap Share →
+  **Add to Home Screen**, open OpenADLC from there, and press the button
+  there. iOS 16.4 or later is needed.
+- **The page says notifications need https or 127.0.0.1.** The console was
+  opened at an address over plain http, such as a LAN address. Open it at
+  `http://127.0.0.1` on the computer it runs on, or use a cloud install for a
+  phone.
+- **The page says notifications are blocked.** The browser was told no once.
+  Allow notifications for the console's site in the browser's site settings,
+  reload, and turn them on again.
+- **"Removed … on …: its browser stopped taking notifications."** The push
+  service answered 404 or 410: the app was removed from the Home Screen, the
+  site's data was cleared, or notifications were turned off in the system
+  settings. Turn notifications on there again.
+- **"None of your devices took the last notification".** Press **Send a
+  test** on one. A status 401 or 403 says the push service refused the
+  install's key: the key was lost or replaced, which means turning
+  notifications on again on each device. No status at all says the bridge
+  could not reach the push service. The `push-egress` card names the host.
+- **A test arrives, but nothing else does.** Push carries only what the
+  bridge would tell you: items routed to you and, for an admin, what the
+  install's channel carries. Check the switches under Settings →
+  Notifications, which apply to push too. A device whose console tab is open
+  and in front shows nothing, because the page shows it there.
 
 ## A named reviewer does not exist or cannot review
 

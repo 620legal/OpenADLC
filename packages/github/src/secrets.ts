@@ -204,6 +204,28 @@ export function personNotifyTargetRef(personId: string): string {
 }
 
 /**
+ * The install's VAPID key (RFC 8292): the P-256 private key every Web Push the
+ * bridge sends is signed with. Made once; a push service refuses a key other
+ * than the one a subscription was made with, so losing it means every device
+ * turns notifications on again.
+ */
+export function pushVapidKeyRef(): string {
+  return 'push-vapid-key';
+}
+
+/** Where every device's push subscription is kept: `pushDeviceRef(person, device)` starts with it. */
+export const PUSH_DEVICE_PREFIX = 'push-device:';
+
+/**
+ * One device's push subscription, its endpoint and keys: whoever holds it can
+ * send to that browser as the install (ADR 0048). The person is in the ref so
+ * removing them deletes theirs by prefix, after the rows are already gone.
+ */
+export function pushDeviceRef(personId: string, deviceId: string): string {
+  return `${PUSH_DEVICE_PREFIX}${personId}:${deviceId}`;
+}
+
+/**
  * What hostd presents to the bridge's token service. The service hands out a
  * GitHub credential, so reaching the private network is not on its own enough
  * to be served: the caller has to hold something only the install's own

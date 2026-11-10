@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BRIDGE_NOT_ANSWERING } from '@/lib/reach';
 import {
+  addPushDevice,
+  removePushDevice,
+  testPushDevice,
   answerGate,
   fileRequest,
   killSession,
@@ -90,6 +93,43 @@ describe('saving the roles the install’s people hold', () => {
   it('passes on the bridge’s refusal in its own words', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: 'Product cannot be renamed' }), { status: 400 })));
     expect(await savePersonRoles([])).toEqual({ ok: false, error: 'Product cannot be renamed' });
+  });
+});
+
+describe('this device’s notifications', () => {
+  const subscription = { endpoint: 'https://fcm.googleapis.com/fcm/send/abc', keys: { p256dh: 'BP', auth: 'AA' } };
+
+  it('sends the subscription to the bridge once, and gives back only the device', async () => {
+    const calls: { url: string; method: string; body: unknown }[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init: RequestInit) => {
+        calls.push({ url, method: init.method ?? 'GET', body: init.body ? JSON.parse(String(init.body)) : null });
+        return Response.json({ id: 'd1', name: 'Mac · Chrome', addedAt: '2026-11-10T00:00:00Z' });
+      }),
+    );
+    expect(await addPushDevice(subscription, 'Mac · Chrome')).toEqual({ ok: true, device: { id: 'd1', name: 'Mac · Chrome', addedAt: '2026-11-10T00:00:00Z' } });
+    expect(calls).toEqual([{ url: expect.stringMatching(/\/v1\/me\/push\/devices$/), method: 'POST', body: { subscription, name: 'Mac · Chrome' } }]);
+  });
+
+  it('removes and tests one device by its id', async () => {
+    const calls: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init: RequestInit) => {
+        calls.push(`${init.method} ${url.replace(/^.*\/v1/, '/v1')}`);
+        return Response.json(init.method === 'DELETE' ? { removed: 'd/1' } : { ok: true, status: 201, error: null });
+      }),
+    );
+    expect(await removePushDevice('d/1')).toEqual({ ok: true });
+    expect(await testPushDevice('d/1')).toEqual({ ok: true, result: { ok: true, status: 201, error: null } });
+    expect(calls).toEqual(['DELETE /v1/me/push/devices/d%2F1', 'POST /v1/me/push/devices/d%2F1/test']);
+  });
+
+  it('passes on the bridge’s refusal in its own words', async () => {
+    const error = 'This browser’s push service (10.0.0.5) is not one OpenADLC sends to: use Chrome, Edge, Firefox or Safari';
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error }), { status: 400 })));
+    expect(await addPushDevice(subscription, 'x')).toEqual({ ok: false, error });
   });
 });
 

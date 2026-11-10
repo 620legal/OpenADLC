@@ -29,6 +29,9 @@ import {
   notifyTargetRef,
   PERSON_NOTIFY_TARGET_PREFIX,
   personNotifyTargetRef,
+  PUSH_DEVICE_PREFIX,
+  pushDeviceRef,
+  pushVapidKeyRef,
   webhookSecretRef,
 } from './secrets.js';
 
@@ -98,6 +101,32 @@ describe('a person’s own notification target', () => {
     await store.set(ref, 'https://ntfy.sh/alice-topic');
     expect(await store.get(ref)).toBe('https://ntfy.sh/alice-topic');
     rmSync(root, { recursive: true, force: true });
+  });
+});
+
+describe('a push device’s subscription and the install’s VAPID key', () => {
+  const person = '6f1c2d3e-0000-4000-8000-000000000001';
+  const device = '0a1b2c3d-0000-4000-8000-0000000000ff';
+
+  it('keeps each device under its person, so removing the person lists theirs by prefix', async () => {
+    const ref = pushDeviceRef(person, device);
+    expect(ref).toBe(`push-device:${person}:${device}`);
+    expect(ref.startsWith(`${PUSH_DEVICE_PREFIX}${person}:`)).toBe(true);
+    expect(pushVapidKeyRef()).toBe('push-vapid-key');
+
+    const root = mkdtempSync(join(tmpdir(), 'openadlc-secrets-'));
+    const store = new FileSecretStore(root);
+    await store.set(ref, '{"endpoint":"https://fcm.googleapis.com/fcm/send/x"}');
+    await store.set(pushDeviceRef('someone-else', device), '{}');
+    expect(await store.get(ref)).toBe('{"endpoint":"https://fcm.googleapis.com/fcm/send/x"}');
+    expect(await store.list(`${PUSH_DEVICE_PREFIX}${person}:`)).toEqual([ref]);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('fits Secret Manager’s ids, which allow 255 characters of letters, digits, - and _', () => {
+    const id = `openadlc-${pushDeviceRef(person, device).replace(/:/g, '__')}`;
+    expect(id).toMatch(/^[A-Za-z0-9_-]{1,255}$/);
+    expect(id.replace(/^openadlc-/, '').replace(/__/g, ':')).toBe(pushDeviceRef(person, device));
   });
 });
 

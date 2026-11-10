@@ -80,6 +80,7 @@ import { abandonRequest, RequestFiling } from './request-lifecycle.js';
 import { authorize, listFromEnv, Roles } from './roles.js';
 import { livePeopleDeps, registerPeopleRoutes } from './people-routes.js';
 import { liveMyNotificationsDeps, registerMyNotificationsRoutes } from './my-notifications-routes.js';
+import { sweepOrphans } from './push-devices.js';
 import { consolePeopleBy } from './thread-messages.js';
 import { liveEgressDeps, registerEgressRoutes } from './egress-routes.js';
 import { livePeopleRolesDeps, registerPeopleRolesRoutes } from './people-roles-routes.js';
@@ -150,6 +151,15 @@ async function main(): Promise<void> {
   // A design that supersedes an accepted entry is said on its issue, as the automation account.
   sayDesignMemoryWith((repoFullName, issueNumber, body) => automation.comment(repoFullName, issueNumber, body));
   const notifier = new Notifier(config);
+  // A device secret with no row is what a crash between its two writes leaves
+  // (ADR 0048): nothing reads it, so it goes. A start never waits on it.
+  if (notifier.push) {
+    void sweepOrphans(notifier.push)
+      .then((swept) => {
+        if (swept > 0) console.log(`[bridge] removed ${swept} push subscription(s) whose device was gone`);
+      })
+      .catch((error: unknown) => console.warn(`[bridge] could not sweep push subscriptions: ${error instanceof Error ? error.message : String(error)}`));
+  }
   const gates = new Gates(actors, notifier, config.consoleUrl, config.costs.perTaskCapUsd, config.costs);
   // A standing approval on an issue settles its builder's later plan changes,
   // never one with a path under Human review on the base branch (#77); the

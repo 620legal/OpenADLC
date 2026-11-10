@@ -1,4 +1,6 @@
+import { createECDH, randomBytes } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { addDevice, memoryPushStore } from './push-devices.js';
 import {
   isNotifiable,
   itemLink,
@@ -496,5 +498,73 @@ describe('a person’s own channel', () => {
     await expect(notifier.testPerson('p-a')).resolves.toMatchObject({ ok: true });
     expect(JSON.parse(String((fetchSpy.mock.calls[0] as [string, RequestInit])[1].body))).toMatchObject({ topic: ALICE_TOPIC });
     await expect(notifier.testPerson('p-b')).resolves.toBeNull();
+  });
+});
+
+describe('each person’s devices, beside their channels (ADR 0048)', () => {
+  const browserKeys = () => {
+    const ecdh = createECDH('prime256v1');
+    ecdh.generateKeys();
+    return { p256dh: ecdh.getPublicKey().toString('base64url'), auth: randomBytes(16).toString('base64url') };
+  };
+  const withDevices = async (owners: string[], admins: string[]) => {
+    const push = memoryPushStore({ admins: admins.map((id) => ({ id, email: `${id}@example.com` })) });
+    for (const owner of owners) {
+      const added = await addDevice(push, owner, { subscription: { endpoint: `https://fcm.googleapis.com/fcm/send/${owner}-secret`, keys: browserKeys() }, name: owner });
+      expect(added.ok).toBe(true);
+    }
+    return push;
+  };
+  const pushedTo = (spy: ReturnType<typeof answering>) =>
+    spy.mock.calls
+      .map((call) => String(call[0]))
+      .filter((url) => url.startsWith('https://fcm.googleapis.com/'))
+      .map((url) => url.split('/').at(-1)!.replace(/-secret$/, ''))
+      .sort();
+
+  it('sends a routed item to its people’s devices and to no one else’s', async () => {
+    const spy = answering(201);
+    const push = await withDevices(['p-a', 'p-b', 'p-admin'], ['p-admin']);
+    const store = Object.assign(memoryNotifyStore(), { push });
+    await expect(new Notifier(configWith(''), store).send({ event: 'gate_opened', to: null, text: 'q', link: 'l', people: ['p-a'] })).resolves.toBe('sent');
+    expect(pushedTo(spy)).toEqual(['p-a']);
+    expect(push.log.filter((event) => event.type === 'notify.delivery').map((event) => event.payload)).toEqual([
+      expect.objectContaining({ transport: 'push', source: 'device', person: 'p-a', ok: true, status: 201 }),
+    ]);
+  });
+
+  it('sends what the install’s channel carries to every admin’s devices as well, and to no user’s', async () => {
+    const spy = answering(201);
+    const push = await withDevices(['p-a', 'p-admin', 'p-admin2'], ['p-admin', 'p-admin2']);
+    const store = Object.assign(memoryNotifyStore(), { push });
+    await expect(new Notifier(configWith('https://hooks.example.invalid/x'), store).send({ event: 'cap_warning', to: null, text: 'spend', link: 'l' })).resolves.toBe('sent');
+    expect(pushedTo(spy)).toEqual(['p-admin', 'p-admin2']);
+    expect(spy.mock.calls.map((call) => String(call[0]))).toContain('https://hooks.example.invalid/x');
+  });
+
+  it('counts a push that got through as sent when the install has no channel: a local install’s operator is its admin', async () => {
+    answering(201);
+    const push = await withDevices(['p-operator'], ['p-operator']);
+    const store = Object.assign(memoryNotifyStore(), { push });
+    await expect(new Notifier(configWith(''), store).send({ event: 'check_failing', to: null, text: 'x', link: 'l' })).resolves.toBe('sent');
+  });
+
+  it('keeps notifyKinds’ meaning: a kind switched off reaches no device', async () => {
+    const spy = answering(201);
+    const push = await withDevices(['p-a', 'p-admin'], ['p-admin']);
+    const store = Object.assign(memoryNotifyStore({ settings: { notifyKinds: JSON.stringify({ gate_opened: false, cap_warning: false }) } }), { push });
+    const notifier = new Notifier(configWith(''), store);
+    await expect(notifier.send({ event: 'gate_opened', to: null, text: 'q', link: 'l', people: ['p-a'] })).resolves.toBe('off');
+    await expect(notifier.send({ event: 'cap_warning', to: null, text: 'q', link: 'l' })).resolves.toBe('off');
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('forgets a removed person’s devices with their channel', async () => {
+    const push = await withDevices(['p-a', 'p-b'], []);
+    const store = Object.assign(memoryNotifyStore(), { push });
+    await forgetPersonalNotification(store, 'p-a', 'admin@example.com');
+    expect(push.rows.map((row) => row.personId)).toEqual(['p-b']);
+    expect(Object.keys(push.secrets).filter((ref) => ref.startsWith('push-device:p-a:'))).toEqual([]);
+    expect(Object.keys(push.secrets).filter((ref) => ref.startsWith('push-device:p-b:'))).toHaveLength(1);
   });
 });
