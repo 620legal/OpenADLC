@@ -330,6 +330,18 @@ function waitingLine(card: BoardCard, waiting: CardWaiting, context: CardContext
               : 'its build ended, waiting for its pull request';
       return line([`Leased to ${context.said(reason.bot)}`, what]);
     }
+    case 'sent_back': {
+      // Sent back with its pull request open: whether its builder round
+      // waits for the builder, or nothing will start one. "Leased to the
+      // builder · held for pull request #N" sat 21 hours on such a card,
+      // never stuck (ADR 0046).
+      if (reason.round.state === 'waiting') {
+        return { text: `Waiting for ${context.said(reason.bot)} · ${reason.round.on} · since ${clockOf(reason.round.since)}`, tone: 'muted', mark: null };
+      }
+      const none = `no builder round has started on #${reason.pr}`;
+      if (waiting.stuck) return { text: `Stuck · ${none}`, tone: 'alarm', mark: 'dot', stuck: true };
+      return { text: `Sent back · ${none}`, tone: 'muted', mark: null };
+    }
     case 'host':
       return line([`Waiting for a host with room (${reason.running} of ${reason.capacity} running)`]);
     case 'free': {
@@ -353,6 +365,30 @@ function waitingLine(card: BoardCard, waiting: CardWaiting, context: CardContext
       return line([reason.by === 'dispatcher' ? 'Next up' : 'Not started', `${seat} is free`, when]);
     }
   }
+}
+
+/** "10:42", on the reader's clock. */
+function clockOf(at: string): string {
+  return new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(at));
+}
+
+/**
+ * Why a Build card came back from Review, in one line under its title, with
+ * the whole reason as its tooltip; null for a card that was not sent back,
+ * or from an older bridge. Said while its round runs too: the reason never
+ * reached the card, only "sent back ×1" (ADR 0046).
+ */
+export function sendBackLine(card: Pick<BoardCard, 'stage' | 'sendBack'>): { text: string; title: string } | null {
+  const sent = card.sendBack;
+  if (card.stage !== 'build' || !sent) return null;
+  const words = sent.words || 'no reason given';
+  const text =
+    sent.by === 'openadlc'
+      ? `Sent back: ${words}`
+      : sent.kind === 'person'
+        ? `${sent.by} moved it back: ${words}`
+        : `${sent.by} asked for changes: ${words}`;
+  return { text, title: sent.reason || words };
 }
 
 /** The root's number as the card's own board says it: `#213` in its own repository, `web#213` in another. */

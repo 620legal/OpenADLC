@@ -106,6 +106,22 @@ export async function sendBackOfTask(taskId: string): Promise<StageMove | null> 
   return row ? toMove(row) : null;
 }
 
+/**
+ * Each issue's newest move, by `repoId#number`, in one read: a sent-back
+ * card says why from it (ADR 0046). `stage_moves_issue` serves it; ties on
+ * the time go to the higher id, as `listForIssue` orders them.
+ */
+export async function newestMoves(issues: readonly { repoId: string; issueNumber: number }[]): Promise<Map<string, StageMove>> {
+  if (issues.length === 0) return new Map();
+  const rows = await query<Row>(
+    `select distinct on (repo_id, issue_number) * from stage_moves
+     where (repo_id, issue_number) in (select * from unnest($1::uuid[], $2::int[]))
+     order by repo_id, issue_number, created_at desc, id desc`,
+    [issues.map((issue) => issue.repoId), issues.map((issue) => issue.issueNumber)],
+  );
+  return new Map(rows.map((row) => [`${row.repo_id}#${row.issue_number}`, toMove(row)]));
+}
+
 /** How many times each issue was sent back, by `repoId#number`, for the board's "sent back ×N". */
 export async function sendBackCounts(repoId?: string): Promise<Map<string, number>> {
   const rows = await query<{ repo_id: string; issue_number: number; count: string }>(

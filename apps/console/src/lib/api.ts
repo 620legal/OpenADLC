@@ -71,6 +71,19 @@ export interface DependencyNow {
   waits: { kind: string; seat: string | null } | null;
 }
 
+/** Why a card was sent back from Review to Build, from its newest stage move (`sendBackOf` in the bridge's waiting.ts). */
+export interface SendBackFacts {
+  /** `openadlc` for CI or the merge line, a seat's name for the lead, a login for a person. */
+  by: string;
+  kind: 'send_back' | 'person';
+  at: string;
+  pr: number | null;
+  /** The reason's first line, without links, at most 160 characters. */
+  words: string;
+  /** The whole reason, at most 600 characters. */
+  reason: string;
+}
+
 /** Why a card with nothing going on it waits (`waitingOf` in the bridge's waiting.ts). */
 export type WaitingReason =
   | { kind: 'held' }
@@ -91,6 +104,18 @@ export type WaitingReason =
   | { kind: 'lease'; on: number[]; paths: string[] }
   /** Its own issue's lease holds it with nothing running: `leased` before its build starts, `paused`, or `in_task` for its pull request, `merged` once that has. */
   | { kind: 'leased'; bot: string; state: string; pr: number | null; merged: boolean }
+  /**
+   * Its lease holds its open pull request `pr`, it was sent back from Review,
+   * and nothing runs on it: its builder round waits for the builder (`on`
+   * what holds it), or none has started (ADR 0046).
+   */
+  | {
+      kind: 'sent_back';
+      bot: string;
+      pr: number;
+      sendBack: SendBackFacts;
+      round: { state: 'waiting'; on: string; since: string } | { state: 'not_started' };
+    }
   /** Nothing else holds it, and the live hosts run all the tasks they have room for. */
   | { kind: 'host'; running: number; capacity: number }
   | { kind: 'free'; seat: WaitingSeat; by: 'runner' | 'sweep' | 'dispatcher'; nextAt?: string | null };
@@ -188,6 +213,8 @@ export interface BoardCard {
    * the card says its stage's line.
    */
   waiting?: CardWaiting | null;
+  /** On a Build card sent back from Review with its pull request open, why; set while its round runs too. Absent from an older bridge. */
+  sendBack?: SendBackFacts | null;
   /**
    * Its wait followed to its root. Null when it waits on nothing behind it,
    * has work going, or its root is its own; absent from an older bridge, and

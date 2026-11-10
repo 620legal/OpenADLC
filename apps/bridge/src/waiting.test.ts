@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_PATH_POLICY } from '@openadlc/shared';
-import { buildCandidates, STUCK_AFTER_MS, waitingCards, waitingOf, type LeaseFacts, type WaitingInput } from './waiting.js';
+import { buildCandidates, sendBackOf, sendBackWords, STUCK_AFTER_MS, waitingCards, waitingOf, type LeaseFacts, type SendBackFacts, type WaitingInput } from './waiting.js';
 import { isActive, type IssueFacts, type TaskFacts } from './work.js';
 
 /**
@@ -507,6 +507,107 @@ describe('a Build card its own lease holds with nothing running', () => {
     expect(waiting.cards.has('OpenADLC#160')).toBe(false);
     expect(waiting.cards.get('OpenADLC#161')?.reason.kind).toBe('free');
     expect(waiting.cards.get('OpenADLC#141')?.reason.kind).toBe('free');
+  });
+});
+
+/**
+ * A Build card its lease holds for an open pull request that the reviewers or
+ * CI sent back: it says why, and whether its builder round waits for the
+ * builder or none will start. On 2026-11-09 one said only "held for pull
+ * request #N" for 21 hours, with nothing in Needs you (ADR 0046).
+ */
+describe('a Build card sent back with its pull request open', () => {
+  const held = (extra: Partial<LeaseFacts> = {}): LeaseFacts => ({
+    repoId: 'repo-1',
+    issueNumber: 274,
+    botId: 'bot-builder',
+    state: 'in_task',
+    prNumber: 281,
+    pullMerged: false,
+    updatedAt: ago(40),
+    ...extra,
+  });
+  const sendBack = (minutes: number): SendBackFacts => ({
+    by: 'openadlc',
+    kind: 'send_back',
+    at: ago(minutes),
+    pr: 281,
+    words: 'CI failed on abc1234: test › Run unit tests',
+    reason: 'CI failed on abc1234: test › Run unit tests',
+  });
+  const card = (extra: Partial<IssueFacts> = {}) => ready(274, { prNumber: 281, updatedAt: ago(60), ...extra });
+  const sentBacks = (minutes: number) => new Map([['OpenADLC#274', sendBack(minutes)]]);
+  const waitEvent = (minutes: number) => ({
+    at: ago(minutes),
+    payload: { subjectRef: 'OpenADLC#281', repo: 'OpenADLC', pr: 281, issue: 274, botId: 'bot-builder', bot: 'openadlc-atlas-janedoe', round: 2, by: 'openadlc', busyWith: 'running `implement` on OpenADLC#280' },
+  });
+
+  it('says why, with no round started, and is stuck only past the stuck time', () => {
+    const early = read([card()], [], { leases: [held()], sentBacks: sentBacks(2) });
+    expect(early.cards.get('OpenADLC#274')).toEqual({
+      reason: { kind: 'sent_back', bot: 'openadlc-atlas-janedoe', pr: 281, sendBack: sendBack(2), round: { state: 'not_started' } },
+      since: ago(2),
+      stuck: false,
+    });
+    const late = read([card()], [], { leases: [held()], sentBacks: sentBacks(4) });
+    expect(late.cards.get('OpenADLC#274')).toMatchObject({ reason: { kind: 'sent_back', round: { state: 'not_started' } }, since: ago(4), stuck: true });
+    expect(STUCK_AFTER_MS).toBe(3 * 60_000);
+  });
+
+  it('waits from its last round’s end when that came after the send-back', () => {
+    const ended = task('OpenADLC#281', 'bot-builder', 'patch', 'done', { endedAt: ago(1) });
+    const waiting = read([card()], [ended], { leases: [held()], sentBacks: sentBacks(10) });
+    expect(waiting.cards.get('OpenADLC#274')).toMatchObject({ since: ago(1), stuck: false });
+  });
+
+  it('says its round waits for the busy builder, on what, and is never stuck', () => {
+    const waiting = read([card()], [], { leases: [held()], sentBacks: sentBacks(30), patchWaitEvents: [waitEvent(25)] });
+    expect(waiting.cards.get('OpenADLC#274')).toMatchObject({
+      reason: { kind: 'sent_back', round: { state: 'waiting', on: 'running `implement` on OpenADLC#280', since: ago(25) } },
+      since: ago(25),
+      stuck: false,
+    });
+  });
+
+  it('is not stuck when left for a person', () => {
+    const waiting = read([card({ labels: ['adlc:build', 'start:now', 'needs-human'] })], [], { leases: [held()], sentBacks: sentBacks(30) });
+    expect(waiting.cards.get('OpenADLC#274')).toMatchObject({ reason: { kind: 'sent_back' }, stuck: false });
+  });
+
+  it('is not here while its round runs, or is paused on a question', () => {
+    const running = task('OpenADLC#281', 'bot-builder', 'patch', 'running');
+    expect(read([card()], [running], { leases: [held()], sentBacks: sentBacks(30) }).cards.has('OpenADLC#274')).toBe(false);
+    const paused = task('OpenADLC#281', 'bot-builder', 'patch', 'paused');
+    const gated = read([card()], [paused], { leases: [held()], sentBacks: sentBacks(30), gated: new Set([paused.id]) });
+    expect(gated.cards.has('OpenADLC#274')).toBe(false);
+  });
+
+  it('stays leased without a send-back, or once its pull request merged', () => {
+    expect(read([card()], [], { leases: [held()] }).cards.get('OpenADLC#274')?.reason.kind).toBe('leased');
+    const merged = read([card()], [], { leases: [held({ pullMerged: true })], sentBacks: sentBacks(30) });
+    expect(merged.cards.get('OpenADLC#274')?.reason).toMatchObject({ kind: 'leased', merged: true });
+  });
+});
+
+describe('a send-back as a card says it', () => {
+  it('takes the first line, without links, cut at a word', () => {
+    const said = sendBackWords('CI failed on abc1234 (https://github.com/o/r/actions/runs/1): test › Run unit tests\n\nThe log ends:\n  FAIL');
+    expect(said.words).toBe('CI failed on abc1234: test › Run unit tests');
+    expect(said.reason).toContain('The log ends:');
+    const long = sendBackWords('word '.repeat(80));
+    expect(long.words.length).toBeLessThanOrEqual(160);
+    expect(long.words.endsWith('word…')).toBe(true);
+    expect(sendBackWords('x'.repeat(700)).reason.length).toBeLessThanOrEqual(600);
+  });
+
+  it('counts only a move into Build from Review, by a send-back or a person', () => {
+    const move = { id: 'm1', repoId: 'repo-1', issueNumber: 274, prNumber: 281, from: 'review', to: 'build', kind: 'send_back', actor: 'openadlc-lead', taskId: null, reason: 'Fix the test', commentUrl: null, createdAt: ago(5) } as const;
+    expect(sendBackOf(move)).toMatchObject({ by: 'openadlc-lead', kind: 'send_back', pr: 281, words: 'Fix the test' });
+    expect(sendBackOf({ ...move, kind: 'person' })?.kind).toBe('person');
+    expect(sendBackOf({ ...move, kind: 'forward' })).toBeNull();
+    expect(sendBackOf({ ...move, from: 'spec' })).toBeNull();
+    expect(sendBackOf({ ...move, to: 'spec', from: 'build' })).toBeNull();
+    expect(sendBackOf(undefined)).toBeNull();
   });
 });
 

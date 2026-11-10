@@ -251,6 +251,24 @@ describe('the bridge enforces the role on every route', () => {
     }
     expect(ran).toEqual([]);
   });
+
+  // Needs you's Start the builder round on a sent-back card goes through this
+  // route (ADR 0046): it starts work, so only a user may press it.
+  it('refuses Start the builder round to someone who may not start work, before its handler runs, and serves a user', async () => {
+    const key = 'POST /v1/items/:subject/start';
+    expect(ROUTE_ROLES[key]).toBe('user');
+    const { url, ran } = await serve({ 'jane@example.com': 'user', 'admin@example.com': 'admin' });
+    const press = (identity: string) =>
+      fetch(`${url}/v1/items/testbed%237/start`, { method: 'POST', headers: { 'x-openadlc-identity': identity, 'content-type': 'application/json' }, body: '{}' });
+
+    const refused = await press('stranger@example.com');
+    expect(refused.status).toBe(403);
+    expect(await refused.json()).toMatchObject({ code: 'not-a-user' });
+    expect(ran).toEqual([]);
+
+    expect((await press('jane@example.com')).status).toBe(200);
+    expect(ran).toEqual([key]);
+  });
 });
 
 /** `users` in memory, with the store's rule: the first admins only while it is empty. */

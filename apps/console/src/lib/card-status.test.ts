@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { BoardCard, CardTask, CardWaiting, WaitChain, WaitEnd, WaitingReason, WaitLink } from './api';
-import { awaitedApprovalsOf, cardBot, cardCost, cardStatus, chainLine, heldApprovalsOf, nextUp, rootButton, runningStatus, type CardContext } from './card-status';
+import type { BoardCard, CardTask, CardWaiting, SendBackFacts, WaitChain, WaitEnd, WaitingReason, WaitLink } from './api';
+import { awaitedApprovalsOf, cardBot, cardCost, cardStatus, chainLine, heldApprovalsOf, nextUp, rootButton, runningStatus, sendBackLine, type CardContext } from './card-status';
 import { ago, duration, money, ordinal, untilIn } from './when';
 
 const NOW = '2026-09-24T12:00:00.000Z';
@@ -674,6 +674,71 @@ describe('a card waiting with nothing going on it', () => {
       [{ kind: 'host', running: 4, capacity: 4 }, 'Waiting for a host with room (4 of 4 running) · 32 min'],
     ];
     for (const [reason, text] of lines) expect(waits(reason, {}, build), text).toEqual({ text, tone: 'muted', mark: null });
+  });
+
+  // A card sent back with its pull request open said only "Leased to the
+  // builder · held for pull request #N · sent back ×1" for 21 hours, never
+  // why and never stuck (ADR 0046).
+  describe('sent back with its pull request open', () => {
+    const ci: SendBackFacts = {
+      by: 'openadlc',
+      kind: 'send_back',
+      at: minutesAgo(20),
+      pr: 281,
+      words: 'CI failed on abc1234 after the lead approved: test › Run unit tests',
+      reason: 'CI failed on abc1234 after the lead approved: test › Run unit tests\n\nThe log ends: FAIL src/a.test.ts',
+    };
+    const lead: SendBackFacts = { ...ci, by: 'openadlc-lead', words: 'Handle the empty cart before checkout', reason: 'Handle the empty cart before checkout.' };
+    const sentBack = (sendBack: SendBackFacts, round: Extract<WaitingReason, { kind: 'sent_back' }>['round'] = { state: 'not_started' }): WaitingReason => ({
+      kind: 'sent_back',
+      bot: 'openadlc-atlas-janedoe',
+      pr: 281,
+      sendBack,
+      round,
+    });
+    const build = (sendBack: SendBackFacts, waiting: CardWaiting | null, extra: Partial<BoardCard> = {}) =>
+      card({ stage: 'build', labels: ['adlc:build'], prNumber: 281, sentBack: 1, sendBack, waiting, ...extra });
+
+    it('says why CI sent it back, and that no builder round has started', () => {
+      const shown = build(ci, { reason: sentBack(ci), since: minutesAgo(2), stuck: false });
+      expect(sendBackLine(shown)).toEqual({ text: 'Sent back: CI failed on abc1234 after the lead approved: test › Run unit tests', title: ci.reason });
+      expect(cardStatus(shown, CONTEXT)).toEqual({ text: 'Sent back · no builder round has started on #281', tone: 'muted', mark: null });
+    });
+
+    it('says who asked for changes, and a person’s move as theirs', () => {
+      expect(sendBackLine(build(lead, null))?.text).toBe('openadlc-lead asked for changes: Handle the empty cart before checkout');
+      expect(sendBackLine(build({ ...lead, by: 'janedoe', kind: 'person' }, null))?.text).toBe('janedoe moved it back: Handle the empty cart before checkout');
+    });
+
+    it('says its round waits for the busy builder, on what, and since when', () => {
+      const round = { state: 'waiting' as const, on: 'running `implement` on #280', since: minutesAgo(15) };
+      const status = cardStatus(build(ci, { reason: sentBack(ci, round), since: minutesAgo(15), stuck: false }), CONTEXT);
+      expect(status.text).toMatch(/^Waiting for openadlc-atlas-janedoe · running `implement` on #280 · since \d\d:\d\d$/);
+      expect(status).toMatchObject({ tone: 'muted', mark: null });
+      expect(status.stuck).toBeUndefined();
+    });
+
+    it('is stuck when no round has started past the stuck time', () => {
+      expect(cardStatus(build(lead, { reason: sentBack(lead), since: minutesAgo(20), stuck: true }), CONTEXT)).toEqual({
+        text: 'Stuck · no builder round has started on #281',
+        tone: 'alarm',
+        mark: 'dot',
+        stuck: true,
+      });
+    });
+
+    it('says the running round’s line while it runs, and still why it was sent back', () => {
+      const patching = task({ kind: 'patch', state: 'running', startedAt: minutesAgo(4) });
+      const running = build(ci, null, { active: [patching], assignees: ['openadlc-atlas-janedoe'] });
+      expect(cardStatus(running, CONTEXT).text).not.toMatch(/Sent back|Stuck/);
+      expect(cardStatus(running, CONTEXT).live).toBe(true);
+      expect(sendBackLine(running)?.text).toBe('Sent back: CI failed on abc1234 after the lead approved: test › Run unit tests');
+    });
+
+    it('says nothing of a send-back off Build, or from an older bridge', () => {
+      expect(sendBackLine(build(ci, null, { stage: 'review' }))).toBeNull();
+      expect(sendBackLine(card({}))).toBeNull();
+    });
   });
 
   it('says on a build paused on a question that it holds its repository’s build while others wait for one', () => {

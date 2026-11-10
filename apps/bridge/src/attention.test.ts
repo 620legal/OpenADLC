@@ -2686,6 +2686,8 @@ describe('GET /v1/attention', () => {
       'review.stalled',
       // The starts a full seat turned away, for the work stuck behind none.
       'stage.waiting_on_seat',
+      // And the patch rounds a busy builder turned away, for a sent-back card's round.
+      'patch.round_waiting',
     ]);
     expect(body.items.map((item) => item.id)).toEqual(['stall:openadlc-testbed#29', 'gate:gate-old']);
     // A gate older than the week is still a gate: its task is read on its own.
@@ -3975,6 +3977,73 @@ describe('work stuck with its seat free', () => {
     const leased = { repoId: 'repo-1', issueNumber: 160, botId: 'bot-builder', state: 'in_task', prNumber: 57, pullMerged: true, updatedAt: minutesAgo(41) };
     expect((await items({ issues: [design, build], waiting: { nextSweepAt: nextSweep, leases: [leased] } })).map((item) => item.id)).toEqual(['stuck:openadlc-testbed#141']);
     expect(await items({ issues: [design, build], waiting: { nextSweepAt: nextSweep, hosts: { running: 4, capacity: 4 } } })).toEqual([]);
+  });
+});
+
+/**
+ * A Build card sent back with its pull request open, and nothing running,
+ * waiting or asked on it past the stuck time: nothing will start its builder
+ * round, and on 2026-11-09 one sat 21 hours with nothing here (ADR 0046).
+ */
+describe('a sent-back card no builder round will start', () => {
+  const sent = { ...issue(7, 'Handle the empty cart', 'build', 29), updatedAt: minutesAgo(60), body: '', labels: ['adlc:build'] };
+  const lease = { repoId: 'repo-1', issueNumber: 7, botId: 'bot-builder', state: 'in_task', prNumber: 29, pullMerged: false, updatedAt: minutesAgo(60) };
+  const sendBack = {
+    by: 'openadlc',
+    kind: 'send_back',
+    at: minutesAgo(20),
+    pr: 29,
+    words: 'CI failed on abc1234: test › Run unit tests',
+    reason: 'CI failed on abc1234: test › Run unit tests.',
+  };
+  const items = async (extra: Record<string, unknown> = {}, waiting: Record<string, unknown> = {}) => {
+    const { attentionItems } = await load();
+    return attentionItems({
+      now: NOW,
+      gates: [],
+      tasks: [],
+      bots: BOTS,
+      repos: REPOS,
+      issues: [sent],
+      requests: [],
+      stallEvents: [],
+      waiting: { leases: [lease], sentBacks: new Map([['openadlc-testbed#7', sendBack]]), ...waiting },
+      ...extra,
+    } as never);
+  };
+
+  it('is a work_stuck item quoting why it was sent back, whose first action starts the builder round', async () => {
+    const stuck = (await items()).filter((item) => item.kind === 'work_stuck');
+    expect(stuck).toHaveLength(1);
+    expect(stuck[0]).toMatchObject({
+      id: 'stuck:openadlc-testbed#7',
+      group: 'system',
+      since: minutesAgo(20),
+      bot: { name: 'openadlc-atlas-janedoe' },
+      headline: 'No builder round has started on #29 for 20 min',
+    });
+    expect(stuck[0]?.detail).toBe(
+      'openadlc-testbed#7 was sent back to openadlc-atlas-janedoe 20 min ago: CI failed on abc1234: test › Run unit tests. ' +
+        'No round is running on #29, none is waiting for openadlc-atlas-janedoe, and no question is open, so nothing will start one. ' +
+        'Start the builder round opens the next round on its branch now; the bridge’s log says why none started.',
+    );
+    expect(stuck[0]?.actions[0]).toEqual({ kind: 'start_work', label: 'Start the builder round', subject: 'openadlc-testbed#7' });
+    expect(stuck[0]?.actions).toContainEqual({ kind: 'open_thread', label: 'Open thread', bot: 'openadlc-atlas-janedoe' });
+  });
+
+  it('is not said while its round waits for the builder', async () => {
+    const waitEvent = {
+      at: minutesAgo(15),
+      payload: { subjectRef: 'openadlc-testbed#29', repo: 'openadlc-testbed', pr: 29, issue: 7, botId: 'bot-builder', bot: 'openadlc-atlas-janedoe', round: 2, by: 'openadlc', busyWith: 'running `implement` on openadlc-testbed#30' },
+    };
+    expect((await items({}, { patchWaitEvents: [waitEvent] })).filter((item) => item.kind === 'work_stuck')).toEqual([]);
+  });
+
+  it('gives way to a failed round not tried again on its pull request, which has Try again', async () => {
+    const failed = task({ botId: 'bot-builder', kind: 'patch', subjectRef: 'openadlc-testbed#29', state: 'failed', exitReason: 'the session ended' });
+    const withFailure = await items({ tasks: [failed] });
+    expect(withFailure.map((item) => item.kind)).toContain('task_failed');
+    expect(withFailure.filter((item) => item.kind === 'work_stuck')).toEqual([]);
   });
 });
 

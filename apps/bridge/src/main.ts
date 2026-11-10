@@ -860,6 +860,13 @@ async function main(): Promise<void> {
     startNow: async (item) => {
       const stage = item.issue?.stage;
       if (stage === 'intake' || stage === 'spec') return stages.sweep({ stages: [stage] });
+      // A Build card whose lease holds its pull request: the dispatcher
+      // never starts an issue a lease holds (#153), so its patch round is
+      // what starts it (ADR 0046).
+      if (stage === 'build' && item.issue) {
+        const held = await leaseStore.getActiveLease(item.repoId, item.issue.number).catch(() => null);
+        if (held?.prNumber) return sendBack.startHeldRound({ repoName: item.repoName, issueNumber: item.issue.number });
+      }
       if (stage === 'build' && dispatchRuns) {
         dispatchRuns.soon(`${item.key} was asked to start`);
         return [`asked the dispatcher to look at ${item.key} now`];

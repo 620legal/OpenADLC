@@ -1,4 +1,4 @@
-import { costs, hosts as hostStore, ignoredIssues, issues as issueStore, leases as leaseStore, listEventsOfType, repos as repoStore, type HealthRow } from '@openadlc/db';
+import { costs, hosts as hostStore, ignoredIssues, issues as issueStore, leases as leaseStore, listEventsOfType, repos as repoStore, stageMoves, type HealthRow, type StageMove } from '@openadlc/db';
 import { blockingOverlaps, type WorkInFlight } from '@openadlc/dispatcher';
 import {
   DEFAULT_PATH_POLICY,
@@ -20,6 +20,7 @@ import {
   type TaskState,
 } from '@openadlc/shared';
 import { blockersOf, type HealthAnswer } from './health/checks/crew.js';
+import { PATCH_ROUND_WAITING, standingPatchWaits } from './patch-waits.js';
 import { readSeatPauses, seatPausedWords } from './seat-pause.js';
 import { SEAT_WAIT_WINDOW_MS, STAGE_WAITING_ON_SEAT, standingSeatWaits } from './seat-waits.js';
 import { isActive, issueForSubject, parseRef, subjectsOf, type IssueFacts, type TaskFacts } from './work.js';
@@ -145,6 +146,22 @@ export type WaitingReason =
    */
   | { kind: 'leased'; bot: string; state: LeaseState; pr: number | null; merged: boolean }
   /**
+   * In Build, its own lease holds its open pull request `pr`, the reviewers
+   * or CI sent it back (`sendBack`), and nothing is running on it: its
+   * builder round waits for a busy builder (`waiting`, #273's
+   * `patch.round_waiting`, `on` what holds the builder) or nothing will start
+   * one (`not_started`). Read as `leased`, it said only "held for pull
+   * request #N" and was never stuck: on 2026-11-09 one sat 21 hours with
+   * nothing in Needs you (ADR 0046).
+   */
+  | {
+      kind: 'sent_back';
+      bot: string;
+      pr: number;
+      sendBack: SendBackFacts;
+      round: { state: 'waiting'; on: string; since: string } | { state: 'not_started' };
+    }
+  /**
    * Nothing else holds it: its seat has room, it is first in line, and the
    * live hosts run all the tasks they have room for (`hosts.taskLoad`), so a
    * start is refused until one ends (`HostFullError`).
@@ -190,6 +207,62 @@ export interface BuildHold {
   waiting: number;
 }
 
+/**
+ * Why a card was sent back from Review to Build, from its newest stage move
+ * (`stageMoves.newestMoves`): what the round's `sent-back.md` reads too, so
+ * the card and the builder never disagree.
+ */
+export interface SendBackFacts {
+  /** Who moved it: `openadlc` for CI or the merge line, a seat's name for the lead, a login for a person. */
+  by: string;
+  /** The move's kind: a person's move says so on the card. */
+  kind: 'send_back' | 'person';
+  at: string;
+  pr: number | null;
+  /** The reason's first line, without links, cut at a word (`sendBackWords`). */
+  words: string;
+  /** The whole reason, at most 600 characters, for a tooltip and Needs you. */
+  reason: string;
+}
+
+const WORDS_MAX = 160;
+const REASON_MAX = 600;
+
+/** Cut at the last word that fits, with an ellipsis when anything was left out. */
+function cutAtWord(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const head = text.slice(0, max - 1);
+  const space = head.lastIndexOf(' ');
+  return `${(space > max / 2 ? head.slice(0, space) : head).trimEnd()}…`;
+}
+
+/**
+ * A send-back's reason as a card says it: the first line that says
+ * something, links taken out (a CI reason carries its run's URL, which
+ * pushed the job and the step off a one-line card), at most 160 characters;
+ * and the whole of it, at most 600.
+ */
+export function sendBackWords(reason: string | null | undefined): { words: string; reason: string } {
+  const whole = (reason ?? '').trim();
+  const strip = (line: string) =>
+    line
+      .replace(/<?https?:\/\/[^\s)\]>]+>?/g, '')
+      .replace(/\(\s*\)|\[\s*\]/g, '')
+      .replace(/\s+/g, ' ')
+      .replace(/ ([:,;.])/g, '$1')
+      .replace(/[\s:,;(—-]+$/, '')
+      .trim();
+  const first = whole.split('\n').map(strip).find((line) => line.length > 0) ?? '';
+  return { words: cutAtWord(first, WORDS_MAX), reason: cutAtWord(whole, REASON_MAX) };
+}
+
+/** The send-back a newest move records, or null when that move is not one from Review into Build. */
+export function sendBackOf(move: StageMove | undefined): SendBackFacts | null {
+  if (!move || move.to !== 'build' || move.from !== 'review') return null;
+  if (move.kind !== 'send_back' && move.kind !== 'person') return null;
+  return { by: move.actor, kind: move.kind, at: move.createdAt, pr: move.prNumber, ...sendBackWords(move.reason) };
+}
+
 /** A lease still holding an issue (`leases.heldLeases`). */
 export interface LeaseFacts {
   repoId: string;
@@ -225,6 +298,13 @@ export interface WaitingContext {
    * from them and the cards' tasks (`standingSeatWaits`). Absent, none.
    */
   seatWaitEvents?: readonly { at: string; payload: unknown }[];
+  /**
+   * The patch rounds a busy builder turned away (`patch.round_waiting`, #273),
+   * in the same window: which stand is read with `standingPatchWaits`. Absent, none.
+   */
+  patchWaitEvents?: readonly { at: string; payload: unknown }[];
+  /** Why each Build card a lease holds for its pull request was sent back, by card ref (`sendBackOf`). Absent, none was. */
+  sentBacks?: ReadonlyMap<string, SendBackFacts>;
   /** Every lease still holding an issue, for a Build card one holds with nothing running. Absent, none. */
   leases?: readonly LeaseFacts[];
   /**
@@ -363,6 +443,11 @@ export function waitingOf(input: WaitingInput): Waiting {
     return stage === 'build' ? all : all.slice(0, 1);
   };
 
+  // The patch rounds a busy builder turned away that nothing has started since.
+  const patchWaits = input.patchWaitEvents?.length
+    ? standingPatchWaits(input.patchWaitEvents, issues, input.cards.flatMap((card) => card.tasks))
+    : new Map<string, { busyWith: string; since: string }>();
+
   const holdOf = (card: WaitingCard): Hold | null => {
     const { issue } = card;
     if (!STAFFED.includes(issue.stage) || card.active.length > 0) return null;
@@ -376,9 +461,23 @@ export function waitingOf(input: WaitingInput): Waiting {
     // it now asked the dispatcher for what it would never do (#153).
     const lease = issue.stage === 'build' ? leaseOf.get(card.ref) : undefined;
     if (lease) {
+      const bot = input.bots.find((one) => one.id === lease.botId)?.name ?? 'a bot';
+      // Sent back with its pull request open: say why, and whether a round
+      // waits for the builder or none will start.
+      const sendBack = input.sentBacks?.get(card.ref);
+      if (sendBack && lease.prNumber !== null && lease.pullMerged !== true) {
+        const wait = patchWaits.get(`${issue.repoName}#${lease.prNumber}`);
+        return {
+          kind: 'sent_back',
+          bot,
+          pr: lease.prNumber,
+          sendBack,
+          round: wait ? { state: 'waiting', on: wait.busyWith, since: wait.since } : { state: 'not_started' },
+        };
+      }
       return {
         kind: 'leased',
-        bot: input.bots.find((bot) => bot.id === lease.botId)?.name ?? 'a bot',
+        bot,
         state: lease.state,
         pr: lease.prNumber,
         merged: lease.prNumber !== null && lease.pullMerged === true,
@@ -584,8 +683,17 @@ export function waitingOf(input: WaitingInput): Waiting {
     // Turned away by its seat, it has waited since then; else since it last
     // changed, or its lease did.
     const changed = latest([card.issue.updatedAt, ...card.tasks.filter((task) => !isActive(task)).map((task) => task.endedAt ?? task.createdAt)]) ?? card.issue.updatedAt;
-    const since = seatWaits.get(card.ref)?.since ?? (reason.kind === 'leased' ? (latest([changed, leaseOf.get(card.ref)?.updatedAt]) ?? changed) : changed);
+    let since = seatWaits.get(card.ref)?.since ?? (reason.kind === 'leased' ? (latest([changed, leaseOf.get(card.ref)?.updatedAt]) ?? changed) : changed);
     let stuck = false;
+    if (reason.kind === 'sent_back') {
+      // Since the round was turned away, while it waits; else since it was
+      // sent back or its last task ended. A waiting round is a wait, not
+      // stuck: #273 starts it when the builder has room.
+      const ended = card.tasks.filter((task) => !isActive(task)).map((task) => task.endedAt);
+      since = reason.round.state === 'waiting' ? reason.round.since : (latest([reason.sendBack.at, ...ended]) ?? reason.sendBack.at);
+      const forPerson = card.issue.labels.includes('needs-human') || card.issue.labels.includes('do:human');
+      stuck = reason.round.state === 'not_started' && !forPerson && now - Date.parse(since) > STUCK_AFTER_MS;
+    }
     if (reason.kind === 'free') {
       const bot = botByName.get(reason.seat.name);
       const freeSince = latest([since, bot ? lastEnd.get(bot.id) : null]) ?? since;
@@ -663,7 +771,7 @@ export async function readWaitingContext(
     return [repo.id, { work, policy }];
   };
   const managed = (async () => repoStore.listRepos())().catch(() => undefined);
-  const [seatPauses, budget, health, inFlight, seatWaitEvents, held, load, ignored, releasing] = await Promise.all([
+  const [seatPauses, budget, health, inFlight, seatWaitEvents, held, load, ignored, releasing, patchWaitEvents] = await Promise.all([
     readSeatPauses(),
     // The cap the dispatcher stops leasing at, and every start too
     // (`spendingLimits.refusal`), as the budget job last wrote it.
@@ -687,7 +795,24 @@ export async function readWaitingContext(
       const answers = await Promise.all(repos.map((repo) => ask(repo.fullName).catch(() => false)));
       return new Set(repos.filter((_, index) => answers[index]).map((repo) => repo.id));
     })().catch(() => undefined),
+    (async () => listEventsOfType(PATCH_ROUND_WAITING, new Date(Date.now() - SEAT_WAIT_WINDOW_MS)))().catch(() => []),
   ]);
+  // Why each pull request a lease holds was sent back: one read, for those leases alone.
+  const sentBacks = await (async () => {
+    const holding = (held ?? []).filter((lease) => lease.prNumber !== null && lease.pullMerged !== true);
+    if (holding.length === 0) return undefined;
+    const repos = await managed;
+    if (!repos) return undefined;
+    const names = new Map(repos.map((repo) => [repo.id, repo.name]));
+    const moves = await stageMoves.newestMoves(holding.map((lease) => ({ repoId: lease.repoId, issueNumber: lease.issueNumber })));
+    const found = new Map<string, SendBackFacts>();
+    for (const lease of holding) {
+      const name = names.get(lease.repoId);
+      const sendBack = sendBackOf(moves.get(`${lease.repoId}#${lease.issueNumber}`));
+      if (name && sendBack) found.set(`${name}#${lease.issueNumber}`, sendBack);
+    }
+    return found;
+  })().catch(() => undefined);
   const next = reads.nextSweepAt?.();
   return {
     ...(reads.paused ? { paused: reads.paused } : {}),
@@ -698,6 +823,8 @@ export async function readWaitingContext(
     ...(reads.dispatching !== undefined ? { dispatching: reads.dispatching } : {}),
     inFlight: new Map(inFlight.filter((entry): entry is [string, Flight] => entry !== null)),
     seatWaitEvents,
+    patchWaitEvents,
+    ...(sentBacks ? { sentBacks } : {}),
     ...(held ? { leases: held } : {}),
     ...(load !== undefined ? { hosts: load ? { running: load.used, capacity: load.capacity } : null } : {}),
     ...(ignored ? { ignored: new Map(ignored.map((one) => [`${one.repoId}#${one.number}`, { state: one.state, stateReason: one.stateReason }])) } : {}),

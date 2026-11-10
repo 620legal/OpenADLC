@@ -954,11 +954,18 @@ const answered =
         ? { text: 'Taken. It waits on other work before it goes on; its thread says what.', final: false }
         : { text: `Answered: ${option}. It goes on from here.`, final: true };
 
-/** What Start it now did: started it, or asked and nothing could start it yet. */
-const startSaid: Said = (result) =>
-  ((result as { started?: string[] }).started ?? []).length > 0
-    ? { text: 'Started.', final: false }
-    : { text: 'Asked, and it did not start yet; the bridge’s log says why.', final: false };
+/**
+ * What Start it now did, in the bridge's own first line: "Started patch round
+ * 3 on #281", or that the round waits for its builder. A bare "Started." read
+ * as started for a round that only waited (ADR 0046). Nothing said: asked,
+ * and nothing could start it yet.
+ */
+const startSaid: Said = (result) => {
+  const first = ((result as { started?: string[] }).started ?? []).find((line) => line.trim().length > 0)?.trim();
+  if (!first) return { text: 'Asked, and it did not start yet; the bridge’s log says why.', final: false };
+  const said = `${first[0]!.toUpperCase()}${first.slice(1)}`;
+  return { text: /[.!?]$/.test(said) ? said : `${said}.`, final: false };
+};
 
 function DoneLine({ done }: { done: Done }) {
   return (
