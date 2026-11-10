@@ -250,6 +250,12 @@ export interface MergeLineEntry {
   detail: string | null;
   /** Why only a person can land it, when it is waiting for one at the front. Absent from an older bridge. */
   heldFor?: string | null;
+  /**
+   * On a held one: whether the viewer may merge it from the console, as the
+   * bridge says (a hold Merge is offered over, and an account GitHub lets
+   * merge). Absent from an older bridge, whose card says it waits for you.
+   */
+  heldForYou?: boolean;
 }
 
 /** A task running anywhere in the install, as the list under the board's count says it (the bridge's `RunningTask`). */
@@ -512,7 +518,41 @@ export type AttentionAction =
    * `subject` is the pull request, `login` the person it waits on, `head` the
    * commit decided. The card draws them from `decision`. Absent from an older bridge.
    */
-  | { kind: 'human_review_approve' | 'human_review_reject' | 'human_review_discuss'; label: string; subject: string; login: string; head: string };
+  | { kind: 'human_review_approve' | 'human_review_reject' | 'human_review_discuss'; label: string; subject: string; login: string; head: string }
+  /** A held merge's buttons: Merge, Leave it, Discuss. The card draws them from `heldMerge`. Absent from an older bridge. */
+  | { kind: 'held_merge_merge' | 'held_merge_leave' | 'held_merge_discuss'; label: string; subject: string; head: string }
+  /** A held promote kept held until another commit waits, or discussed on its pull request `subject`. Absent from an older bridge. */
+  | { kind: 'promote_keep_holding'; label: string; repo: string; sha: string }
+  | { kind: 'promote_discuss'; label: string; repo: string; sha: string; subject: string };
+
+/**
+ * A pull request the merge line holds for a person, as its card describes it.
+ * See `apps/bridge/src/attention.ts` (`HeldMergeDecision`).
+ */
+export interface HeldMergeDecision {
+  repo: string;
+  pr: number;
+  head: string | null;
+  why: string;
+  /** Whether Merge is offered, or why not. */
+  merge: { merge: true } | { merge: false; why: string };
+  next: { merge: string; leave: string; discuss: string };
+  prUrl: string | null;
+  /** Whether the viewer may press Merge. Absent from a bridge that does not say: then they may not. */
+  yours?: boolean;
+  whyNot?: string;
+  settingsUrl?: string;
+}
+
+/** A promote held for a person, as its card describes it (`HeldPromoteDecision`). */
+export interface HeldPromoteDecision {
+  repo: string;
+  sha: string;
+  pr: number | null;
+  what: string;
+  why: string;
+  next: { release: string; keepHolding: string; discuss: string | null; automatic: string };
+}
 
 /** A crew review a held approval's card shows. */
 export interface HumanReviewSummary {
@@ -617,6 +657,10 @@ export interface AttentionItem {
   awaiting?: { login: string; again: boolean; paths: string[] };
   /** A held Human-review approval's decision, for its card's Approve, Reject and Discuss. Absent from an older bridge. */
   decision?: HumanReviewDecision;
+  /** A held merge's decision: Merge, Leave it or Discuss. Absent from an older bridge. */
+  heldMerge?: HeldMergeDecision;
+  /** A held promote's decision: Release, Keep holding or Discuss. Absent from an older bridge. */
+  heldPromote?: HeldPromoteDecision;
   /**
    * The pull request it is about, when its repository declares commands in
    * `.github/openadlc.yml`: the card shows that pull request's command buttons

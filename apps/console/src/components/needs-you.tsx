@@ -16,6 +16,8 @@ import {
   dismissSigningKey,
   dismissDesignMemoryNotice,
   dismissTasks,
+  leaveAttention,
+  mergeHeld,
   recheckHealth,
   rejectHumanReview,
   releasePromote,
@@ -48,6 +50,8 @@ import {
   groupCounts,
   groupOf,
   hasMore,
+  heldMergeButtons,
+  noMergeReason,
   plainDetail,
   rejectReady,
   reviewVerdict,
@@ -56,6 +60,7 @@ import {
   unblockedOf,
   waiting as waitingOf,
   type DecisionButton,
+  type HeldMergeButton,
 } from '@/lib/attention-card';
 import { IncidentSteps } from '@/components/incident-steps';
 import { PullActions, pullPath } from '@/components/pull-panel';
@@ -562,7 +567,7 @@ function NeedsCard({
             {decision}
           </p>
         )}
-        {item.detail && !item.decision && (
+        {item.detail && !item.decision && !item.heldMerge && !item.heldPromote && (
           <p
             data-clamp="detail"
             className={cn(
@@ -575,6 +580,8 @@ function NeedsCard({
           </p>
         )}
         {item.decision && <HumanReviewDecisionPanel item={item} />}
+        {item.heldMerge && <HeldMergePanel item={item} />}
+        {item.heldPromote && <HeldPromotePanel item={item} />}
         {unblocked && (
           // What doing this lets go on: each card behind it opens.
           <p data-unblocks className="text-[12px] leading-normal text-soft">
@@ -1277,7 +1284,284 @@ function ActionButton({
     case 'human_review_discuss':
       // Drawn by the card's decision, each with what it does next (`HumanReviewDecisionPanel`).
       return null;
+    case 'held_merge_merge':
+    case 'held_merge_leave':
+    case 'held_merge_discuss':
+    case 'promote_keep_holding':
+    case 'promote_discuss':
+      // Drawn by the card's decision, each with what it does next (`HeldMergePanel`, `HeldPromotePanel`).
+      return null;
   }
+}
+
+/** What a held merge's or a held promote's panel is doing: nothing, a message being written, or a Merge's sign-in waiting. */
+export type HeldStep = { kind: 'idle' } | { kind: 'discuss'; text: string; role: 'review_lead' | 'implement' } | { kind: 'signing'; flowId: string; userCode: string; verificationUri: string };
+
+/** The message box a held decision's Discuss opens: to the lead reviewer or the builder, on the pull request. */
+function HeldDiscuss({
+  step,
+  busy,
+  onChange,
+  onSend,
+  onCancel,
+}: {
+  step: Extract<HeldStep, { kind: 'discuss' }>;
+  busy: boolean;
+  onChange: (step: Extract<HeldStep, { kind: 'discuss' }>) => void;
+  onSend: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <form
+      data-discuss
+      className="flex flex-col gap-1.5"
+      onSubmit={(event) => {
+        event.preventDefault();
+        onSend();
+      }}
+    >
+      <label className="flex items-center gap-1.5 text-soft">
+        To
+        <select
+          value={step.role}
+          onChange={(event) => onChange({ ...step, role: event.target.value === 'implement' ? 'implement' : 'review_lead' })}
+          className="rounded-md border border-edge-strong bg-panel px-1.5 py-1 text-[12px] text-body"
+        >
+          <option value="review_lead">the lead reviewer</option>
+          <option value="implement">the builder</option>
+        </select>
+      </label>
+      <textarea
+        aria-label="Your message"
+        value={step.text}
+        onChange={(event) => onChange({ ...step, text: event.target.value })}
+        className="min-h-16 rounded-md border border-edge-strong bg-panel px-2 py-1.5 text-[12.5px] text-body"
+      />
+      <div className="flex gap-1.5">
+        <button type="submit" disabled={busy || !step.text.trim()} className={PRIMARY}>
+          {busy ? 'Sending…' : 'Send'}
+        </button>
+        <button type="button" className={SECONDARY} onClick={onCancel}>
+          Cancel
+        </button>
+      </div>
+    </form>
+  );
+}
+
+/** One of a held decision's buttons, with what it does next under its label. */
+function NextButton({ id, label, next, busy, onPress }: { id: string; label: string; next: string; busy: boolean; onPress: () => void }) {
+  return (
+    <button
+      type="button"
+      data-decide={id}
+      disabled={busy}
+      onClick={onPress}
+      className="inline-flex min-h-11 items-center rounded-md border border-edge-strong bg-panel px-3 py-2 text-left text-[12.5px] leading-snug text-body transition-colors hover:border-attention/60 hover:bg-attention/10 focus-visible:outline-2 focus-visible:outline-link disabled:opacity-60 md:min-h-7 md:px-2.5 md:py-1"
+    >
+      <span className="flex flex-col gap-0.5">
+        <span>{label}</span>
+        <span data-next className="text-[11.5px] leading-snug text-muted">
+          {next}
+        </span>
+      </span>
+    </button>
+  );
+}
+
+/**
+ * A pull request the merge line holds for a person, decided from its card:
+ * why it is held, and Merge, Leave it and Discuss, each with what it does
+ * next (`heldMerge.next`). Merge is drawn only where the bridge offers it and
+ * says the viewer may press it, and the card says why when it is not; the
+ * bridge refuses a Merge it would not offer, from anyone. See
+ * docs/adr/0037-a-person-merges-a-held-pull-request-from-the-console.md.
+ */
+export function HeldMergePanel({ item, initialStep = { kind: 'idle' } }: { item: AttentionItem; initialStep?: HeldStep }) {
+  const held = item.heldMerge!;
+  const buttons = heldMergeButtons(item);
+  const noMerge = noMergeReason(held);
+  const subject = `${held.repo}#${held.pr}`;
+  const [step, setStep] = useState<HeldStep>(initialStep);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [done, setDone] = useState<string | null>(null);
+  const short = held.head?.slice(0, 7) ?? '';
+
+  // A Merge's sign-in, read until the person approves its code or it ends.
+  useEffect(() => {
+    if (step.kind !== 'signing') return;
+    const timer = setInterval(() => {
+      void fetch(pullPath(subject, `/flows/${encodeURIComponent(step.flowId)}`), { cache: 'no-store' })
+        .then((response) => response.json())
+        .then((said: { state: string; error?: string; mergedSha?: string }) => {
+          if (said.state === 'waiting') return;
+          setStep({ kind: 'idle' });
+          if (said.state === 'sent') setDone(`Merged ${short} on GitHub as you${said.mergedSha ? `, as ${said.mergedSha.slice(0, 7)}` : ''}. The card goes once GitHub says so.`);
+          // GitHub's refusal, in its words, comes back as the flow's error.
+          else if (said.state === 'failed') setError(said.error ?? 'The sign-in ended before anything was merged. Press Merge again.');
+          else setError('OpenADLC no longer knows how this sign-in went. Look at the pull request before you press Merge again.');
+        })
+        .catch(() => undefined);
+    }, DECISION_FLOW_READ_MS);
+    return () => clearInterval(timer);
+  }, [step, subject, short]);
+
+  const press = (button: HeldMergeButton) => {
+    if (busy || done) return;
+    setError(null);
+    if (button === 'discuss') return setStep({ kind: 'discuss', text: '', role: 'review_lead' });
+    setBusy(true);
+    if (button === 'leave') {
+      void safeAction(() => leaveAttention(item.id)).then((result) => {
+        setBusy(false);
+        if (!result.ok) return setError(result.error ?? 'It was not taken off Needs you.');
+        setDone('Left. It comes back when the pull request changes.');
+      });
+      return;
+    }
+    void safeAction(() => mergeHeld(subject, { head: held.head ?? '' })).then((result) => {
+      setBusy(false);
+      if (!result.ok || !result.flow) return setError(result.error ?? 'The sign-in could not start.');
+      setStep({ kind: 'signing', flowId: result.flow.flowId, userCode: result.flow.userCode, verificationUri: result.flow.verificationUri });
+    });
+  };
+
+  const sendDiscuss = (text: string, role: 'review_lead' | 'implement') => {
+    if (busy || !text.trim()) return;
+    setBusy(true);
+    setError(null);
+    const about = held.head ? { kind: 'held_merge' as const, pr: held.pr, head: held.head } : null;
+    void safeAction(() => sendItemMessage(subject, { text, role, about })).then((result) => {
+      setBusy(false);
+      if (!result.ok) return setError(result.error ?? 'Your message was not sent.');
+      setStep({ kind: 'idle' });
+      setDone(`Sent to the ${role === 'implement' ? 'builder' : 'lead reviewer'}. It stays held.`);
+    });
+  };
+
+  const LABEL: Record<HeldMergeButton, string> = { merge: 'Merge', leave: 'Leave it', discuss: 'Discuss' };
+
+  return (
+    <div data-held-merge className="flex flex-col gap-2 rounded-md border border-edge bg-surface px-2.5 py-2 text-[12px] leading-snug">
+      <p data-why className="text-soft">
+        <span className="font-medium text-body">Why it waits for a person: </span>
+        {held.why}
+      </p>
+      {noMerge && (
+        <p data-no-merge className="text-muted">
+          {noMerge}{' '}
+          {held.merge.merge && held.settingsUrl && (
+            <Link href={held.settingsUrl} className="text-link hover:underline">
+              Link your GitHub account
+            </Link>
+          )}
+        </p>
+      )}
+      {step.kind === 'idle' && !done && buttons.length > 0 && (
+        <div role="group" aria-label="Decision" className="flex flex-wrap gap-1.5">
+          {buttons.map((button) => (
+            <NextButton key={button} id={button} label={busy && button === 'merge' ? 'Starting…' : LABEL[button]} next={held.next[button]} busy={busy} onPress={() => press(button)} />
+          ))}
+        </div>
+      )}
+      {step.kind === 'signing' && (
+        <div data-signing className="flex flex-col gap-1.5">
+          <p className="text-soft">Approve this code on GitHub as yourself; {short} is merged once you do.</p>
+          <DeviceCode code={step.userCode} url={step.verificationUri} />
+        </div>
+      )}
+      {step.kind === 'discuss' && (
+        <HeldDiscuss step={step} busy={busy} onChange={setStep} onSend={() => sendDiscuss(step.text, step.role)} onCancel={() => setStep({ kind: 'idle' })} />
+      )}
+      {done && <DoneLine done={{ text: done, final: true }} />}
+      {error && (
+        <p role="status" data-error className="text-[12px] text-alarm">
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * A promote held for a person, decided from its card: what is being
+ * released, why it waits for a person, and what Release, Keep holding,
+ * Discuss and the switch to automatic each do next. Release and the switch
+ * are the card's own buttons, as they were; Keep holding and Discuss are drawn here.
+ */
+export function HeldPromotePanel({ item, initialStep = { kind: 'idle' } }: { item: AttentionItem; initialStep?: HeldStep }) {
+  const held = item.heldPromote!;
+  const discuss = item.actions.find((action): action is Extract<AttentionAction, { kind: 'promote_discuss' }> => action.kind === 'promote_discuss');
+  const keep = item.actions.some((action) => action.kind === 'promote_keep_holding');
+  const automatic = item.actions.some((action) => action.kind === 'promote_automatic');
+  const [step, setStep] = useState<HeldStep>(initialStep);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [done, setDone] = useState<string | null>(null);
+
+  const keepHolding = () => {
+    if (busy || done) return;
+    setBusy(true);
+    setError(null);
+    void safeAction(() => leaveAttention(item.id)).then((result) => {
+      setBusy(false);
+      if (!result.ok) return setError(result.error ?? 'It was not taken off Needs you.');
+      setDone('Kept held. It comes back when another commit waits for production.');
+    });
+  };
+
+  const sendDiscuss = (text: string, role: 'review_lead' | 'implement') => {
+    if (busy || !text.trim() || !discuss || held.pr === null) return;
+    setBusy(true);
+    setError(null);
+    void safeAction(() => sendItemMessage(discuss.subject, { text, role, about: { kind: 'held_promote', sha: held.sha, pr: held.pr! } })).then((result) => {
+      setBusy(false);
+      if (!result.ok) return setError(result.error ?? 'Your message was not sent.');
+      setStep({ kind: 'idle' });
+      setDone(`Sent to the ${role === 'implement' ? 'builder' : 'lead reviewer'}. The promote stays held.`);
+    });
+  };
+
+  return (
+    <div data-held-promote className="flex flex-col gap-2 rounded-md border border-edge bg-surface px-2.5 py-2 text-[12px] leading-snug">
+      <p data-what className="text-body">
+        <span className="font-medium">What it releases: </span>
+        {held.what}
+      </p>
+      <p data-why className="text-soft">
+        <span className="font-medium text-body">Why it waits for a person: </span>
+        {held.why}
+      </p>
+      <ul data-consequences className="flex flex-col gap-0.5 text-muted">
+        <li>
+          <span className="font-medium text-body">Release: </span>
+          {held.next.release}
+        </li>
+        {automatic && (
+          <li>
+            <span className="font-medium text-body">Switch to automatic delivery: </span>
+            {held.next.automatic}
+          </li>
+        )}
+      </ul>
+      {step.kind === 'idle' && !done && (keep || discuss) && (
+        <div role="group" aria-label="Decision" className="flex flex-wrap gap-1.5">
+          {keep && <NextButton id="keep" label="Keep holding" next={held.next.keepHolding} busy={busy} onPress={keepHolding} />}
+          {discuss && held.next.discuss && <NextButton id="discuss" label="Discuss" next={held.next.discuss} busy={busy} onPress={() => setStep({ kind: 'discuss', text: '', role: 'review_lead' })} />}
+        </div>
+      )}
+      {step.kind === 'discuss' && (
+        <HeldDiscuss step={step} busy={busy} onChange={setStep} onSend={() => sendDiscuss(step.text, step.role)} onCancel={() => setStep({ kind: 'idle' })} />
+      )}
+      {done && <DoneLine done={{ text: done, final: true }} />}
+      {error && (
+        <p role="status" className="text-[12px] text-alarm">
+          {error}
+        </p>
+      )}
+    </div>
+  );
 }
 
 /** How often an Approve's sign-in is read while it waits for the person to approve its code. */

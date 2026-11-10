@@ -1371,6 +1371,25 @@ needs no sign-in, unless the console person's linked account id is the
 awaited login's
 ([ADR 0036](adr/0036-a-person-decides-a-held-human-review-approval-from-the-console.md)).
 
+The same token may also perform one merge, from the console's Merge on a pull
+request the merge line holds for a person
+([troubleshooting](troubleshooting.md#deciding-a-held-merge-from-the-console)),
+and nothing else. It is the person's own merge on GitHub, of the head they saw
+(`PUT /pulls/{n}/merge` with `sha`, squashed); the app never merges on a
+person's say, and only the merge line merges as the app. The bridge refuses it
+unless:
+- the console person's linked account is one GitHub says has write, maintain
+  or admin on the repository (`collaborators/{login}/permission`), and is not
+  a crew account;
+- the merge line still holds the pull request for a person, at that head;
+- every merge rule still unmet on the head is one a person may merge over
+  (`mergeBlockers`). A required check, a crew review, or a login `AGENTS.md`'s
+  Human review names is never one.
+
+The last two are checked again once the code is approved. GitHub's own branch
+rules then apply to the merge
+([ADR 0037](adr/0037-a-person-merges-a-held-pull-request-from-the-console.md)).
+
 OpenADLC never asks for a personal access token, and nothing in the repository
 should ever contain one. If you find a credential in a diff, treat it as leaked:
 revoke it at the provider, then rotate.

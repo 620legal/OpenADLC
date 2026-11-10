@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AttentionItem } from './api';
-import { alarming, audienceLine, decisionButtons, faceActions, groupCounts, groupOf, hasMore, plainDetail, rejectReady, reviewerName, reviewVerdict, unblockedOf, unblocksLine } from './attention-card';
+import { alarming, audienceLine, decisionButtons, faceActions, groupCounts, groupOf, hasMore, heldMergeButtons, noMergeReason, plainDetail, rejectReady, reviewerName, reviewVerdict, unblockedOf, unblocksLine } from './attention-card';
 
 const ITEM: AttentionItem = {
   id: 'task:t-1',
@@ -72,6 +72,66 @@ describe('a promote held for a person', () => {
     };
     expect(faceActions(held).map((action) => action.label)).toEqual(['Release to production', 'Switch to automatic delivery']);
     expect(groupOf(held)).toBe('work');
+  });
+
+  it('keeps Keep holding and Discuss off the face, for its decision to draw', () => {
+    const held = {
+      id: 'promote:app@abc1234',
+      kind: 'promote_held' as const,
+      headline: 'Release app@abc1234 to production?',
+      subject: { repo: 'app', number: null, title: null, ref: null, url: null },
+      bot: null,
+      since: '2026-09-24T11:59:00.000Z',
+      detail: 'Held.',
+      actions: [
+        { kind: 'promote_release' as const, label: 'Release', repo: 'app', sha: 'abc1234' },
+        { kind: 'promote_keep_holding' as const, label: 'Keep holding', repo: 'app', sha: 'abc1234' },
+        { kind: 'promote_discuss' as const, label: 'Discuss', repo: 'app', sha: 'abc1234', subject: 'app#40' },
+        { kind: 'promote_automatic' as const, label: 'Switch to automatic delivery', repo: 'app', sha: 'abc1234' },
+      ],
+    };
+    expect(faceActions(held).map((action) => action.label)).toEqual(['Release', 'Switch to automatic delivery']);
+  });
+});
+
+describe('a held merge', () => {
+  const HEAD = '692cd1f88f3e45093ad9ba4e68e84d590af3b595';
+  const next = { merge: 'Merges it.', leave: 'Leaves it.', discuss: 'Discusses it.' };
+  const held = (merge: { merge: true } | { merge: false; why: string }, yours?: boolean, whyNot?: string): AttentionItem => ({
+    id: 'merge:www#46',
+    kind: 'merge_waiting',
+    headline: 'Pull request #46 is held for a person: merge it, leave it, or discuss it',
+    subject: { repo: 'www', number: 46, title: null, ref: 'www#46', url: null },
+    bot: null,
+    since: '2026-09-24T11:59:00.000Z',
+    detail: 'Held.',
+    actions: [
+      ...(merge.merge ? [{ kind: 'held_merge_merge' as const, label: 'Merge', subject: 'www#46', head: HEAD }] : []),
+      { kind: 'held_merge_leave', label: 'Leave it', subject: 'www#46', head: HEAD },
+      { kind: 'held_merge_discuss', label: 'Discuss', subject: 'www#46', head: HEAD },
+      { kind: 'open_url', label: 'Open on GitHub', url: 'https://github.com/620legal/www/pull/46' },
+    ],
+    heldMerge: { repo: 'www', pr: 46, head: HEAD, why: 'Held.', merge, next, prUrl: null, ...(yours !== undefined ? { yours } : {}), ...(whyNot ? { whyNot } : {}) },
+  });
+
+  it('offers Merge only where the bridge offers it and says the viewer may press it', () => {
+    expect(heldMergeButtons(held({ merge: true }, true))).toEqual(['merge', 'leave', 'discuss']);
+    expect(heldMergeButtons(held({ merge: true }, false, '@sam cannot merge in 620legal/www (GitHub says read).'))).toEqual(['leave', 'discuss']);
+    expect(heldMergeButtons(held({ merge: true }))).toEqual(['leave', 'discuss']);
+    expect(heldMergeButtons(held({ merge: false, why: 'There is no Merge: a required check has not passed on this head.' }, true))).toEqual(['leave', 'discuss']);
+  });
+
+  it('says why there is no Merge: the hold’s reason first, then the viewer’s', () => {
+    expect(noMergeReason(held({ merge: true }, true).heldMerge!)).toBeNull();
+    expect(noMergeReason(held({ merge: false, why: 'There is no Merge: a required check has not passed on this head.' }, false, 'nope').heldMerge!)).toBe(
+      'There is no Merge: a required check has not passed on this head.',
+    );
+    expect(noMergeReason(held({ merge: true }, false, '@sam cannot merge in 620legal/www (GitHub says read).').heldMerge!)).toContain('GitHub says read');
+  });
+
+  it('keeps only Open on GitHub on the face, for its decision to draw the rest', () => {
+    expect(faceActions(held({ merge: true }, true)).map((action) => action.label)).toEqual(['Open on GitHub']);
+    expect(hasMore(held({ merge: true }, true))).toBe(false);
   });
 });
 

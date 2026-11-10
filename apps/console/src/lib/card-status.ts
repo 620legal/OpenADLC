@@ -528,7 +528,13 @@ function inLine(card: BoardCard, mergeLine: readonly MergeLineEntry[] | undefine
   if (!entry) return null;
   // Green at the front, and only a person can land it: "Merging" said it was
   // happening, and it sat there with nobody told. Needs you has it too.
-  if (entry.heldFor) return { text: 'Approved · waiting for you to merge it', tone: 'attention', mark: 'dot' };
+  // It says it waits on you only where you can merge it from Needs you; for
+  // anyone else it is held for a person, and their Needs you says why.
+  if (entry.heldFor) {
+    return entry.heldForYou === false
+      ? { text: 'Approved · held for a person to merge', tone: 'attention', mark: 'dot' }
+      : { text: 'Approved · waiting for you to merge it', tone: 'attention', mark: 'dot' };
+  }
   switch (entry.state) {
     case 'merging':
       return { text: 'Merging', tone: 'signal', mark: 'dot' };

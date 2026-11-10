@@ -2,7 +2,7 @@ import { isValidElement, type ReactElement, type ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Dialog } from '@/components/ui/dialog';
-import { adminOnly, HumanReviewDecisionPanel, keyOf, NeedsYou, Recoveries } from './needs-you';
+import { adminOnly, HeldMergePanel, HeldPromotePanel, HumanReviewDecisionPanel, keyOf, NeedsYou, Recoveries } from './needs-you';
 import type { AttentionItem } from '@/lib/api';
 
 /** What the card sent the gate-answer route. */
@@ -23,6 +23,14 @@ vi.mock('@/app/actions', () => ({
   }),
   sendItemMessage: vi.fn(async (subject: string, input: Record<string, unknown>) => {
     decided.push({ what: 'discuss', subject, input });
+    return { ok: true };
+  }),
+  mergeHeld: vi.fn(async (subject: string, input: Record<string, unknown>) => {
+    decided.push({ what: 'merge', subject, input });
+    return { ok: true, flow: { flowId: 'f', userCode: 'ABCD-1234', verificationUri: 'https://github.com/login/device', expiresInSeconds: 900 } };
+  }),
+  leaveAttention: vi.fn(async (id: string) => {
+    decided.push({ what: 'leave', subject: id, input: {} });
     return { ok: true };
   }),
   answerGate: vi.fn(async (gateId: string, answer: string) => {
@@ -883,5 +891,146 @@ describe('a held Human-review approval', () => {
     const html = needs([HELD({ yours: true })]);
     expect(html.match(/Review it on GitHub/g)).toHaveLength(1);
     expect(html).not.toContain('data-clamp="detail"');
+  });
+});
+
+describe('a held merge, decided from the card (ADR 0037)', () => {
+  const HEAD = '692cd1f88f3e45093ad9ba4e68e84d590af3b595';
+  const next = {
+    merge: "Merges 692cd1f into main on GitHub as you (@janedoe), after you approve a one-time code. GitHub's branch rules still apply; if GitHub refuses, nothing changes.",
+    leave: 'Takes it off Needs you for everyone it is shown to. It comes back when the pull request gets a new commit, a new review, or a new reason it is held. Nothing on GitHub changes.',
+    discuss: 'Sends your message to the lead reviewer, or the builder, who answers on the pull request. It stays held.',
+  };
+  const why = 'ci and review-gate passed, but OpenADLC did not merge it, because it is behind main.';
+  const HELD = (over: { merge?: { merge: true } | { merge: false; why: string }; yours?: boolean; whyNot?: string; settingsUrl?: string } = {}): AttentionItem => {
+    const merge = over.merge ?? { merge: true };
+    return {
+      id: 'merge:www#46',
+      kind: 'merge_waiting',
+      group: 'work',
+      headline: 'Pull request #46 is held for a person: merge it, leave it, or discuss it',
+      subject: { repo: 'www', number: 12, title: 'New pricing page', ref: 'www#12', url: 'https://github.com/620legal/www/pull/46' },
+      bot: null,
+      since: '2026-09-24T11:59:00.000Z',
+      detail: why,
+      actions: [
+        ...(merge.merge ? [{ kind: 'held_merge_merge' as const, label: 'Merge', subject: 'www#46', head: HEAD }] : []),
+        { kind: 'held_merge_leave', label: 'Leave it', subject: 'www#46', head: HEAD },
+        { kind: 'held_merge_discuss', label: 'Discuss', subject: 'www#46', head: HEAD },
+        { kind: 'open_url', label: 'Open on GitHub', url: 'https://github.com/620legal/www/pull/46' },
+      ],
+      heldMerge: {
+        repo: 'www',
+        pr: 46,
+        head: HEAD,
+        why,
+        merge,
+        next,
+        prUrl: 'https://github.com/620legal/www/pull/46',
+        ...(over.yours !== undefined ? { yours: over.yours } : {}),
+        ...(over.whyNot ? { whyNot: over.whyNot } : {}),
+        ...(over.settingsUrl ? { settingsUrl: over.settingsUrl } : {}),
+      },
+    };
+  };
+  const words = (html: string) => html.replace(/<[^>]+>/g, ' ').replace(/&#x27;/g, "'").replace(/\s+/g, ' ');
+  const decides = (html: string) => [...html.matchAll(/data-decide="(\w+)"/g)].map((match) => match[1]);
+
+  it('says why it is held, what each button does next, and offers Merge to a viewer who may press it', () => {
+    const html = needs([HELD({ yours: true })]);
+    const text = words(html);
+    expect(text).toContain(`Why it waits for a person: ${why}`);
+    for (const said of Object.values(next)) expect(text).toContain(said);
+    expect(decides(html)).toEqual(['merge', 'leave', 'discuss']);
+    expect(html.match(/Open on GitHub/g)).toHaveLength(1);
+    expect(html).not.toContain('data-clamp="detail"');
+  });
+
+  it('offers no Merge over a failed required check, and says why', () => {
+    const html = needs([HELD({ yours: true, merge: { merge: false, why: 'There is no Merge: a required check has not passed on this head. Open it on GitHub, or Discuss it.' } })]);
+    expect(decides(html)).toEqual(['leave', 'discuss']);
+    expect(words(html)).toContain('There is no Merge: a required check has not passed on this head.');
+    expect(html).toContain('Open on GitHub');
+  });
+
+  it('offers no Merge while a Human-review approval is awaited, and names who decides it', () => {
+    const html = needs([HELD({ yours: true, merge: { merge: false, why: "There is no Merge: this waits for @orzelig's approval under AGENTS.md's Human review, which is decided on its own card." } })]);
+    expect(decides(html)).toEqual(['leave', 'discuss']);
+    expect(words(html)).toContain("@orzelig's approval under AGENTS.md's Human review");
+  });
+
+  it('offers no Merge to someone GitHub does not let merge, and says why, or where to link an account', () => {
+    const refused = needs([HELD({ yours: false, whyNot: '@sam cannot merge in 620legal/www (GitHub says read); someone who can merges it.' })]);
+    expect(decides(refused)).toEqual(['leave', 'discuss']);
+    expect(words(refused)).toContain('GitHub says read');
+    const unlinked = needs([HELD({ yours: false, whyNot: 'You have not linked a GitHub account. Link it in Settings → Your GitHub account.', settingsUrl: '/settings#your-github' })]);
+    expect(unlinked).toContain('href="/settings#your-github"');
+    // A bridge that does not say: no Merge.
+    expect(decides(needs([HELD()]))).toEqual(['leave', 'discuss']);
+  });
+
+  it('asks the bridge to merge the head shown, and to leave it', () => {
+    press(buttonsIn(<HeldMergePanel item={HELD({ yours: true })} />), `Merge${next.merge}`);
+    press(buttonsIn(<HeldMergePanel item={HELD({ yours: true })} />), `Leave it${next.leave}`);
+    expect(decided).toEqual([
+      { what: 'merge', subject: 'www#46', input: { head: HEAD } },
+      { what: 'leave', subject: 'merge:www#46', input: {} },
+    ]);
+  });
+
+  it('shows the code to approve while the Merge waits for the person', () => {
+    const html = renderToStaticMarkup(<HeldMergePanel item={HELD({ yours: true })} initialStep={{ kind: 'signing', flowId: 'f', userCode: 'ABCD-1234', verificationUri: 'https://github.com/login/device' }} />);
+    expect(html).toContain('ABCD-1234');
+    expect(words(html)).toContain('692cd1f is merged once you do');
+  });
+});
+
+describe('a held promote, decided from the card (ADR 0037)', () => {
+  const SHA = 'abc1234def567890abc1234def567890abc12345';
+  const HELD: AttentionItem = {
+    id: `promote:testbed@${SHA}`,
+    kind: 'promote_held',
+    group: 'work',
+    headline: 'Release testbed@abc1234 to production?',
+    subject: { repo: 'testbed', number: null, title: null, ref: null, url: null },
+    bot: null,
+    since: '2026-09-24T11:59:00.000Z',
+    detail: 'Held.',
+    actions: [
+      { kind: 'promote_release', label: 'Release', repo: 'testbed', sha: SHA },
+      { kind: 'promote_keep_holding', label: 'Keep holding', repo: 'testbed', sha: SHA },
+      { kind: 'promote_discuss', label: 'Discuss', repo: 'testbed', sha: SHA, subject: 'testbed#40' },
+      { kind: 'promote_automatic', label: 'Switch to automatic delivery', repo: 'testbed', sha: SHA },
+    ],
+    heldPromote: {
+      repo: 'testbed',
+      sha: SHA,
+      pr: 40,
+      what: 'Releases abc1234 (pull request #40: Rate-limit) from testing to production. Its smoke passed on testing.',
+      why: "testbed's delivery rules say a person approves each production deploy. GitHub’s plan cannot hold a production reviewer here.",
+      next: {
+        release: 'Starts the production deploy of abc1234 now.',
+        keepHolding: 'Leaves the promote held and takes it off Needs you for everyone it is shown to. Nothing deploys. It comes back only when another commit waits for production.',
+        discuss: 'Sends your message to the lead reviewer of pull request #40, who answers there. The promote stays held.',
+        automatic: 'Switches the repository to automatic delivery: a soak on testing, the smoke, and an automatic rollback if production fails.',
+      },
+    },
+  };
+  const words = (html: string) => html.replace(/<[^>]+>/g, ' ').replace(/&#x27;/g, "'").replace(/\s+/g, ' ');
+
+  it('reads as a decision: what it releases, why, and Release, Keep holding and Discuss, each with what it does next', () => {
+    const html = needs([HELD]);
+    const text = words(html);
+    expect(text).toContain('What it releases: Releases abc1234 (pull request #40: Rate-limit)');
+    expect(text).toContain("Why it waits for a person: testbed's delivery rules say a person approves each production deploy.");
+    for (const said of Object.values(HELD.heldPromote!.next)) expect(text).toContain(said!);
+    // Release and the switch stay the card's own buttons, as they were.
+    for (const label of ['Release', 'Switch to automatic delivery']) expect(html).toMatch(new RegExp(`<button type="button"[^>]*>${label}</button>`));
+    expect([...html.matchAll(/data-decide="(\w+)"/g)].map((match) => match[1])).toEqual(['keep', 'discuss']);
+  });
+
+  it('keeps it held, and discusses it on its pull request', () => {
+    press(buttonsIn(<HeldPromotePanel item={HELD} />), `Keep holding${HELD.heldPromote!.next.keepHolding}`);
+    expect(decided).toEqual([{ what: 'leave', subject: `promote:testbed@${SHA}`, input: {} }]);
   });
 });

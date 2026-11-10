@@ -66,7 +66,7 @@ import {
   type TaskState,
 } from '@openadlc/shared';
 import type { Actors } from './actors.js';
-import type { Automation } from './automation.js';
+import { personMayMergeOver, type Automation } from './automation.js';
 import type { BridgeConfig } from './config.js';
 import type { DispatchGate } from './dispatch-gate.js';
 import { subjectClosed, wasRefused, type Gates } from './gates.js';
@@ -1433,14 +1433,25 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
         ...(typeof taskCaps[index] === 'number' ? { taskCapUsd: taskCaps[index] } : {}),
       })),
       columns,
-      mergeLine: landing.map((entry) => ({
-        repo: entry.repoName,
-        ref: `${entry.repoName}#${entry.prNumber}`,
-        position: entry.position,
-        state: entry.state,
-        detail: entry.detail,
-        heldFor: heldForPerson(entry),
-      })),
+      mergeLine: await Promise.all(
+        landing.map(async (entry) => {
+          const heldFor = heldForPerson(entry);
+          // Whether the card may say it waits for this viewer to merge it:
+          // a hold Merge is offered over, and an account GitHub lets merge
+          // (ADR 0037). Anyone else's card says it is held for a person.
+          const repo = heldFor ? (repoList.find((one) => one.name === entry.repoName) ?? (await repos.getRepoByName(entry.repoName).catch(() => null))) : null;
+          const yours = heldFor && repo && personMayMergeOver(heldFor) ? (await heldMerges.mayMerge(identity, repo).catch(() => null))?.yours === true : false;
+          return {
+            repo: entry.repoName,
+            ref: `${entry.repoName}#${entry.prNumber}`,
+            position: entry.position,
+            state: entry.state,
+            detail: entry.detail,
+            heldFor,
+            ...(heldFor ? { heldForYou: yours } : {}),
+          };
+        }),
+      ),
       waitingOnYou: await waitingOnYouOrAdmins(identity, role, openGates),
       working: activeSessions.filter((session) => session.state === 'working').length,
       idle: activeSessions.filter((session) => session.state === 'idle').length,

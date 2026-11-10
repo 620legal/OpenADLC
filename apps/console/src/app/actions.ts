@@ -407,7 +407,12 @@ export async function sendItemMessage(
      * it, and decides nothing. The bridge reads the login and head from it; the
      * repository and pull request it records are the item's, not these.
      */
-    about?: { kind: 'human_review'; repo: string; pr: number; login: string; head: string } | null;
+    about?:
+      | { kind: 'human_review'; repo: string; pr: number; login: string; head: string }
+      /** Discuss on a held merge or a held promote: audited as about that head or commit; the hold stays. */
+      | { kind: 'held_merge'; pr: number; head: string }
+      | { kind: 'held_promote'; sha: string; pr: number }
+      | null;
   },
 ): Promise<{ ok: boolean; error?: string; answered?: boolean }> {
   try {
@@ -464,6 +469,46 @@ export async function rejectHumanReview(
     return { ok: true, sentBack: result.state === 'sent_back', commentUrl: result.commentUrl, ...(result.why ? { why: result.why } : {}) };
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : 'could not send it back' };
+  }
+}
+
+/**
+ * Merge on a held merge: the bridge checks the person's linked account may
+ * merge, the head is the one they saw, and every rule still unmet is one a
+ * person may merge over, and answers with the device code their own GitHub
+ * sign-in approves; their merge is posted once they do
+ * (`apps/bridge/src/held-merge-decide.ts`). The flow is read through the pull
+ * panel's flow route.
+ */
+export async function mergeHeld(
+  subject: string,
+  input: { head: string },
+): Promise<{ ok: boolean; error?: string; url?: string; flow?: { flowId: string; userCode: string; verificationUri: string; expiresInSeconds: number } }> {
+  try {
+    const result = await call<{ flow: { flowId: string; userCode: string; verificationUri: string; expiresInSeconds: number } }>(
+      `/v1/items/${encodeURIComponent(subject)}/pull/held-merge/merge`,
+      'POST',
+      { head: input.head },
+    );
+    return { ok: true, flow: result.flow };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : 'could not start the sign-in' };
+  }
+}
+
+/**
+ * Leave it on a held merge, Keep holding on a held promote: off Needs you
+ * for everyone it is shown to, until something about it changes. The bridge
+ * works out what that is.
+ */
+export async function leaveAttention(id: string): Promise<{ ok: boolean; error?: string }> {
+  try {
+    await call('/v1/attention/leave', 'POST', { id });
+    revalidatePath('/');
+    revalidatePath('/needs-you');
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : 'could not take it off Needs you' };
   }
 }
 
