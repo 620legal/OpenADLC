@@ -10,6 +10,7 @@ import {
   removeDevice,
   sendToDevice,
   sendToDevices,
+  SUBSCRIPTION_UNREADABLE,
   sweepOrphans,
   TOO_MANY_DEVICES,
 } from './push-devices.js';
@@ -163,6 +164,42 @@ describe('sending to devices', () => {
     await sendToDevices(store, ['p1'], { event: 'gate_opened', text: 'q', link: 'l' }, { ...CONSOLE, fetch });
     expect(fetch).not.toHaveBeenCalled();
     expect(store.rows).toEqual([]);
+  });
+
+  it('keeps a device whose secret cannot be read, and records a failed delivery', async () => {
+    const store = memoryPushStore();
+    const sub = browser();
+    const added = await addDevice(store, 'p1', { subscription: sub, name: 'a' });
+    const id = added.ok ? added.device.id : '';
+    store.secret = async () => {
+      throw new Error('Secret Manager: deadline exceeded');
+    };
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const fetch = answering(201);
+    const [result] = await sendToDevices(store, ['p1'], { event: 'gate_opened', text: 'q', link: 'l' }, { ...CONSOLE, fetch });
+    expect(result).toMatchObject({ ok: false, status: null, error: SUBSCRIPTION_UNREADABLE });
+    expect(fetch).not.toHaveBeenCalled();
+    expect(store.rows.map((row) => row.id)).toEqual([id]);
+    expect(store.secrets[`push-device:p1:${id}`]).toBe(JSON.stringify(sub));
+    expect(store.log.some((event) => event.type === 'notify.device_dropped')).toBe(false);
+    expect(store.log.find((event) => event.type === 'notify.delivery')?.payload).toMatchObject({ device: id, ok: false, error: SUBSCRIPTION_UNREADABLE });
+  });
+
+  it('drops a device whose secret holds no subscription', async () => {
+    const store = memoryPushStore();
+    const added = await addDevice(store, 'p1', { subscription: browser(), name: 'a' });
+    store.secrets[`push-device:p1:${added.ok ? added.device.id : ''}`] = 'not json';
+    await sendToDevices(store, ['p1'], { event: 'gate_opened', text: 'q', link: 'l' }, { ...CONSOLE, fetch: answering(201) });
+    expect(store.rows).toEqual([]);
+    expect(store.log.some((event) => event.type === 'notify.device_dropped')).toBe(true);
+  });
+
+  it('reads the admins and the key once a send, not once a device', async () => {
+    const store = memoryPushStore();
+    for (const name of ['a', 'b', 'c']) await addDevice(store, 'p1', { subscription: browser(), name });
+    const admins = vi.spyOn(store, 'admins');
+    await sendToDevices(store, ['p1'], { event: 'gate_opened', text: 'q', link: 'l' }, { ...CONSOLE, fetch: answering(201) });
+    expect(admins).toHaveBeenCalledTimes(1);
   });
 
   it('records each send with the device, never its endpoint or keys', async () => {

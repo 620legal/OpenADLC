@@ -243,33 +243,81 @@ export async function sendToDevices(store: PushStore, personIds: readonly string
   if (unique.length === 0) return [];
   const devices = await store.devices(unique);
   if (devices.length === 0) return [];
-  return Promise.all(devices.map((device) => sendToDevice(store, device, message, options)));
+  // The key and the VAPID subject are the same for every device: read once
+  // per send, not once per device.
+  const signing = await signingFor(store, options.consoleUrl).catch((error: unknown) => error as Error);
+  return Promise.all(devices.map((device) => sendToDevice(store, device, message, options, signing)));
 }
 
-/** One device; a device whose secret is gone is dropped, since nothing can be sent to it. */
-export async function sendToDevice(store: PushStore, device: PushDevice, message: PushMessage, options: SendOptions): Promise<DeviceResult> {
-  const subscription = parseStored(await store.secret(pushDeviceRef(device.personId, device.id)).catch(() => null));
+interface Signing {
+  keys: Awaited<ReturnType<typeof vapidKeys>>;
+  sub: string;
+}
+
+async function signingFor(store: PushStore, consoleUrl: string): Promise<Signing> {
+  const keys = await vapidKeys(store);
+  const admin = (await store.admins().catch(() => [])).find((one) => one.email)?.email ?? null;
+  return { keys, sub: vapidSubject(consoleUrl, admin) };
+}
+
+export const SUBSCRIPTION_UNREADABLE = 'could not read its subscription from the secret store';
+
+/**
+ * One device. A device whose secret is gone, or holds no subscription, is
+ * dropped, since nothing can be sent to it. A secret store that fails to
+ * answer is not that: a Secret Manager timeout once dropped every device of
+ * everyone a notification was for, so a failed read keeps the device and
+ * counts as a failed delivery.
+ */
+export async function sendToDevice(
+  store: PushStore,
+  device: PushDevice,
+  message: PushMessage,
+  options: SendOptions,
+  signing?: Signing | Error,
+): Promise<DeviceResult> {
+  let stored: string | null;
+  try {
+    stored = await store.secret(pushDeviceRef(device.personId, device.id));
+  } catch (error) {
+    console.warn(`[bridge] could not read the subscription of device ${device.id}: ${messageOf(error)}`);
+    const unreadable = { ok: false, status: null, error: SUBSCRIPTION_UNREADABLE };
+    await recordDelivery(store, device, message, unreadable);
+    return { device: device.id, person: device.personId, ...unreadable };
+  }
+  const subscription = parseStored(stored);
   if (!subscription) {
     await drop(store, device, null);
     return { device: device.id, person: device.personId, ok: false, status: null, error: 'its subscription is gone' };
   }
   let result: { ok: boolean; status: number | null; error: string | null };
   try {
-    const keys = await vapidKeys(store);
-    const admin = (await store.admins().catch(() => [])).find((one) => one.email)?.email ?? null;
+    const signed = signing ?? (await signingFor(store, options.consoleUrl));
+    if (signed instanceof Error) throw signed;
     const { url, init } = pushRequest(subscription, pushPayload(message), {
-      keys,
-      sub: vapidSubject(options.consoleUrl, admin),
+      keys: signed.keys,
+      sub: signed.sub,
       tag: pushTag(message),
       ...(options.now ? { now: options.now } : {}),
     });
     const response = await (options.fetch ?? fetch)(url, { ...init, redirect: 'error', signal: AbortSignal.timeout(5000) });
-    result = { ok: response.status === 201 || response.status === 202 || response.ok, status: response.status, error: response.ok ? null : response.statusText || null };
+    result = { ok: response.ok, status: response.status, error: response.ok ? null : response.statusText || null };
   } catch (error) {
     result = { ok: false, status: null, error: messageOf(error) };
   }
   const safe = { ...result, error: result.error === null ? null : redactEndpoint(result.error, subscription.endpoint) };
   if (!safe.ok) console.warn(`[bridge] could not push to device ${device.id} (${device.service}): ${safe.status ?? ''} ${safe.error ?? ''}`.trim());
+  await recordDelivery(store, device, message, safe);
+  if (safe.status === 404 || safe.status === 410) await drop(store, device, safe.status);
+  return { device: device.id, person: device.personId, ...safe };
+}
+
+async function recordDelivery(
+  store: PushStore,
+  device: PushDevice,
+  message: PushMessage,
+  result: { ok: boolean; status: number | null; error: string | null },
+): Promise<void> {
   await store
     .record('notify.delivery', {
       event: message.event,
@@ -278,13 +326,11 @@ export async function sendToDevice(store: PushStore, device: PushDevice, message
       person: device.personId,
       device: device.id,
       setAt: device.addedAt,
-      ok: safe.ok,
-      status: safe.status,
-      error: safe.error,
+      ok: result.ok,
+      status: result.status,
+      error: result.error,
     })
     .catch(() => undefined);
-  if (safe.status === 404 || safe.status === 410) await drop(store, device, safe.status);
-  return { device: device.id, person: device.personId, ...safe };
 }
 
 async function drop(store: PushStore, device: PushDevice, status: number | null): Promise<void> {
