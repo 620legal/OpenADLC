@@ -119,10 +119,11 @@ describe('the sections of settings', () => {
       'spending-limits',
       'backup',
       'pause',
-      'users',
+      'people',
       'roles',
       'appearance',
     ]);
+    expect(hashSection('users')).toBe('people');
     expect(hashSection('engine-updates')).toBe('system');
     expect(hashSection('keep-awake')).toBe('system');
     expect(hashSection('system')).toBe('system');
