@@ -26,6 +26,7 @@ import { loadBridgeConfig } from './config.js';
 import { Context } from './context.js';
 import { DispatchGate } from './dispatch-gate.js';
 import { Gates, subjectClosed } from './gates.js';
+import { readAudienceFacts } from './needs-you-audience.js';
 import { standingCoverFor } from './plan-changes.js';
 import { humanReviewReader } from './human-review-read.js';
 import { readDefaultBranch, syncDefaultBranches } from './default-branch.js';
@@ -77,6 +78,7 @@ import { DispatchRunner } from './dispatch-runner.js';
 import { abandonRequest, RequestFiling } from './request-lifecycle.js';
 import { authorize, listFromEnv, Roles } from './roles.js';
 import { livePeopleDeps, registerPeopleRoutes } from './people-routes.js';
+import { liveMyNotificationsDeps, registerMyNotificationsRoutes } from './my-notifications-routes.js';
 import { consolePeopleBy } from './thread-messages.js';
 import { liveEgressDeps, registerEgressRoutes } from './egress-routes.js';
 import { livePeopleRolesDeps, registerPeopleRolesRoutes } from './people-roles-routes.js';
@@ -152,6 +154,9 @@ async function main(): Promise<void> {
   // never one with a path under Human review on the base branch (#77); the
   // read says why when the rules cannot be read, which the card then says.
   gates.useStandingApprovals(standingCoverFor({ humanReviewRules: humanReviewReader(actors, config) }));
+  // A question's role is resolved against the install's roles, and on a cloud
+  // install its comment, card and notification follow who holds it (ADR 0035).
+  gates.useAudience({ local: config.identityMode === 'local', facts: readAudienceFacts });
   const context = new Context(actors, config);
   // The one routine that renames a bot: when an account connects it takes
   // that account's handle, and everything named after it moves with it.
@@ -855,6 +860,7 @@ async function main(): Promise<void> {
     audit: auditEntry,
   });
   registerPeopleRoutes(router, livePeopleDeps(config, roles, consoleMembers));
+  registerMyNotificationsRoutes(router, liveMyNotificationsDeps(config.identityMode, notifier));
   consolePeopleBy(config.identityMode);
   // Settings → Egress, put on the cloud host's proxy by hostd; the check
   // that says a testing URL is off the list asks again after each save.

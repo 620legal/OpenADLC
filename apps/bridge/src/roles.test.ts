@@ -123,6 +123,12 @@ describe('every console route says who may call it', () => {
     }
   });
 
+  it('lets a user set their own notification channel, which acts only on the caller', () => {
+    for (const key of ['GET /v1/me/notifications', 'PUT /v1/me/notifications', 'POST /v1/me/notifications/test']) {
+      expect(ROUTE_ROLES[key], key).toBe('user');
+    }
+  });
+
   it('lets a user press a pull request’s commands and link their own GitHub account, each acting only as the caller', () => {
     for (const key of [
       'GET /v1/items/:subject/pull',

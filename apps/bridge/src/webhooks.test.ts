@@ -2152,6 +2152,18 @@ describe('a person in People with Approves off, answering on GitHub', () => {
     expect(answered).toEqual([expect.objectContaining({ answeredBy: 'dana', answeredByPerson: 'p-dana', via: 'github' })]);
   });
 
+  // A question routed to Legal (ADR 0035) is answered on GitHub by the role's
+  // person under the same rules as any other: the role decides whose Needs
+  // you it is in, never who may answer, and the answered gate leaves it.
+  it('answers a question routed to the role they hold, as any other question', async () => {
+    const { webhooks, answered, reply, threads } = await answering(false);
+    vi.mocked(threads.listOpenGates).mockResolvedValue([
+      { id: 'gate-1', taskId: 'task-1', threadId: 'thread-1', options: [], personRole: 'legal', personRoleAsked: 'Legal' },
+    ] as never);
+    await webhooks.receive('issue_comment', reply(404), 'delivery-dana-legal');
+    expect(answered).toEqual([expect.objectContaining({ gateId: 'gate-1', answeredBy: 'dana', answeredByPerson: 'p-dana', via: 'github' })]);
+  });
+
   it('is not taken from another account by that login: a login alone is never the person', async () => {
     const { webhooks, answered, reply } = await answering(false);
     await webhooks.receive('issue_comment', reply(405), 'delivery-dana-other');

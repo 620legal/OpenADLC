@@ -277,3 +277,14 @@ export function diffPersonRoles(before: readonly PersonRole[], after: readonly P
 export function personRolesUnchanged(diff: PersonRolesDiff): boolean {
   return Object.values(diff).every((list) => list.length === 0);
 }
+
+/**
+ * The role a question names, matched by name without regard to case, or
+ * undefined when the install has none by that name. Bots name a role as people
+ * see it and never by a custom role's `pr_` id, so only names are matched.
+ */
+export function personRoleByName<T extends { id: string; name: string }>(name: string | null | undefined, roles: readonly T[]): T | undefined {
+  const wanted = name?.trim().toLowerCase();
+  if (!wanted) return undefined;
+  return roles.find((role) => role.name.trim().toLowerCase() === wanted);
+}

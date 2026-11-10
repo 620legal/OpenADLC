@@ -913,6 +913,8 @@ export function registerInternalApi(
       planChange?: { paths?: unknown; reason?: unknown };
       decision?: unknown;
       consequences?: unknown;
+      /** The person role it is for, by name; `Gates.open` resolves it and ignores it on a plan change. */
+      role?: unknown;
     }>();
     // A list with one entry that is not a string is dropped whole: filtering
     // the entry out would pair every later choice with the next one's consequence.
@@ -929,6 +931,7 @@ export function registerInternalApi(
       consequences,
       addressedTo: input.addressedTo ?? null,
       planChange: input.planChange ?? null,
+      role: typeof input.role === 'string' ? input.role : null,
     });
   });
 

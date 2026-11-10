@@ -3,6 +3,9 @@
  * record, the event is derived from it. Every structured comment carries one
  * HTML-comment marker holding JSON.
  */
+
+import { MAX_PERSON_ROLE_NAME } from './people-roles.js';
+
 export const MARKER_PREFIX = 'openadlc:';
 
 export const OPENADLC_EVENTS = [
@@ -36,6 +39,8 @@ export interface Marker {
   decision?: string;
   consequences?: string[];
   addressedTo?: string;
+  /** On a `question`: the person role it is for, by name (`Legal`), so Needs you shows it only to that role's people. */
+  role?: string;
   reason?: string;
   /** On `send_back`: the stage the work goes back to, and on the bridge's record, the stage it left. */
   to?: string;
@@ -294,6 +299,11 @@ export interface AskedQuestion {
   context: string;
   /** The person it is for, when the marker names one. */
   addressedTo: string | null;
+  /**
+   * The person role it is for, by name as the bot wrote it (`Legal`), or null.
+   * Never set on a plan change: approvers decide those, whatever their role.
+   */
+  role: string | null;
   /** Question markers after the first, which are not asked: one message asks one question. */
   ignored: number;
   /** Set when the message asks to widen the task's paths rather than a question of its own. */
@@ -349,6 +359,7 @@ export function parseQuestion(body: string): AskedQuestion | null {
         open: true,
         context,
         addressedTo: addressedTo || null,
+        role: null,
         ignored,
         planChange: null,
         decision: '',
@@ -361,6 +372,7 @@ export function parseQuestion(body: string): AskedQuestion | null {
       open: false,
       context,
       addressedTo: addressedTo || null,
+      role: null,
       ignored,
       planChange: { paths, reason },
       decision: '',
@@ -378,11 +390,23 @@ export function parseQuestion(body: string): AskedQuestion | null {
     open: options.length === 0,
     context: asked ? said : '',
     addressedTo: addressedTo || null,
+    role: questionRole(marker.role),
     ignored,
     planChange: null,
     decision,
     consequences: markerConsequences(marker),
   };
+}
+
+/**
+ * The role a question marker names, trimmed, or null. A name longer than any
+ * role may be called is cut to that length rather than dropped: it can match
+ * no role either way, and the card still says what the bot asked for.
+ */
+export function questionRole(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const name = value.trim().slice(0, MAX_PERSON_ROLE_NAME).trim();
+  return name || null;
 }
 
 /**
@@ -433,6 +457,12 @@ export function renderGateComment(input: {
   /** What the bot found and why it asks, said before the question. */
   context?: string | null;
   addressedTo?: string;
+  /**
+   * The person role the question is for, and the GitHub logins of its people,
+   * mentioned on a line before the question so GitHub tells each of them.
+   * Nothing is said when no one in it has a login.
+   */
+  forRole?: { name: string; logins: readonly string[] } | null;
   /** What is being decided, said between the context and the question. */
   decision?: string | null;
   /** What each choice leads to, in the order of `options`; shown only when there is one per option. */
@@ -448,11 +478,14 @@ export function renderGateComment(input: {
   const to = input.addressedTo ? ` @${input.addressedTo}` : '';
   const context = input.context?.trim();
   const decision = input.decision?.trim();
+  const logins = [...new Set((input.forRole?.logins ?? []).map((login) => login.trim()).filter(Boolean))];
+  const forRole = input.forRole && logins.length > 0 ? `For ${input.forRole.name}: ${logins.map((login) => `@${login}`).join(' ')}` : '';
   return [
     `**${input.bot} needs a decision.**${to}`,
     '',
     ...(context ? [context, ''] : []),
     ...(decision ? [`**Deciding:** ${decision}`, ''] : []),
+    ...(forRole ? [forRole, ''] : []),
     emphasised(input.question),
     '',
     ...(options ? [options, ''] : []),

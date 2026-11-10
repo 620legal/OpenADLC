@@ -33,6 +33,7 @@ import {
   threads,
   withAdvisoryLock,
   workItems,
+  type Role,
 } from '@openadlc/db';
 import {
   ADDABLE_SEAT_ROLES,
@@ -110,6 +111,7 @@ import { selfUpdateAttentionFromSettings } from './self-update.js';
 import { ATTENTION_WINDOW_DAYS, attentionItems, ClosedSubjects, readAttention, registerAttentionRoutes, STOPPED_BY_A_PERSON, type AttentionDeps, type HeldPromote } from './attention.js';
 import { notificationSettingsView, saveNotificationSettings, type NotificationSettingsInput, type Notifier } from './notify.js';
 import { WaitingNotices } from './notify-waiting.js';
+import { openGatesFor, readAudienceFacts, withAudiences, type AudienceFacts } from './needs-you-audience.js';
 import { NOTIFICATIONS_CHECK } from './health/checks/notifications.js';
 import { bridgeStopReason, stoppedByTheBridge, THE_BRIDGE } from './bridge-stops.js';
 import { asAutomation } from './automation-bot.js';
@@ -228,6 +230,8 @@ export interface ApiDeps {
    * and nothing is looked at.
    */
   notifier?: Notifier;
+  /** People and the roles, which Needs you is routed by (`needs-you-audience.ts`); read from the database unless a test says otherwise. */
+  audienceFacts?: () => Promise<AudienceFacts>;
 }
 
 /** Where what runs after an answer belongs: the task it was for, or else a subject's thread. */
@@ -1088,9 +1092,31 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
     client: () => asAutomation(deps.actors, config),
     fullName: async (name) => (await repos.getRepoByName(name))?.fullName ?? null,
   });
+  const audienceFacts = deps.audienceFacts ?? readAudienceFacts;
+  const local = config.identityMode === 'local';
+  /** The open questions in one viewer's Needs you, for the board's count; every one on a local install. */
+  const waitingOnYou = async (identity: string, role: Role, gates: readonly { id: string; options: string[] }[]): Promise<number> => {
+    if (local || gates.length === 0) return gates.length;
+    const [facts, planChanges] = await Promise.all([
+      audienceFacts(),
+      (async () => leases.planChangesOfGates(gates.map((gate) => gate.id)))().catch(() => new Map<string, unknown>()),
+    ]);
+    return openGatesFor(identity, gates, facts, new Set(planChanges.keys()), role);
+  };
+  // The count is one number on the board: a gate row it cannot route (one read
+  // without its options) took the whole GET /v1/board down with it. It is
+  // counted as if nobody could be read, every open question for an admin and
+  // none for anyone else, which keeps the board up without counting a routed
+  // question for everyone (`needs-you-audience.ts`).
+  const waitingOnYouOrAdmins = (identity: string, role: Role, gates: readonly { id: string; options: string[] }[]): Promise<number> =>
+    waitingOnYou(identity, role, gates).catch((error: unknown) => {
+      console.warn(`[bridge] could not route the board's waiting count, so it counts as the admins': ${error instanceof Error ? error.message : error}`);
+      return role === 'admin' ? gates.length : 0;
+    });
   // Named, so the notifications' look at Needs you reads the same items, by
   // the same ids, as the board (`notify-waiting.ts`).
   const attentionDeps: AttentionDeps = {
+    audience: { local, facts: audienceFacts },
     waiting: waitingReads,
     engineUpdates: engineUpdatesFor(hostd),
     selfUpdate: { attention: () => selfUpdateAttentionFromSettings() },
@@ -1126,10 +1152,14 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
     },
   };
   registerAttentionRoutes(router, attentionDeps, (identity, login) => humanReview.mayDecide(identity, login));
+  // Every item, each with whom it is for, so each is sent to its own people.
   const waitingNotices = deps.notifier
     ? new WaitingNotices({
         notifier: deps.notifier,
-        items: async () => attentionItems(await readAttention(new Date(), attentionDeps)),
+        items: async () => {
+          const items = attentionItems(await readAttention(new Date(), attentionDeps));
+          return local ? items : withAudiences(items, await audienceFacts(), false);
+        },
         consoleUrl: config.consoleUrl,
       })
     : null;
@@ -1148,7 +1178,7 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
     recheck: () => deps.health?.runSoon(['signing-key']),
   });
 
-  router.get('/v1/board', async ({ query }) => {
+  router.get('/v1/board', async ({ query, identity, role }) => {
     const repoFilter = query.get('repo');
     const repoName = !repoFilter || repoFilter === 'all' ? undefined : repoFilter;
     // Once the install is numbered, a card is a work item's, and an item with
@@ -1380,7 +1410,7 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
         detail: entry.detail,
         heldFor: heldForPerson(entry),
       })),
-      waitingOnYou: openGates.length,
+      waitingOnYou: await waitingOnYouOrAdmins(identity, role, openGates),
       working: activeSessions.filter((session) => session.state === 'working').length,
       idle: activeSessions.filter((session) => session.state === 'idle').length,
       // Tasks running across the install, which the board counts above its columns.
@@ -3277,6 +3307,8 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
       if (key === 'notifyTransport' || key === 'notifyKinds') {
         throw new HttpFailure(400, `${key} is written by PUT /v1/settings/notifications, which keeps where notifications go and its target together`);
       }
+      // Each entry is one person's, written by them beside their own secret.
+      if (key === 'personNotify') throw new HttpFailure(400, 'personNotify is written by each person with PUT /v1/me/notifications, which keeps their channel and its target together');
       if (key === 'unownedIssues') throw new HttpFailure(400, 'unownedIssues is kept by the intake sweep; answer each issue with POST /v1/repos/<repo>/unowned/intake, /ignore or /close');
       if (typeof value !== 'string') throw new HttpFailure(400, `${key} must be a string`);
 

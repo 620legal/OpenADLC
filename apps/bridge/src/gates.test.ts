@@ -482,6 +482,90 @@ describe('a question quoting a token', () => {
 });
 
 /**
+ * A question names the person role it is for (ADR 0035). The gate keeps the
+ * role's id and the name as asked; on a cloud install the comment mentions
+ * the role's people and the notification goes to them alone.
+ */
+describe('a question for a person role', () => {
+  const facts = {
+    people: [
+      { id: 'p-a', email: 'a@example.com', githubLogin: 'alice', consoleRole: 'user' as const, approves: false },
+      { id: 'p-c', email: 'c@example.com', githubLogin: null, consoleRole: 'user' as const, approves: false },
+      { id: 'p-b', email: 'b@example.com', githubLogin: 'bob', consoleRole: 'admin' as const, approves: true },
+    ],
+    roles: [
+      { id: 'legal', name: 'Legal', members: ['p-a', 'p-c'] },
+      { id: 'product', name: 'Product', members: [] },
+    ],
+  };
+  const routed = (local = false) => {
+    const notifier = { send: vi.fn(async () => undefined) };
+    const asking = new Gates(actors as never, notifier as never);
+    asking.useAudience({ local, facts: async () => facts });
+    return { asking, notifier };
+  };
+
+  beforeEach(() => {
+    store.task.leaseId = null;
+  });
+
+  it('keeps the role by id and as asked, mentions its people with a login, and notifies them alone', async () => {
+    const { asking, notifier } = routed();
+    await asking.open({ taskId: 'task-1', question: 'May the notice say this?', options: ['yes', 'no'], role: ' legal ' });
+
+    expect(threads.createGate).toHaveBeenCalledWith(expect.objectContaining({ personRole: 'legal', personRoleAsked: 'legal' }));
+    const body = String((client.comment.mock.calls[0] as unknown[])[2]);
+    expect(body).toContain('For Legal: @alice\n');
+    expect(notifier.send).toHaveBeenCalledWith(expect.objectContaining({ event: 'gate_opened', people: ['p-a', 'p-c'] }));
+  });
+
+  it('keeps a role the install lacks as asked, and sends it to everyone through the install’s channel', async () => {
+    const { asking, notifier } = routed();
+    await asking.open({ taskId: 'task-1', question: 'q?', options: ['yes'], role: 'Privacy' });
+    expect(threads.createGate).toHaveBeenCalledWith(expect.objectContaining({ personRole: null, personRoleAsked: 'Privacy' }));
+    expect(String((client.comment.mock.calls[0] as unknown[])[2])).not.toContain('For ');
+    expect(notifier.send).toHaveBeenCalledWith(expect.not.objectContaining({ people: expect.anything() }));
+  });
+
+  it('sends a question for a role nobody holds, or for none, to everyone', async () => {
+    const { asking, notifier } = routed();
+    await asking.open({ taskId: 'task-1', question: 'q?', options: ['yes'], role: 'Product' });
+    await asking.open({ taskId: 'task-1', question: 'q?', options: ['yes'] });
+    expect(threads.createGate).toHaveBeenCalledWith(expect.objectContaining({ personRole: 'product' }));
+    expect(threads.createGate).toHaveBeenLastCalledWith(expect.objectContaining({ personRole: null, personRoleAsked: null }));
+    for (const [sent] of notifier.send.mock.calls as unknown as [Record<string, unknown>][]) expect(sent.people).toBeUndefined();
+  });
+
+  it('mentions nobody and notifies nobody when who holds the role comes from the last read, not this one', async () => {
+    const notifier = { send: vi.fn(async () => undefined) };
+    const asking = new Gates(actors as never, notifier as never);
+    asking.useAudience({ local: false, facts: async () => ({ ...facts, unread: 'last' as const }) });
+    await asking.open({ taskId: 'task-1', question: 'May the notice say this?', options: ['yes', 'no'], role: 'Legal' });
+    expect(threads.createGate).toHaveBeenCalledWith(expect.objectContaining({ personRole: 'legal', personRoleAsked: 'Legal' }));
+    expect(String((client.comment.mock.calls[0] as unknown[])[2])).not.toContain('For Legal');
+    expect(notifier.send).not.toHaveBeenCalled();
+  });
+
+  it('with no read of the roles yet, keeps the name asked, mentions nobody and notifies nobody, rather than everyone', async () => {
+    const notifier = { send: vi.fn(async () => undefined) };
+    const asking = new Gates(actors as never, notifier as never);
+    asking.useAudience({ local: false, facts: async () => ({ people: [], roles: [], unread: 'none' as const }) });
+    await asking.open({ taskId: 'task-1', question: 'q?', options: ['yes'], role: 'Legal' });
+    expect(threads.createGate).toHaveBeenCalledWith(expect.objectContaining({ personRole: null, personRoleAsked: 'Legal' }));
+    expect(String((client.comment.mock.calls[0] as unknown[])[2])).not.toContain('For ');
+    expect(notifier.send).not.toHaveBeenCalled();
+  });
+
+  it('still resolves the role on a local install, but routes nothing: no mention, the install’s channel', async () => {
+    const { asking, notifier } = routed(true);
+    await asking.open({ taskId: 'task-1', question: 'q?', options: ['yes'], role: 'Legal' });
+    expect(threads.createGate).toHaveBeenCalledWith(expect.objectContaining({ personRole: 'legal' }));
+    expect(String((client.comment.mock.calls[0] as unknown[])[2])).not.toContain('For Legal');
+    expect(notifier.send).toHaveBeenCalledWith(expect.not.objectContaining({ people: expect.anything() }));
+  });
+});
+
+/**
  * A person answers from the question alone: what is being decided, and what
  * each choice leads to, on the issue, the gate and the thread alike.
  */

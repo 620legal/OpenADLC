@@ -387,6 +387,15 @@ describe('a question that needs you', () => {
     question: { gateId: 'gate-7', options: ['index.html at the repository root', 'A different path'] },
   };
 
+  it('says whom it is for under the headline, and why when it fell back to everyone', () => {
+    const legal = needs([{ ...QUESTION, audience: { for: 'role', name: 'Legal', people: ['p-a'] } }]);
+    expect(legal).toMatch(/<p data-audience[^>]*>For Legal<\/p>/);
+    const everyone = needs([{ ...QUESTION, audience: { for: 'everyone', name: 'everyone', people: [], why: 'no one holds Legal yet' } }]);
+    expect(everyone).toContain('For everyone: no one holds Legal yet');
+    // A local install's items carry no audience, and say nothing of one.
+    expect(needs([QUESTION])).not.toContain('data-audience');
+  });
+
   it('shows what it asks about — intake’s draft — on the card, before the question', () => {
     const html = needs([
       {

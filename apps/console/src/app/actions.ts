@@ -7,6 +7,8 @@ import {
   type NotificationSettingsUpdate,
   type NotificationSettingsView,
   type NotificationTestResult,
+  type PersonalNotificationUpdate,
+  type PersonalNotificationView,
   type PersonRolesView,
   type RemovalChoices,
   type RemovalPreview,
@@ -1032,6 +1034,30 @@ export async function testNotifications(): Promise<{ ok: boolean; error?: string
   try {
     const result = await call<NotificationTestResult>('/v1/settings/notifications/test', 'POST', {});
     revalidatePath('/settings');
+    revalidatePath('/settings/notifications');
+    return { ok: true, result };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : 'the test was not sent' };
+  }
+}
+
+/** Save Your channel: where the bridge tells the signed-in person about their own Needs-you items. */
+export async function savePersonalNotifications(
+  update: PersonalNotificationUpdate,
+): Promise<{ ok: boolean; error?: string; view?: PersonalNotificationView }> {
+  try {
+    const view = await call<PersonalNotificationView>('/v1/me/notifications', 'PUT', update);
+    revalidatePath('/settings/notifications');
+    return { ok: true, view };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : 'your channel was not saved' };
+  }
+}
+
+/** Send a test through the signed-in person's own channel, and whether it was taken. */
+export async function testPersonalNotifications(): Promise<{ ok: boolean; error?: string; result?: NotificationTestResult }> {
+  try {
+    const result = await call<NotificationTestResult>('/v1/me/notifications/test', 'POST', {});
     revalidatePath('/settings/notifications');
     return { ok: true, result };
   } catch (error) {

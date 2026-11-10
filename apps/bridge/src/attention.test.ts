@@ -118,7 +118,7 @@ describe('a builder asking for more paths', () => {
 
   it('offers approve all for its issue and asking the designer, beside the choices', async () => {
     const item = await read({ planChanges: new Map([['gate-p', plan]]) });
-    expect(item?.question).toEqual({ gateId: 'gate-p', options: ['Approve', 'Refuse'] });
+    expect(item?.question).toEqual({ gateId: 'gate-p', options: ['Approve', 'Refuse'], planChange: true });
     expect(item?.actions.slice(0, 2)).toEqual([
       { kind: 'approve_all', label: 'Approve, and any more paths for #16', gateId: 'gate-p' },
       { kind: 'ask_designer', label: 'Ask the designer', gateId: 'gate-p' },
@@ -703,6 +703,25 @@ describe('what needs a person', () => {
 
       const failed = await forViewer(items, 'jane@acme.test', async () => Promise.reject(new Error('down')));
       expect(failed[0]?.decision).toMatchObject({ yours: false, notYours: expect.stringContaining('reload') });
+    });
+
+    it('sends a held approval only to its audience, and says it is the viewer’s after that filter', async () => {
+      const { attentionItems, attentionFor, forViewer } = await load();
+      const person = (id: string, email: string, githubLogin: string) => ({ id, name: id, email, githubLogin, consoleRole: 'user' as const, approves: false });
+      const facts = { people: [person('p-jane', 'jane@acme.test', 'janedoe'), person('p-bob', 'bob@acme.test', 'bob')], roles: [] };
+      const deps = { audience: { local: false, facts: async () => facts } };
+      const items = attentionItems({ ...base, personAwaits: [awaited(minutesAgo(10))] });
+      const mayDecide = vi.fn(async () => ({ yours: true }) as const);
+
+      const jane = await forViewer(await attentionFor('jane@acme.test', items, deps, 'user'), 'jane@acme.test', mayDecide);
+      expect(jane.map((item) => item.decision?.yours)).toEqual([true]);
+      expect(jane[0]?.audience).toMatchObject({ for: 'person', people: ['p-jane'] });
+
+      // Bob is not its audience: the item never reaches him, so nothing is annotated for him.
+      mayDecide.mockClear();
+      const bob = await forViewer(await attentionFor('bob@acme.test', items, deps, 'user'), 'bob@acme.test', mayDecide);
+      expect(bob).toEqual([]);
+      expect(mayDecide).not.toHaveBeenCalled();
     });
 
     it('takes the first paragraph of an Outcome, its comments out, and cuts a long one on a word', async () => {
@@ -2660,6 +2679,103 @@ describe('GET /v1/attention', () => {
     expect(body.items.map((item) => item.id)).toEqual(['stall:openadlc-testbed#29', 'gate:gate-old']);
     // A gate older than the week is still a gate: its task is read on its own.
     expect(body.items[1]).toMatchObject({ kind: 'question', bot: { name: 'ottoexampleco' } });
+  });
+});
+
+/**
+ * Needs you is per viewer (ADR 0035): a question for Legal is in the Legal
+ * person's list and nobody else's, and one for no role, or a role nobody
+ * holds, is in everyone's with why. A local install routes nothing.
+ */
+describe('GET /v1/attention, routed by person role', () => {
+  let bridge: Server;
+  let bridgeUrl: string;
+  let facts: import('./needs-you-audience.js').AudienceFacts;
+
+  const start = async (identityMode: 'iap' | 'local', access?: (method: string, path: string, identity: string) => Promise<'admin' | 'user'>) => {
+    const { registerConsoleApi } = await import('./api.js');
+    const { Router } = await import('./router.js');
+    const router = new Router(undefined, undefined, undefined, access);
+    registerConsoleApi(router, {
+      config: { gitHubClientId: '', webhookSecret: '', humans: [], identityMode } as never,
+      hostd: {} as never,
+      actors: {} as never,
+      invitations: {} as never,
+      automation: {} as never,
+      gates: {} as never,
+      taskService: {} as never,
+      threadStream: { subscribe: () => () => undefined, watching: 0 } as never,
+      onboarding: {} as never,
+      webhookSetup: {} as never,
+      repoSetup: {} as never,
+      audienceFacts: async () => facts,
+    });
+    bridge = createServer((request, response) => void router.handle(request, response));
+    await new Promise<void>((resolve) => bridge.listen(0, '127.0.0.1', resolve));
+    bridgeUrl = `http://127.0.0.1:${(bridge.address() as AddressInfo).port}`;
+  };
+
+  const listOf = async (email: string) => {
+    const response = await fetch(`${bridgeUrl}/v1/attention`, { headers: { 'x-openadlc-identity': email } });
+    return ((await response.json()) as { items: { id: string; audience?: { for: string; name: string; why?: string } }[] }).items;
+  };
+
+  beforeEach(() => {
+    store.tasks = [];
+    store.eventTypes = [];
+    store.settings = {};
+    store.gates = [
+      { id: 'gate-legal', taskId: 'task-old-gate', question: 'May it say this?', options: [], githubCommentUrl: null, createdAt: '2026-09-01T00:00:00.000Z', personRole: 'legal', personRoleAsked: 'Legal' },
+      { id: 'gate-privacy', taskId: 'task-old-gate', question: 'And this?', options: [], githubCommentUrl: null, createdAt: '2026-09-01T00:00:01.000Z', personRole: null, personRoleAsked: 'Privacy' },
+    ] as never;
+    facts = {
+      people: [
+        { id: 'p-a', email: 'a@example.com', githubLogin: 'alice', consoleRole: 'user', approves: false },
+        { id: 'p-b', email: 'b@example.com', githubLogin: 'bob', consoleRole: 'user', approves: false },
+      ],
+      roles: [{ id: 'legal', name: 'Legal', members: ['p-a'] }],
+    };
+  });
+
+  afterEach(async () => {
+    await new Promise<void>((resolve) => bridge.close(() => resolve()));
+  });
+
+  it('shows a Legal question to the Legal person only, and one for a role the install lacks to both, with why', async () => {
+    await start('iap');
+    const a = await listOf('a@example.com');
+    const b = await listOf('b@example.com');
+    expect(a.filter((one) => one.id.startsWith('gate:')).map((one) => one.id).sort()).toEqual(['gate:gate-legal', 'gate:gate-privacy']);
+    expect(b.filter((one) => one.id.startsWith('gate:')).map((one) => one.id)).toEqual(['gate:gate-privacy']);
+    expect(a.find((one) => one.id === 'gate:gate-legal')?.audience).toEqual({ for: 'role', name: 'Legal', people: ['p-a'] });
+    expect(b.find((one) => one.id === 'gate:gate-privacy')?.audience).toMatchObject({ for: 'everyone', why: 'no role here is called Privacy' });
+  });
+
+  it('follows a move between roles on the next read, and falls back to everyone when the role empties', async () => {
+    await start('iap');
+    facts = { ...facts, roles: [{ id: 'legal', name: 'Legal', members: ['p-b'] }] };
+    expect((await listOf('a@example.com')).map((one) => one.id)).not.toContain('gate:gate-legal');
+    expect((await listOf('b@example.com')).map((one) => one.id)).toContain('gate:gate-legal');
+    facts = { ...facts, roles: [{ id: 'legal', name: 'Legal', members: [] }] };
+    const a = await listOf('a@example.com');
+    expect(a.find((one) => one.id === 'gate:gate-legal')?.audience).toMatchObject({ for: 'everyone', why: 'no one holds Legal yet' });
+  });
+
+  it('with People unread and no read before, shows a routed question to the admin who signed in and to no one else', async () => {
+    await start('iap', async (_method, _path, identity) => (identity === 'ada@example.com' ? 'admin' : 'user'));
+    facts = { people: [], roles: [], unread: 'none' };
+    const admin = await listOf('ada@example.com');
+    const user = await listOf('a@example.com');
+    expect(admin.filter((one) => one.id.startsWith('gate:')).map((one) => one.id).sort()).toEqual(['gate:gate-legal', 'gate:gate-privacy']);
+    expect(admin.find((one) => one.id === 'gate:gate-legal')?.audience).toMatchObject({ for: 'admins', people: [] });
+    expect(user.filter((one) => one.id.startsWith('gate:'))).toEqual([]);
+  });
+
+  it('routes nothing on a local install: every item is the one person’s, with no audience', async () => {
+    await start('local');
+    const items = await listOf('local operator');
+    expect(items.filter((one) => one.id.startsWith('gate:')).map((one) => one.id).sort()).toEqual(['gate:gate-legal', 'gate:gate-privacy']);
+    expect(items.every((one) => one.audience === undefined)).toBe(true);
   });
 });
 

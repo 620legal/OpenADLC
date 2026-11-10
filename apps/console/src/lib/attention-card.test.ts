@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AttentionItem } from './api';
-import { alarming, decisionButtons, faceActions, groupCounts, groupOf, hasMore, plainDetail, rejectReady, reviewerName, reviewVerdict, unblockedOf, unblocksLine } from './attention-card';
+import { alarming, audienceLine, decisionButtons, faceActions, groupCounts, groupOf, hasMore, plainDetail, rejectReady, reviewerName, reviewVerdict, unblockedOf, unblocksLine } from './attention-card';
 
 const ITEM: AttentionItem = {
   id: 'task:t-1',
@@ -12,6 +12,19 @@ const ITEM: AttentionItem = {
   detail: 'Engine claude is not available on this host.',
   actions: [{ kind: 'retry_task', label: 'Try again', taskId: 't-1' }],
 };
+
+describe('whom a Needs-you card says it is for', () => {
+  it('names its role, the approvers, the admins or you, and says why it is everyone’s', () => {
+    expect(audienceLine({ audience: { for: 'role', name: 'Legal', people: ['p-a'] } })).toBe('For Legal');
+    expect(audienceLine({ audience: { for: 'approvers', name: 'approvers', people: ['p-a'] } })).toBe('For approvers');
+    expect(audienceLine({ audience: { for: 'admins', name: 'admins', people: ['p-a'] } })).toBe('For admins');
+    expect(audienceLine({ audience: { for: 'person', name: 'Alice', people: ['p-a'] } })).toBe('For you');
+    expect(audienceLine({ audience: { for: 'everyone', name: 'everyone', people: [], why: 'the question names no role' } })).toBe(
+      'For everyone: the question names no role',
+    );
+    expect(audienceLine({})).toBeNull();
+  });
+});
 
 describe('a Needs-you card’s face', () => {
   it('says the detail without its markdown, so two lines cut a sentence', () => {

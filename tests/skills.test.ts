@@ -342,6 +342,20 @@ describe('a skill that can ask a person asks one question at a time', () => {
     expect(prose).not.toContain('Keep it short; the question itself goes in the marker.');
   });
 
+  // Needs you is routed by the role a question names (ADR 0035): a skill
+  // whose example names none teaches its bot to send everything to everyone.
+  const ROUTED = ['triage', 'spec', 'implement', 'pr-review', 'deploy', 'resolve-conflict'];
+  it.each(ROUTED)('%s names the person role a question is for, and says how to choose it', (skill) => {
+    const questions = parseMarkers(read(skill)).filter((marker) => marker.event === 'question');
+    const named = questions.map((marker) => parseQuestion(`<!-- openadlc:${JSON.stringify(marker)} -->`)?.role).filter(Boolean);
+    expect(named.length, `${skill} names no role in an example question`).toBeGreaterThan(0);
+    for (const role of named) expect(['Legal', 'Product', 'Engineering']).toContain(role);
+
+    const prose = read(skill).replace(/\s+/g, ' ');
+    expect(prose).toContain('Name the person role the question is for with `role`, by its name as people see it');
+    expect(prose).toContain('Leave it out when unsure.');
+  });
+
   it('is what the intake playbook says too', () => {
     const playbook = readFileSync(join(here, '..', 'crew', 'roles', 'intake.md'), 'utf8').replace(/\s+/g, ' ');
     expect(playbook).toContain('one question at a time');

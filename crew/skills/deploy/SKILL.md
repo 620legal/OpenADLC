@@ -169,7 +169,7 @@ next question is written after it, not before.
   its choices and what each choice leads to:
 
   ```
-  <!-- openadlc:{"event":"question","question":"Could a user have seen the failure?","decision":"An incident is opened only when users could have been affected, and the logs do not show whether they were.","options":["yes, open an incident","no"],"consequences":["An incident is opened, and its record starts","The failure is recorded, with no incident"]} -->
+  <!-- openadlc:{"event":"question","question":"Could a user have seen the failure?","role":"Engineering","decision":"An incident is opened only when users could have been affected, and the logs do not show whether they were.","options":["yes, open an incident","no"],"consequences":["An incident is opened, and its record starts","The failure is recorded, with no incident"]} -->
   ```
 
   What you write before the marker is the context: what you found, and why you
@@ -182,6 +182,12 @@ next question is written after it, not before.
   picks it — with every question that has choices. A person answers from the
   question alone, on the console's card or on GitHub, without reading the
   thread.
+- Name the person role the question is for with `role`, by its name as people
+  see it: `Legal` for legal wording, `Product` for user-facing behaviour,
+  wording or policy, `Engineering` for code, contracts and infrastructure, and
+  a custom role only when the issue or request names it. Leave it out when
+  unsure. Needs you shows the question only to that role's people, and to
+  everyone when no one holds it or the install has no role by that name.
 - Prefer choices, even just yes or no. Put the likely or recommended answer
   first, and keep each choice to a few words. The person can always answer in
   their own words instead, so the choices need not cover everything.

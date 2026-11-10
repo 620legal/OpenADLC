@@ -120,14 +120,14 @@ describe('what a gate decides and what each choice leads to', () => {
       consequences: [`keep ${token}`, 'rotate it'],
     });
     const [sql, params] = vi.mocked(queryOne).mock.calls.at(-1) ?? [];
-    expect(String(sql)).toMatch(/insert into gates \([^)]*decision, consequences\)/);
+    expect(String(sql)).toMatch(/insert into gates \([^)]*decision, consequences[,)]/);
     expect(String(sql)).toMatch(/returning[\s\S]*decision, consequences/);
-    expect((params as unknown[]).slice(7)).toEqual(['whether ghu_*** is rotated', ['keep ghu_***', 'rotate it']]);
+    expect((params as unknown[]).slice(7, 9)).toEqual(['whether ghu_*** is rotated', ['keep ghu_***', 'rotate it']]);
     expect(gate).toMatchObject({ decision: 'whether ghu_*** is rotated', consequences: ['keep ghu_***', 'rotate it'] });
 
     vi.mocked(queryOne).mockResolvedValueOnce({ ...ROW, decision: null, consequences: [] });
     const plain = await createGate({ taskId: 'task-1', threadId: 'thread-1', question: 'q', options: ['a', 'b'] });
-    expect((vi.mocked(queryOne).mock.calls.at(-1)?.[1] as unknown[]).slice(7)).toEqual([null, []]);
+    expect((vi.mocked(queryOne).mock.calls.at(-1)?.[1] as unknown[]).slice(7, 9)).toEqual([null, []]);
     expect(plain).toMatchObject({ decision: null, consequences: [] });
   });
 
@@ -153,6 +153,40 @@ describe('what a gate decides and what each choice leads to', () => {
   it('are none on a gate asked before they were kept', async () => {
     vi.mocked(query).mockResolvedValueOnce([{ ...ROW, decision: null, consequences: [] }]);
     expect(await listOpenGates()).toEqual([expect.objectContaining({ decision: null, consequences: [] })]);
+  });
+});
+
+/**
+ * A question names the person role it is for. The gate keeps the role's id and
+ * the name as the bot wrote it; who holds the role is read on every load, so
+ * the gate is never rewritten when someone moves in or out of it.
+ */
+describe('the person role a gate is for', () => {
+  const migration = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'migrations', '0163_gate_person_role.sql'), 'utf8');
+
+  it('is two nullable columns, so a gate asked before them names no role', () => {
+    expect(migration).toContain('alter table gates add column if not exists person_role text;');
+    expect(migration).toContain('alter table gates add column if not exists person_role_asked text;');
+  });
+
+  it('is stored as the bridge resolved it and read back by the reads Needs you and an answer use', async () => {
+    vi.mocked(queryOne).mockResolvedValueOnce({ ...ROW, person_role: 'legal', person_role_asked: 'legal' });
+    const gate = await createGate({ taskId: 'task-1', threadId: 'thread-1', question: 'q', options: ['a'], personRole: 'legal', personRoleAsked: 'legal' });
+    const [sql, params] = vi.mocked(queryOne).mock.calls.at(-1) ?? [];
+    expect(String(sql)).toMatch(/insert into gates \([^)]*person_role, person_role_asked\)/);
+    expect((params as unknown[]).slice(9)).toEqual(['legal', 'legal']);
+    expect(gate).toMatchObject({ personRole: 'legal', personRoleAsked: 'legal' });
+
+    vi.mocked(queryOne).mockResolvedValueOnce({ ...ROW });
+    await createGate({ taskId: 'task-1', threadId: 'thread-1', question: 'q', options: ['a'] });
+    expect((vi.mocked(queryOne).mock.calls.at(-1)?.[1] as unknown[]).slice(9)).toEqual([null, null]);
+
+    vi.mocked(query).mockResolvedValueOnce([{ ...ROW, person_role: null, person_role_asked: 'Privacy' }]);
+    expect(await listOpenGates()).toEqual([expect.objectContaining({ personRole: null, personRoleAsked: 'Privacy' })]);
+    expect(String(vi.mocked(query).mock.calls.at(-1)?.[0])).toContain('g.person_role, g.person_role_asked');
+
+    vi.mocked(queryOne).mockResolvedValueOnce({ ...ROW, person_role: 'pr_0000abcd', person_role_asked: 'Privacy' });
+    expect(await getGate('gate-1')).toMatchObject({ personRole: 'pr_0000abcd', personRoleAsked: 'Privacy' });
   });
 });
 

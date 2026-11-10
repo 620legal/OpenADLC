@@ -4,6 +4,7 @@ import { BridgeDown } from '@/components/bridge-down';
 import { ChevronLeftIcon } from '@/components/icons';
 import { AdminsOnly } from '@/components/not-a-user';
 import { NotificationSettings } from '@/components/notification-settings';
+import { PersonalNotificationSettings } from '@/components/personal-notification-settings';
 import { api, readMe } from '@/lib/api';
 import { colorMapOf } from '@/lib/repo-colors';
 import { readHeader } from '@/lib/read-header';
@@ -13,16 +14,27 @@ export const dynamic = 'force-dynamic';
 /**
  * Where notifications go, which kinds, and Send a test. The notifications
  * health card's button lands here: its fix is a send that gets through.
+ *
+ * Everyone signed in to a cloud install also sets their own channel here,
+ * where the items routed to them go (ADR 0035). The install's channel is an
+ * admin's, as every setting is: a user sees only theirs. A local install has
+ * one person, whose channel is the install's.
  */
 export default async function NotificationSettingsPage() {
-  // An admin's, as every setting is: a user who types the address is told so,
-  // rather than shown a form whose every save is refused.
   const me = await readMe();
-  if (me?.known && me.role !== 'admin')
-    return <AdminsOnly email={me.email} identityMode={me.identityMode} what="Notifications need" doing="changes where notifications go" />;
+  const admin = !me?.known || me.role === 'admin';
+  const personal = me?.known === true && me.identityMode !== 'local';
+  if (!admin && !personal)
+    return <AdminsOnly email={me?.email ?? ''} identityMode={me?.identityMode} what="Notifications need" doing="changes where notifications go" />;
 
   try {
-    const [repos, crew, costs, notifications] = await Promise.all([api.repos(), api.crew(), api.costs().catch(() => null), api.notifications()]);
+    const [repos, crew, costs, notifications, mine] = await Promise.all([
+      api.repos(),
+      api.crew(),
+      api.costs().catch(() => null),
+      admin ? api.notifications() : Promise.resolve(null),
+      personal ? api.myNotifications().catch(() => null) : Promise.resolve(null),
+    ]);
     const header = await readHeader({
       repos: repos.repos.map((repo) => repo.name),
       colors: colorMapOf(repos.repos),
@@ -37,7 +49,8 @@ export default async function NotificationSettingsPage() {
             <ChevronLeftIcon size={12} />
             Settings
           </Link>
-          <NotificationSettings initial={notifications} />
+          {mine && <PersonalNotificationSettings initial={mine} />}
+          {notifications && <NotificationSettings initial={notifications} />}
         </main>
       </AppShell>
     );

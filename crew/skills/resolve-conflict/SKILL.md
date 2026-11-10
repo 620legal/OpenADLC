@@ -55,7 +55,7 @@ next question is written after it, not before.
   its choices and what each choice leads to:
 
   ```
-  <!-- openadlc:{"event":"question","question":"Keeping both sides needs src/app.js, outside the conflict. Leave it to a person?","decision":"Keeping both sides needs a file outside the conflict, which this task does not change on its own.","options":["leave it to a person","resolve within the conflicted files only"],"consequences":["The pull request waits for a person to resolve it","Only the conflicted files change, and one side may be lost"]} -->
+  <!-- openadlc:{"event":"question","question":"Keeping both sides needs src/app.js, outside the conflict. Leave it to a person?","role":"Engineering","decision":"Keeping both sides needs a file outside the conflict, which this task does not change on its own.","options":["leave it to a person","resolve within the conflicted files only"],"consequences":["The pull request waits for a person to resolve it","Only the conflicted files change, and one side may be lost"]} -->
   ```
 
   What you write before the marker is the context: which files conflict, and
@@ -66,6 +66,12 @@ next question is written after it, not before.
   picks it — with every question that has choices. A person answers from the
   question alone, on the console's card or on GitHub, without reading the
   thread.
+- Name the person role the question is for with `role`, by its name as people
+  see it: `Legal` for legal wording, `Product` for user-facing behaviour,
+  wording or policy, `Engineering` for code, contracts and infrastructure, and
+  a custom role only when the issue or request names it. Leave it out when
+  unsure. Needs you shows the question only to that role's people, and to
+  everyone when no one holds it or the install has no role by that name.
 - Prefer choices, even just yes or no. Put the likely or recommended answer
   first, and keep each choice to a few words.
 - Ask an open question only when no set of choices could cover the answers,

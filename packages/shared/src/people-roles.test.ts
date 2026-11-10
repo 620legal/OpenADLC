@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { checkPersonRoles, diffPersonRoles, parsePersonRoles, personRoleLabel, personRolesUnchanged, pruneMembers, viewPersonRoles, type StoredPersonRoles } from './people-roles.js';
+import {
+  checkPersonRoles,
+  diffPersonRoles,
+  parsePersonRoles,
+  personRoleByName,
+  personRoleLabel,
+  personRolesUnchanged,
+  pruneMembers,
+  viewPersonRoles,
+  type StoredPersonRoles,
+} from './people-roles.js';
 
 const EMPTY = parsePersonRoles(null);
 const FIXED = [
@@ -148,6 +158,25 @@ describe('diffPersonRoles', () => {
       membersRemoved: [{ role: 'Product', person: 'ada' }],
     });
     expect(personRolesUnchanged(diffPersonRoles(after, after))).toBe(true);
+  });
+});
+
+describe('personRoleByName', () => {
+  const roles = [
+    { id: 'legal', name: 'Legal' },
+    { id: 'pr_0000abcd', name: 'Privacy Office' },
+  ];
+
+  it('finds a role by the name people see, whatever its case and spacing', () => {
+    expect(personRoleByName(' legal ', roles)?.id).toBe('legal');
+    expect(personRoleByName('PRIVACY OFFICE', roles)?.id).toBe('pr_0000abcd');
+  });
+
+  it('finds nothing for a name the install has no role by, an id, or no name', () => {
+    expect(personRoleByName('Privacy', roles)).toBeUndefined();
+    expect(personRoleByName('pr_0000abcd', roles)).toBeUndefined();
+    expect(personRoleByName('', roles)).toBeUndefined();
+    expect(personRoleByName(null, roles)).toBeUndefined();
   });
 });
 
