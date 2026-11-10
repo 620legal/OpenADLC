@@ -266,7 +266,7 @@ export function pushRequest(
   if (options.tag) headers.topic = b64url(createHash('sha256').update(options.tag).digest()).slice(0, 32);
   return {
     url: subscription.endpoint,
-    init: { method: 'POST', headers, body: encryptPayload(payload, subscription.keys) },
+    init: { method: 'POST', headers, body: new Uint8Array(encryptPayload(payload, subscription.keys)) },
   };
 }
 
