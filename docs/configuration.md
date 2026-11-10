@@ -639,6 +639,15 @@ release its lease and leave `needs-human` on the issue; a console request
 whose triage stopped this way is marked abandoned, as one a person abandons
 from its card or cancels is ([architecture](architecture.md)).
 
+The question names the task's total spend, across every session it ran, and
+its cap in force: "Stopped at the $30 cap on X after $35.88" once one
+continue has raised a $15 cap to $30. A run still under way when it reaches
+the cap is stopped there and asks. A run that reaches the cap only with its
+own totals, which every engine reports as the run ends, has nothing left to
+stop: it ends done and starts no further turn, and the task's next run asks
+when its headroom check finds none. So "continue" never runs finished work
+again.
+
 ### models.yaml — prices (optional)
 
 `models: { <model id>: { inPerMtok, outPerMtok, cachedInPerMtok, cacheWritePerMtok } }`
@@ -651,6 +660,9 @@ Code's cache writes); unset, it is 1.25 times `inPerMtok` for a `claude-*`
 model and `inPerMtok` for any other. A Claude or Grok Build run is priced
 message by message as it goes, cached input included, so the per-task cap can
 stop it partway; the run's own total, on its last line, has the last word.
+Codex reports a turn's usage only when the turn ends, so the per-task cap
+stops a Codex task between turns, never partway through one: a turn can run
+past the cap by up to its own spend.
 Tokens in, in the ledger, count all input the model processed, cached input
 included. Copy
 `config/models.example.yaml` to `config/models.yaml`; git ignores the copy, so

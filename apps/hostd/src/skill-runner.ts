@@ -371,8 +371,15 @@ async function main(): Promise<void> {
    * task's cap. Returns why the task has to fail instead, when no gate opened:
    * `post` answers `{}` for a bridge it could not reach, and pausing then
    * would be the dead end the question exists to avoid.
+   *
+   * The spend it names is the ledger's: the task's total across its sessions.
+   * Named from this session's own sum, a session resumed after one "continue"
+   * said "$30 cap … after $20.88" when the task had spent $35.88. `spentUsd`
+   * is only for a bridge that does not say.
    */
-  const askAtCap = async (spentUsd: number, ledger: Record<string, unknown>): Promise<string | null> => {
+  const askAtCap = async (fallbackUsd: number, ledger: Record<string, unknown>): Promise<string | null> => {
+    const total = Number(ledger.spent);
+    const spentUsd = ledger.spent !== undefined && ledger.spent !== null && Number.isFinite(total) ? total : fallbackUsd;
     const opened = await post(
       env.bridgeUrl,
       `/internal/tasks/${env.taskId}/gate`,
@@ -447,10 +454,11 @@ async function main(): Promise<void> {
 
   /**
    * Asked by an engine when a turn ends complete, after its usage is in the
-   * ledger. Nothing once the turn asked a person or sent the work back. Nothing
-   * at the cap either, and nothing taken: the task ends as it would have, its
-   * messages are returned, and the work they start asks at the cap when its
-   * own headroom check finds none.
+   * ledger. Nothing once the turn asked a person or sent the work back. At the
+   * cap, or with no answer from the ledger, it rejects and takes nothing, so
+   * no turn starts, Codex's idle nudge included. The task ends done as it
+   * would have, its messages are returned, and the work they start asks at
+   * the cap when its own headroom check finds none.
    *
    * Rejects once the task paused or failed, a take the bridge never answered
    * included: the session stops there. Null was read as an empty inbox, and
@@ -461,7 +469,14 @@ async function main(): Promise<void> {
     if (paused || failed) throw new Error(`the session stops here: ${failed || 'the task paused'}`);
     if (asked || sentBack) return null;
     const left = await postLedger(env.bridgeUrl, `/internal/tasks/${env.taskId}/headroom`, () => ({ estimateUsd: 0.5 }), env.ledgerRetryMs);
-    if (!left || left.stop === true) return null;
+    if (!left || left.stop === true) {
+      // Rejected, not null: Codex reads null as an empty inbox and runs its
+      // idle nudge, a turn started past the cap. The turn that asked ended
+      // complete (it is the only one that asks), so the task still ends done,
+      // and the next run's headroom check asks at the cap.
+      finishedTurn = true;
+      throw new Error('the session stops here: the task is at its cost cap');
+    }
     const messages = await takeInbox();
     if (!messages) {
       failed = INBOX_NOT_TAKEN;
@@ -624,11 +639,13 @@ async function main(): Promise<void> {
         // is a run whose own totals, which arrive once it has finished, are
         // what reached the cap: there is nothing left to stop, and a finished
         // run reported as paused at the cap would do its work again on
-        // "continue". The next run's headroom check asks instead.
+        // "continue". Every engine marks those totals `final` (Claude's and
+        // Grok's result line, Codex's `turn.completed`, which is the only
+        // usage Codex reports). The next run's headroom check asks instead.
         if (result.stop === true && event.final) {
-          console.log(`[skill] the run's totals reached the $${env.costCap} cap after it finished; $${spent.toFixed(2)} spent`);
+          console.log(`[skill] the run's totals reached the $${env.costCap} cap after it finished; $${spent.toFixed(2)} spent this session`);
         } else if (result.stop === true && !asked && !sentBack) {
-          console.log(`[skill] paused at the $${env.costCap} cap after $${spent.toFixed(2)}`);
+          console.log(`[skill] paused at the $${env.costCap} cap after $${spent.toFixed(2)} spent this session`);
           failed = await askAtCap(spent, result);
           paused = !failed;
         }
