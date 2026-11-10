@@ -232,6 +232,16 @@ describe('a question that says what it decides and what each choice leads to', (
   });
 });
 
+describe('a question for a person role', () => {
+  it('has the role’s name passed to the gate it opens, and anything but words dropped', async () => {
+    await post('/internal/tasks/task-1/gate', { question: 'May it say this?', options: ['yes', 'no'], role: 'Legal' });
+    expect(open).toHaveBeenLastCalledWith(expect.objectContaining({ question: 'May it say this?', role: 'Legal' }));
+
+    await post('/internal/tasks/task-1/gate', { question: 'May it say this?', options: ['yes', 'no'], role: 7 });
+    expect(open).toHaveBeenLastCalledWith(expect.objectContaining({ role: null }));
+  });
+});
+
 describe('a task ending, which may let go of paths a plan change was waiting for', () => {
   it.each(['done', 'failed', 'stopped'])('resumes the tasks whose paths are free once one is %s', async (state) => {
     applyHeld.mockResolvedValueOnce(['task-7', 'task-8']);

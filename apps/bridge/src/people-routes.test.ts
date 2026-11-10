@@ -170,6 +170,20 @@ describe('Settings → People', () => {
     expect(await response.json()).toMatchObject({ code: 'last-admin' });
     expect(deps.roles.invalidate).toHaveBeenCalled();
   });
+
+  it('takes away a person’s own notification channel once they are removed or merged away, and not when the removal is refused', async () => {
+    const three = [...USERS.map((one) => ({ ...one })), person({ id: 'p-c', email: 'c@example.com', consoleRole: 'user' })];
+    const forgetChannel = vi.fn(async () => undefined);
+    const api = await serve({ ...memory(three).deps, forgetChannel });
+    expect((await api.send('POST', '/v1/people/p-c/remove')).status).toBe(200);
+    expect(forgetChannel).toHaveBeenCalledWith('p-c', 'Jane@Example.com');
+    expect((await api.send('POST', '/v1/people/p-b/merge', { into: 'p-a' })).status).toBe(200);
+    expect(forgetChannel).toHaveBeenLastCalledWith('p-b', 'Jane@Example.com');
+
+    forgetChannel.mockClear();
+    expect((await api.send('POST', '/v1/people/p-a/remove')).status).toBe(409);
+    expect(forgetChannel).not.toHaveBeenCalled();
+  });
 });
 
 describe('PATCH /v1/install {humans}', () => {

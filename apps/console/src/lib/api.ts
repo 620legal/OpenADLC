@@ -582,6 +582,16 @@ export interface AttentionItem {
   pull?: { repo: string; number: number };
   /** The cards whose wait ends here, in board order. Absent when none does, and from an older bridge. */
   unblocks?: { count: number; items: { ref: string; repo: string; number: number; title: string }[] };
+  /** Whom it is for, on a cloud install (ADR 0035). Absent on a local install, and from an older bridge. */
+  audience?: AttentionAudience;
+}
+
+/** Whom a Needs-you item is for: a role's people, the approvers, the admins, one person, or everyone with why. */
+export interface AttentionAudience {
+  for: 'role' | 'approvers' | 'admins' | 'person' | 'everyone';
+  name: string;
+  people: string[];
+  why?: string;
 }
 
 /** A pull request's declared command, as the bridge's `pull-commands.ts` says it for the person asking. */
@@ -1005,6 +1015,24 @@ export interface NotificationSettingsUpdate {
   switches?: Partial<Record<NotifySwitch, boolean>>;
 }
 
+/**
+ * Your channel (`GET /v1/me/notifications`): where the bridge tells you about
+ * the Needs-you items routed to you. `target` is masked, as the install's is.
+ */
+export interface PersonalNotificationView {
+  kind: NotifyTransportKind | null;
+  server: string | null;
+  target: string | null;
+  last: { at: string; event: string; ok: boolean; status: number | null; error: string | null } | null;
+}
+
+/** What a save of Your channel sends: a null kind stops it; an omitted target keeps the one saved. */
+export interface PersonalNotificationUpdate {
+  kind: NotifyTransportKind | null;
+  server?: string;
+  target?: string;
+}
+
 export interface NotificationTestResult {
   ok: boolean;
   status: number | null;
@@ -1366,6 +1394,7 @@ export const api = {
     get<InsightsView>(`/v1/insights?days=${options.days}${options.repo ? `&repo=${encodeURIComponent(options.repo)}` : ''}`),
   spendingLimits: () => get<SpendingLimitsView>('/v1/spending/limits'),
   notifications: () => get<NotificationSettingsView>('/v1/settings/notifications'),
+  myNotifications: () => get<PersonalNotificationView>('/v1/me/notifications'),
   hosts: () => get<HostsView>('/v1/hosts'),
   attention: () => get<{ items: AttentionItem[] }>('/v1/attention'),
   modelAccounts: () => get<{ accounts: ModelAccountRef[] }>('/v1/model-accounts'),

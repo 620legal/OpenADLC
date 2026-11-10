@@ -28,6 +28,11 @@ export const ROUTE_ROLES: Readonly<Record<string, Role>> = {
   'POST /v1/me/github': 'user',
   'GET /v1/me/github/flows/:flowId': 'user',
   'DELETE /v1/me/github': 'user',
+  // A person's own notification channel (ADR 0035): each acts only on the
+  // caller's own person (`my-notifications-routes.ts`).
+  'GET /v1/me/notifications': 'user',
+  'PUT /v1/me/notifications': 'user',
+  'POST /v1/me/notifications/test': 'user',
 
   // The board, the crew, the threads and the costs, to read.
   'GET /v1/board': 'user',

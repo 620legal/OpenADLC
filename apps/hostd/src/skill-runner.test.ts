@@ -440,6 +440,15 @@ describe('a real engine asking a person', () => {
     ]);
   }, 30_000);
 
+  it('passes on the person role a question names, so Needs you shows it only to that role’s people', async () => {
+    const marker = { event: 'question', question: 'May the notice say this?', options: ['yes', 'no'], role: ' Legal ' };
+    const bin = fakeClaude([assistant('msg-1', `<!-- openadlc:${JSON.stringify(marker)} -->`, 1500, 60), result(0.1)]);
+
+    expect(await runTriage(bin)).toBe(0);
+
+    expect(to('gate').map((call) => call.body)).toEqual([{ question: 'May the notice say this?', options: ['yes', 'no'], role: 'Legal' }]);
+  }, 30_000);
+
   it('leaves out consequences that do not pair with the choices, and keeps the decision', async () => {
     const marker = { event: 'question', question: 'Where?', options: ['the root', 'docs/'], decision: 'Where it is served.', consequences: ['Served at /'] };
     const bin = fakeClaude([assistant('msg-1', `<!-- openadlc:${JSON.stringify(marker)} -->`, 1500, 60), result(0.1)]);

@@ -1,4 +1,5 @@
 import type { AttentionItem } from './attention.js';
+import { routedPeople } from './needs-you-audience.js';
 import { itemLink, type Notifier } from './notify.js';
 
 /** The Needs-you kinds sent as they appear, each under the notification of the same name. */
@@ -12,7 +13,11 @@ const FIRST_LOOK = 'first';
 
 export interface WaitingNoticesDeps {
   notifier: Pick<Notifier, 'send' | 'store'>;
-  /** Needs you's items, read as `GET /v1/attention` reads them, so the ids are the ones it shows. */
+  /**
+   * Needs you's items, read as `GET /v1/attention` reads them, so the ids are
+   * the ones it shows, but for everyone: each with its audience
+   * (`withAudiences`), and none left out for not being one viewer's.
+   */
   items(): Promise<AttentionItem[]>;
   consoleUrl: string;
   say?: (line: string) => void;
@@ -114,10 +119,14 @@ export class WaitingNotices {
           continue;
         }
         const subject = item.subject.item ?? item.subject.ref;
+        // To the item's people when it is routed to some, each on their own
+        // channel; one record per occurrence either way, so none is sent twice.
+        const people = routedPeople(item);
         await this.deps.notifier.send({
           event: kind,
           to: null,
           item: key,
+          ...(people ? { people } : {}),
           text: waitingText(item),
           link: subject ? itemLink(this.deps.consoleUrl, subject) : this.deps.consoleUrl,
         });

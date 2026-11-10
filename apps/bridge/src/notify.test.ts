@@ -10,6 +10,10 @@ import {
   ntfyOrigin,
   redactTarget,
   requestFor,
+  forgetPersonalNotification,
+  parsePersonNotify,
+  personalNotificationView,
+  savePersonalNotification,
   saveNotificationSettings,
   TEST_TEXT,
 } from './notify.js';
@@ -323,5 +327,125 @@ describe('a link about a piece of work opens its item', () => {
     // other request intake had worked on in it. Each request is its own conversation.
     expect(itemLink('http://127.0.0.1:47300/', 'openadlc#12')).toBe('http://127.0.0.1:47300/?item=openadlc%2312');
     expect(itemLink('http://127.0.0.1:47300', 'request:a4b02784')).toBe('http://127.0.0.1:47300/?item=request%3Aa4b02784');
+  });
+});
+
+/**
+ * A channel per person (ADR 0035): an item routed to some people goes to each
+ * one's own channel and not to the install's, which reaches everyone on it.
+ * Each person's target is a credential, kept apart and shown masked.
+ */
+describe('a person’s own channel', () => {
+  const ALICE_TOPIC = 'alice-own-topic-9z8y';
+  const withPeople = (people: Record<string, { kind: 'ntfy' | 'slack' | 'webhook'; target: string }>) =>
+    memoryNotifyStore({
+      settings: {
+        notifyTransport: JSON.stringify({ kind: 'slack', setAt: '2026-11-02T00:00:00.000Z', setBy: 'janedoe' }),
+        personNotify: JSON.stringify({
+          people: Object.fromEntries(
+            Object.entries(people).map(([id, one]) => [id, { kind: one.kind, ...(one.kind === 'ntfy' ? { server: 'https://ntfy.sh' } : {}), setAt: '2026-11-03T00:00:00.000Z' }]),
+          ),
+        }),
+      },
+      target: SLACK,
+      personTargets: Object.fromEntries(Object.entries(people).map(([id, one]) => [id, one.target])),
+    });
+
+  it('sends a routed item to each of its people with a channel, once, and not to the install’s', async () => {
+    const fetchSpy = answering(200);
+    const store = withPeople({ 'p-a': { kind: 'ntfy', target: ALICE_TOPIC } });
+    const notifier = new Notifier(configWith(''), store);
+
+    await expect(notifier.send({ event: 'gate_opened', to: null, text: 'q', link: 'l', people: ['p-a', 'p-a', 'p-b'] })).resolves.toBe('sent');
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('https://ntfy.sh/');
+    expect(JSON.parse(String(init.body))).toMatchObject({ topic: ALICE_TOPIC, message: 'q' });
+    const delivery = store.events.find((event) => event.type === 'notify.delivery');
+    expect(delivery?.payload).toMatchObject({ source: 'person', person: 'p-a', transport: 'ntfy', ok: true });
+    expect(store.events.find((event) => event.type === 'notify.gate_opened')?.payload).toMatchObject({ people: ['p-a', 'p-a', 'p-b'] });
+    expect(JSON.stringify(store.events)).not.toContain(ALICE_TOPIC);
+  });
+
+  it('sends nothing for a routed item whose people have no channel, and the install’s channel stays quiet', async () => {
+    const fetchSpy = answering(200);
+    const notifier = new Notifier(configWith(''), withPeople({}));
+    await expect(notifier.send({ event: 'gate_opened', to: null, text: 'q', link: 'l', people: ['p-b'] })).resolves.toBe('logged');
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('sends an item for everyone to the install’s channel, as it always did', async () => {
+    const fetchSpy = answering(200);
+    const notifier = new Notifier(configWith(''), withPeople({ 'p-a': { kind: 'ntfy', target: ALICE_TOPIC } }));
+    await notifier.send({ event: 'gate_opened', to: null, text: 'q', link: 'l' });
+    await notifier.send({ event: 'gate_opened', to: null, text: 'q', link: 'l', people: [] });
+    expect(fetchSpy.mock.calls.map(([url]) => url)).toEqual([SLACK, SLACK]);
+  });
+
+  it('keeps a switched-off kind off for a person’s channel too', async () => {
+    const fetchSpy = answering(200);
+    const store = withPeople({ 'p-a': { kind: 'ntfy', target: ALICE_TOPIC } });
+    store.settings.notifyKinds = JSON.stringify({ gate_opened: false });
+    await expect(new Notifier(configWith(''), store).send({ event: 'gate_opened', to: null, text: 'q', link: 'l', people: ['p-a'] })).resolves.toBe('off');
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('never counts a person’s delivery as the install channel’s', async () => {
+    answering(500);
+    const store = withPeople({ 'p-a': { kind: 'ntfy', target: ALICE_TOPIC } });
+    const notifier = new Notifier(configWith(''), store);
+    await notifier.send({ event: 'gate_opened', to: null, text: 'q', link: 'l', people: ['p-a'] });
+    const install = await notifier.transport();
+    expect(install && (await notifier.lastDelivery(install))).toBeNull();
+    expect((await personalNotificationView(notifier, 'p-a')).last).toMatchObject({ ok: false, status: 500 });
+  });
+
+  it('is saved with its kind in personNotify and its target only in the person’s secret, and shown masked', async () => {
+    const store = memoryNotifyStore();
+    const saved = await savePersonalNotification(store, 'p-a', { kind: 'ntfy', target: ALICE_TOPIC }, 'a@example.com', new Date('2026-11-10T00:00:00Z'));
+    expect(saved).toEqual({ ok: true, change: { kind: 'ntfy', targetChanged: true } });
+    expect(JSON.parse(store.settings.personNotify ?? '{}')).toEqual({ people: { 'p-a': { kind: 'ntfy', server: 'https://ntfy.sh', setAt: '2026-11-10T00:00:00.000Z' } } });
+    expect(store.settings.personNotify).not.toContain(ALICE_TOPIC);
+    expect(store.personSecrets['p-a']).toBe(ALICE_TOPIC);
+    expect(store.secret).toBeNull();
+    expect((await personalNotificationView(new Notifier(configWith(''), store), 'p-a')).target).toBe('…9z8y');
+
+    // Another person's save keeps the first one's entry.
+    await savePersonalNotification(store, 'p-b', { kind: 'slack', target: SLACK }, 'b@example.com');
+    expect(Object.keys(parsePersonNotify(store.settings.personNotify ?? null).people).sort()).toEqual(['p-a', 'p-b']);
+  });
+
+  it('refuses a save the install’s channel would refuse, in the same words', async () => {
+    const store = memoryNotifyStore();
+    await expect(savePersonalNotification(store, 'p-a', { kind: 'slack', target: 'https://example.com/x' }, 'a')).resolves.toMatchObject({ ok: false, error: expect.stringContaining('hooks.slack.com') });
+    await expect(savePersonalNotification(store, 'p-a', { kind: 'ntfy' }, 'a')).resolves.toEqual({ ok: false, error: 'Enter the ntfy topic' });
+    await expect(savePersonalNotification(store, 'p-a', { kind: 'ntfy', target: 't', server: 'https://u:p@ntfy.example.com' }, 'a')).resolves.toMatchObject({ ok: false });
+    expect(store.settings.personNotify).toBeUndefined();
+  });
+
+  it('is stopped by the person, and forgotten when they are removed', async () => {
+    const store = memoryNotifyStore();
+    await savePersonalNotification(store, 'p-a', { kind: 'ntfy', target: ALICE_TOPIC }, 'a');
+    await savePersonalNotification(store, 'p-b', { kind: 'ntfy', target: 'bob-topic' }, 'b');
+    await expect(savePersonalNotification(store, 'p-a', { kind: null }, 'a')).resolves.toEqual({ ok: true, change: { kind: null, targetChanged: true } });
+    expect(store.personSecrets['p-a']).toBeUndefined();
+    await forgetPersonalNotification(store, 'p-b', 'admin@example.com');
+    expect(store.personSecrets['p-b']).toBeUndefined();
+    expect(store.settings.personNotify).toBeUndefined();
+  });
+
+  it('is read without entries for people who are gone, or of a kind it does not know', () => {
+    const raw = JSON.stringify({ people: { 'p-a': { kind: 'ntfy', setAt: 'x' }, 'p-gone': { kind: 'slack', setAt: 'x' }, 'p-odd': { kind: 'pager', setAt: 'x' } } });
+    expect(Object.keys(parsePersonNotify(raw, ['p-a', 'p-odd']).people)).toEqual(['p-a']);
+    expect(parsePersonNotify('not json').people).toEqual({});
+  });
+
+  it('is tested through the person’s own channel, and says when there is none', async () => {
+    const fetchSpy = answering(200);
+    const notifier = new Notifier(configWith(''), withPeople({ 'p-a': { kind: 'ntfy', target: ALICE_TOPIC } }));
+    await expect(notifier.testPerson('p-a')).resolves.toMatchObject({ ok: true });
+    expect(JSON.parse(String((fetchSpy.mock.calls[0] as [string, RequestInit])[1].body))).toMatchObject({ topic: ALICE_TOPIC });
+    await expect(notifier.testPerson('p-b')).resolves.toBeNull();
   });
 });

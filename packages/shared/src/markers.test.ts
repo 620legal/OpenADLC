@@ -44,6 +44,20 @@ describe('gate comments', () => {
     expect(marker?.options).toEqual(['openadlc', 'infra']);
   });
 
+  it('mentions the people of the role it is for by GitHub login, before the question', () => {
+    const body = renderGateComment({
+      bot: 'Builder',
+      taskId: 'task-1',
+      question: 'May the notice say this?',
+      options: ['yes', 'no'],
+      context: 'The notice is new.',
+      forRole: { name: 'Legal', logins: ['alice', ' bob ', 'alice'] },
+    });
+    expect(body).toContain('The notice is new.\n\nFor Legal: @alice @bob\n\n**May the notice say this?**');
+    // No one in it has a login: there is no one to mention, so nothing is said.
+    expect(renderGateComment({ bot: 'B', taskId: 't', question: 'q', options: [], forRole: { name: 'Legal', logins: [] } })).not.toContain('For Legal');
+  });
+
   it('says a question with choices takes a number, or the person’s own words', () => {
     const body = renderGateComment({
       bot: 'ottoexampleco',
@@ -152,6 +166,7 @@ describe('the question a message asks', () => {
       open: false,
       context: found,
       addressedTo: null,
+      role: null,
       ignored: 0,
       planChange: null,
       decision: '',
@@ -181,6 +196,7 @@ describe('the question a message asks', () => {
       open: false,
       context: '',
       addressedTo: null,
+      role: null,
       ignored: 0,
       planChange: null,
       decision: '',
@@ -209,6 +225,19 @@ describe('the question a message asks', () => {
       parseQuestion('<!-- openadlc:{"event":"question","question":"Ship it?","options":["yes","no"],"addressedTo":" janedoe "} -->')
         ?.addressedTo,
     ).toBe('janedoe');
+  });
+
+  it('says which person role it is for, by name, trimmed and cut to a role name’s length', () => {
+    const ask = (role: unknown) => parseQuestion(`<!-- openadlc:${JSON.stringify({ event: 'question', question: 'Ship it?', options: ['yes'], role })} -->`)?.role;
+    expect(ask(' Legal ')).toBe('Legal');
+    expect(ask('x'.repeat(60))).toBe('x'.repeat(40));
+    expect(ask('')).toBeNull();
+    expect(ask(7)).toBeNull();
+    expect(parseQuestion('<!-- openadlc:{"event":"question","question":"Ship it?"} -->')?.role).toBeNull();
+  });
+
+  it('names no role for a plan change, which approvers decide whatever their role', () => {
+    expect(parseQuestion('<!-- openadlc:{"event":"plan_change","paths":["a.ts"],"reason":"r","role":"Legal"} -->')?.role).toBeNull();
   });
 
   it('is nothing at all in a message that asks nothing', () => {
@@ -273,6 +302,7 @@ describe('what a question decides, and what each choice leads to', () => {
       open: false,
       context: 'I found two web roots.',
       addressedTo: null,
+      role: null,
       ignored: 0,
       planChange: null,
       decision: '',
@@ -388,6 +418,7 @@ describe('a plan change a task asks for', () => {
       open: false,
       context: 'The runner drops the field.\n\nReason: it forwards nothing',
       addressedTo: null,
+      role: null,
       ignored: 0,
       planChange: { paths: ['apps/hostd/src/skill-runner.ts', 'docs/'], reason: 'it forwards nothing' },
       decision: '',

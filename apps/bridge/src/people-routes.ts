@@ -4,6 +4,7 @@ import type { BridgeConfig } from './config.js';
 import { effectiveConfig } from './effective-config.js';
 import { resolveGithubAccount } from './human-ids.js';
 import type { IdentityMode } from './identity.js';
+import { databaseNotifyStore, forgetPersonalNotification } from './notify.js';
 import { iapAccess, type IapAccess, type Roles } from './roles.js';
 import { HttpFailure, type Router } from './router.js';
 
@@ -66,6 +67,11 @@ export interface PeopleRouteDeps {
   personRoles(): Promise<StoredPersonRoles>;
   /** The GitHub account the signed-in person linked, for `GET /v1/me`. */
   githubOf?: (identity: string) => Promise<{ login: string } | null>;
+  /**
+   * Takes away a person's own notification channel and its secret, once they
+   * are removed or merged into someone else: left, the secret outlived them.
+   */
+  forgetChannel?: (personId: string, by: string) => Promise<void>;
 }
 
 export function livePeopleDeps(config: BridgeConfig, roles: PeopleRouteDeps['roles'], consoleMembers: readonly string[]): PeopleRouteDeps {
@@ -93,8 +99,16 @@ export function livePeopleDeps(config: BridgeConfig, roles: PeopleRouteDeps['rol
           : await personAccounts.ofIdentity(usersStore.normalizeEmail(identity));
       return linked ? { login: linked.githubLogin } : null;
     },
+    forgetChannel: (personId, by) => forgetPersonalNotification(databaseNotifyStore(), personId, by),
     ...(config.identityMode === 'iap' ? { access: (email: string) => iapAccess(email, consoleMembers) } : {}),
   };
+}
+
+/** Forgets a person's own channel; a failure is said and leaves the person's change done, since the channel is read only for people who exist. */
+async function forgetChannel(deps: PeopleRouteDeps, personId: string, by: string): Promise<void> {
+  await deps.forgetChannel?.(personId, by).catch((error: unknown) => {
+    console.warn(`[bridge] could not remove the notification channel of person ${personId}: ${error instanceof Error ? error.message : error}`);
+  });
 }
 
 const STATUS: Record<UserChangeRefused['reason'], number> = { 'last-admin': 409, exists: 409, 'not-found': 404, invalid: 400 };
@@ -279,6 +293,7 @@ export function registerPeopleRoutes(router: Router, deps: PeopleRouteDeps): voi
     if (typeof into !== 'string' || !into) throw new HttpFailure(400, 'into is the id of the person to keep');
     refuseEnvironment(into);
     const person = await change(deps, () => deps.store.merge(id, into, identity));
+    if (person.id !== id) await forgetChannel(deps, id, identity);
     return { person: (await peopleView(deps)).people.find((one) => one.id === person.id) };
   });
 
@@ -286,6 +301,7 @@ export function registerPeopleRoutes(router: Router, deps: PeopleRouteDeps): voi
     const id = params.id ?? '';
     refuseEnvironment(id);
     await change(deps, () => deps.store.remove(id, identity));
+    await forgetChannel(deps, id, identity);
     return { ok: true };
   });
 }

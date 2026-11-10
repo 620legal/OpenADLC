@@ -51,6 +51,8 @@ interface GateRow {
   consequences?: string[];
   added_needs_human?: boolean;
   held?: unknown;
+  person_role?: string | null;
+  person_role_asked?: string | null;
 }
 
 /**
@@ -60,7 +62,15 @@ interface GateRow {
  * whether a person's approval of its plan change waits (`held`), so nothing
  * offers Approve on one already approved.
  */
-export type GateRecord = Gate & { addedNeedsHuman?: boolean; held?: PlanChangeHold | null; answeredByPerson?: string | null };
+export type GateRecord = Gate & {
+  addedNeedsHuman?: boolean;
+  held?: PlanChangeHold | null;
+  answeredByPerson?: string | null;
+  /** The id of the person role the question is for, resolved when it opened; null when it named none the install had. */
+  personRole?: string | null;
+  /** The role's name as the bot wrote it, kept so a card can say no role is called that. */
+  personRoleAsked?: string | null;
+};
 
 function toMessage(row: MessageRow): Message {
   return {
@@ -98,6 +108,8 @@ function toGate(row: GateRow): GateRecord {
     ...(row.added_needs_human !== undefined ? { addedNeedsHuman: row.added_needs_human } : {}),
     ...(row.held !== undefined ? { held: toHold(row.held) } : {}),
     ...(row.answered_by_person !== undefined ? { answeredByPerson: row.answered_by_person } : {}),
+    ...(row.person_role !== undefined ? { personRole: row.person_role } : {}),
+    ...(row.person_role_asked !== undefined ? { personRoleAsked: row.person_role_asked } : {}),
   };
 }
 
@@ -248,12 +260,16 @@ export async function createGate(input: {
   /** What is being decided, and what each option leads to, in their order: shown with the question, never matched as an answer. */
   decision?: string | null;
   consequences?: string[];
+  /** The person role it is for: its id when the install has it, and its name as asked. */
+  personRole?: string | null;
+  personRoleAsked?: string | null;
 }): Promise<GateRecord> {
   const row = await queryOne<GateRow>(
-    `insert into gates (task_id, thread_id, question, options, addressed_to, github_comment_url, added_needs_human, decision, consequences)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+    `insert into gates (task_id, thread_id, question, options, addressed_to, github_comment_url, added_needs_human, decision, consequences,
+                        person_role, person_role_asked)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
      returning id, task_id, thread_id, question, options, state, answer, answered_by, answered_at, addressed_to, github_comment_url, created_at,
-               decision, consequences, added_needs_human`,
+               decision, consequences, added_needs_human, person_role, person_role_asked`,
     [
       input.taskId,
       input.threadId,
@@ -266,6 +282,8 @@ export async function createGate(input: {
       input.addedNeedsHuman ?? true,
       input.decision ? redactSecrets(input.decision) : null,
       (input.consequences ?? []).map((consequence) => redactSecrets(consequence)),
+      input.personRole ?? null,
+      input.personRoleAsked ? redactSecrets(input.personRoleAsked) : null,
     ],
   );
   if (!row) throw new Error('failed to create gate');
@@ -292,7 +310,7 @@ export async function listOpenGates(): Promise<GateRecord[]> {
     // With what the card shows the question is about, and the hold its own
     // message carries (`leases.holdPlanChange`).
     `select g.id, g.task_id, g.thread_id, g.question, g.options, g.state, g.answer, g.answered_by, g.answered_at,
-            g.addressed_to, g.github_comment_url, g.created_at, g.decision, g.consequences,
+            g.addressed_to, g.github_comment_url, g.created_at, g.decision, g.consequences, g.person_role, g.person_role_asked,
             (select q.payload->'held' from messages q
               where q.thread_id = g.thread_id and q.kind = 'gate' and q.payload->>'gateId' = g.id::text
               order by q.at desc limit 1) as held,
@@ -363,7 +381,7 @@ export async function listGatesForTasks(taskIds: readonly string[]): Promise<Gat
 export async function getGate(id: string): Promise<GateRecord | null> {
   const row = await queryOne<GateRow>(
     `select id, task_id, thread_id, question, options, state, answer, answered_by, answered_at, addressed_to, github_comment_url, created_at,
-            decision, consequences, added_needs_human
+            decision, consequences, added_needs_human, person_role, person_role_asked
      from gates where id = $1`,
     [id],
   );

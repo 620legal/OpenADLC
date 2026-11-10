@@ -191,6 +191,18 @@ export function notifyTargetRef(): string {
   return 'notify-target';
 }
 
+/** Where every person's own channel is kept: `personNotifyTargetRef(id)` starts with it. */
+export const PERSON_NOTIFY_TARGET_PREFIX = 'notify-target:person:';
+
+/**
+ * Where one person's own notifications go (`personNotify`, ADR 0035): the
+ * same kind of credential as the install's `notifyTargetRef`, kept per person
+ * id so removing the person removes it, and never shown back unmasked.
+ */
+export function personNotifyTargetRef(personId: string): string {
+  return `${PERSON_NOTIFY_TARGET_PREFIX}${personId}`;
+}
+
 /**
  * What hostd presents to the bridge's token service. The service hands out a
  * GitHub credential, so reaching the private network is not on its own enough

@@ -52,6 +52,7 @@ export { standingPersonAsks, standingPersonAwaits, type HeldPlanChange, type Per
 import { ACCOUNTS_STEP, RECONNECT } from './health/words.js';
 import type { Router } from './router.js';
 import type { SubjectTitle } from './subject-titles.js';
+import { isCostCapGate, viewerOf, visibleTo, withAudiences, type Audience, type AudienceFacts } from './needs-you-audience.js';
 import {
   ignoredSubjects,
   issueForSubject,
@@ -353,7 +354,25 @@ export interface AttentionItem {
    * With what is being decided, said above the question, and what each
    * choice leads to, in the order of `options`, when the bot said them.
    */
-  question?: { gateId: string; options: string[]; decision?: string; consequences?: string[] };
+  question?: {
+    gateId: string;
+    options: string[];
+    decision?: string;
+    consequences?: string[];
+    /** The person role it is for, by id as its gate resolved it, and the name the bot wrote. */
+    personRole?: string | null;
+    personRoleAsked?: string | null;
+    /** Asks to widen a task's paths, which approvers decide. */
+    planChange?: boolean;
+    /** Asks for more money at a task's cap, which admins decide. */
+    costCap?: boolean;
+  };
+  /**
+   * Who it is for (`needs-you-audience.ts`), set by `GET /v1/attention`
+   * outside a local install: the card says it, and the list holds only the
+   * viewer's. Absent on a local install, where everything is the one person's.
+   */
+  audience?: Audience;
   /**
    * What a question is about: the bot's message just before it, such as the
    * issue intake drafted before "Here's what I'll file. OK?". The card asked
@@ -468,7 +487,11 @@ interface RequestRow {
   updatedAt?: string;
 }
 
-type GateRow = Pick<Gate, 'id' | 'taskId' | 'question' | 'options' | 'githubCommentUrl' | 'createdAt' | 'context' | 'decision' | 'consequences'>;
+type GateRow = Pick<Gate, 'id' | 'taskId' | 'question' | 'options' | 'githubCommentUrl' | 'createdAt' | 'context' | 'decision' | 'consequences'> & {
+  /** The person role the question is for (`gates.person_role`), and its name as asked. */
+  personRole?: string | null;
+  personRoleAsked?: string | null;
+};
 
 /** What a plan-change card says about its request: whether it waits on a lease, the designer's part, a standing approval that could not cover it. */
 type PlanChangeFacts = Pick<leases.PlanChangeRecord, 'paths' | 'held' | 'designer' | 'standing'>;
@@ -1262,6 +1285,10 @@ export function attentionItems(given: AttentionInput): AttentionItem[] {
         options: gate.options,
         ...(decision ? { decision } : {}),
         ...(consequences.length > 0 ? { consequences } : {}),
+        ...(gate.personRole ? { personRole: gate.personRole } : {}),
+        ...(gate.personRoleAsked ? { personRoleAsked: gate.personRoleAsked } : {}),
+        ...(plan || failed || input.planChanges?.has(gate.id) ? { planChange: true } : {}),
+        ...(isCostCapGate(gate.options) ? { costCap: true } : {}),
       },
       ...(context ? { context } : {}),
     });
@@ -2479,6 +2506,24 @@ export interface AttentionDeps {
   heldPromotes?: () => Promise<readonly HeldPromote[]>;
   /** Where what work waits on is read from (`readWaitingContext`), for the work that is stuck. Absent, none is said to be. */
   waiting?: WaitingReads;
+  /**
+   * Who each item is for (ADR 0035): People and the roles, read once per
+   * request. On a local install, or absent, nothing is routed and every item
+   * is in the one list.
+   */
+  audience?: { local: boolean; facts(): Promise<AudienceFacts> };
+}
+
+/**
+ * The items one person's Needs you holds, each saying whom it is for: those
+ * routed to them, and those that fell back to everyone. Anything that needs
+ * every item (`WaitingNotices`, the board's counts) reads `withAudiences`, not this.
+ */
+export async function attentionFor(identity: string, items: readonly AttentionItem[], deps: Pick<AttentionDeps, 'audience'>): Promise<AttentionItem[]> {
+  if (!deps.audience || deps.audience.local) return [...items];
+  const facts = await deps.audience.facts();
+  const viewer = viewerOf(identity, facts);
+  return withAudiences(items, facts, false).filter((item) => visibleTo(viewer, item));
 }
 
 /**
@@ -2752,5 +2797,5 @@ export async function readAttention(now: Date, deps: AttentionDeps = {}): Promis
 }
 
 export function registerAttentionRoutes(router: Router, deps: AttentionDeps = {}): void {
-  router.get('/v1/attention', async () => ({ items: attentionItems(await readAttention(new Date(), deps)) }));
+  router.get('/v1/attention', async ({ identity }) => ({ items: await attentionFor(identity, attentionItems(await readAttention(new Date(), deps)), deps) }));
 }

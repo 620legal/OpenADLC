@@ -9,7 +9,7 @@ commands, [cli.md](cli.md).
 | Place | Holds | Written by |
 |---|---|---|
 | `$OPENADLC_HOME/install.json` | This machine's install: driver, database, ports, the App's client id, the humans, the webhook secret | `openadlc init`, `openadlc up` (the database password), or by hand. The console's walkthrough writes the settings table instead |
-| The `settings` table | What the console set: organization, client id, automation bot, operator email, public URL, install name, the engine update schedules and time zone, OpenADLC's own update (`selfUpdateSchedule`, and what the bridge records of it: `selfUpdateRun`, `selfUpdateLast`, `selfUpdateCandidate`), attribution mode, which repositories a person merges for (`bridgeMergeOff`, `ciMergeByPerson`), testing deploys, the CI minutes cap, pauses and holds, the console's name and logo (`consoleName`, `consoleLogo`), whether the bridge keeps its Mac awake (`keepAwake`), and the roles the install's people hold (`personRoles`). The closed list is `SETTING_KEYS` in `packages/db/src/store/settings.ts`. No credential: the webhook secret, the App's private key and its client secret, set through the console, go to the secret store | the console |
+| The `settings` table | What the console set: organization, client id, automation bot, operator email, public URL, install name, the engine update schedules and time zone, OpenADLC's own update (`selfUpdateSchedule`, and what the bridge records of it: `selfUpdateRun`, `selfUpdateLast`, `selfUpdateCandidate`), attribution mode, which repositories a person merges for (`bridgeMergeOff`, `ciMergeByPerson`), testing deploys, the CI minutes cap, pauses and holds, the console's name and logo (`consoleName`, `consoleLogo`), whether the bridge keeps its Mac awake (`keepAwake`), and the roles the install's people hold (`personRoles`), and where each person's own notifications go (`personNotify`). The closed list is `SETTING_KEYS` in `packages/db/src/store/settings.ts`. No credential: the webhook secret, the App's private key and its client secret, set through the console, go to the secret store | the console |
 | `config/*.yaml` | The crew, the repositories to seed, the caps, the review rules | you, in git |
 | Environment variables | Everything else, per service | you, or `openadlc up` |
 | `$OPENADLC_HOME/secrets/` | Refresh tokens, signing keys, model keys, the App's private key and client secret, the webhook secret, the internal secret | OpenADLC, never by hand |
@@ -728,6 +728,89 @@ Notifications, while that send failed or none has got through yet, and
 clears when one does. With nothing set it passes; with only
 `OPENADLC_NOTIFY_WEBHOOK` and nothing sent yet it has no answer.
 
+**Your channel.** On a cloud install, everyone signed in to the console can
+set a channel of their own in **Settings → Notifications → Your channel**: an
+ntfy topic, a Slack incoming webhook or a webhook URL, checked as the
+install's are. A [Needs-you item routed](#needs-you-routing) to some people is
+sent to each of their own channels, and **not** to the install's. The
+install's channel is an admin's: it carries what is for everyone (an item that
+fell back, `cap_warning`, `promote_waiting`, `check_failing` and
+`check_fixed`).
+
+- Someone with no channel of their own gets nothing from the bridge for an
+  item routed to them. They still have the console's badge and desktop alert,
+  and GitHub's own notification of the comment's mention.
+- The install's switches (`notifyKinds`) apply to both. There are no
+  per-person switches.
+- The target is kept only in the secret store, as
+  `notify-target:person:<person id>`, and shown back masked. The
+  `personNotify` setting holds each person's kind, ntfy server and when it was
+  set: `{"people": {"<person id>": {"kind": "ntfy", "server": "https://ntfy.sh", "setAt": "…"}}}`.
+  Only `PUT /v1/me/notifications` writes it, and `PATCH /v1/install` refuses it.
+- Each delivery is recorded as `notify.delivery` with `source: "person"` and
+  the person's id. The `notifications` health check counts only the install's
+  deliveries, so one person's broken topic never raises a card; they see their
+  own last delivery, and **Send a test**.
+- Removing a person, or merging them into someone else, deletes their channel
+  and its secret. Backup and restore carry both with the install.
+- The API, for any signed-in person, acting only on their own channel:
+  `GET /v1/me/notifications`, `PUT /v1/me/notifications` (`{kind, server?,
+  target?}`; `kind: null` stops it) and `POST /v1/me/notifications/test`. Each
+  save is audited as `notify.personal_configured` with `{person, kind,
+  targetChanged}`, never the target. A local install refuses them: its one
+  person's channel is the install's.
+
+**Upgrading a cloud install.** Once people hold roles, the items routed to
+them stop going to the install's channel. Until each of them sets their own,
+the bridge sends them nothing for those items. A local install is unchanged.
+
+## Needs-you routing
+
+On a cloud install each Needs-you item is for someone, and reaches only them:
+their Needs you list, its badge, the tab title and favicon count, the desktop
+alert and the item's notification. Everyone else does not see it, count it or
+get notified ([ADR 0035](adr/0035-needs-you-items-follow-person-roles.md)).
+Who it is for is worked out on every load, from who is in [People](#people)
+and who holds which [role](#roles) now, so moving someone into or out of a
+role changes what they see on their next load, and no item is rewritten.
+
+| Item | For |
+|---|---|
+| A bot's question | the role its question marker names (`"role": "Legal"`), by name, without regard to case |
+| A plan change | the approvers (people with Approves on), whatever role it names |
+| The cost-cap question | the admins |
+| A pull request waiting on one person's approval | that person, matched by GitHub login; the approvers when no one in People has the login |
+| A production promote held for a person, an approved plan change waiting on paths | the approvers |
+| A pull request a person merges, a stopped review, a send-back held, a failed task or triage, unowned issues, an abandoned dependency, answered work waiting on GitHub, a held stacked change | Engineering |
+| A health check failing or fixed, a failed engine or OpenADLC update, a design memory supersede, work stuck | the admins |
+
+When that comes to nobody, the item is for everyone, and its card says why
+under the headline:
+
+- "For everyone: the question names no role"
+- "For everyone: no role here is called Privacy"
+- "For everyone: no one holds Legal yet"
+- "For everyone: no one approves yet"
+
+A routed card says "For Legal", "For approvers", "For admins" or "For you".
+
+- **The role a question names** is resolved when its gate opens and kept on the
+  gate by id (`gates.person_role`), with the name as asked
+  (`gates.person_role_asked`). Renaming a custom role keeps routing it; a role
+  added after the gate opened does not route it. Bots name roles as people see
+  them, never by a custom role's `pr_` id.
+- **The GitHub comment** for a routed question mentions its people with a
+  GitHub login on a line before the question: "For Legal: @alice @bob".
+- **Who may answer is not routed.** Anyone in People answers a question, from
+  the console or from GitHub, as before, and an approval still needs Approves.
+  Anyone with access still opens an item by its link. An answered gate leaves
+  everyone's Needs you.
+- **The board's** "waiting on you" counts only the viewer's open questions,
+  and those for everyone.
+- **A local install** has one console identity, so nothing is routed: every
+  item is that person's, its card says nothing of whom it is for, and
+  notifications go to the install's channel as before.
+
 ## People
 
 **Settings → People** (admins only) is the install's one list of people. It
@@ -809,9 +892,9 @@ The API takes admins only: `GET /v1/people`, `GET /v1/people/github/:login`
 ## Roles
 
 **Settings → Roles** (admins only) groups the install's people into roles.
-Nothing is routed by them yet: a later change will send a Needs-you item to
-the role it concerns, such as Product for a product decision or Legal for a
-legal one.
+On a cloud install, Needs-you items follow them: a bot's question for Legal
+goes to the people who hold Legal, and the crew's own work to Engineering (see
+[Needs-you routing](#needs-you-routing)).
 
 - **Product, Legal and Engineering** are on every install, including one with
   nothing stored. You can add people to them and take people off them, but
