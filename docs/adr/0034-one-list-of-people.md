@@ -38,6 +38,10 @@ could not hold someone known only by a GitHub login.
   `mayAnswerGates` also accepts a person matched by the delivery's account id
   when the gate is not `needsApprover` (a plan change or the cost-cap
   question). Reviews, reserved paths and production still read `humans`.
+  Being in People is not access to the repository: `actsForOn`, which decides
+  whether any delivery is read at all, does not count it. A comment from a
+  person with no role on the repository is let through only to answer an open
+  question, and does nothing else.
 - **A gate records the person who answered** (`gates.answered_by_person`, no
   foreign key): from the console by email, the operator on a local install;
   from GitHub by account id. `answered_by` keeps the identity as written.

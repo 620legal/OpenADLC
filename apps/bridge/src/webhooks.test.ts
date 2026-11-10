@@ -2158,6 +2158,35 @@ describe('a person in People with Approves off, answering on GitHub', () => {
     expect(answered).toEqual([]);
   });
 
+  // Being in People is not access to the repository: Dana's id let her
+  // through `actsForOn`, so her issues, edits and every comment were read as
+  // vouched for. Only answering a bot's question counts her place in People.
+  it('is not trusted for anything but answering a question', async () => {
+    const { webhooks, answered, reply } = await answering(false);
+    const onIssue = vi.spyOn(webhooks as never as { onIssue: () => Promise<void> }, 'onIssue');
+    await webhooks.receive(
+      'issues',
+      {
+        action: 'opened',
+        repository: { name: 'openadlc', full_name: 'janedoe/openadlc' },
+        sender: { login: 'dana', id: 404 },
+        issue: { author_association: 'CONTRIBUTOR', number: 971, title: 'Do this', body: 'please', user: { login: 'dana', id: 404 } },
+      } as never,
+      'delivery-dana-issue',
+    );
+    expect(onIssue).not.toHaveBeenCalled();
+
+    const wakeBuild = vi.spyOn(webhooks as never as { wakeBuild: () => Promise<void> }, 'wakeBuild');
+    const { threads } = await import('@openadlc/db');
+    vi.mocked(threads.listOpenGates).mockResolvedValue([] as never);
+    await webhooks.receive('issue_comment', reply(404), 'delivery-dana-no-question');
+    expect(wakeBuild).not.toHaveBeenCalled();
+    expect(answered).toEqual([]);
+
+    const input = { client: null, repoFullName: 'janedoe/openadlc', crew: [], humans: [] };
+    expect(await smokeStarterRefusal({ triggering_actor: { login: 'dana', type: 'User', id: 404 } }, input)).toContain('dana');
+  });
+
   it('does not approve a plan change, and is told it takes Approves', async () => {
     const { webhooks, answered, reply, threads } = await answering(true);
     await webhooks.receive('issue_comment', reply(404), 'delivery-dana-plan');

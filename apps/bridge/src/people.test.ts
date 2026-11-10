@@ -111,10 +111,13 @@ describe('the role a login has, for the merge check', () => {
 });
 
 describe('a person in People on GitHub', () => {
-  it('is acted for by their account id, whatever GitHub says of the login, and never by the login alone', async () => {
+  // Being in People is not access: trusted here, a People member with no role
+  // on the repository had every issue, edit and comment read as vouched for.
+  // They may only answer a bot's question, which webhooks.ts decides.
+  it('is not acted for without a role on the repository, by their account id or their login', async () => {
     const crew: { githubLogin: string | null }[] = [];
     const nobody = asker({});
-    expect(await actsForOn({ client: nobody, repoFullName: 'exampleco/api', author: { login: 'dana', association: 'NONE', id: 404 }, crew })).toBe(true);
+    expect(await actsForOn({ client: nobody, repoFullName: 'exampleco/api', author: { login: 'dana', association: 'NONE', id: 404 }, crew })).toBe(false);
     expect(await actsForOn({ client: nobody, repoFullName: 'exampleco/api', author: { login: 'dana', association: 'NONE', id: 999 }, crew })).toBe(false);
   });
 });

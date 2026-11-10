@@ -407,14 +407,13 @@ export class Webhooks {
     const eventId = await recordEvent({ source: 'github', type, deliveryId, payload });
 
     try {
-      const attributed = (await this.fromSomeoneWithAccess(event, payload))
-        ? await this.attributed(event, payload)
-        : null;
+      const access = await this.fromSomeoneWithAccess(event, payload);
+      const attributed = access ? await this.attributed(event, payload) : null;
       if (!attributed?.counts) {
         await markEventProcessed(eventId);
         return;
       }
-      await this.dispatch(event, payload, attributed.signature);
+      await this.dispatch(event, payload, attributed.signature, access === 'question only');
       await markEventProcessed(eventId);
       // An issue labelled, moved, opened or closed, a pull request merged or
       // closed, a deploy that ships: each can let the next piece of work start.
@@ -590,8 +589,14 @@ export class Webhooks {
    * with no role here, so what the branch's owner can cause is judged by the
    * pull request's author (`BY_THE_BRANCH`). Deliveries about the repository's
    * own machinery — checks, runs, deployments — have no author to judge.
+   *
+   * A person in People with no role on the repository is not somebody with
+   * access: matched by account id, their comment is let through `'question
+   * only'`, to answer a bot's question and nothing else. Trusted as anybody
+   * with access, being in People read their issues, edits and comments as
+   * vouched for everywhere (docs/adr/0034-one-list-of-people.md).
    */
-  private async fromSomeoneWithAccess(event: string, payload: WebhookPayload): Promise<boolean> {
+  private async fromSomeoneWithAccess(event: string, payload: WebhookPayload): Promise<boolean | 'question only'> {
     const written =
       event === 'issue_comment' || event === 'pull_request_review_comment'
         ? payload.comment
@@ -621,6 +626,11 @@ export class Webhooks {
       if (await actsForOn({ client, repoFullName: payload.repository.full_name, author: { login: author, association: null, id: authorId }, crew, humans: live?.humans ?? [] })) {
         return true;
       }
+    }
+
+    if (event === 'issue_comment' && payload.action === 'created' && typeof authorId === 'number' && !isAppAccount(payload.comment?.user)) {
+      const person = await peopleStore.personByGithubId(authorId).catch(() => null);
+      if (person) return 'question only';
     }
 
     if (event === 'issue_comment' && author) {
@@ -686,12 +696,12 @@ export class Webhooks {
     return { counts: checked.counts, signature: { verified: checked.verified, seat: checked.seat, task: checked.task } };
   }
 
-  private async dispatch(event: string, payload: WebhookPayload, signature: CommentSignature | null = null): Promise<void> {
+  private async dispatch(event: string, payload: WebhookPayload, signature: CommentSignature | null = null, questionOnly = false): Promise<void> {
     switch (event) {
       case 'issues':
         return this.onIssue(payload);
       case 'issue_comment':
-        return this.onIssueComment(payload, signature);
+        return this.onIssueComment(payload, signature, questionOnly);
       case 'pull_request':
         return this.onPullRequest(payload);
       case 'pull_request_review':
@@ -1561,7 +1571,12 @@ export class Webhooks {
     return isDeclaredCommand(repo, body).catch(() => false);
   }
 
-  private async onIssueComment(payload: WebhookPayload, signature: CommentSignature | null = null): Promise<void> {
+  /**
+   * `questionOnly`: the author is a person in People with no role on the
+   * repository (`fromSomeoneWithAccess`), whose comment may answer an open
+   * question and do nothing else.
+   */
+  private async onIssueComment(payload: WebhookPayload, signature: CommentSignature | null = null, questionOnly = false): Promise<void> {
     const comment = payload.comment;
     const issue = payload.issue;
     const repoName = payload.repository?.name;
@@ -1634,7 +1649,9 @@ export class Webhooks {
     const openGates = await threads.listOpenGates();
     const relevant = await this.gateForSubject(openGates, subjectRef);
     if (!relevant) {
-      await this.wakeBuild(payload, repo, subjectRef);
+      // With no question open, a comment from someone in People without a role
+      // here does nothing: continuing a build is not answering a question.
+      if (!questionOnly) await this.wakeBuild(payload, repo, subjectRef);
       return;
     }
 

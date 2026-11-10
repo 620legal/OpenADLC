@@ -1,4 +1,3 @@
-import { people as peopleStore } from '@openadlc/db';
 import { actsFor } from '@openadlc/shared';
 import { isPinnedHuman } from './human-ids.js';
 
@@ -122,9 +121,9 @@ export async function permissionOn(
  * answer. One of `humans` counts only from the account its login was pinned
  * to (`isPinnedHuman`): the author's `id` has to be that account's. Without an
  * id, or from another account by that login, GitHub's answer about the login
- * is what decides. A person in People counts too, by the author's account id
- * and never by login, so what they write on GitHub is read as theirs
- * (docs/adr/0034-one-list-of-people.md).
+ * is what decides. Being in People is not access: a person there with no
+ * role on the repository is not acted for here, and may only answer a bot's
+ * question (`mayAnswerGates`, webhooks.ts; docs/adr/0034-one-list-of-people.md).
  */
 export async function actsForOn(input: {
   client: PermissionAsker | null;
@@ -137,17 +136,7 @@ export async function actsForOn(input: {
   const login = input.author.login;
   if (!login) return false;
   if (input.humans && (await isPinnedHuman(input.humans, login, input.author.id))) return true;
-  if (typeof input.author.id === 'number' && (await isPerson(input.author.id))) return true;
   return hasRepoAccess(input.client, input.repoFullName, login);
-}
-
-/** Whether a GitHub account is a person's in People; no when People cannot be read. */
-async function isPerson(githubUserId: number): Promise<boolean> {
-  try {
-    return (await peopleStore.personByGithubId(githubUserId)) !== null;
-  } catch {
-    return false;
-  }
 }
 
 /** For tests: forget what GitHub said. */
