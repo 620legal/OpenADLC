@@ -1,6 +1,6 @@
 import { audit, bots, costs, health, hosts, ignoredIssues, issues, leases, listEventsOfType, recordEvent, repos, settings, spendingLimits, tasks } from '@openadlc/db';
 import { fetchJson, maxTasksOf, type CostsConfig, hasIgnoreLabel, hasNextLabel, hasPausedLabel } from '@openadlc/shared';
-import { DEFAULT_PATH_POLICY, deliveryRulesFrom, dependencyIsSatisfied, formatDependencyRef, missingForRouting, namesRepository, onlyExpectedPathsUnreadable, parseDependencyRefs, UNREADABLE_PATH_LINE, tooManyAttempts, type PathPolicy } from '@openadlc/shared';
+import { DEFAULT_PATH_POLICY, deliveryRulesFrom, dependencyIsSatisfied, dependencyRepository, formatDependencyRef, missingForRouting, namesRepository, onlyExpectedPathsUnreadable, parseDependencyRefs, UNREADABLE_PATH_LINE, tooManyAttempts, type PathPolicy, type ShipsByRelease } from '@openadlc/shared';
 import { overlapKind, pathsOverlap } from './overlap.js';
 
 export { overlapKind, pathMatches } from './overlap.js';
@@ -35,6 +35,13 @@ export interface DispatcherOptions {
    * the default policy when there are none.
    */
   pathPolicy?: (repo: { id: string; name: string; fullName: string; defaultBranch: string }) => Promise<PathPolicy>;
+  /**
+   * Whether a repository, by `owner/name`, ships by release, as the bridge
+   * reads its delivery rules (`releaseShipping`). There a merged dependency
+   * has shipped as far as what waits on it is concerned. Without it (a
+   * dispatcher of its own) every repository answers no: the stricter rule.
+   */
+  shipsByRelease?: ShipsByRelease;
 }
 
 export interface DispatchDecision {
@@ -374,9 +381,20 @@ export class Dispatcher {
    *
    * A dependency may be in another repository the install manages, and is
    * read from its row there; one in a repository it does not manage never
-   * ships, so what waits on it stays blocked.
+   * ships, so what waits on it stays blocked. Each is judged by its own
+   * repository's delivery rules: a merge ships it where that repository ships
+   * by release.
+   *
+   * An issue that names no dependency waits on nothing, and is unblocked too.
+   * Skipping it left `blocked` on until a person took it off: the label was
+   * the note again. The lease check reads the body on every pass, so a body
+   * whose Dependencies arrive a moment after the label still starts nothing
+   * early.
    */
-  private async unblockWhatHasShipped(repo: { id: string; name: string; fullName: string }): Promise<DispatchDecision[]> {
+  private async unblockWhatHasShipped(
+    repo: { id: string; name: string; fullName: string },
+    releases: (repoFullName: string) => Promise<boolean>,
+  ): Promise<DispatchDecision[]> {
     const decisions: DispatchDecision[] = [];
 
     for (const issue of await issues.listBlockedIssues(repo.id)) {
@@ -384,10 +402,14 @@ export class Dispatcher {
       // still not the crew's to unblock.
       if (hasIgnoreLabel(issue.labels)) continue;
       const refs = parseDependencyRefs(issue.body);
-      if (refs.length === 0) continue;
 
-      const resolved = await Promise.all(refs.map((ref) => issues.resolveDependency(repo, ref)));
-      if (resolved.some((one) => !dependencyIsSatisfied(one.issue, one.ignored))) continue;
+      const resolved = await Promise.all(
+        refs.map(async (ref) => ({
+          ...(await issues.resolveDependency(repo, ref)),
+          delivery: { shipsByRelease: await releases(dependencyRepository(ref, repo.fullName)) },
+        })),
+      );
+      if (resolved.some((one) => !dependencyIsSatisfied(one.issue, one.ignored, one.delivery))) continue;
       const dependencies = refs.map(formatDependencyRef);
 
       try {
@@ -401,7 +423,7 @@ export class Dispatcher {
           issue: issue.number,
           bot: null,
           action: 'unblocked',
-          reason: `everything it waited for has shipped: ${dependencies.join(', ')}`,
+          reason: dependencies.length > 0 ? `everything it waited for has shipped: ${dependencies.join(', ')}` : 'it lists no dependency',
         });
       } catch (error) {
         decisions.push({
@@ -417,8 +439,29 @@ export class Dispatcher {
     return decisions;
   }
 
+  /**
+   * `shipsByRelease`, asked once a pass per repository: every dependency in a
+   * pass names one of a few repositories, and each answer may read GitHub.
+   * Anything that throws answers no, the stricter rule.
+   */
+  private releaseLookup(): (repoFullName: string) => Promise<boolean> {
+    const ask = this.options.shipsByRelease;
+    const asked = new Map<string, Promise<boolean>>();
+    return (repoFullName) => {
+      if (!ask) return Promise.resolve(false);
+      const key = repoFullName.toLowerCase();
+      let answer = asked.get(key);
+      if (!answer) {
+        answer = ask(repoFullName).catch(() => false);
+        asked.set(key, answer);
+      }
+      return answer;
+    };
+  }
+
   async runOnce(): Promise<DispatchDecision[]> {
     const decisions: DispatchDecision[] = [];
+    const releases = this.releaseLookup();
 
     for (const lease of await leases.expireStaleLeases()) {
       await audit({
@@ -551,7 +594,7 @@ export class Dispatcher {
       // The label kept tidy for people reading GitHub: an issue whose
       // dependencies have shipped loses `blocked`. Whether one may start is
       // decided below from the dependencies themselves, not from the label.
-      for (const decision of await this.unblockWhatHasShipped(repo)) decisions.push(decision);
+      for (const decision of await this.unblockWhatHasShipped(repo, releases)) decisions.push(decision);
 
       // The one a person asked for next goes first, ahead of priority order;
       // the rest keep the order they were listed in.
@@ -602,11 +645,12 @@ export class Dispatcher {
             ...(namesRepository(ref, repo.fullName)
               ? { managed: true, issue: known.get(ref.number) ?? null, ignored: ignoredHere.get(ref.number) ?? null }
               : await issues.resolveDependency(repo, ref)),
+            delivery: { shipsByRelease: await releases(dependencyRepository(ref, repo.fullName)) },
           })),
         );
         // Said, not skipped in silence: an issue read as waiting on one that
         // would never ship — closed as superseded — sat with nothing in the log.
-        const waitingOn = resolved.filter((one) => !dependencyIsSatisfied(one.issue, one.ignored));
+        const waitingOn = resolved.filter((one) => !dependencyIsSatisfied(one.issue, one.ignored, one.delivery));
         if (waitingOn.length > 0) {
           decisions.push({
             repo: repo.name,

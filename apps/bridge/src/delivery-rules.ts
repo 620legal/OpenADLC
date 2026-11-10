@@ -6,9 +6,11 @@ import {
   defaultDeliveryRules,
   parseDeliveryRules,
   rulesSetApproval,
+  shipsByRelease,
   storedDeliveryRules,
   type DeliveryRules,
   type ProductionChoice,
+  type ShipsByRelease,
 } from '@openadlc/shared';
 import { shipsByMerging, testingDeployChoice, type WorkflowLister } from './deploys.js';
 
@@ -172,4 +174,30 @@ export class DeliveryKnowledge {
   forget(repoFullName: string): void {
     this.known.delete(repoFullName);
   }
+}
+
+/**
+ * Whether a repository ships by release, for the dependency rule
+ * (`dependencyIsSatisfied`): asked of the same rules the release sweep acts
+ * on, so the dispatcher never unblocks on a merge the sweep does not treat as
+ * waiting for a release. Reading `repos.delivery_rules` alone was not enough:
+ * the row is used only where there is no `.github/openadlc.yml`, so a
+ * repository that ships by release because of its file read as deploying.
+ *
+ * A repository this install does not manage, rules that could not be read, or
+ * anything that throws answers false: the stricter rule, which only waits
+ * longer. `DeliveryKnowledge.get` already stands the last good read in for a
+ * failed one, so a 502 does not flip the answer.
+ */
+export function releaseShipping(delivery: Pick<DeliveryKnowledge, 'get'>): ShipsByRelease {
+  return async (repoFullName) => {
+    try {
+      const repo = await repoStore.getRepoByName(repoFullName);
+      if (!repo) return false;
+      const found = await delivery.get(repo);
+      return !found.readError && shipsByRelease(found.rules);
+    } catch {
+      return false;
+    }
+  };
 }

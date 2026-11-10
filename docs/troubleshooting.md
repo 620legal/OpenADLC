@@ -1571,6 +1571,37 @@ Done from the board reopens the issue and stays where it was moved.
 grep -E 'closed without a merge|was reopened' "$(openadlc logs bridge)" | tail -n 20
 ```
 
+## An issue stays `blocked` after what it waits for merged
+
+The dispatcher takes `blocked` off, and leases the issue, once every issue
+under its `## Dependencies` counts as shipped. What counts depends on the
+repository the **dependency** is in, not the waiting issue's:
+
+| The dependency's repository | The dependency counts once it is |
+|---|---|
+| Deploys to testing (`testing.on: merge`) | In Done, or in Ship (Merged) with `deployed:testing` |
+| Ships by release (`testing.on: release`) | In Done, or in Ship (Merged): the merge into the default branch is enough |
+| Deploys nothing (`testing.on: none`) | In Done, which a merge moves it to |
+| Any | Never when it is labelled `openadlc:abandoned`; one labelled `openadlc:ignore` only once GitHub says it closed as completed |
+
+In a repository that ships by release, a merged dependency's card still stays
+in Ship until a release contains it; only what waits on it may start sooner
+([ADR 0040](adr/0040-a-merged-dependency-counts-where-the-repository-ships-by-release.md)).
+The board's "Waiting on", stacking, intake's hand-off and the dispatcher all
+read the same rule.
+
+If it still waits on a merged dependency in a repository that ships by
+release, the bridge could not read that repository's rules: a failed read
+counts as not shipping by release, which only waits longer. Settings →
+Repositories says where its rules came from and why a file was not used; the
+next pass after a read that works unblocks it.
+
+A `blocked` issue whose Dependencies list nothing, or that has no
+Dependencies section, is unblocked on the dispatcher's next pass, unless it
+is labelled `openadlc:ignore`. The audit says `issue.unblocked` with no
+dependencies. To hold an issue for a person, put `needs-human` on it, not
+`blocked`.
+
 ## Work moves slowly: reading Insights
 
 **Insights** (`/insights`, `GET /v1/insights?repo=&days=7|30`) says, for each

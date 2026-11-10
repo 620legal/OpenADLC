@@ -14,6 +14,7 @@ import {
   type IgnoredState,
   type LeaseState,
   type PathPolicy,
+  type ShipsByRelease,
   type StageKey,
   type TaskKind,
   type TaskState,
@@ -238,6 +239,12 @@ export interface WaitingContext {
    * on, as the dispatcher reads it. Absent, none.
    */
   ignored?: ReadonlyMap<string, IgnoredState>;
+  /**
+   * The ids of the repositories that ship by release (`releaseShipping`):
+   * there a merged dependency is not waited on, as the dispatcher reads it.
+   * Absent, none does, which is the stricter rule.
+   */
+  releasing?: ReadonlySet<string>;
 }
 
 /** A card the reasons are worked out for. */
@@ -517,7 +524,9 @@ export function waitingOf(input: WaitingInput): Waiting {
     const issue = repo ? (issues.find((one) => one.repoId === repo.id && one.number === ref.number) ?? null) : null;
     const shown = repo?.id === card.issue.repoId ? `#${ref.number}` : formatDependencyRef(ref);
     const ignored = repo ? (input.ignored?.get(`${repo.id}#${ref.number}`) ?? null) : null;
-    return { repoName: repo?.name ?? null, number: ref.number, issue, shown, ignored };
+    // Judged by the dependency's own repository, as the dispatcher judges it.
+    const delivery = { shipsByRelease: repo ? (input.releasing?.has(repo.id) ?? false) : false };
+    return { repoName: repo?.name ?? null, number: ref.number, issue, shown, ignored, delivery };
   };
   const dependencyNow = ({ repoName, number, issue, shown, ignored }: ReturnType<typeof resolveRef>): DependencyNow => {
     // One in a repository the install does not manage has nothing going on it that the board sees.
@@ -554,7 +563,7 @@ export function waitingOf(input: WaitingInput): Waiting {
     // its next pass to come off.
     const unshipped = parseDependencyRefs(card.issue.body ?? null)
       .map((ref) => resolveRef(card, ref))
-      .filter((found) => !dependencyIsSatisfied(found.issue, found.ignored));
+      .filter((found) => !dependencyIsSatisfied(found.issue, found.ignored, found.delivery));
     reasons.set(card.ref, { kind: 'dependency', on: unshipped.map(dependencyNow) });
   }
 
@@ -626,6 +635,12 @@ export interface WaitingReads {
   health?: () => Promise<readonly HealthRow[]>;
   /** A repository's path policy (`.github/openadlc.yml` `paths:`), for a build another change's files hold back. */
   pathPolicy?: (repo: { id: string; name: string; fullName: string; defaultBranch: string }) => Promise<PathPolicy>;
+  /**
+   * Whether a repository ships by release (`releaseShipping`), so the board
+   * and Needs you say a merged dependency there is met, as the dispatcher
+   * does. Absent, none does.
+   */
+  shipsByRelease?: ShipsByRelease;
 }
 
 /**
@@ -647,7 +662,8 @@ export async function readWaitingContext(
     ]);
     return [repo.id, { work, policy }];
   };
-  const [seatPauses, budget, health, inFlight, seatWaitEvents, held, load, ignored] = await Promise.all([
+  const managed = (async () => repoStore.listRepos())().catch(() => undefined);
+  const [seatPauses, budget, health, inFlight, seatWaitEvents, held, load, ignored, releasing] = await Promise.all([
     readSeatPauses(),
     // The cap the dispatcher stops leasing at, and every start too
     // (`spendingLimits.refusal`), as the budget job last wrote it.
@@ -659,7 +675,18 @@ export async function readWaitingContext(
     (async () => leaseStore.heldLeases())().catch(() => undefined),
     (async () => hostStore.taskLoad())().catch(() => undefined),
     // Every repository's ignored issues: a dependency may be in any of them.
-    (async () => ignoredIssues.listForRepos((await repoStore.listRepos()).map((repo) => repo.id)))().catch(() => undefined),
+    (async () => {
+      const repos = await managed;
+      return repos ? ignoredIssues.listForRepos(repos.map((repo) => repo.id)) : undefined;
+    })().catch(() => undefined),
+    // Which of them ship by release; one that cannot be asked does not.
+    (async () => {
+      const repos = await managed;
+      const ask = reads.shipsByRelease;
+      if (!repos || !ask) return undefined;
+      const answers = await Promise.all(repos.map((repo) => ask(repo.fullName).catch(() => false)));
+      return new Set(repos.filter((_, index) => answers[index]).map((repo) => repo.id));
+    })().catch(() => undefined),
   ]);
   const next = reads.nextSweepAt?.();
   return {
@@ -674,6 +701,7 @@ export async function readWaitingContext(
     ...(held ? { leases: held } : {}),
     ...(load !== undefined ? { hosts: load ? { running: load.used, capacity: load.capacity } : null } : {}),
     ...(ignored ? { ignored: new Map(ignored.map((one) => [`${one.repoId}#${one.number}`, { state: one.state, stateReason: one.stateReason }])) } : {}),
+    ...(releasing ? { releasing } : {}),
   };
 }
 

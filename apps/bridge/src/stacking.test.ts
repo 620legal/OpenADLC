@@ -110,6 +110,7 @@ function stacking(
     dispatching?: () => boolean;
     gate?: (repoFullName: string, sha: string) => Promise<'pending' | 'success' | 'failure' | null>;
     rebuild?: (input: { repoName: string; prNumber: number; reason: string }) => Promise<string | null>;
+    shipsByRelease?: (repoFullName: string) => Promise<boolean>;
   } = {},
 ) {
   const events: { type: string; payload: Record<string, unknown>; at: string }[] = [];
@@ -132,6 +133,7 @@ function stacking(
     dispatching: options.dispatching ?? (() => true),
     ...(options.gate ? { gate: options.gate } : {}),
     ...(options.rebuild ? { rebuild: options.rebuild } : {}),
+    ...(options.shipsByRelease ? { shipsByRelease: options.shipsByRelease } : {}),
     say: async (subjects, text) => {
       said.push({ subjects, text });
       return true;
@@ -201,6 +203,23 @@ describe('an issue that depends on one in review', () => {
 
     world.ignored.set(18, { state: 'closed', stateReason: 'completed' });
     expect(await subject.sweep()).toEqual([`shop#5: stacked on #4, from ${A_BRANCH}`]);
+  });
+
+  it('does not count a merged dependency outstanding where the repository ships by release, and does where it deploys', async () => {
+    // #255 waited on #252 and #254: one merged, unreleased, in a repository
+    // that ships by release, beside one in review. The merged one is met, as
+    // the dispatcher reads it, so the one in review is all that is left.
+    world.issues.set(5, { ...world.issues.get(5)!, body: `${dependsOn4}- #3\n` });
+    world.issues.set(3, { number: 3, stage: 'merged', labels: ['adlc:merged'], prNumber: 29, body: '', declaredPaths: ['src/c.ts'] });
+
+    const deploys = stacking({ shipsByRelease: async () => false });
+    expect(await deploys.subject.sweep()).toEqual([]);
+    expect(deploys.build).not.toHaveBeenCalled();
+
+    const asked: string[] = [];
+    const releases = stacking({ shipsByRelease: async (name) => (asked.push(name), true) });
+    expect(await releases.subject.sweep()).toEqual([`shop#5: stacked on #4, from ${A_BRANCH}`]);
+    expect(asked).toEqual([REPO.fullName]);
   });
 
   it('starts from that one’s branch rather than waiting for it to merge', async () => {

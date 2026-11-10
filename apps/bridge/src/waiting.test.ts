@@ -257,6 +257,42 @@ describe('a card waiting on another issue', () => {
     });
   });
 
+  describe('merged, where its repository ships by release', () => {
+    // #254 waited on #251 after it merged: no deploy labels a merge there,
+    // and the board said "not shipped" while the dispatcher had to agree.
+    const twoDeps = issue(137, 'build', { labels: ['adlc:build', 'blocked'], body: '## Dependencies\n\n- #120\n- #404\n' });
+    const merged = issue(120, 'merged', { labels: ['adlc:merged'] });
+
+    it('does not name it, as the dispatcher reads it', () => {
+      const waiting = read([twoDeps, merged], [], { releasing: new Set(['repo-1']) });
+      expect(waiting.cards.get('OpenADLC#137')?.reason).toEqual({ kind: 'dependency', on: [expect.objectContaining({ ref: '#404' })] });
+    });
+
+    it('names it where the repository deploys and testing does not have it', () => {
+      const waiting = read([twoDeps, merged]);
+      expect(waiting.cards.get('OpenADLC#137')?.reason).toEqual({
+        kind: 'dependency',
+        on: [expect.objectContaining({ ref: '#120', stage: 'merged' }), expect.objectContaining({ ref: '#404' })],
+      });
+    });
+
+    it('is judged by the dependency’s repository, not the card’s', () => {
+      const repos = [
+        { ...REPOS[0]!, fullName: '620legal/OpenADLC' },
+        { id: 'repo-2', name: 'a', fullName: 'owner/a', stageModes: {} as Record<string, string> },
+      ];
+      const card = issue(137, 'build', { labels: ['adlc:build', 'blocked'], body: '## Dependencies\n\n- owner/a#2\n- #404\n' });
+      const theirs = issue(2, 'merged', { repoId: 'repo-2', repoName: 'a', labels: ['adlc:merged'] });
+      const met = read([card, theirs], [], { repos, releasing: new Set(['repo-2']) });
+      expect(met.cards.get('OpenADLC#137')?.reason).toEqual({ kind: 'dependency', on: [expect.objectContaining({ ref: '#404' })] });
+      const held = read([card, theirs], [], { repos, releasing: new Set(['repo-1']) });
+      expect(held.cards.get('OpenADLC#137')?.reason).toEqual({
+        kind: 'dependency',
+        on: [expect.objectContaining({ ref: 'owner/a#2', stage: 'merged' }), expect.objectContaining({ ref: '#404' })],
+      });
+    });
+  });
+
   describe('in another repository', () => {
     const repos = [
       { ...REPOS[0]!, fullName: '620legal/OpenADLC' },

@@ -818,6 +818,37 @@ describe('the end of intake, on either intake path', () => {
     expect(readiness).toEqual([{ issueNumber: 9, blocked: true }]);
   });
 
+  it('ends in Build with start:now on a merged dependency only where that dependency’s repository ships by release', async () => {
+    // #254 waited on #251 after it merged: no deploy labels a merge in a
+    // repository that ships by release, and the release was not cut.
+    const { stages, readiness } = handoff();
+    try {
+      board.issues = [
+        { number: 9, repoName: 'openadlc', stage: 'intake', labels: ['adlc:build', ...INTAKES_OWN], body: '### Dependencies\n\n- owner/a#1\n' },
+      ];
+      board.elsewhere = [{ fullName: 'owner/a', number: 1, stage: 'merged', labels: ['adlc:merged'] }];
+
+      // Not told how any repository ships: the stricter rule.
+      await withRepo({ spec: 'conditional' }, () => stages.afterIntake({ repoName: 'openadlc', issueNumber: 9 }));
+      // This repository ships by release; the dependency's deploys.
+      const asked: string[] = [];
+      stages.useShipsByRelease(async (name) => (asked.push(name), name === 'janedoe/openadlc'));
+      await withRepo({ spec: 'conditional' }, () => stages.afterIntake({ repoName: 'openadlc', issueNumber: 9 }));
+      // The dependency's repository ships by release.
+      stages.useShipsByRelease(async (name) => name === 'owner/a');
+      await withRepo({ spec: 'conditional' }, () => stages.afterIntake({ repoName: 'openadlc', issueNumber: 9 }));
+
+      expect(asked).toEqual(['owner/a']);
+      expect(readiness).toEqual([
+        { issueNumber: 9, blocked: true },
+        { issueNumber: 9, blocked: true },
+        { issueNumber: 9, blocked: false },
+      ]);
+    } finally {
+      board.elsewhere = [];
+    }
+  });
+
   it('ends in Build with blocked while a dependency in another repository has not shipped, and start:now once it has', async () => {
     // Read as waiting on nothing, it was given start:now and built before
     // the work in the other repository shipped.

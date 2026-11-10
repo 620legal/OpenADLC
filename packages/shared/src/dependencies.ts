@@ -98,6 +98,28 @@ export function namesRepository(ref: DependencyRef, fullName: string): boolean {
 }
 
 /**
+ * The repository whose delivery rules judge a dependency: the one the ref
+ * names, or the dependent's own for `#N`. A merge is shipping only by the
+ * dependency's own repository's rules, not the dependent's.
+ */
+export function dependencyRepository(ref: DependencyRef, ownFullName: string): string {
+  return ref.repo ?? ownFullName;
+}
+
+/** How the dependency's own repository ships, as far as the rule needs it. */
+export interface DependencyDelivery {
+  /** It ships by release (`testing.on: release`): merging into the default branch is what a dependent waits for. */
+  shipsByRelease: boolean;
+}
+
+/**
+ * Whether a repository, by `owner/name`, ships by release. The bridge answers
+ * it from its delivery rules (`releaseShipping`); a read that fails answers
+ * false, the stricter rule.
+ */
+export type ShipsByRelease = (repoFullName: string) => Promise<boolean>;
+
+/**
  * What GitHub last said of an issue labelled `openadlc:ignore`: kept in
  * `ignored_issues` (`packages/db`), since nothing of it is on the board's
  * columns. `stateReason` is GitHub's `state_reason` as given.
@@ -110,10 +132,23 @@ export interface IgnoredState {
 /**
  * Whether a dependency has shipped far enough to stop blocking.
  *
- * The plan asks for closed *and* reached testing: a merge is not a release, and
- * an issue waiting on a behaviour is waiting for it to be somewhere it can be
- * seen. `deployed:testing` is the label the bridge puts on a change when GitHub
- * reports its testing deploy succeeded.
+ * In a repository that deploys, the plan asks for merged *and* reached
+ * testing: a merge is not a deploy, and an issue waiting on a behaviour is
+ * waiting for it to be somewhere it can be seen. `deployed:testing` is the
+ * label the bridge puts on a change when GitHub reports its testing deploy
+ * succeeded.
+ *
+ * In a repository that ships by release, no deploy ever labels a merge, and
+ * the release that ships it may be weeks away: #254 waited on #251, and #255
+ * on #252 and #254, after each had merged, until a person unblocked them by
+ * hand. There the merge into the default branch is what a dependent builds
+ * on, so `merged` counts. The card still reaches Done only when a release
+ * ships it; this answers only whether what waits on it may start.
+ *
+ * `delivery` is the dependency's own repository's answer. It is required so
+ * that a caller that forgets it fails to compile rather than quietly keeping
+ * the old rule, and the board, stacking and the dispatcher disagree; see
+ * docs/adr/0040-a-merged-dependency-counts-where-the-repository-ships-by-release.md.
  *
  * `ignored` is the dependency's record when it is labelled `openadlc:ignore`:
  * built by a person outside the crew, it never reaches Done, and an issue
@@ -123,7 +158,8 @@ export interface IgnoredState {
  */
 export function dependencyIsSatisfied(
   dependency: { stage: string; labels: string[] } | null,
-  ignored?: IgnoredState | null,
+  ignored: IgnoredState | null | undefined,
+  delivery: DependencyDelivery,
 ): boolean {
   if (dependency) {
     // Closed without merging: in Done, and nothing of it shipped. Read as
@@ -134,7 +170,7 @@ export function dependencyIsSatisfied(
     // deploys nothing, merging is shipping: the card goes to Done with no deploy
     // label at all, and an issue waiting on it would have waited for good.
     if (dependency.stage === 'done') return true;
-    if (dependency.stage === 'merged' && dependency.labels.includes('deployed:testing')) return true;
+    if (dependency.stage === 'merged' && (delivery.shipsByRelease || dependency.labels.includes('deployed:testing'))) return true;
   }
   // A person said it is theirs, and GitHub says they finished it. Closed as
   // not planned, as a duplicate or for no reason given, nothing shipped.
