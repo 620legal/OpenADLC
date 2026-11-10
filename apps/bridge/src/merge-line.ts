@@ -175,6 +175,13 @@ export function landedComment(head: string, merged: string, approvals: readonly 
   ].join('\n');
 }
 
+/**
+ * What came of `MergeLine.updateStacked`: merged in, already up to date,
+ * conflicted (a resolution round opened), not a stacked pull request whose
+ * dependency has shipped, a stack that could not be read, or not tried.
+ */
+export type StackedUpdate = 'updated' | 'current' | 'conflict' | 'not_stacked' | 'unreadable' | 'skipped';
+
 export interface MergeLineStep {
   repo: string;
   prNumber: number;
@@ -404,8 +411,13 @@ export class MergeLine {
     // One step at a time per repository. A review's webhook and the tick both
     // advance the line, and two at once both tried to merge the same pull
     // request: GitHub landed it once, and the loser said it had been refused.
+    return this.oneAtATime(repoName, () => this.advanceOnce(repoName));
+  }
+
+  /** Runs `step` after whatever this repository's line is doing: its steps and stacked updates (`updateStacked`) never interleave. */
+  private oneAtATime<T>(repoName: string, step: () => Promise<T>): Promise<T> {
     const key = repoName.toLowerCase();
-    const run = (this.advancing.get(key) ?? Promise.resolve()).catch(() => undefined).then(() => this.advanceOnce(repoName));
+    const run = (this.advancing.get(key) ?? Promise.resolve()).catch(() => undefined).then(step);
     const settled = run.catch(() => undefined);
     this.advancing.set(key, settled);
     void settled.then(() => {
@@ -415,6 +427,82 @@ export class MergeLine {
   }
 
   private readonly advancing = new Map<string, Promise<unknown>>();
+
+  /**
+   * Merges the base into a stacked pull request's branch now, rather than
+   * when it reaches the front of the line: once what it was built on merged
+   * (`carry: true`, its approvals stand), or before its first round when it
+   * opened after that (`carry: false`, the round opens on the merged head).
+   * Made at the front of the line only, the update came after every seat had
+   * read the stacked change with its dependency's whole diff in it (#256).
+   *
+   * In the line's queue for the repository, so a merge delivered twice, or a
+   * line step at the same time, finds the branch up to date and makes no
+   * second merge. A conflict opens the resolution round, the only time a
+   * builder is started; a stack that cannot be read is left to the line,
+   * which holds the pull request out for it (`enter`).
+   */
+  updateStacked(input: { repoName: string; prNumber: number; carry: boolean; why: string }): Promise<StackedUpdate> {
+    return this.oneAtATime(input.repoName, () => this.updateStackedOnce(input));
+  }
+
+  private async updateStackedOnce(input: { repoName: string; prNumber: number; carry: boolean; why: string }): Promise<StackedUpdate> {
+    const subject = `${input.repoName}#${input.prNumber}`;
+    const said = (answer: StackedUpdate, detail: string): StackedUpdate => {
+      console.log(`[bridge] ${subject}: ${detail} (${input.why})`);
+      return answer;
+    };
+    if (!this.stacks) return 'not_stacked';
+    const repo = await repos.getRepoByName(input.repoName);
+    if (!repo) return 'skipped';
+    const automation = await asAutomation(this.actors, this.config);
+    if (!automation) return said('skipped', 'not brought up to date: no account here can read GitHub');
+    const pull = await automation.getPullRequest(repo.fullName, input.prNumber).catch(() => null);
+    if (!pull) return said('skipped', 'not brought up to date: its pull request could not be read');
+    // As the line takes them: not one closed, from a fork, or onto another
+    // branch, whose branch is not the crew's to update.
+    if (pull.merged || pull.state !== 'open') return 'skipped';
+    if (pull.headRepoFullName?.toLowerCase() !== repo.fullName.toLowerCase() || pull.baseRef !== repo.defaultBranch) return 'skipped';
+    const issue = issueNumberFromBranch(pull.headRef);
+    if (!issue) return 'not_stacked';
+
+    let behind: number;
+    try {
+      behind = await automation.behindBy(repo.fullName, pull.baseRef, pull.headSha);
+    } catch (error) {
+      return said('skipped', `not brought up to date: it could not be compared with ${pull.baseRef}: ${error instanceof Error ? error.message.slice(0, 160) : String(error)}`);
+    }
+    if (behind === 0) return 'current';
+
+    let stacked: boolean;
+    try {
+      stacked = await this.stacks.updating({
+        repoName: repo.name,
+        repoFullName: repo.fullName,
+        prNumber: input.prNumber,
+        issue,
+        baseRef: pull.baseRef,
+        headSha: pull.headSha,
+        carry: input.carry,
+      });
+    } catch (error) {
+      return said('unreadable', `not brought up to date: whether it was stacked could not be read (${error instanceof Error ? error.message : String(error)}); the merge line holds it`);
+    }
+    if (!stacked) return 'not_stacked';
+
+    const client = (await this.actors.asBot(await this.updaterFor(repo.name))) ?? automation;
+    const result = await this.stackedUpdate(client, repo, input.prNumber, pull);
+    if (result.conflict) {
+      if (this.conflicts) {
+        await this.conflicts.start({ repoName: repo.name, prNumber: input.prNumber, baseRef: pull.baseRef }).catch((error: unknown) =>
+          console.warn(`[bridge] ${subject}: no resolution round: ${error instanceof Error ? error.message : error}`),
+        );
+      }
+      return said('conflict', `conflicts with ${pull.baseRef}; its builder resolves it in a resolution round`);
+    }
+    if (!result.updated) return said('skipped', `not brought up to date with ${pull.baseRef}: ${result.message}`);
+    return said('updated', `brought up to date with ${pull.baseRef}: ${result.message}`);
+  }
 
   /**
    * Records an update of a branch the line made, by the head it was made on
@@ -554,6 +642,7 @@ export class MergeLine {
             issue: issueNumberFromBranch(pull.headRef),
             baseRef: pull.baseRef,
             headSha: pull.headSha,
+            carry: true,
           })
           .catch(() => false)) ?? false;
       const result = stacked

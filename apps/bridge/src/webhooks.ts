@@ -1943,11 +1943,85 @@ export class Webhooks {
   useMergeabilityWait(wait: Pick<MergeabilityWait, 'hold' | 'resume'>): void {
     this.mergeability = wait;
   }
-  private stacks: Pick<Stacking, 'pushed'> | null = null;
+  private stacks: Pick<Stacking, 'pushed' | 'opensRound' | 'stackedOnMerged' | 'stackedOn' | 'waitingOn'> | null = null;
 
-  /** Tells a stacked pull request's update onto the base from any other push; set once at start-up (main.ts). */
-  useStacking(stacks: Pick<Stacking, 'pushed'>): void {
+  /**
+   * Tells a stacked pull request's update onto the base from any other push,
+   * and finds the stacked pull requests to bring up to date when the one they
+   * were built on merges; set once at start-up (main.ts).
+   */
+  useStacking(stacks: Pick<Stacking, 'pushed' | 'opensRound' | 'stackedOnMerged' | 'stackedOn' | 'waitingOn'>): void {
     this.stacks = stacks;
+  }
+
+  /**
+   * Brings each stacked pull request built on `pr` up to date with the base
+   * now that `pr` merged, before its reviewers read on (`updateStacked`).
+   * What goes wrong is said and holds up nothing: the line still updates a
+   * stacked branch before it lands it.
+   */
+  private async updateStackedOn(repo: { name: string }, pr: { number: number }, closed: readonly number[]): Promise<void> {
+    if (!this.stacks) return;
+    let stacked: Array<{ issue: number; prNumber: number }>;
+    try {
+      stacked = await this.stacks.stackedOnMerged(repo.name, pr.number, closed);
+    } catch (error) {
+      console.warn(
+        `[bridge] ${repo.name}#${pr.number} merged; what was built on it is not brought up to date now, since the stacks could not be read ` +
+          `(${error instanceof Error ? error.message : error}). The merge line holds each until they can be`,
+      );
+      return;
+    }
+    for (const child of stacked) {
+      await this.mergeLine
+        .updateStacked({ repoName: repo.name, prNumber: child.prNumber, carry: true, why: `#${pr.number}, which it was built on, merged` })
+        .catch((error: unknown) =>
+          console.warn(`[bridge] ${repo.name}#${child.prNumber} was not brought up to date once #${pr.number} merged: ${error instanceof Error ? error.message : error}`),
+        );
+    }
+  }
+
+  /**
+   * Before a stacked pull request's round opens on a head its builder made
+   * after what it was built on shipped, the base is merged in first, so its
+   * reviewers read its own change and not the other's again (#256 opened
+   * after #253 merged, and was read with both). True when the round is left
+   * to the push that update, or its resolution round, makes. Only on a head
+   * that would be reviewed as it is: the update's push is the line's, which
+   * no local CI pass is asked of, so one made on a crew head with none would
+   * have let that head past its hold (#118).
+   */
+  private async updatedFirst(
+    repo: { id: string; name: string },
+    pr: { number: number; head: { sha: string; ref: string } },
+    issue: number | null,
+    crewSender: boolean,
+  ): Promise<boolean> {
+    if (!this.stacks || !issue || !builderOfBranch(pr.head.ref)) return false;
+    try {
+      if (!(await this.stacks.stackedOn(repo.name, issue))) return false;
+      if (await this.stacks.waitingOn(repo.name, issue)) return false;
+    } catch {
+      // A stack that cannot be read is the line's to hold out (`enter`).
+      return false;
+    }
+    // A pass that cannot be read is none: the hold below sends the work back, and the builder's next push is updated.
+    if (crewSender && !(await (async () => localCiRuns.passFor(repo.id, pr.head.sha))().catch(() => null))) return false;
+    const answer = await this.mergeLine
+      .updateStacked({ repoName: repo.name, prNumber: pr.number, carry: false, why: 'before its first round, what it was built on having merged' })
+      .catch((error: unknown) => {
+        console.warn(`[bridge] ${repo.name}#${pr.number} was not brought up to date before its round: ${error instanceof Error ? error.message : error}`);
+        return 'skipped' as const;
+      });
+    if (answer === 'updated') {
+      console.log(`[bridge] ${repo.name}#${pr.number}: brought up to date with its base first; its reviews start on the merged head`);
+      return true;
+    }
+    if (answer === 'conflict') {
+      console.log(`[bridge] ${repo.name}#${pr.number}: conflicts with its base; its reviews start on the resolution round's push`);
+      return true;
+    }
+    return false;
   }
 
   /** Tells a push that resolves a merge-line conflict from any other; set once at start-up (main.ts). */
@@ -2335,7 +2409,12 @@ export class Webhooks {
         console.warn(`[bridge] ${repoFullName}#${pr.number}: testing deploy held; a crew account merged it without review-gate passing`);
         return;
       }
-      const { byMerging } = await this.finishMerge(repo, repoFullName, pr, fork);
+      const { byMerging, own, closes } = await this.finishMerge(repo, repoFullName, pr, fork);
+      // After the move above, which is what tells the stacks it shipped
+      // (`hasShipped`). Not on the unreviewed-merge hold, or a merge into
+      // another branch, both returned from: nothing has shipped, and the line
+      // updates a stacked branch later, as it always did.
+      await this.updateStackedOn(repo, pr, [...(own ? [own] : []), ...closes]);
       if (byMerging) {
         console.log(`[bridge] ${repoFullName}#${pr.number} merged; no testing deploy for this repository, so merging shipped it`);
         return;
@@ -2406,6 +2485,8 @@ export class Webhooks {
     let resolution: { before: string; files: string[]; at: string } | null = null;
     // Whether this push is the merge line's update from the base.
     let lineUpdate = false;
+    // Whether this push is a conflict resolution round's, whichever review it gets.
+    let roundPush = false;
     if (payload.action === 'synchronize') {
       const before = String((payload as { before?: unknown }).before ?? '');
       const client = await asAutomation(this.automation['actors'], this.config);
@@ -2435,6 +2516,7 @@ export class Webhooks {
               .catch(() => null)
           : null;
       if (round?.review === 'lead-only') resolution = { before, files: round.files, at: round.at };
+      roundPush = Boolean(round);
       // With no round open: the merge commit the line made to bring a stacked
       // pull request up to date once what it was built on merged, matched by
       // its SHA. Its diff lost only that work, which was reviewed and landed
@@ -2443,8 +2525,17 @@ export class Webhooks {
         changed && !round && prFiles && this.stacks
           ? await this.stacks.pushed({ repoName: repo.name, prNumber: pr.number, before, after: pr.head.sha, prFiles }).catch(() => false)
           : false;
+      // The update made before a stacked pull request's first round held that
+      // round back for its own push (`updatedFirst`), so that push opens it,
+      // even when the merge left the diff as it was: let stand, the pull
+      // request had no round at all. A record that cannot be read is no such
+      // update, and the push is read as any other.
+      const opensRound =
+        !changed && !resolving && this.stacks
+          ? await this.stacks.opensRound({ repoName: repo.name, prNumber: pr.number, before, after: pr.head.sha }).catch(() => false)
+          : false;
 
-      if ((!changed && !resolving) || stackUpdate) {
+      if (((!changed && !resolving) || stackUpdate) && !opensRound) {
         // The approvals stand and no reviewer is asked again. The gate is still
         // refreshed, because it is a status on the new head and the old one's
         // does not carry over.
@@ -2512,6 +2603,13 @@ export class Webhooks {
     // that earlier diff was taken for one of this, and no seat but the lead
     // was asked again (#118). A resolution the lead re-checks alone is no new
     // round; the other approvals stand.
+    //
+    // A stacked pull request whose dependency has shipped is brought up to
+    // date first, and the round is left to the push that makes: one opened
+    // on this head would read the dependency's diff again. Not for the line's
+    // own update or a resolution round's push, which are what come of it.
+    const crewSender = payload.sender?.login ? isCrewLogin(await bots.listBots().catch(() => []), payload.sender.login) : false;
+    if (!resolution && !lineUpdate && !roundPush && (await this.updatedFirst(repo, pr, forIssue, crewSender))) return;
     if (!resolution) {
       await recordEvent({ source: 'platform', type: REVIEW_ROUND_OPENED, payload: { subjectRef: `${repo.name}#${pr.number}`, sha: pr.head.sha } }).catch(
         () => undefined,
@@ -2526,7 +2624,6 @@ export class Webhooks {
     // back to build to run `openadlc-ci`. A person's push is theirs, and the
     // merge line's update the line's: no builder ran anything on it, and
     // GitHub's CI runs on it once the lead approves it again.
-    const crewSender = payload.sender?.login ? isCrewLogin(await bots.listBots().catch(() => []), payload.sender.login) : false;
     if (crewSender && forIssue && !lineUpdate) {
       const pass = await (async () => localCiRuns.passFor(repo.id, pr.head.sha))().catch(() => undefined);
       if (pass === null) {

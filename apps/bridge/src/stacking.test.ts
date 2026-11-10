@@ -29,6 +29,9 @@ const world = vi.hoisted(() => ({
   attempts: 0,
   inFlight: [] as { number: number; paths: string[]; building: boolean }[],
   unfinished: 0,
+  /** The tasks on each subject, as `listTasksOnSubjects` reads them. */
+  tasks: [] as { subjectRef: string; kind: string; state: string }[],
+  tasksReadFails: false,
 }));
 
 vi.mock('@openadlc/db', () => ({
@@ -60,7 +63,13 @@ vi.mock('@openadlc/db', () => ({
     }),
   },
   repos: { listRepos: vi.fn(async () => world.repos), getRepoByName: vi.fn(async () => REPO) },
-  tasks: { countUnfinishedImplementTasks: vi.fn(async () => world.unfinished) },
+  tasks: {
+    countUnfinishedImplementTasks: vi.fn(async () => world.unfinished),
+    listTasksOnSubjects: vi.fn(async (refs: readonly string[]) => {
+      if (world.tasksReadFails) throw new Error('the database went away');
+      return world.tasks.filter((task) => refs.includes(task.subjectRef));
+    }),
+  },
   settings: { getSetting: vi.fn(async () => null), setSetting: vi.fn(async () => undefined) },
   stacks: {
     recordStack: vi.fn(async (input: { repoId: string; issue: number; onIssue: number; onPr: number; onBranch: string; onHeadSha: string | null }) => {
@@ -76,7 +85,10 @@ vi.mock('@openadlc/db', () => ({
     removeStack: vi.fn(async (_repo: string, issue: number) => {
       world.stacks.delete(issue);
     }),
-    listStacks: vi.fn(async () => [...world.stacks.values()]),
+    listStacks: vi.fn(async () => {
+      if (world.stackReadFails) throw new Error('the database went away');
+      return [...world.stacks.values()];
+    }),
     markPaused: vi.fn(async (_repo: string, issue: number) => {
       const stack = world.stacks.get(issue);
       if (stack && !stack.pausedAt) stack.pausedAt = new Date().toISOString();
@@ -110,6 +122,7 @@ function stacking(
     dispatching?: () => boolean;
     gate?: (repoFullName: string, sha: string) => Promise<'pending' | 'success' | 'failure' | null>;
     rebuild?: (input: { repoName: string; prNumber: number; reason: string }) => Promise<string | null>;
+    update?: (input: { repoName: string; prNumber: number; carry: boolean; why: string }) => Promise<string>;
     shipsByRelease?: (repoFullName: string) => Promise<boolean>;
   } = {},
 ) {
@@ -133,6 +146,7 @@ function stacking(
     dispatching: options.dispatching ?? (() => true),
     ...(options.gate ? { gate: options.gate } : {}),
     ...(options.rebuild ? { rebuild: options.rebuild } : {}),
+    ...(options.update ? { update: options.update } : {}),
     ...(options.shipsByRelease ? { shipsByRelease: options.shipsByRelease } : {}),
     say: async (subjects, text) => {
       said.push({ subjects, text });
@@ -180,6 +194,8 @@ describe('an issue that depends on one in review', () => {
     world.attempts = 0;
     world.inFlight = [{ number: 4, paths: ['src/a.ts', 'src/b.ts'], building: false }];
     world.unfinished = 0;
+    world.tasks = [];
+    world.tasksReadFails = false;
     world.ignored = new Map();
   });
 
@@ -402,6 +418,115 @@ describe('an issue that depends on one in review', () => {
     expect(await subject.pushed({ repoName: 'shop', prNumber: 31, before, after, prFiles: ['src/b.ts'] })).toBe(false);
 
     expect(events.filter((event) => event.type === STACK_UPDATED)).toHaveLength(1);
+  });
+
+  it('notes whether the approvals stand across the update, and that they do unless said', async () => {
+    const { events } = await readyToUpdate();
+    expect(events.at(-1)).toMatchObject({ type: STACK_UPDATING, payload: { pr: 31, from: before, carry: true } });
+
+    const first = stacking();
+    world.stacks.set(5, { repoId: 'repo-1', issue: 5, onIssue: 4, onPr: 30, onBranch: A_BRANCH, onHeadSha: 'a1', startedAt: '', pausedAt: null });
+    expect(
+      await first.subject.updating({ repoName: 'shop', repoFullName: 'janedoe/shop', prNumber: 31, issue: 5, baseRef: 'main', headSha: before, carry: false }),
+    ).toBe(true);
+    expect(first.events.at(-1)).toMatchObject({ type: STACK_UPDATING, payload: { pr: 31, from: before, carry: false } });
+  });
+
+  it('keeps no approvals for an update made before the first round: its round opens on the merged head', async () => {
+    const { subject, events } = stacking();
+    await subject.sweep();
+    world.issues.set(4, { ...world.issues.get(4)!, stage: 'merged' });
+    await subject.updating({ repoName: 'shop', repoFullName: 'janedoe/shop', prNumber: 31, issue: 5, baseRef: 'main', headSha: before, carry: false });
+    await subject.made({ repoName: 'shop', prNumber: 31, from: before, to: after });
+
+    expect(await subject.pushed({ repoName: 'shop', prNumber: 31, before, after, prFiles: ['src/b.ts'] })).toBe(false);
+    expect(events.some((event) => event.type === STACK_UPDATED)).toBe(false);
+  });
+
+  it('says the push an update made before the first round opens that round, and no other push', async () => {
+    const { subject } = stacking();
+    await subject.sweep();
+    world.issues.set(4, { ...world.issues.get(4)!, stage: 'merged' });
+    await subject.updating({ repoName: 'shop', repoFullName: 'janedoe/shop', prNumber: 31, issue: 5, baseRef: 'main', headSha: before, carry: false });
+    await subject.made({ repoName: 'shop', prNumber: 31, from: before, to: after });
+
+    expect(await subject.opensRound({ repoName: 'shop', prNumber: 31, before, after })).toBe(true);
+    expect(await subject.opensRound({ repoName: 'shop', prNumber: 31, before, after: 'c'.repeat(40) })).toBe(false);
+    expect(await subject.opensRound({ repoName: 'shop', prNumber: 32, before, after })).toBe(false);
+
+    // The line's update, and the parent's merge, keep the approvals instead.
+    const { subject: carried } = await readyToUpdate();
+    await carried.made({ repoName: 'shop', prNumber: 31, from: before, to: after });
+    expect(await carried.opensRound({ repoName: 'shop', prNumber: 31, before, after })).toBe(false);
+  });
+
+  it('keeps the approvals for the line’s update noted before notes said whether they stand', async () => {
+    const { subject, events, later } = stacking();
+    events.push({ type: STACK_UPDATING, payload: { repo: 'shop', pr: 31, issue: 5, on: 4, from: before, files: ['src/a.ts', 'src/b.ts'] }, at: new Date(later(0)).toISOString() });
+    await subject.made({ repoName: 'shop', prNumber: 31, from: before, to: after });
+
+    expect(await subject.pushed({ repoName: 'shop', prNumber: 31, before, after, prFiles: ['src/b.ts'] })).toBe(true);
+  });
+
+  describe('what is brought up to date when a pull request merges (`stackedOnMerged`)', () => {
+    const stackOn = (issue: number, onIssue: number, onPr: number, pausedAt: string | null = null) =>
+      world.stacks.set(issue, { repoId: 'repo-1', issue, onIssue, onPr, onBranch: A_BRANCH, onHeadSha: 'a1', startedAt: '', pausedAt });
+
+    beforeEach(() => {
+      world.issues.set(5, { ...world.issues.get(5)!, stage: 'review', prNumber: 31, labels: ['adlc:review'] });
+      world.issues.set(6, { number: 6, stage: 'review', labels: ['adlc:review'], prNumber: 32, body: '', declaredPaths: [] });
+      world.issues.set(7, { number: 7, stage: 'review', labels: ['adlc:review'], prNumber: 33, body: '', declaredPaths: [] });
+    });
+
+    it('finds each open stacked pull request built on it, by its pull request or an issue it closed', async () => {
+      stackOn(5, 4, 30);
+      // Recorded on #8's earlier pull request, which was closed and opened again as #30.
+      stackOn(6, 8, 29);
+      stackOn(7, 9, 40);
+      const { subject } = stacking();
+
+      expect(await subject.stackedOnMerged('shop', 30, [4])).toEqual([{ issue: 5, prNumber: 31 }]);
+      expect(await subject.stackedOnMerged('shop', 30, [8])).toEqual([
+        { issue: 5, prNumber: 31 },
+        { issue: 6, prNumber: 32 },
+      ]);
+      expect(await subject.stackedOnMerged('shop', 41, [])).toEqual([]);
+    });
+
+    it('leaves out one held, one with no pull request, one already merged, and one its builder is working on', async () => {
+      stackOn(5, 4, 30);
+      stackOn(6, 4, 30);
+      stackOn(7, 4, 30);
+      world.issues.set(5, { ...world.issues.get(5)!, labels: ['adlc:review', 'openadlc:paused'] });
+      world.issues.set(6, { ...world.issues.get(6)!, prNumber: null });
+      world.issues.set(7, { ...world.issues.get(7)!, stage: 'merged' });
+      const { subject } = stacking();
+      expect(await subject.stackedOnMerged('shop', 30, [4])).toEqual([]);
+
+      world.issues.set(5, { ...world.issues.get(5)!, labels: ['adlc:review'] });
+      world.tasks = [{ subjectRef: 'shop#31', kind: 'patch', state: 'running' }];
+      expect(await subject.stackedOnMerged('shop', 30, [4])).toEqual([]);
+      world.tasks = [{ subjectRef: 'shop#5', kind: 'implement', state: 'paused' }];
+      expect(await subject.stackedOnMerged('shop', 30, [4])).toEqual([]);
+      world.tasksReadFails = true;
+      expect(await subject.stackedOnMerged('shop', 30, [4])).toEqual([]);
+
+      // A finished build, or a review on it, holds nothing.
+      world.tasksReadFails = false;
+      world.tasks = [
+        { subjectRef: 'shop#5', kind: 'implement', state: 'done' },
+        { subjectRef: 'shop#31', kind: 'review', state: 'running' },
+      ];
+      expect(await subject.stackedOnMerged('shop', 30, [4])).toEqual([{ issue: 5, prNumber: 31 }]);
+    });
+
+    it('throws when the stacks cannot be read, rather than finding nothing', async () => {
+      stackOn(5, 4, 30);
+      world.stackReadFails = true;
+      const { subject } = stacking();
+
+      await expect(subject.stackedOnMerged('shop', 30, [4])).rejects.toThrow('the database went away');
+    });
   });
 
   it('never matches a note an earlier version wrote, which says nothing of what was made', async () => {
@@ -642,6 +767,47 @@ describe('an issue that depends on one in review', () => {
       expect(await subject.sweep()).toEqual([]);
     });
 
+    it('brings it up to date with the base before its reviews start, once that one merged', async () => {
+      const order: string[] = [];
+      const update = vi.fn(async (_input: { repoName: string; prNumber: number; carry: boolean; why: string }) => (order.push('updated'), 'updated'));
+      const { subject, client } = await heldOn4({ update });
+      client.changedFilesBetween.mockImplementation(apart);
+      client.getPullRequest.mockImplementation(pulls({ headSha: 'a2', merged: true }));
+      client.comment.mockImplementation(async () => (order.push('said'), null));
+      world.issues.set(4, { ...world.issues.get(4)!, stage: 'done', labels: ['adlc:done'] });
+
+      expect(await subject.sweep()).toEqual([
+        'shop#5: brought up to date with main before its reviews: updated',
+        'shop#5: let go, #4, which this was built on, merged; its reviews start now',
+      ]);
+      expect(update).toHaveBeenCalledWith({ repoName: 'shop', prNumber: 31, carry: true, why: 'let go: #4 merged' });
+      expect(order).toEqual(['updated', 'said']);
+    });
+
+    it('merges no base in when that one was approved again rather than merged', async () => {
+      const update = vi.fn(async () => 'updated');
+      const gate = vi.fn(async () => 'success' as const);
+      const approved = await heldOn4({ update, gate });
+      approved.client.changedFilesBetween.mockImplementation(apart);
+      approved.client.getPullRequest.mockImplementation(pulls({ headSha: 'a2' }));
+      world.issues.set(4, { ...world.issues.get(4)!, stage: 'review' });
+
+      expect(await approved.subject.sweep()).toEqual(['shop#5: let go, #4, which this was built on, was approved again at a2; its reviews start now']);
+      expect(update).not.toHaveBeenCalled();
+    });
+
+    it('leaves it to its builder’s round when that one merged having changed its files', async () => {
+      const update = vi.fn(async () => 'updated');
+      const rebuild = vi.fn(async () => null);
+      const redo = await heldOn4({ update, rebuild });
+      redo.client.changedFilesBetween.mockImplementation(async (_repo: string, _from: string, head: string) => (head === 'b1' ? ['src/b.ts'] : ['src/a.ts', 'src/b.ts']));
+      redo.client.getPullRequest.mockImplementation(pulls({ headSha: 'a2', merged: true }));
+      world.issues.set(4, { ...world.issues.get(4)!, stage: 'done', labels: ['adlc:done'] });
+      await redo.subject.sweep();
+      expect(rebuild).toHaveBeenCalled();
+      expect(update).not.toHaveBeenCalled();
+    });
+
     it('hands it to its builder to bring up to date when that one changed its files, not to a person', async () => {
       const rebuild = vi.fn(async (_input: { repoName: string; prNumber: number; reason: string }) => null);
       const { subject, client, said } = await heldOn4({ rebuild });
@@ -730,6 +896,8 @@ describe('a stacked build the dispatcher would not start', () => {
     world.attempts = 0;
     world.inFlight = [{ number: 4, paths: ['src/a.ts', 'src/b.ts'], building: false }];
     world.unfinished = 0;
+    world.tasks = [];
+    world.tasksReadFails = false;
   });
 
   it('starts nothing while work is paused install-wide', async () => {
