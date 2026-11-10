@@ -750,7 +750,12 @@ none yet, says its kind of work instead ("writing the change").
    private repository whose plan refuses rulesets a crew account's token can
    still merge through the API: the bridge detects that merge
    (`merge.unreviewed`), flags it and holds its testing deploy until a person
-   moves the card to Merged or reverts it. The install setting `bridgeMergeOff` (`PATCH /v1/install`,
+   moves the card to Merged or reverts it. Every merge the line did not make
+   (`merged_by` is not the app's bot login), a person's included, is audited
+   as `merge.outside_line`. The entry has the merger, the method, the head,
+   the base, `review-gate` and GitHub Actions' `ci` on the head. When `ci` was
+   not green, the pull request gets one comment naming the run and not the
+   merger. It holds nothing (ADR 0047). The install setting `bridgeMergeOff` (`PATCH /v1/install`,
    repository names, comma-separated) leaves a repository's merges to
    auto-merge and the branch's rules, or to a person. A pull request it
    leaves for a person — a change to how CI runs in a repository listed in

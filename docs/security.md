@@ -833,6 +833,21 @@ at all. What does hold, whatever a session runs:
   reads is the one OpenADLC published (`publishedGate`): the app's check run
   and the status the app or the automation account set, the most restrictive
   of them. A `review-gate` status any other account wrote counts for nothing.
+  Every merge the merge line did not make, by a person or a crew account and
+  into any branch, is also audited as `merge.outside_line`
+  (`noticeMergeOutsideLine`, ADR 0047). The entry records the merger, the
+  method (`merge` for two parents, `squash_or_rebase` for one, null when the
+  merge commit cannot be read), the head, the merge commit, the base,
+  `review-gate` as OpenADLC published it, and `ci` on the head: GitHub
+  Actions' check run only, never a commit status of that name, with its
+  verdict (`green`, `red`, `pending`, `missing`, or null when unreadable), its
+  conclusion and its URL. The line is recognised by `merged_by` being the
+  app's bot login, which covers merges from the console. When `ci` was red,
+  still running or never ran, the pull request gets one comment that says
+  what was red and where the run is, without naming who merged. Nothing is
+  held: the deploy and the card go on as before. The reconciler
+  (`mergeUnheard`) records a merge whose delivery never came, and writes
+  only one entry per head.
   A direct push to the default branch of a repository without rulesets is not
   watched.
 - **Attribution.** What a session posts through OpenADLC's `gh` is signed as its
@@ -1865,7 +1880,9 @@ What stops an injected instruction from mattering:
    `ci` and the app-pinned `review-gate`. On a private repository whose plan
    refuses rulesets, nothing on GitHub stops a crew account's token from
    merging: such a merge is detected (`merge.unreviewed`), flagged and its
-   deploy held, not prevented (see the bridge's watch on merges, above). A
+   deploy held, not prevented (see the bridge's watch on merges, above). Any
+   merge the merge line did not make, a person's included, is recorded as
+   `merge.outside_line` with `ci` and `review-gate` on its head. A
    review the builder dismisses with its token still holds the merge when a
    person had asked for changes, and the bridge says so on the pull request and
    asks the dismissed reviewer again. The builder cannot reach another seat's

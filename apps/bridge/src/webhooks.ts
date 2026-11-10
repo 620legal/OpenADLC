@@ -68,7 +68,7 @@ import { asAutomation, automationBotName, findOwnOpenIssue } from './automation-
 import type { BridgeConfig } from './config.js';
 import { alreadyLanded, subjectClosed, type Gates } from './gates.js';
 import { endStandingApproval } from './plan-changes.js';
-import { askedForCi, type MergeLine } from './merge-line.js';
+import { askedForCi, latestByName, verdictFor, type MergeLine } from './merge-line.js';
 import { itemLink, type Notifier } from './notify.js';
 import { recordDesignMemory, type CommentSignature } from './design-memory.js';
 import { NO_TESTING_URL, openQaRun, qaTarget, taskGaveUp } from './scheduler.js';
@@ -79,7 +79,7 @@ import { workflowFile, type DeployPipeline, type RevertOutcome } from './deploy-
 import { releaseOf, type GitHubRelease } from './release-shipping.js';
 import type { DeliveryKnowledge } from './delivery-rules.js';
 import { askPeopleAgain, awaitPeople, BotBusyError, BuilderWorkingError, crewReviewsOn, REVERT_BRANCH_PREFIX, REVIEW_START_REFUSED, reviewStartLock, SubjectClosedError, type TaskService } from './task-service.js';
-import { FORBIDDEN_PUSH, ciKeysChanged, contentChanged, fastPathOf, forbiddenPushGate, reviewSample } from './automation.js';
+import { CI_APP, FORBIDDEN_PUSH, ciKeysChanged, contentChanged, fastPathOf, forbiddenPushGate, reviewSample } from './automation.js';
 import { continuesBranch } from './build-left.js';
 import { BRANCH_UPDATED_BY_LINE, DEPLOY_PATH_BRANCH_PREFIX, headInRepository, issueNumberFromBranch, issuesMergedBy, madeByLineUpdate, ownIssueOf, REVIEW_ROUND_OPENED, REVIEW_STALLED, REVIEW_SUBMITTED_ON, scopeLabelAcceptedFrom } from './work.js';
 import { shipsByMerging, testingDeployChoice } from './deploys.js';
@@ -1875,6 +1875,102 @@ export class Webhooks {
   }
 
   /**
+   * A merge the merge line did not make, by a person or a crew account,
+   * recorded as `merge.outside_line` with what GitHub showed on its head when
+   * it landed (ADR 0047). On 2026-11-10 a person merged a crew pull request
+   * over a red `ci`, on a plan with no branch rules; it deployed to testing
+   * three minutes later, and nothing on the audit log, the pull request or
+   * the board said who had merged it (#276). Only `noticeUnreviewedMerge`
+   * spoke, and only for a crew account.
+   *
+   * The line merges only as the app (`mergeAsApp`), so its merges, the
+   * console's included, are the ones `merged_by` names the app's bot for.
+   * Not its `merge.landed` audit: that is written after the merge call
+   * returns, and the `closed` delivery can arrive first, so the line's own
+   * merges would read as outside it. An app login that cannot be read counts
+   * as outside; the line never lands a head whose `ci` is not green, so that
+   * records a merge and says nothing on the pull request.
+   *
+   * `ci` is GitHub Actions' check run, as `mergeDecision` reads it: a commit
+   * status named `ci` can be set by any token that may write statuses. When it
+   * was not green the pull request is told, without naming who merged it.
+   * Nothing here holds or moves anything: what follows the merge is as it was.
+   * Once per head: a redelivery, or the reconciler's `once` after it, writes
+   * and says nothing more.
+   */
+  private async noticeMergeOutsideLine(
+    repoFullName: string,
+    pr: {
+      number: number;
+      merged_by?: { login: string } | null;
+      head: { sha: string };
+      base?: { ref?: string } | null;
+      merge_commit_sha?: string | null;
+    },
+    { once = false }: { once?: boolean } = {},
+  ): Promise<void> {
+    const merger = pr.merged_by?.login ?? null;
+    const appLogin = await (async () => this.automation['appGate']?.botLogin() ?? null)().catch(() => null);
+    if (merger && appLogin && sameLogin(merger, appLogin)) return;
+    const target = `${repoFullName}#${pr.number}`;
+    const sha = pr.head.sha;
+    const before = await lastAudit('merge.outside_line', target).catch(() => null);
+    if (before && (once || (before.payload as { sha?: unknown } | null)?.sha === sha)) return;
+    const client = await asAutomation(this.automation['actors'], this.config).catch(() => null);
+    const mergeCommit = pr.merge_commit_sha ?? null;
+    const [reviewGate, runs, parents] = await Promise.all([
+      (async () => this.automation.publishedGate(repoFullName, sha))().catch(() => null),
+      (async () => (client ? await client.checkRunsFor(repoFullName, sha) : null))().catch(() => null),
+      (async () =>
+        client && mergeCommit
+          ? (await client.request<{ parents?: unknown[] }>('GET', `/repos/${repoFullName}/commits/${mergeCommit}`)).parents ?? null
+          : null)().catch(() => null),
+    ]);
+    const method = !Array.isArray(parents) ? null : parents.length >= 2 ? 'merge' : parents.length === 1 ? 'squash_or_rebase' : null;
+    const checksPage = `https://github.com/${repoFullName}/commit/${sha}/checks`;
+    // The newest of GitHub Actions' `ci` runs: a rerun that passed is green.
+    const run = runs ? latestByName(runs.filter((check) => check.name === REQUIRED_CHECK && check.app === CI_APP))[0] : undefined;
+    const ci = !runs
+      ? { verdict: null, conclusion: null, url: checksPage }
+      : !run
+        ? { verdict: 'missing' as const, conclusion: null, url: checksPage }
+        : {
+            verdict: verdictFor([run], [REQUIRED_CHECK]),
+            conclusion: run.conclusion,
+            url: typeof run.id === 'number' ? `https://github.com/${repoFullName}/runs/${run.id}` : checksPage,
+          };
+    const base = pr.base?.ref ?? null;
+    await audit({
+      actor: merger ?? 'unknown',
+      action: 'merge.outside_line',
+      target,
+      payload: { merger, method, sha, mergeCommit, base, reviewGate, ci },
+    }).catch(() => undefined);
+    if (ci.verdict === null) {
+      console.warn(`[bridge] ${target} merged outside the merge line; its ${REQUIRED_CHECK} on ${sha.slice(0, 7)} could not be read`);
+      return;
+    }
+    if (ci.verdict === 'green') return;
+    const short = sha.slice(0, 7);
+    const running = ci.verdict === 'pending' && run?.status !== 'completed';
+    const headline =
+      ci.verdict === 'missing'
+        ? `\`${REQUIRED_CHECK}\` never ran on \`${short}\` before this merged** (its checks: ${ci.url})`
+        : running
+          ? `\`${REQUIRED_CHECK}\` was still running on \`${short}\` when this merged** (the run: ${ci.url})`
+          : `\`${REQUIRED_CHECK}\` was not green on \`${short}\` when this merged** (\`${ci.conclusion ?? 'no conclusion'}\`; the run: ${ci.url})`;
+    console.warn(`[bridge] ${target} merged outside the merge line with ${REQUIRED_CHECK} ${ci.verdict}`);
+    await client
+      ?.comment(
+        repoFullName,
+        pr.number,
+        `**${headline}. \`${REVIEW_GATE_CHECK}\` was ${reviewGate ?? 'never set'}. ` +
+          `The commit is on \`${base ?? 'its base'}\` now; look at the run before the next deploy carries it.`,
+      )
+      .catch(() => undefined);
+  }
+
+  /**
    * A crew account merging a pull request the review gate had not passed.
    *
    * GitHub stops that only where a ruleset requires the review, and a private
@@ -2388,6 +2484,11 @@ export class Webhooks {
       // and the deploy sweep for a merge held until a person looks all read
       // the file as this merge left it.
       if (pr.base?.ref === repo.defaultBranch) this.delivery?.forget(repo.fullName);
+      // Recorded for every base, and holds nothing: what follows is the same
+      // whatever it found (ADR 0047).
+      await this.noticeMergeOutsideLine(repoFullName, pr).catch((error: unknown) =>
+        console.warn(`[bridge] could not record how ${repoFullName}#${pr.number} merged: ${String(error)}`),
+      );
       const unreviewed = await this.noticeUnreviewedMerge(repoFullName, pr);
       await this.noticeConfigurationMerged(repo, repoFullName, pr);
       // Only a merge into the default branch ships anything. A merge into
@@ -3374,6 +3475,20 @@ export class Webhooks {
     // nobody was told either, so the alarm is raised here, once. The pull is
     // read live: no `mergedBy` is an account deleted since it merged, and is
     // repaired as a person's merge would be.
+    //
+    // A merge outside the line is recorded here too, once, when its delivery
+    // never came. `getPullRequest` does not read the merge commit, so its
+    // method stays null here.
+    await this.noticeMergeOutsideLine(
+      record.fullName,
+      {
+        number: pull.number,
+        merged_by: pull.mergedBy ? { login: pull.mergedBy } : null,
+        head: { sha: pull.headSha },
+        base: { ref: pull.baseRef },
+      },
+      { once: true },
+    ).catch((error: unknown) => console.warn(`[bridge] could not record how ${record.fullName}#${prNumber} merged: ${String(error)}`));
     const unreviewed = await this.noticeUnreviewedMerge(
       record.fullName,
       { number: pull.number, merged_by: pull.mergedBy ? { login: pull.mergedBy } : null, head: { sha: pull.headSha } },
