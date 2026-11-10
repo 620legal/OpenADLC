@@ -400,7 +400,11 @@ export async function sendItemMessage(
     gateId?: string | null;
     role?: string | null;
     attachments?: string[];
-    /** Discuss on a held Human-review approval: the message is audited as about it, and decides nothing. */
+    /**
+     * Discuss on a held Human-review approval: the message is audited as about
+     * it, and decides nothing. The bridge reads the login and head from it; the
+     * repository and pull request it records are the item's, not these.
+     */
     about?: { kind: 'human_review'; repo: string; pr: number; login: string; head: string } | null;
   },
 ): Promise<{ ok: boolean; error?: string; answered?: boolean }> {

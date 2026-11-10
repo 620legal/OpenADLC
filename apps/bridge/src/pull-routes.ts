@@ -164,7 +164,9 @@ export function liveHumanReviewDecisions(input: {
     },
     rejected: async (repo, pr, head) => {
       const row = await lastAudit('pull.human_review_rejected', decisionTarget(repo, pr));
-      return ((row?.payload ?? {}) as Record<string, unknown>).head === head;
+      // Only a Reject that opened the round holds the head: one refused may be tried again.
+      const said = (row?.payload ?? {}) as Record<string, unknown>;
+      return said.head === head && said.sentBack === true;
     },
     audit: async (entry) => {
       await writeAudit(entry);

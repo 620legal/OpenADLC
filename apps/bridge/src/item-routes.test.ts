@@ -225,7 +225,8 @@ describe('reading a work item', () => {
 
   it('discusses a held Human-review approval with the lead reviewer on the pull request, audits it, and decides nothing', async () => {
     const head = '692cd1f88f3e45093ad9ba4e68e84d590af3b595';
-    const about = { kind: 'human_review', repo: 'api', pr: 31, login: 'janedoe', head };
+    // A repository and pull request in the body are not what the row records: the item's are.
+    const about = { kind: 'human_review', repo: 'web', pr: 99, login: 'janedoe', head };
     const response = await send('api#31', { text: 'Why does this touch infra/?', role: 'review_lead', about });
 
     expect(await response.json()).toMatchObject({ answered: false, bot: 'lead-reviewer', subject: 'api#31' });
@@ -244,7 +245,7 @@ describe('reading a work item', () => {
 
     // A message about nothing in particular, or with a malformed about, writes no such row.
     await send('api#31', { text: 'Another thought.', role: 'review_lead' });
-    await send('api#31', { text: 'And another.', role: 'review_lead', about: { kind: 'human_review', pr: 31, login: 'janedoe', head: 'abc' } });
+    await send('api#31', { text: 'And another.', role: 'review_lead', about: { kind: 'human_review', login: 'janedoe', head: 'abc' } });
     expect(world.audits).toHaveLength(1);
   });
 

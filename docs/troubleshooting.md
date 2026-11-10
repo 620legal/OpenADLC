@@ -1782,7 +1782,10 @@ Under each button is what it does next.
   OpenADLC says the reason on the pull request, then sends the pull request
   back to Build with your reason as the finding, as a request for changes on
   GitHub does. The lead reviews the fix, and you are asked again on the new
-  head. A second Reject of the same head is refused.
+  head. A second Reject of a head that went back is refused. If it could not
+  go back (no builder holds the branch, or the review loop stopped for a
+  person), the card says why: your reason is already on the pull request, and
+  you can Reject again once that is fixed, or request changes on GitHub.
 - **Discuss** opens a message box addressed to the lead reviewer, or to the
   builder if you pick it. The message goes on the pull request and starts that
   role's work to answer it. The decision stays open.

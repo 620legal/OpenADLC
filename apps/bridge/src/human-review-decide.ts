@@ -1,3 +1,4 @@
+import { inertMarkup } from '@openadlc/shared';
 import { personKey, type FlowView, type GitHubViewer, type PersonFlows } from './person-github.js';
 import type { PullRepo } from './pull-commands.js';
 import { HttpFailure } from './router.js';
@@ -45,9 +46,11 @@ export interface HumanReviewDeps {
   postReviewAsPerson(accessToken: string, fullName: string, number: number, review: { commitId: string; body: string }): Promise<{ id: number; htmlUrl: string }>;
   /** Comments as the app; null when it is not installed on the repository. */
   commentAsApp(fullName: string, number: number, body: string): Promise<{ htmlUrl: string } | null>;
-  /** Whether a Reject was already recorded for this pull request's head. */
+  /** Whether a Reject already sent this pull request's head back (a row with `sentBack: true`). */
   rejected(repo: string, pr: number, head: string): Promise<boolean>;
   audit(entry: { actor: string; action: string; target: string; payload: Record<string, unknown> }): Promise<void>;
+  /** Where a record that could not be written is said; `console.warn` when not given. */
+  warn?(message: string): void;
   /** Opens the patch round (`SendBack.reviewRound`): null once the builder has it, else why it did not open. */
   sendBack(input: { repo: PullRepo; number: number; by: string; reason: string }): Promise<string | null>;
 }
@@ -65,8 +68,18 @@ export class HumanReviewDecisions {
   private readonly userIds = new Map<string, number>();
   /** Approve's sign-ins still waiting, by `repo#pr@head#identity`: a second press while one waits posted twice. */
   private readonly signing = new Map<string, { flowId: string; identity: string }>();
+  /**
+   * Rejects still running, by `repo#pr@head`. The audit row is read before
+   * anything is posted and written after, so two quick presses (two tabs)
+   * both passed it and posted two comments and opened two rounds.
+   */
+  private readonly rejecting = new Set<string>();
 
   constructor(private readonly deps: HumanReviewDeps) {}
+
+  private warn(message: string): void {
+    (this.deps.warn ?? console.warn)(message);
+  }
 
   private async userId(login: string): Promise<number | null> {
     const key = login.toLowerCase();
@@ -145,12 +158,19 @@ export class HumanReviewDecisions {
         const now = await this.deps.pull(repo, number);
         if (now.head !== head) throw new Error(`Pull request #${number} moved to ${short(now.head)} while you signed in; nothing was posted. Reload and approve the new head.`);
         const posted = await this.deps.postReviewAsPerson(accessToken, repo.fullName, number, { commitId: head, body: 'Approved from the OpenADLC console.' });
-        await this.deps.audit({
-          actor: identity,
-          action: 'pull.human_review_approved',
-          target: decisionTarget(repo.name, number),
-          payload: { repo: repo.name, pr: number, login: viewer.login, awaited: login, head, reviewId: posted.id, reviewUrl: posted.htmlUrl, by: identity },
-        });
+        // The review is posted and counts in `mergeDecision` from here on. A
+        // record that cannot be written is said in the log, not to the person:
+        // told it failed, they would approve again for nothing.
+        await this.deps
+          .audit({
+            actor: identity,
+            action: 'pull.human_review_approved',
+            target: decisionTarget(repo.name, number),
+            payload: { repo: repo.name, pr: number, login: viewer.login, awaited: login, head, reviewId: posted.id, reviewUrl: posted.htmlUrl, by: identity },
+          })
+          .catch((error: unknown) =>
+            this.warn(`[bridge] @${viewer.login}'s approval of ${repo.name}#${number} at ${short(head)} was posted but not audited: ${error instanceof Error ? error.message : error}`),
+          );
         return { commentUrl: posted.htmlUrl };
       },
       { noClientId: `OpenADLC cannot sign in as a person on this install: no GitHub App client id is configured. Approve it on GitHub: ${url}/files` },
@@ -164,38 +184,64 @@ export class HumanReviewDecisions {
    * Sends the pull request back to Build with the person's reason as the
    * finding: said on the pull request as the app, audited, and the patch round
    * opened with `by: '@login'`, as their request for changes on GitHub opens it.
-   * Once per head: the audit row is the guard, since the round's own opening
-   * clears the item only once it is recorded.
+   * Once per head that went back: the audit row, written with whether the
+   * round opened, is the guard, since the round's own opening clears the item
+   * only once it is recorded. A Reject whose round did not open can be tried
+   * again: guarded by the row alone, the person was left with a reason posted
+   * that nobody acted on and a 409 on every retry.
    */
   async reject(input: { repo: PullRepo; number: number; login: string; head: string; identity: string; reason: string }): Promise<{ state: 'sent_back'; commentUrl: string } | { state: 'not_sent_back'; commentUrl: string; why: string }> {
     const { repo, number, login, head, identity } = input;
     const reason = input.reason.trim();
     if (!reason) throw new HttpFailure(400, 'A reason is required; it is what the builder fixes.');
     if (reason.length > REJECT_REASON_LIMIT) throw new HttpFailure(400, `A reason is at most ${REJECT_REASON_LIMIT} characters; say the finding, and put the rest on the pull request.`);
-    await this.check(input);
-    const already = await this.deps.rejected(repo.name, number, head).catch(() => {
-      throw new HttpFailure(503, `OpenADLC cannot tell whether #${number} was already sent back; nothing was done. Try again in a moment.`);
-    });
-    if (already) throw new HttpFailure(409, `Pull request #${number} at ${short(head)} was already sent back from the console; nothing was done again.`);
-    const quoted = reason
-      .split('\n')
-      .map((line) => `> ${line}`)
-      .join('\n');
-    const posted = await this.deps.commentAsApp(repo.fullName, number, `@${login} rejected \`${short(head)}\` from the OpenADLC console:\n\n${quoted}`);
-    if (!posted) {
-      throw new HttpFailure(
-        503,
-        `OpenADLC cannot post as its app on ${repo.fullName}: the app is not installed there, or its key cannot be read. Nothing was done; request changes on GitHub instead.`,
-      );
+    // Taken before the first await, so a second press finds it.
+    const key = `${repo.name}#${number}@${head}`;
+    if (this.rejecting.has(key)) throw new HttpFailure(409, `Pull request #${number} at ${short(head)} is being sent back already; nothing was done again.`);
+    this.rejecting.add(key);
+    try {
+      await this.check(input);
+      const already = await this.deps.rejected(repo.name, number, head).catch(() => {
+        throw new HttpFailure(503, `OpenADLC cannot tell whether #${number} was already sent back; nothing was done. Try again in a moment.`);
+      });
+      if (already) throw new HttpFailure(409, `Pull request #${number} at ${short(head)} was already sent back from the console; nothing was done again.`);
+      // The person's words go out as the app. Posted as typed, a
+      // `<!-- openadlc:{...} -->` in them reached the webhook as the app's own
+      // marker (`inertMarkup`, packages/shared/src/markers.ts).
+      const quoted = inertMarkup(reason)
+        .split('\n')
+        .map((line) => `> ${line}`)
+        .join('\n');
+      const posted = await this.deps.commentAsApp(repo.fullName, number, `@${login} rejected \`${short(head)}\` from the OpenADLC console:\n\n${quoted}`);
+      if (!posted) {
+        throw new HttpFailure(
+          503,
+          `OpenADLC cannot post as its app on ${repo.fullName}: the app is not installed there, or its key cannot be read. Nothing was done; request changes on GitHub instead.`,
+        );
+      }
+      const refused = await this.deps
+        .sendBack({ repo, number, by: `@${login}`, reason })
+        .catch((error: unknown) => (error instanceof Error ? error.message : String(error)) || 'the patch round could not be opened');
+      const sentBack = refused === null;
+      await this.deps
+        .audit({
+          actor: identity,
+          action: 'pull.human_review_rejected',
+          target: decisionTarget(repo.name, number),
+          payload: { repo: repo.name, pr: number, login, head, reason, commentUrl: posted.htmlUrl, sentBack, ...(sentBack ? {} : { why: refused }), by: identity },
+        })
+        .catch((error: unknown) =>
+          this.warn(`[bridge] @${login}'s Reject of ${repo.name}#${number} at ${short(head)} was not audited: ${error instanceof Error ? error.message : error}`),
+        );
+      if (sentBack) return { state: 'sent_back', commentUrl: posted.htmlUrl };
+      return {
+        state: 'not_sent_back',
+        commentUrl: posted.htmlUrl,
+        why: `Your reason is on the pull request, but it did not go back to the builder: ${refused}. Reject it again once that is fixed, or request changes on GitHub.`,
+      };
+    } finally {
+      this.rejecting.delete(key);
     }
-    await this.deps.audit({
-      actor: identity,
-      action: 'pull.human_review_rejected',
-      target: decisionTarget(repo.name, number),
-      payload: { repo: repo.name, pr: number, login, head, reason, commentUrl: posted.htmlUrl, by: identity },
-    });
-    const why = await this.deps.sendBack({ repo, number, by: `@${login}`, reason });
-    return why === null ? { state: 'sent_back', commentUrl: posted.htmlUrl } : { state: 'not_sent_back', commentUrl: posted.htmlUrl, why };
   }
 }
 

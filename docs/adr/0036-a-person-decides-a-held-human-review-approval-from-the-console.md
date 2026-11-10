@@ -42,10 +42,13 @@ The same two Needs-you items carry a `decision`. It holds:
   for a review made on GitHub.
 - **Reject** takes no sign-in. The bridge checks that the console person's
   linked account id is the awaited login's id. It requires a reason that is
-  not empty, posts the reason as the app, writes `pull.human_review_rejected`,
-  and calls `SendBack.reviewRound` with `by: '@login'`. That is the call a
-  person's request for changes on GitHub makes. It happens once per head; the
-  audit row is the guard.
+  not empty, posts the reason as the app with its markup made inert
+  (`inertMarkup`), calls `SendBack.reviewRound` with `by: '@login'`, and then
+  writes `pull.human_review_rejected` with whether the round opened. That is
+  the call a person's request for changes on GitHub makes. A head goes back
+  once: a row whose round opened is the guard, and a press while one Reject
+  of the head is still running is refused. A Reject whose round did not open
+  can be tried again.
 - **Discuss** is the item's message box (`POST /v1/items/:subject/messages`).
   It goes to the lead reviewer by default, or to the builder, and starts that
   role's work through `MessageStarts`. It carries
