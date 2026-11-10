@@ -891,6 +891,14 @@ describe('this repository uses the templates itself', () => {
     expect(template).not.toContain('should be able to paste');
     expect(template).toContain('`openadlc-ci`');
   });
+
+  it('asks for None rather than a deleted section, which OpenADLC’s gh refuses', () => {
+    for (const root of [ROOT, TEMPLATE]) {
+      const template = readFileSync(join(root, '.github', 'pull_request_template.md'), 'utf8');
+      expect(template).not.toMatch(/Delete this section/i);
+      expect(template).toContain('Write None');
+    }
+  });
 });
 
 /**

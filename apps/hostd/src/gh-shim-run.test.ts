@@ -133,6 +133,54 @@ describe('the gh a session runs, end to end', () => {
     expect(run.reachedGh).toBeNull();
   });
 
+  describe('a pull request body in a repository with a template', () => {
+    const templated = join(dir, 'templated');
+    mkdirSync(join(templated, '.github'), { recursive: true });
+    spawnSync('git', ['init', '-q'], { cwd: templated });
+    writeFileSync(
+      join(templated, '.github', 'pull_request_template.md'),
+      'Closes #\n\n## What changed\n\n<!-- What. -->\n\n## How to see it\n\n<!-- How. -->\n\n## What is not proven here\n\n<!-- What not. -->\n',
+    );
+    // A task's session; nothing answers at the bridge, so a post that goes out goes unsigned.
+    const task = { OPENADLC_BOT: 'builder', OPENADLC_TASK_ID: 'task-1', OPENADLC_BRIDGE_URL: 'http://127.0.0.1:1' };
+
+    it('refuses a body that leaves a section out, naming it, and the real gh never runs', () => {
+      const body = file('short.md', 'Closes #9\n\n## What changed\n\nThis.\n\n## What is not proven here\n\nNone\n');
+      const run = gh(['pr', 'create', '--title', 't', '--body-file', body], task, templated);
+      expect(run.status).toBe(1);
+      expect(run.stderr).toContain('"## How to see it"');
+      expect(run.stderr).toContain('.github/pull_request_template.md');
+      expect(run.reachedGh).toBeNull();
+    });
+
+    it('refuses a body given on stdin that leaves a section empty', () => {
+      rmSync(reached, { force: true });
+      const run = spawnSync(process.execPath, [SHIM, 'pr', 'edit', '7', '--body-file', '-'], {
+        cwd: templated,
+        encoding: 'utf8',
+        input: '## What changed\n\nThis.\n\n## How to see it\n\n<!-- How. -->\n\n## What is not proven here\n\nNone\n',
+        env: { PATH: [fakeBin, '/usr/bin', '/bin'].join(delimiter), HOME: dir, ...task },
+      });
+      expect(run.status).toBe(1);
+      expect(run.stderr).toContain('leaves "## How to see it" empty');
+      expect(existsSync(reached)).toBe(false);
+    });
+
+    it('lets a body that fills every section through', () => {
+      const body = file('full.md', 'Closes #9\n\n## What changed\n\nThis.\n\n## How to see it\n\nRan it.\n\n## What is not proven here\n\nNone\n');
+      const run = gh(['pr', 'create', '--title', 't', '--body-file', body], task, templated);
+      expect(run.status).toBe(0);
+      expect(run.reachedGh).toMatch(/^pr create --title t --body-file /);
+    });
+
+    it('holds a person’s own shell, which names no task, to nothing', () => {
+      const body = file('loose.md', 'Just this.');
+      const run = gh(['pr', 'create', '--title', 't', '--body-file', body], { OPENADLC_BOT: 'builder' }, templated);
+      expect(run.status).toBe(0);
+      expect(run.reachedGh).not.toBeNull();
+    });
+  });
+
   describe('an advisory reviewer', () => {
     const advisory = { OPENADLC_REVIEW_MODE: 'advisory' };
 
