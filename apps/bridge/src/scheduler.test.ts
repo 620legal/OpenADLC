@@ -1983,7 +1983,7 @@ describe('the lead’s review, asked again by the sweep', () => {
 
   // Pull request #2 of openadlc-testbed is issue #1's, in review, and only the
   // lead reviews it (a revert).
-  function sweeping(leadDue: { seat: string; since: string | null } | null) {
+  function sweeping(leadDue: { seat: string; since: string | null; lateAsks?: { seat: string; reviewId: number | null; submittedAt: string | null }[] } | null) {
     store.repos = [{ id: 'repo-1', name: 'openadlc-testbed', fullName: 'janedoe/openadlc-testbed' }];
     store.issues = [{ repoName: 'openadlc-testbed', number: 1, prNumber: 2, stage: 'review', labels: [] }];
     store.bots = [LEAD];
@@ -2041,6 +2041,20 @@ describe('the lead’s review, asked again by the sweep', () => {
 
     expect(opened).toEqual([expect.objectContaining({ bot: LEAD.name, subjectRef: 'openadlc-testbed#2' })]);
     expect(actions).toContainEqual(expect.stringContaining('the lead’s, last'));
+  });
+
+  it('asks the lead again, with its brief, on a request for changes made after it approved (docs/adr/0038)', async () => {
+    // The lead was busy at the delivery that held the gate; no other comes.
+    store.reviewTasks = [{ subjectRef: 'openadlc-testbed#2', state: 'done', botId: LEAD.id, createdAt: '2026-10-01T09:00:00.000Z' }];
+    const lateAsks = [{ seat: 'second-reviewer', reviewId: 9, submittedAt: '2026-10-01T10:00:00.000Z' }];
+    const { scheduler, opened } = sweeping({ seat: LEAD.name, since: '2026-10-01T10:00:00.000Z', lateAsks });
+
+    const actions = await scheduler.settleGates();
+
+    expect(opened).toEqual([
+      expect.objectContaining({ bot: LEAD.name, subjectRef: 'openadlc-testbed#2', extraContext: [expect.objectContaining({ name: 'asked-again.md' })] }),
+    ]);
+    expect(actions).toContainEqual(expect.stringContaining('second-reviewer having asked for changes after it approved'));
   });
 
   it('does not ask the lead twice for one diff', async () => {

@@ -436,7 +436,18 @@ none yet, says its kind of work instead ("writing the change").
    seat an approval or a request for changes (`OPENADLC_REVIEW_MODE`). Once every
    other seat asked has posted on this diff, the lead is asked, with all of
    their reviews in front of it, and decides: approve, or one request for
-   changes with every finding that stands. Each round of reviews records
+   changes with every finding that stands. A request for changes from any
+   other seat asked — advisory or blocking, on any change, not only one to
+   how CI runs — posted on this diff after the lead's latest review of it,
+   while the lead approves, holds `review-gate` ("changes requested by … after
+   the lead approved; the lead asked again") and asks the lead again, once,
+   with an `asked-again.md` naming that verdict beside the reviews
+   ([ADR 0038](adr/0038-a-late-request-for-changes-reopens-the-leads-decision.md)).
+   Which came later is read by `submittedAt`, and by review id when either
+   has none. A request posted before the lead's latest review was read and
+   holds nothing new; a later approval, or a comment with no verdict, changes
+   nothing. While the lead is asked again no stall is recorded for a person:
+   the lead decides. Each round of reviews records
    `review.round_opened` `{subjectRef, sha}` as soon as a push is known to
    have changed the diff, before anything can hold the work — a push held for
    its local CI too — and that is when the diff began. A patch round that
@@ -633,7 +644,11 @@ none yet, says its kind of work instead ("writing the change").
      this head or of an earlier one whose diff against the base is the same,
      with seats on one account told apart only by a signature that checks for
      that review, in audit mode as well as enforce; the other seats are
-     advisory, and the lead read them. "The same diff" covers both sides of
+     advisory, and the lead read them: one that asks for changes after the
+     lead's approval holds `review-gate`, and so this rule, until the lead
+     decides again
+     ([ADR 0038](adr/0038-a-late-request-for-changes-reopens-the-leads-decision.md)).
+     "The same diff" covers both sides of
      every file the pull request changes: what it was at the merge base and
      what it is at the head. A merge of the base that kept the pull request's
      side of a file the base also changed is a changed diff, and the reviews

@@ -3449,7 +3449,7 @@ describe('a blocking seat still asking for changes on a head the lead approved',
   };
   const verdict = (user: string, state: string, at: string, commitId = HEAD) => ({ id: at.length + user.length, user, state, body: '', submittedAt: at, commitId });
 
-  function bridge(reviews: Record<string, unknown>[], options: { config?: unknown; files?: string[]; attribution?: unknown } = {}) {
+  function bridge(reviews: Record<string, unknown>[], options: { config?: unknown; files?: string[]; attribution?: unknown; openLeadReview?: (input: never) => Promise<string | null>; notes?: string } = {}) {
     const files = options.files ?? ['apps/bridge/src/api.ts'];
     const github = {
       listPullCommits: vi.fn(async () => []),
@@ -3458,7 +3458,7 @@ describe('a blocking seat still asking for changes on a head the lead approved',
       listEveryPullFile: vi.fn(async () => ({ files, complete: true, renamedFrom: [] })),
       listPullFilesAsNamed: vi.fn(async () => files),
       listReviews: vi.fn(async () => reviews),
-      readFileAtRef: vi.fn(async () => '# Agent notes\n'),
+      readFileAtRef: vi.fn(async () => options.notes ?? '# Agent notes\n'),
       requestReviewers: vi.fn(async () => undefined),
       getPullRequest: vi.fn(async () => ({ labels: [] })),
       addLabels: vi.fn(async () => undefined),
@@ -3472,9 +3472,10 @@ describe('a blocking seat still asking for changes on a head the lead approved',
     const used = options.config ?? config;
     const automation = new Automation(used as never, { asBot: vi.fn(async () => github), attribution: options.attribution } as never);
     const taskService = taskServiceOpening(vi.fn(async () => ({ taskId: 'task-patch', session: 'patch-1' })));
+    if (options.openLeadReview) taskService.openLeadReview = options.openLeadReview as never;
     const mergeLine = { enter: vi.fn(async () => undefined), advance: vi.fn(async () => null), leave: vi.fn(async () => undefined) };
     const webhooks = new Webhooks(used as never, automation, {} as never, taskService as never, {} as never, mergeLine as never);
-    return { webhooks, taskService };
+    return { webhooks, taskService, github, mergeLine };
   }
 
   beforeEach(() => {
@@ -3488,22 +3489,22 @@ describe('a blocking seat still asking for changes on a head the lead approved',
     store.botTasks = [];
   });
 
-  async function stallsAfter(reviews: Record<string, unknown>[], by: string, state: string, options: Parameters<typeof bridge>[1] = {}) {
+  async function stallsAfter(reviews: Record<string, unknown>[], by: string, state: string, options: Parameters<typeof bridge>[1] & { pull?: unknown } = {}) {
     const { recordEvent } = await import('@openadlc/db');
     vi.mocked(recordEvent).mockClear();
-    const { webhooks, taskService } = bridge(reviews, options);
+    const { webhooks, taskService, github, mergeLine } = bridge(reviews, options);
     const quiet = [vi.spyOn(console, 'warn').mockImplementation(() => undefined), vi.spyOn(console, 'log').mockImplementation(() => undefined)];
     try {
       await webhooks.receive(
         'pull_request_review',
-        { action: 'submitted', review: { author_association: 'COLLABORATOR', state, user: { login: by }, body: '' }, pull_request: PULL, repository: REPOSITORY } as never,
+        { action: 'submitted', review: { author_association: 'COLLABORATOR', state, user: { login: by }, body: '' }, pull_request: options.pull ?? PULL, repository: REPOSITORY } as never,
         `delivery-${by}-${state}`,
       );
     } finally {
       for (const spy of quiet) spy.mockRestore();
     }
     const stalls = vi.mocked(recordEvent).mock.calls.map(([event]) => event).filter((event) => event.type === 'review.stalled');
-    return { stalls, taskService };
+    return { stalls, taskService, github, mergeLine };
   }
 
   it('records one stall naming the seat when the lead approves over it', async () => {
@@ -3572,6 +3573,61 @@ describe('a blocking seat still asking for changes on a head the lead approved',
 
     expect(stalls).toHaveLength(1);
     expect(stalls[0]?.payload).toMatchObject({ heldBy: [SECURITY], bot: SECURITY, botId: 'bot-security' });
+  });
+
+  describe('a request for changes from another seat after the lead approved', () => {
+    // On #253 the security seat found a blocker after the lead approved; a
+    // person had to send the pull request back by hand. The lead decides
+    // again instead (docs/adr/0038).
+    const marked = (user: string, at: string, verdict: string, id: number) => ({
+      id,
+      user,
+      state: 'COMMENTED',
+      body: `Findings.\n\n<!-- openadlc:{"event":"review_posted","verdict":"${verdict}"} -->`,
+      submittedAt: at,
+      commitId: HEAD,
+    });
+    // Human review rules that name nothing this changes: the gate is the reviews'.
+    const notes = '# Agent notes\n\n## Human review\n\n- `config/` @janedoe\n';
+    // The crew's own branch: a fork's pull request has no seat asked.
+    const pull = { ...PULL, head: { ...PULL.head, repo: { full_name: REPOSITORY.full_name } } };
+    const before = (id: number) => [
+      marked(SECOND, '2026-09-24T09:00:00Z', 'approve', 1),
+      { ...verdict(SECURITY, 'APPROVED', '2026-09-24T09:05:00Z'), id: 2 },
+      { ...verdict(LEAD, 'APPROVED', '2026-09-24T10:00:00Z'), id },
+    ];
+
+    it('holds the gate, keeps the pull request out of the line, records no stall, and asks the lead again with the request', async () => {
+      const openLeadReview = vi.fn(async () => null);
+      const { stalls, github, mergeLine } = await stallsAfter([...before(3), marked(SECOND, '2026-09-24T11:00:00Z', 'request_changes', 4)], SECOND, 'commented', {
+        openLeadReview,
+        notes,
+        pull,
+      });
+
+      expect(github.setCommitStatus).toHaveBeenLastCalledWith(
+        'janedoe/openadlc',
+        HEAD,
+        expect.objectContaining({ context: 'review-gate', state: 'pending', description: expect.stringContaining(`changes requested by ${SECOND} after ${LEAD} approved`) }),
+      );
+      expect(mergeLine.enter).not.toHaveBeenCalled();
+      expect(stalls).toEqual([]);
+      expect(openLeadReview).toHaveBeenCalledWith(
+        expect.objectContaining({ seat: LEAD, since: '2026-09-24T11:00:00Z', lateAsks: [{ seat: SECOND, reviewId: 4, submittedAt: '2026-09-24T11:00:00Z' }] }),
+      );
+    });
+
+    it('changes nothing on a later approval, or a plain comment: into the line, and the lead is not asked', async () => {
+      for (const late of [marked(SECOND, '2026-09-24T11:00:00Z', 'approve', 4), { ...verdict(SECOND, 'COMMENTED', '2026-09-24T11:00:00Z'), id: 4 }]) {
+        const openLeadReview = vi.fn(async () => null);
+        const { stalls, github, mergeLine } = await stallsAfter([...before(3), late], SECOND, 'commented', { openLeadReview, notes, pull });
+
+        expect(github.setCommitStatus).toHaveBeenLastCalledWith('janedoe/openadlc', HEAD, expect.objectContaining({ context: 'review-gate', state: 'success' }));
+        expect(mergeLine.enter).toHaveBeenCalledWith(expect.objectContaining({ prNumber: 31 }));
+        expect(openLeadReview).not.toHaveBeenCalled();
+        expect(stalls).toEqual([]);
+      }
+    });
   });
 
   it('records nothing for a request for changes on a diff since replaced', async () => {

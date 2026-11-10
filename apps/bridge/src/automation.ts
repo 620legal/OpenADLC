@@ -468,14 +468,54 @@ export function securityVerdictOn(
   seat: string,
   onThisDiff: (commitId: string | null) => boolean,
 ): string | null {
-  let verdict: string | null = null;
+  return seatVerdictOn(reviews, crew, seat, onThisDiff)?.verdict ?? null;
+}
+
+/**
+ * A seat's latest verdict on this diff, and the review that gave it, read as
+ * `securityVerdictOn` reads the security seat's. A review with neither an
+ * approval nor a marker verdict — a plain comment — leaves the earlier one
+ * standing. Null when the seat gave none.
+ */
+export function seatVerdictOn(
+  reviews: readonly { id?: number; user: string | null; state: string; body?: string | null; commitId?: string | null; submittedAt?: string | null }[],
+  crew: readonly { name: string; slot?: string; githubLogin: string | null }[],
+  seat: string,
+  onThisDiff: (commitId: string | null) => boolean,
+): { verdict: string; reviewId: number | null; submittedAt: string | null } | null {
+  let found: { verdict: string; reviewId: number | null; submittedAt: string | null } | null = null;
   for (const review of reviews) {
     const author = whoWrote(review.user, crew, { bot: seatOf(review.body) });
     if (author.kind !== 'openadlc' || author.bot?.name !== seat || !onThisDiff(review.commitId ?? null)) continue;
     const said = ownReviewMarker(review.body);
-    verdict = review.state === 'APPROVED' ? 'approve' : typeof said?.verdict === 'string' ? said.verdict : verdict;
+    const verdict = review.state === 'APPROVED' ? 'approve' : typeof said?.verdict === 'string' ? said.verdict : null;
+    if (verdict) found = { verdict, reviewId: review.id ?? null, submittedAt: review.submittedAt ?? null };
   }
-  return verdict;
+  return found;
+}
+
+/**
+ * Whether review `a` came after review `b`: by `submittedAt` when both have
+ * one, otherwise by GitHub's review id, which increases.
+ */
+export function reviewedAfter(
+  a: { reviewId: number | null; submittedAt: string | null },
+  b: { reviewId: number | null; submittedAt: string | null },
+): boolean {
+  if (a.submittedAt && b.submittedAt) {
+    const left = Date.parse(a.submittedAt);
+    const right = Date.parse(b.submittedAt);
+    if (!Number.isNaN(left) && !Number.isNaN(right) && left !== right) return left > right;
+  }
+  if (a.reviewId !== null && b.reviewId !== null) return a.reviewId > b.reviewId;
+  return false;
+}
+
+/** A request for changes a seat gave after the lead's latest review of this diff, while the lead approves it. */
+export interface LateAsk {
+  seat: string;
+  reviewId: number | null;
+  submittedAt: string | null;
 }
 
 /** Each login's latest verdict, a comment being none. */
@@ -750,6 +790,24 @@ function lastPostedBy<M extends { name: string; slot?: string; githubLogin: stri
     const author = whoWrote(review.user, crew, { bot: seatOf(review.body) });
     if (author.kind !== 'openadlc' || !author.bot || !seats.includes(author.bot.name) || !review.submittedAt) continue;
     if (!last || Date.parse(review.submittedAt) > Date.parse(last)) last = review.submittedAt;
+  }
+  return last;
+}
+
+/** A seat's latest review among these, whatever it said; null when it posted none. */
+function lastReviewBy<M extends { name: string; slot?: string; githubLogin: string | null }>(
+  reviews: readonly { id?: number; user: string | null; state: string; body?: string | null; submittedAt?: string | null }[],
+  crew: readonly M[],
+  seat: string,
+): { reviewId: number | null; submittedAt: string | null } | null {
+  let last: { reviewId: number | null; submittedAt: string | null } | null = null;
+  for (const review of reviews) {
+    if (review.state.toUpperCase() === 'PENDING') continue;
+    const author = whoWrote(review.user, crew, { bot: seatOf(review.body) });
+    if (author.kind !== 'openadlc' || author.bot?.name !== seat) continue;
+    const here = { reviewId: review.id ?? null, submittedAt: review.submittedAt ?? null };
+    // Reviews come oldest first: a later one wins unless it is known to be earlier.
+    if (!last || !reviewedAfter(last, here)) last = here;
   }
   return last;
 }
@@ -1931,11 +1989,12 @@ export class Automation {
     for (const entry of rules.reviewers) {
       const why = triggeredBy(entry, input);
       if (!why || reviewers.includes(entry.seat)) continue;
-      // A revert drops only the seats there by default. One its own label, its
-      // closing issue's label or its path asked for still reads it — the security seat on its paths — and
-      // so does a blocking seat: the revert went to the lead alone whatever it
-      // touched, and the label was one a session could put on its own pull
-      // request to choose one-model review.
+      // A revert drops only the seats there by default. A seat asked for by
+      // the revert's own label, a closing issue's label or its paths (the
+      // security seat on its paths) still reads it, and so does a blocking
+      // seat: the revert went to the lead alone whatever it touched, and the
+      // label was one a session could put on its own pull request to choose
+      // one-model review.
       if (input.isRevert && !entry.lead && !entry.blocking && askedByDefault(entry, input)) continue;
       reviewers.push(entry.seat);
       reasons[entry.seat] = entry.lead && input.isRevert ? 'fast path: revert' : why;
@@ -2185,7 +2244,13 @@ export class Automation {
      * `changesRequested`, but the merge waits on it all the same.
      */
     securityAsks: string | null;
-    leadDue: { seat: string; since: string | null } | null;
+    /**
+     * Other seats asked whose latest verdict on this diff asks for changes,
+     * given after the lead's latest review of it while the lead approves: the
+     * gate holds and the lead is asked again (docs/adr/0038).
+     */
+    lateAsks?: LateAsk[];
+    leadDue: { seat: string; since: string | null; lateAsks?: LateAsk[] } | null;
     /**
      * Approvers with no review of this diff whose approval GitHub shows counts
      * for nothing on it: each is asked again when its turn comes, the task
@@ -2343,12 +2408,62 @@ export class Automation {
     }
 
     const others = asked.filter((seat) => seat !== decision.lead);
+    // A request for changes from another seat, given after the lead's latest
+    // review of this diff while the lead approves it, reopens the lead's
+    // decision (docs/adr/0038). On #253 the security seat found a blocker
+    // after the lead approved, nothing read it, and a person had to send the
+    // pull request back by hand. Signed reviews only, when signatures can be
+    // checked; when nothing can check one, a crew-authored verdict counts,
+    // since here it only holds the merge and never releases it.
+    const lateAsks: LateAsk[] = [];
+    if (approving.includes(decision.lead)) {
+      const readable = checked ? onDiff.filter((review) => signedIds.has(review.id)) : onDiff;
+      const leadLast = lastReviewBy(onDiff, crew, decision.lead);
+      for (const seat of others) {
+        const said = seatVerdictOn(readable, crew, seat, () => true);
+        if (said?.verdict !== 'request_changes') continue;
+        if (leadLast && !reviewedAfter(said, leadLast)) continue;
+        lateAsks.push({ seat, reviewId: said.reviewId, submittedAt: said.submittedAt });
+      }
+    }
+    if (lateAsks.length > 0 && gate.state === 'success') {
+      gate = {
+        state: 'pending',
+        description: fitStatus(`changes requested by ${lateAsks.map((ask) => ask.seat).join(', ')} after ${decision.lead} approved; ${decision.lead} asked again`),
+      };
+    }
+
     const othersIn = others.every((seat) => posted.includes(seat) || cannot.has(seat.toLowerCase()));
     const due = !pr.draft && othersIn && !posted.includes(decision.lead) && !cannot.has(decision.lead.toLowerCase());
+    const dueAgain = !pr.draft && lateAsks.length > 0 && !cannot.has(decision.lead.toLowerCase());
+    // Asked again once per late ask: a lead task opened since the latest of
+    // them is that review (`openLeadReview`).
+    const askedAt = lateAsks.flatMap((ask) => (ask.submittedAt ? [ask.submittedAt] : []));
     const leadDue = due
-      ? { seat: decision.lead, since: await this.leadAskedSince(repoFullName, pr.number, lastPostedBy(onDiff, crew, others), resolution.at) }
-      : null;
-    return { gate, decision, posted, approved: approving, changesRequested: asking, securityAsks, leadDue, notCounted, peopleNotCounted: people };
+      ? {
+          seat: decision.lead,
+          since: await this.leadAskedSince(repoFullName, pr.number, lastPostedBy(onDiff, crew, others), resolution.at),
+          ...(lateAsks.length > 0 ? { lateAsks } : {}),
+        }
+      : dueAgain
+        ? {
+            seat: decision.lead,
+            since: askedAt.length > 0 ? askedAt.reduce((latest, at) => (Date.parse(at) > Date.parse(latest) ? at : latest)) : null,
+            lateAsks,
+          }
+        : null;
+    return {
+      gate,
+      decision,
+      posted,
+      approved: approving,
+      changesRequested: asking,
+      securityAsks,
+      ...(lateAsks.length > 0 ? { lateAsks } : {}),
+      leadDue,
+      notCounted,
+      peopleNotCounted: people,
+    };
   }
 
   /**
