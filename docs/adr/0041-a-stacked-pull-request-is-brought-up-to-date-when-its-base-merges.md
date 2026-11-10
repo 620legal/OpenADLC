@@ -48,7 +48,10 @@ across the update:
 - `carry: true` is the update at the dependency's merge, the let-go and the
   line. It is matched by `Stacking.pushed` and carried (`stack.updated`).
 - `carry: false` is the update before a first round. It is not matched, and its
-  push opens the round on the merged head.
+  push opens the round on the merged head, even when the merge left the diff
+  against the base fingerprinting the same (`Stacking.opensRound`): the round
+  was held back for that push, and taken for one that changed nothing it would
+  never open.
 
 A note with no `carry` reads true.
 

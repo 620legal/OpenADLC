@@ -443,6 +443,23 @@ describe('an issue that depends on one in review', () => {
     expect(events.some((event) => event.type === STACK_UPDATED)).toBe(false);
   });
 
+  it('says the push an update made before the first round opens that round, and no other push', async () => {
+    const { subject } = stacking();
+    await subject.sweep();
+    world.issues.set(4, { ...world.issues.get(4)!, stage: 'merged' });
+    await subject.updating({ repoName: 'shop', repoFullName: 'janedoe/shop', prNumber: 31, issue: 5, baseRef: 'main', headSha: before, carry: false });
+    await subject.made({ repoName: 'shop', prNumber: 31, from: before, to: after });
+
+    expect(await subject.opensRound({ repoName: 'shop', prNumber: 31, before, after })).toBe(true);
+    expect(await subject.opensRound({ repoName: 'shop', prNumber: 31, before, after: 'c'.repeat(40) })).toBe(false);
+    expect(await subject.opensRound({ repoName: 'shop', prNumber: 32, before, after })).toBe(false);
+
+    // The line's update, and the parent's merge, keep the approvals instead.
+    const { subject: carried } = await readyToUpdate();
+    await carried.made({ repoName: 'shop', prNumber: 31, from: before, to: after });
+    expect(await carried.opensRound({ repoName: 'shop', prNumber: 31, before, after })).toBe(false);
+  });
+
   it('keeps the approvals for the line’s update noted before notes said whether they stand', async () => {
     const { subject, events, later } = stacking();
     events.push({ type: STACK_UPDATING, payload: { repo: 'shop', pr: 31, issue: 5, on: 4, from: before, files: ['src/a.ts', 'src/b.ts'] }, at: new Date(later(0)).toISOString() });

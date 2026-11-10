@@ -741,7 +741,8 @@ none yet, says its kind of work instead ("writing the change").
      the head the line read, and only once (`stack.updated`). Across one made
      before a first round (`stack.updating` with `carry: false`) none do:
      there were none, and the push is the line's, reviewed with no local CI
-     asked of it. Any other push, even one from the same head touching only
+     asked of it. It opens the round even when the diff against the base
+     fingerprints as before (`Stacking.opensRound`). Any other push, even one from the same head touching only
      files it already changed, is reviewed as any push is. When the update
      conflicts, nothing is recorded as made, and the builder's resolution
      goes to a resolution round with that round's re-review; that is the

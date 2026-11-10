@@ -753,6 +753,23 @@ export class Stacking {
   }
 
   /**
+   * Whether a push is the commit a stacked update made before its pull
+   * request's first round (`carry: false`): that push opens the round, even
+   * when the merge left the diff against the base as it was. Taken for a push
+   * that changed nothing, it kept approvals that were never given, and the
+   * update, which had held the round back for it, left the pull request with
+   * none at all.
+   */
+  async opensRound(input: { repoName: string; prNumber: number; before: string; after: string }): Promise<boolean> {
+    if (!input.before || !input.after) return false;
+    const [noted] = (await this.events<UpdatingPayload>(STACK_UPDATING, input.repoName)).filter(
+      (row) => row.payload.pr === input.prNumber && row.payload.from === input.before,
+    );
+    if (noted?.payload.carry !== false) return false;
+    return this.madeFor(input);
+  }
+
+  /**
    * Whether the line recorded making exactly `before`..`after`. While its
    * latest note from `before` is fresh and has nothing recorded after it, the
    * line may still be waiting on GitHub, so this reads again a few times.

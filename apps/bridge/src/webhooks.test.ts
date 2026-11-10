@@ -10048,6 +10048,44 @@ describe('a push to a stacked pull request', () => {
       expect(updateStacked).not.toHaveBeenCalled();
     });
 
+    it('opens its round on the merged head even when that update left the diff against the base fingerprinting the same', async () => {
+      // The update held the round back for its own push; taken for a push
+      // that changed nothing, it let stand approvals never given, and the
+      // pull request had no round at all.
+      const { webhooks, automation, taskService, gates, log, github } = bridge([
+        { ...noted, payload: { ...noted.payload, carry: false } },
+        { type: STACK_MADE, payload: { repo: 'openadlc', pr: 31, from: NOTED, to: PUSHED } },
+      ]);
+      github.diffFingerprint = async () => 'the same diff';
+      store.events = [{ type: 'merge_line.branch_updated', payload: { subjectRef: 'openadlc#31', from: NOTED, to: PUSHED } }];
+      store.localCiPasses = new Set();
+
+      await pushed(webhooks);
+
+      expect(automation.reviewGateFor).not.toHaveBeenCalled();
+      expect(log.some((event) => event.type === STACK_UPDATED)).toBe(false);
+      expect(store.events.some((event) => event.type === 'pr.forbidden_push')).toBe(false);
+      expect(gates.some((gate) => gate.description.includes('no local CI pass'))).toBe(false);
+      expect(await roundsOpened()).toEqual([{ subjectRef: 'openadlc#31', sha: PUSHED }]);
+      expect(taskService.open).toHaveBeenCalledWith(expect.objectContaining({ bot: 'second', kind: 'review', subjectRef: 'openadlc#31' }));
+    });
+
+    it('lets the approvals stand, as before, on a push that left the diff as it was and is no such update', async () => {
+      for (const events of [[], [{ ...noted, payload: { ...noted.payload, carry: true } }, { type: STACK_MADE, payload: { repo: 'openadlc', pr: 31, from: NOTED, to: PUSHED } }]]) {
+        const { webhooks, automation, taskService, github } = bridge(events);
+        github.diffFingerprint = async () => 'the same diff';
+        const { recordEvent } = await import('@openadlc/db');
+        vi.mocked(recordEvent).mockClear();
+
+        await pushed(webhooks);
+
+        expect(automation.reviewGateFor).toHaveBeenCalled();
+        expect(automation.dismissStaleApprovals).not.toHaveBeenCalled();
+        expect(taskService.open).not.toHaveBeenCalled();
+        expect(await roundsOpened()).toEqual([]);
+      }
+    });
+
     it('keeps its approvals as before for the update made when what it was built on merged', async () => {
       const { webhooks, automation, taskService, updateStacked } = bridge([
         { ...noted, payload: { ...noted.payload, carry: true } },

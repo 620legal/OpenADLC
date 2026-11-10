@@ -1929,14 +1929,14 @@ export class Webhooks {
   }
 
   private conflicts: Pick<ConflictRounds, 'pushed' | 'resolving'> | null = null;
-  private stacks: Pick<Stacking, 'pushed' | 'stackedOnMerged' | 'stackedOn' | 'waitingOn'> | null = null;
+  private stacks: Pick<Stacking, 'pushed' | 'opensRound' | 'stackedOnMerged' | 'stackedOn' | 'waitingOn'> | null = null;
 
   /**
    * Tells a stacked pull request's update onto the base from any other push,
    * and finds the stacked pull requests to bring up to date when the one they
    * were built on merges; set once at start-up (main.ts).
    */
-  useStacking(stacks: Pick<Stacking, 'pushed' | 'stackedOnMerged' | 'stackedOn' | 'waitingOn'>): void {
+  useStacking(stacks: Pick<Stacking, 'pushed' | 'opensRound' | 'stackedOnMerged' | 'stackedOn' | 'waitingOn'>): void {
     this.stacks = stacks;
   }
 
@@ -1991,6 +1991,7 @@ export class Webhooks {
       // A stack that cannot be read is the line's to hold out (`enter`).
       return false;
     }
+    // A pass that cannot be read is none: the hold below sends the work back, and the builder's next push is updated.
     if (crewSender && !(await (async () => localCiRuns.passFor(repo.id, pr.head.sha))().catch(() => null))) return false;
     const answer = await this.mergeLine
       .updateStacked({ repoName: repo.name, prNumber: pr.number, carry: false, why: 'before its first round, what it was built on having merged' })
@@ -2510,8 +2511,17 @@ export class Webhooks {
         changed && !round && prFiles && this.stacks
           ? await this.stacks.pushed({ repoName: repo.name, prNumber: pr.number, before, after: pr.head.sha, prFiles }).catch(() => false)
           : false;
+      // The update made before a stacked pull request's first round held that
+      // round back for its own push (`updatedFirst`), so that push opens it,
+      // even when the merge left the diff as it was: let stand, the pull
+      // request had no round at all. A record that cannot be read is no such
+      // update, and the push is read as any other.
+      const opensRound =
+        !changed && !resolving && this.stacks
+          ? await this.stacks.opensRound({ repoName: repo.name, prNumber: pr.number, before, after: pr.head.sha }).catch(() => false)
+          : false;
 
-      if ((!changed && !resolving) || stackUpdate) {
+      if (((!changed && !resolving) || stackUpdate) && !opensRound) {
         // The approvals stand and no reviewer is asked again. The gate is still
         // refreshed, because it is a status on the new head and the old one's
         // does not carry over.
