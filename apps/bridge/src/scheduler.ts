@@ -1190,6 +1190,7 @@ export class Scheduler {
                 seat: reviewed.leadDue.seat,
                 since: reviewed.leadDue.since,
                 notCounted: reviewed.notCounted,
+                ...(reviewed.leadDue.lateAsks ? { lateAsks: reviewed.leadDue.lateAsks } : {}),
               });
               if (line) actions.push(line);
             }
