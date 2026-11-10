@@ -1,4 +1,4 @@
-import { audit, bots, deployRuns, issues, leases, listEventsOfTypeWith, mergeLines, recordEvent, repos, stageMoves, tasks, threads } from '@openadlc/db';
+import { audit, bots, deployRuns, issues, leases, listEventsOfType, listEventsOfTypeWith, mergeLines, recordEvent, repos, stageMoves, tasks, threads } from '@openadlc/db';
 import type { GitHubClient } from '@openadlc/github';
 import {
   CI_LABEL,
@@ -17,7 +17,9 @@ import { reviewLimits, type Automation } from './automation.js';
 import type { BridgeConfig } from './config.js';
 import type { MergeLine } from './merge-line.js';
 import type { StageHandoff } from './stage-handoff.js';
-import type { TaskService } from './task-service.js';
+import { BotBusyError, RestartPendingError, busyWords, type TaskService } from './task-service.js';
+import { PATCH_ROUND_WAITING, standingPatchWaits, type PatchWait, type PatchWaitPayload } from './patch-waits.js';
+import { SEAT_WAIT_WINDOW_MS } from './seat-waits.js';
 import { mergeabilityOf } from './mergeability.js';
 import { publicNameOf } from './thread-view.js';
 import { DEPLOY_PATH_BRANCH_PREFIX, issueNumberFromBranch, REVIEW_STALLED, SEND_BACK_STALLED, SEND_BACK_TO_PERSON, stageOfTask } from './work.js';
@@ -64,7 +66,8 @@ export interface SendBackDeps {
   config: Pick<BridgeConfig, 'review'>;
   automation: Pick<Automation, 'moveStage' | 'comment' | 'parkPull' | 'reopenIssue' | 'addLabels' | 'setCiLabel'>;
   mergeLine: Pick<MergeLine, 'leave'>;
-  taskService: Pick<TaskService, 'open'>;
+  /** `wouldWait` asks before the send-back is said whether the round will wait for its builder. */
+  taskService: Pick<TaskService, 'open' | 'wouldWait'>;
   /** Starts the bot of the stage work went back to, for a person's move; a task's send-back is staffed when the task ends. */
   stages?: Pick<StageHandoff, 'staff'> | null;
   /** Stops work a person's move left behind (`stopTask` in api.ts). */
@@ -427,15 +430,237 @@ export class SendBack {
     const round = await this.nextRound({ repo, repoFullName, pr, issueNumber, lease, builder, check: input.check ?? null, request: { by: input.by, reason: input.reason } });
     if (round === null) return `its review rounds have not converged, and the loop stopped for a person`;
 
+    // Asked before anything is said: the comment and the move to Build both
+    // said a round began when a busy builder had turned it away, and nothing
+    // ever started it (2026-11-09). A round that will wait says so, and on what.
+    const subjectRef = `${repo.name}#${pr.number}`;
+    const busy = await this.wouldWait(builder.id, subjectRef);
+    const busyWith = busy ? await busyWords(busy, builder.id, subjectRef) : null;
     if (issueNumber) {
       const commentUrl = await this.deps.automation
-        .comment(repoFullName, issueNumber, recordComment({ from: 'review', to: 'build', by: input.by, round, reason: input.reason, staffed: true, pr: pr.number }))
+        .comment(
+          repoFullName,
+          issueNumber,
+          recordComment({
+            from: 'review',
+            to: 'build',
+            by: input.by,
+            round,
+            reason: input.reason,
+            staffed: true,
+            pr: pr.number,
+            ...(busyWith ? { waiting: { bot: builder.name, busyWith } } : {}),
+          }),
+        )
         .catch(() => null);
+      // To Build even while it waits: the round is the builder's, and runs
+      // (`sent-back.md` reads this move).
       await this.deps.automation
         .moveStage({ repoName: repo.name, issueNumber, to: 'build', actor: input.by, direction: 'send_back', reason: input.reason, prNumber: pr.number, commentUrl })
         .catch((error: unknown) => console.warn(`[bridge] ${repo.name}#${issueNumber} was not moved back to build: ${error instanceof Error ? error.message : error}`));
     }
-    return this.openPatch({ ...input, issueNumber, lease, builder, round });
+    const patch = { ...input, issueNumber, lease, builder, round, head: pr.head.sha };
+    if (busyWith) {
+      await this.recordWait(patch, busyWith);
+      return null;
+    }
+    const opened = await this.openPatchRound(patch);
+    // Turned away between the question and the start: said once, short.
+    if (opened.waiting && issueNumber) await this.sayWaiting({ repoFullName, issueNumber, prNumber: pr.number, round, bot: builder.name, busyWith: opened.waiting });
+    return opened.refused;
+  }
+
+  /** What a start on the builder's seat would be turned away for now (`TaskService.wouldWait`), or null. */
+  private async wouldWait(botId: string, subjectRef: string): Promise<BotBusyError | null> {
+    try {
+      return await this.deps.taskService.wouldWait({ botId, subjectRef });
+    } catch {
+      // Not knowing is not busy: the start asks again, and a refusal there still waits.
+      return null;
+    }
+  }
+
+  /** The short comment for a round turned away after its send-back was said. */
+  private async sayWaiting(input: { repoFullName: string; issueNumber: number; prNumber: number; round: number; bot: string; busyWith: string }): Promise<void> {
+    await this.deps.automation
+      .comment(input.repoFullName, input.issueNumber, `Review round ${input.round} on #${input.prNumber} has not started. ${waitingSentence(input.bot, input.busyWith)}`)
+      .catch((error: unknown) =>
+        console.warn(`[bridge] ${input.repoFullName}#${input.issueNumber}: the waiting round was not said: ${error instanceof Error ? error.message : error}`),
+      );
+  }
+
+  /**
+   * Patch rounds a busy builder or a full host turned away, by the pull
+   * request's `subjectRef`, with when the newest event about each was
+   * recorded. Read without waiting on the database (`waitingSeats`), and back
+   * from the events at start (`loadWaits`).
+   */
+  private readonly waits = new Map<string, { wait: PatchWait; recordedAt: number }>();
+
+  /**
+   * Records that a round waits on its builder: one `patch.round_waiting`,
+   * unless the wait already standing is for the same head, by the same
+   * sender, on the same builder, with the same brief — a redelivery or a
+   * retry the seat turned away again, which says nothing twice. Recorded
+   * again once a day, so the wait stays inside the window a restart reads.
+   */
+  private async recordWait(
+    input: {
+      repo: { name: string };
+      pr: { number: number };
+      issueNumber: number | null;
+      builder: { id: string; name: string };
+      round: number;
+      by?: string;
+      head?: string;
+      leasePathsOnly?: boolean;
+      brief?: ContextDocument[];
+    },
+    busyWith: string,
+  ): Promise<void> {
+    const subjectRef = `${input.repo.name}#${input.pr.number}`;
+    const payload: PatchWaitPayload = {
+      subjectRef,
+      repo: input.repo.name,
+      pr: input.pr.number,
+      issue: input.issueNumber,
+      botId: input.builder.id,
+      bot: input.builder.name,
+      round: input.round,
+      by: input.by ?? 'openadlc',
+      ...(input.head ? { head: input.head } : {}),
+      busyWith,
+      ...(input.leasePathsOnly ? { leasePathsOnly: true } : {}),
+      ...(input.brief && input.brief.length > 0 ? { brief: input.brief } : {}),
+    };
+    const now = Date.now();
+    const seen = this.waits.get(subjectRef);
+    const same =
+      seen &&
+      seen.wait.head === payload.head &&
+      seen.wait.by === payload.by &&
+      seen.wait.botId === payload.botId &&
+      JSON.stringify(seen.wait.brief ?? null) === JSON.stringify(payload.brief ?? null);
+    let recordedAt = seen?.recordedAt ?? now;
+    if (!same || now - recordedAt > WAIT_RECORDED_AGAIN_MS) {
+      await recordEvent({ source: 'platform', type: PATCH_ROUND_WAITING, payload }).catch(() => undefined);
+      recordedAt = now;
+      console.log(`[bridge] ${subjectRef}: patch round ${input.round} waits for ${input.builder.name}, which is ${busyWith}`);
+    }
+    this.waits.set(subjectRef, { wait: { ...payload, since: seen?.wait.since ?? new Date(now).toISOString() }, recordedAt });
+  }
+
+  /** The builders a patch round waits on, by bot id. */
+  waitingSeats(): string[] {
+    return [...new Set([...this.waits.values()].map((entry) => entry.wait.botId))];
+  }
+
+  /**
+   * Starts each patch round waiting on one of these seats, oldest first; what
+   * was done, a line each. One turned away again keeps waiting; one whose
+   * reason has gone — a round opened on it since, the card out of Build, the
+   * pull request closed, nobody holding it — is let go of.
+   */
+  async startWaiting(seats: readonly string[]): Promise<string[]> {
+    const free = new Set(seats);
+    const lines: string[] = [];
+    const oldestFirst = [...this.waits.values()].sort((a, b) => Date.parse(a.wait.since) - Date.parse(b.wait.since));
+    for (const { wait } of oldestFirst) {
+      if (!free.has(wait.botId)) continue;
+      const line = await this.startWait(wait).catch((error: unknown) => `failed: ${error instanceof Error ? error.message : error}`);
+      lines.push(`${wait.subjectRef}: patch round ${line}`);
+    }
+    return lines;
+  }
+
+  private async startWait(wait: PatchWait): Promise<string> {
+    const drop = (why: string) => {
+      this.waits.delete(wait.subjectRef);
+      return why;
+    };
+    const repo = await repos.getRepoByName(wait.repo);
+    if (!repo || wait.issue === null) return drop('no longer waiting: its repository or issue is gone');
+    const issue = await issues.getIssue(repo.id, wait.issue).catch(() => null);
+    const onSubject = await tasks.listTasksOnSubjects([wait.subjectRef]).catch(() => []);
+    const stands = standingPatchWaits([{ at: wait.since, payload: wait }], issue ? [{ ...issue, repoName: repo.name }] : [], onSubject);
+    if (!stands.has(wait.subjectRef)) return drop('no longer waiting: a round was opened on it since, or its card left Build');
+
+    const client = (await this.deps.client?.().catch(() => null)) ?? null;
+    const pull = client ? await client.getPullRequest(repo.fullName, wait.pr).catch(() => null) : null;
+    if (!pull) return 'still waiting: GitHub did not answer for the pull request';
+    if (pull.state !== 'open') return drop(`no longer waiting: #${wait.pr} is ${pull.state}`);
+    const pr = { number: wait.pr, head: { ref: pull.headRef, sha: pull.headSha } };
+
+    const crew = await bots.listBots();
+    let found = await leases.getActiveLease(repo.id, wait.issue).catch(() => null);
+    let why: string | null = null;
+    if (!found) {
+      const retaken = await retakeLease({ repo, issueNumber: wait.issue, prNumber: wait.pr, crew, reason: `${wait.bot} has room for the round it waited for on #${wait.pr}` });
+      found = retaken.lease;
+      why = retaken.why;
+    }
+    const lease = found && (found.prNumber === null || found.prNumber === undefined || found.prNumber === wait.pr) ? found : null;
+    const builder = lease ? crew.find((bot) => bot.id === lease.botId) : undefined;
+    if (!lease || !builder) {
+      why ??= !lease ? `the lease on #${wait.issue} is for #${found?.prNumber}, not #${wait.pr}` : `the builder that held #${wait.issue} is no longer in the crew`;
+      if (!(await this.stallSaid(repo.name, pr))) await this.recordStall({ repo, pr, issue: wait.issue, why });
+      return drop(`not started: ${why}`);
+    }
+
+    // A person asking is the decision `maxRounds` stops for (`fromMessage`);
+    // every other round stops there, as it would have when it was sent back.
+    const round = wait.brief
+      ? (await roundsRun(repo.name, wait.pr)) + 1
+      : await this.nextRound({ repo, repoFullName: repo.fullName, pr, issueNumber: wait.issue, lease, builder, request: null });
+    if (round === null) return drop('not started: its review rounds have not converged, and the loop stopped for a person');
+
+    const opened = await this.openPatchRound({
+      repo,
+      repoFullName: repo.fullName,
+      pr,
+      client,
+      issueNumber: wait.issue,
+      lease,
+      builder,
+      round,
+      by: wait.by,
+      head: pull.headSha,
+      ...(wait.leasePathsOnly ? { leasePathsOnly: true } : {}),
+      ...(wait.brief ? { brief: wait.brief } : {}),
+    });
+    if (opened.waiting) return `still waiting: ${builder.name} is ${opened.waiting}`;
+    this.waits.delete(wait.subjectRef);
+    if (opened.refused) return `not started: ${opened.refused}`;
+    await this.deps.automation
+      .comment(repo.fullName, wait.issue, `**Review round ${round} started** on #${wait.pr}: ${builder.name} has room now (it waited since ${new Date(wait.since).toISOString().slice(11, 16)} UTC).`)
+      .catch(() => null);
+    return `${round} started`;
+  }
+
+  /**
+   * At start-up: the patch rounds recorded as waiting on their builder that
+   * still stand (`standingPatchWaits`), so `waitingSeats` knows them after a
+   * restart and the round starts when its seat has room.
+   */
+  async loadWaits(now = Date.now()): Promise<number> {
+    const events = await listEventsOfType(PATCH_ROUND_WAITING, new Date(now - SEAT_WAIT_WINDOW_MS));
+    if (events.length === 0) return 0;
+    const subjects = [...new Set(events.map((event) => (event.payload as { subjectRef?: unknown } | null)?.subjectRef).filter((ref): ref is string => typeof ref === 'string'))];
+    const repoNames = new Set(subjects.map((ref) => ref.slice(0, ref.lastIndexOf('#'))));
+    const onBoard: issues.IssueRecord[] = [];
+    for (const repo of await repos.listRepos()) {
+      if (!repoNames.has(repo.name)) continue;
+      for (const issue of await issues.listIssues(repo.name)) onBoard.push({ ...issue, repoName: repo.name });
+    }
+    const standing = standingPatchWaits(events, onBoard, await tasks.listTasksOnSubjects(subjects));
+    for (const wait of standing.values()) {
+      if (this.waits.has(wait.subjectRef)) continue;
+      const newest = Math.max(
+        ...events.filter((event) => (event.payload as { subjectRef?: unknown } | null)?.subjectRef === wait.subjectRef).map((event) => Date.parse(event.at)),
+      );
+      this.waits.set(wait.subjectRef, { wait, recordedAt: Number.isFinite(newest) ? newest : now });
+    }
+    return standing.size;
   }
 
   /**
@@ -506,7 +731,7 @@ export class SendBack {
    * It stays ready for review: the round pushes to it, and that push moves
    * the card to Review again.
    */
-  private async backFromReview(input: { repo: repos.RepoRecord; issueNumber: number; prNumber: number }): Promise<void> {
+  private async backFromReview(input: { repo: repos.RepoRecord; issueNumber: number; prNumber: number; by: string }): Promise<void> {
     const { repo, issueNumber, prNumber } = input;
     const ref = `${repo.name}#${issueNumber}`;
     await this.deps.mergeLine.leave(repo.name, prNumber).catch(() => undefined);
@@ -529,7 +754,8 @@ export class SendBack {
     const pr = { number: prNumber, head: { ref: pull.headRef } };
     const round = await this.nextRound({ repo, repoFullName: repo.fullName, pr, issueNumber, lease, builder });
     if (round === null) return;
-    await this.openPatch({ repo, repoFullName: repo.fullName, pr, client, issueNumber, lease, builder, round });
+    const opened = await this.openPatchRound({ repo, repoFullName: repo.fullName, pr, client, issueNumber, lease, builder, round, by: input.by, head: pull.headSha });
+    if (opened.waiting) await this.sayWaiting({ repoFullName: repo.fullName, issueNumber, prNumber, round, bot: builder.name, busyWith: opened.waiting });
   }
 
   /**
@@ -626,15 +852,14 @@ export class SendBack {
     });
   }
 
-  private async openPatch(input: Parameters<SendBack['openPatchRound']>[0]): Promise<string | null> {
-    // Only a refusal is why not: a round recorded because the builder cannot
-    // start it yet is still its, and the recovery runs it.
-    return (await this.openPatchRound(input)).refused;
-  }
-
   /**
-   * Opens a patch round: what was refused (thrown), and what the start said
-   * went wrong (`error`: recorded for the recovery, or refused by hostd).
+   * Opens a patch round: what was refused (thrown), what the start said went
+   * wrong (`error`: recorded for the recovery, or refused by hostd), and what
+   * holds the builder when a busy seat or a full host turned it away
+   * (`waiting`). Only a refusal is why the round is not the builder's: one
+   * recorded is run by the recovery, and one waiting by `startWaiting` when
+   * the seat has room. A busy builder used to be a refusal, logged as "patch
+   * round not started" and never started.
    */
   private async openPatchRound(input: {
     repo: { id: string; name: string };
@@ -648,7 +873,10 @@ export class SendBack {
     leasePathsOnly?: boolean;
     /** What a person asked of the round, beside the reviews (`fromMessage`). */
     brief?: ContextDocument[];
-  }): Promise<{ refused: string | null; error: string | null }> {
+    /** Who sent it back, and on which head: what a wait records. */
+    by?: string;
+    head?: string;
+  }): Promise<{ refused: string | null; error: string | null; waiting?: string }> {
     // What the round may write: the lease's paths, and every file the
     // pull request already changes — a widening a person approved is in
     // the diff, not the lease. With neither, the round could write only
@@ -690,8 +918,18 @@ export class SendBack {
         ...(extraContext.length > 0 ? { extraContext } : {}),
       })
       .then(
-        (opened) => ({ refused: null, error: opened.error ?? null }),
-        (error: unknown) => {
+        (opened): { refused: string | null; error: string | null; waiting?: string } => {
+          this.waits.delete(`${input.repo.name}#${input.pr.number}`);
+          return { refused: null, error: opened.error ?? null };
+        },
+        async (error: unknown) => {
+          // A busy builder or a full host is a wait on the builder's seat,
+          // never a drop. A pending restart is recorded by the start itself.
+          if (error instanceof BotBusyError && !(error instanceof RestartPendingError)) {
+            const busyWith = await busyWords(error, input.builder.id, `${input.repo.name}#${input.pr.number}`);
+            await this.recordWait(input, busyWith);
+            return { refused: null, error: null, waiting: busyWith };
+          }
           const why = error instanceof Error ? error.message : String(error);
           console.warn(`[bridge] patch round not started: ${why}`);
           return { refused: why, error: why };
@@ -737,7 +975,7 @@ export class SendBack {
     brief: ContextDocument;
     /** The message as it was posted on GitHub, which the move links to. */
     commentUrl?: string | null;
-  }): Promise<{ started: true; round: number } | { started: false; why: string }> {
+  }): Promise<{ started: true; round: number; waiting?: string } | { started: false; why: string }> {
     const no = (why: string) => ({ started: false as const, why });
     const repo = await repos.getRepoByName(input.repoName);
     if (!repo) return no(`${input.repoName} is not a repository OpenADLC works in`);
@@ -771,11 +1009,11 @@ export class SendBack {
       (task) => task.kind === 'patch' && ['queued', 'running', 'paused'].includes(task.state),
     );
     if (going) return no(`its patch round on #${input.prNumber} is already ${going.state === 'paused' ? 'paused' : 'under way'}`);
-    // Asked before the card moves: a builder turned away for want of room
-    // would leave it in Build with no round on it.
-    if (!(await (async () => tasks.seatHasRoom(builder.id))().catch(() => true))) {
-      return no(`${builder.name} is running all the tasks it may at once; write again once one of them ends`);
-    }
+    // A builder with no room no longer turns the message away ("write again
+    // once one of them ends"): the round waits on its seat with the message
+    // as its brief, and starts when it has room (`startWaiting`).
+    const busy = await this.wouldWait(builder.id, subjectRef);
+    const busyWith = busy ? await busyWords(busy, builder.id, subjectRef) : null;
 
     const issue = await issues.getIssue(repo.id, issueNumber).catch(() => null);
     if (issue?.stage === 'review') {
@@ -802,7 +1040,7 @@ export class SendBack {
     }
 
     const round = (await roundsRun(repo.name, input.prNumber)) + 1;
-    const opened = await this.openPatchRound({
+    const patch = {
       repo,
       repoFullName: repo.fullName,
       pr: { number: input.prNumber, head: { ref: pull.headRef } },
@@ -812,7 +1050,15 @@ export class SendBack {
       builder,
       round,
       brief: [input.brief],
-    });
+      by: input.actor,
+      head: pull.headSha,
+    };
+    if (busyWith) {
+      await this.recordWait(patch, busyWith);
+      return { started: true, round, waiting: busyWith };
+    }
+    const opened = await this.openPatchRound(patch);
+    if (opened.waiting) return { started: true, round, waiting: opened.waiting };
     return opened.error ? no(opened.error) : { started: true, round };
   }
 
@@ -886,7 +1132,7 @@ export class SendBack {
 
     await this.letGoOfBuild({ repo, issueNumber: input.issueNumber, prNumber: issue.prNumber, from, to: input.to, why: `moved back to ${input.to} by ${input.actor}` });
     if (input.to === 'build' && from === 'review' && issue.prNumber) {
-      await this.backFromReview({ repo, issueNumber: input.issueNumber, prNumber: issue.prNumber });
+      await this.backFromReview({ repo, issueNumber: input.issueNumber, prNumber: issue.prNumber, by: input.actor });
     }
 
     const staffed = repo.stageModes[input.to] !== 'untouched';
@@ -965,6 +1211,8 @@ export function recordComment(input: {
   staffed: boolean;
   pr?: number;
   person?: boolean;
+  /** The round will not start yet: its builder, and what holds it (`busyWords`). */
+  waiting?: { bot: string; busyWith: string };
 }): string {
   const how = input.person ? `Moved back to ${title(input.to)}` : `Sent back to ${title(input.to)}`;
   const round = input.round > 0 ? (input.from === 'review' ? ` (review round ${input.round})` : ` (send-back ${input.round} from ${title(input.from)})`) : '';
@@ -976,8 +1224,17 @@ export function recordComment(input: {
     // as text. The bridge's own `send_back` marker below is left as it is.
     input.reason ? quoted(inertMarkup(input.reason)) : '_No reason was given._',
     ...(input.staffed ? [] : ['', `Nobody staffs ${title(input.to)} in this repository, so a person takes it from here.`]),
+    ...(input.waiting ? ['', waitingSentence(input.waiting.bot, input.waiting.busyWith)] : []),
     renderMarker({ event: 'send_back', from: input.from, to: input.to, by: input.by, round: input.round, ...(input.person ? { person: true } : {}) }),
   ].join('\n');
+}
+
+/** How long a wait turned away again goes before it is recorded again, inside the window `loadWaits` reads. */
+const WAIT_RECORDED_AGAIN_MS = 24 * 60 * 60 * 1000;
+
+/** What a send-back says of a round that waits for its builder. */
+export function waitingSentence(bot: string, busyWith: string): string {
+  return `**This round is waiting for the builder:** _${bot}_ is ${busyWith}. It starts as soon as ${bot} has room.`;
 }
 
 /** What a patch round on a conflicting branch is told first (`conflict.md`). */

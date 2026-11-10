@@ -35,6 +35,9 @@ vi.mock('@openadlc/db', () => ({
   recordEvent: vi.fn(async (entry: Record<string, unknown>) => {
     world.events.push(entry);
   }),
+  listEventsOfType: vi.fn(async (type: string) =>
+    world.events.filter((event) => event.type === type).map((event, id) => ({ id, at: (event.at as string) ?? '2026-10-04T00:00:00.000Z', payload: event.payload })),
+  ),
   listEventsOfTypeWith: vi.fn(async (type: string, fields: Record<string, unknown>) =>
     world.events
       .filter((event) => event.type === type && Object.entries(fields).every(([key, value]) => (event.payload as Record<string, unknown>)[key] === value))
@@ -70,8 +73,10 @@ vi.mock('@openadlc/db', () => ({
   tasks: {
     getTask: vi.fn(async (id: string) => world.tasks.get(id) ?? null),
     // Newest first, as the store returns them, and only as many as asked for.
-    listTasks: vi.fn(async (filter: { botId?: string; limit?: number } = {}) =>
-      world.botTasks.filter((task) => !filter.botId || task.botId === filter.botId).slice(0, filter.limit ?? 100),
+    listTasks: vi.fn(async (filter: { botId?: string; states?: string[]; limit?: number } = {}) =>
+      world.botTasks
+        .filter((task) => (!filter.botId || task.botId === filter.botId) && (!filter.states || filter.states.includes(task.state as string)))
+        .slice(0, filter.limit ?? 100),
     ),
     listTasksForSubjects: vi.fn(async (kind: string, subjects: string[]) =>
       world.botTasks.filter((task) => task.kind === kind && subjects.includes(task.subjectRef as string)),
@@ -84,6 +89,8 @@ vi.mock('@openadlc/db', () => ({
 import { leases, threads } from '@openadlc/db';
 import { designMemoryProposals, parseMarkers } from '@openadlc/shared';
 import { SendBack, recordComment } from './send-back.js';
+import { PATCH_ROUND_WAITING } from './patch-waits.js';
+import { BotBusyError, HostFullError } from './task-service.js';
 
 function sendBack(review: Record<string, unknown> = {}) {
   const automation = {
@@ -94,10 +101,13 @@ function sendBack(review: Record<string, unknown> = {}) {
     addLabels: vi.fn(async () => undefined),
     setCiLabel: vi.fn(async () => 'app' as const),
   };
-  const pull = { state: 'open', headRef: 'agent/builder/7-issue-7' };
+  const pull = { state: 'open', headRef: 'agent/builder/7-issue-7', headSha: 'h1' };
   const client = { getPullRequest: vi.fn(async () => pull), listPullFilesAsNamed: vi.fn(async () => ['src/app.ts']) };
   const mergeLine = { leave: vi.fn(async () => undefined) };
-  const taskService = { open: vi.fn(async () => ({ taskId: 'task-patch', session: 's' })) };
+  const taskService = {
+    open: vi.fn(async (): Promise<{ taskId: string; session: string | null; error?: string }> => ({ taskId: 'task-patch', session: 's' })),
+    wouldWait: vi.fn(async (): Promise<BotBusyError | null> => null),
+  };
   const stages = { staff: vi.fn(async () => true) };
   const stopTask = vi.fn(async () => undefined);
   const dispatchRuns = { soon: vi.fn() };
@@ -365,7 +375,7 @@ describe('a review sending the work back to build', () => {
         'no lease on #7 was ever linked to #31',
       );
 
-      client.getPullRequest.mockResolvedValueOnce({ state: 'closed', headRef: pr.head.ref });
+      client.getPullRequest.mockResolvedValueOnce({ state: 'closed', headRef: pr.head.ref, headSha: 'h1' });
       expect(await service.backToBuild({ repoName: REPO.name, prNumber: 31, reason: 'x' })).toBe('#31 is closed');
     } finally {
       warned.mockRestore();
@@ -685,6 +695,179 @@ describe('a person’s message to the builder on a pull request', () => {
     expect(await service.fromMessage(ask)).toEqual({ started: false, why: 'pull request #31 is merged' });
     expect(automation.moveStage).not.toHaveBeenCalled();
     expect(taskService.open).not.toHaveBeenCalled();
+  });
+});
+
+describe('a patch round its builder has no room for', () => {
+  // 2026-11-09: CI went red after the lead approved, the dispatcher had leased
+  // the builder the next issue 20 seconds after the pull request opened, the
+  // round was refused as busy, and nothing started it for 21 hours.
+  const pr = { number: 31, head: { ref: 'agent/builder/7-issue-7', sha: 'h1' } };
+  const crew = [{ id: 'bot-builder', name: 'builder' }];
+  const elsewhere = { id: 'task-280', botId: 'bot-builder', subjectRef: 'openadlc-testbed#280', kind: 'implement', skill: 'implement', state: 'running' };
+  const waits = () => world.events.filter((event) => event.type === PATCH_ROUND_WAITING);
+  const said = (automation: ReturnType<typeof sendBack>['automation']) => (automation.comment.mock.calls as unknown as [string, number, string][]).map((call) => call[2]);
+
+  beforeEach(() => {
+    world.issue = { number: 7, stage: 'review', prNumber: 31, labels: ['adlc:review'] };
+    world.botTasks = [elsewhere];
+  });
+
+  it('opens nothing while the builder runs another task, says so on the send-back, and starts the round when that task ends', async () => {
+    const { service, automation, taskService } = sendBack();
+    taskService.wouldWait.mockResolvedValue(new BotBusyError('builder'));
+
+    expect(await service.reviewRound({ repo: REPO, repoFullName: REPO.fullName, pr, crew, client: null, by: 'openadlc', reason: 'CI failed', check: 'ci' })).toBeNull();
+
+    expect(taskService.open).not.toHaveBeenCalled();
+    expect(automation.moveStage).toHaveBeenCalledWith(expect.objectContaining({ to: 'build', direction: 'send_back', prNumber: 31 }));
+    expect(waits()).toEqual([
+      expect.objectContaining({
+        payload: expect.objectContaining({ subjectRef: 'openadlc-testbed#31', pr: 31, issue: 7, botId: 'bot-builder', round: 1, by: 'openadlc', head: 'h1', busyWith: 'running `implement` on openadlc-testbed#280' }),
+      }),
+    ]);
+    const [comment] = said(automation);
+    expect(comment).toContain('**Sent back to Build** from #31 by openadlc (review round 1)');
+    expect(comment).toContain('**This round is waiting for the builder:** _builder_ is running `implement` on openadlc-testbed#280. It starts as soon as builder has room.');
+    expect(comment!.trim().split('\n').at(-1)).toMatch(/^<!-- openadlc:\{"event":"send_back"/);
+    expect(service.waitingSeats()).toEqual(['bot-builder']);
+
+    // The task on #280 ends; the card is in Build, where the move put it.
+    world.botTasks = [];
+    world.issue = { number: 7, stage: 'build', prNumber: 31, labels: ['adlc:build'] };
+    taskService.wouldWait.mockResolvedValue(null);
+    expect(await service.startWaiting(['bot-builder'])).toEqual(['openadlc-testbed#31: patch round 1 started']);
+
+    expect(taskService.open).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'patch', skill: 'implement', subjectRef: 'openadlc-testbed#31', branch: pr.head.ref, leaseId: 'lease-7', round: 1 }),
+    );
+    expect(said(automation).at(-1)).toMatch(/^\*\*Review round 1 started\*\* on #31: builder has room now \(it waited since \d\d:\d\d UTC\)\.$/);
+    expect(service.waitingSeats()).toEqual([]);
+    expect(await service.startWaiting(['bot-builder'])).toEqual([]);
+  });
+
+  it('waits the same when every host is full, and starts once a host has room', async () => {
+    const { service, automation, taskService } = sendBack();
+    taskService.wouldWait.mockResolvedValue(new HostFullError('builder'));
+
+    await service.reviewRound({ repo: REPO, repoFullName: REPO.fullName, pr, crew, client: null, by: 'openadlc', reason: 'CI failed', check: 'ci' });
+
+    expect(taskService.open).not.toHaveBeenCalled();
+    expect(said(automation)[0]).toContain('_builder_ is waiting for a host: every host is running all the tasks it has room for.');
+    world.issue = { number: 7, stage: 'build', prNumber: 31, labels: ['adlc:build'] };
+
+    // The seat has room, a host still has none: it keeps waiting, said once.
+    taskService.open.mockRejectedValueOnce(new HostFullError('builder'));
+    expect(await service.startWaiting(['bot-builder'])).toEqual([
+      'openadlc-testbed#31: patch round still waiting: builder is waiting for a host: every host is running all the tasks it has room for',
+    ]);
+    expect(waits()).toHaveLength(1);
+    expect(service.waitingSeats()).toEqual(['bot-builder']);
+
+    expect(await service.startWaiting(['bot-builder'])).toEqual(['openadlc-testbed#31: patch round 1 started']);
+    expect(taskService.open).toHaveBeenLastCalledWith(expect.objectContaining({ kind: 'patch', round: 1 }));
+  });
+
+  it('waits on the lead’s request for changes too, and says nothing twice for a redelivery', async () => {
+    const { service, taskService } = sendBack();
+    taskService.wouldWait.mockResolvedValue(new BotBusyError('builder'));
+
+    await service.reviewRound({ repo: REPO, repoFullName: REPO.fullName, pr, crew, client: null, by: 'lead-reviewer', reason: 'the cache is never invalidated' });
+    await service.reviewRound({ repo: REPO, repoFullName: REPO.fullName, pr, crew, client: null, by: 'lead-reviewer', reason: 'the cache is never invalidated' });
+
+    expect(taskService.open).not.toHaveBeenCalled();
+    expect(waits()).toEqual([expect.objectContaining({ payload: expect.objectContaining({ by: 'lead-reviewer', round: 1 }) })]);
+  });
+
+  it('keeps a round turned away between the question and the start, and says so once', async () => {
+    const { service, automation, taskService } = sendBack();
+    taskService.open.mockRejectedValueOnce(new BotBusyError('builder'));
+
+    // Null: the round is still the builder's, so `Stacking` and the merge line hand it no one else.
+    expect(await service.backToBuild({ repoName: REPO.name, prNumber: 31, reason: 'CI failed' })).toBeNull();
+
+    expect(waits()).toHaveLength(1);
+    const comments = said(automation);
+    expect(comments).toHaveLength(2);
+    expect(comments[0]).not.toContain('waiting for the builder');
+    expect(comments[1]).toBe(
+      'Review round 1 on #31 has not started. **This round is waiting for the builder:** _builder_ is running `implement` on openadlc-testbed#280. It starts as soon as builder has room.',
+    );
+    expect(service.waitingSeats()).toEqual(['bot-builder']);
+  });
+
+  it('keeps a person’s message as the round’s brief while it waits, and moves the card to Build', async () => {
+    const brief = { name: 'message.md', title: 'What jane asked of you', content: 'Accept any heading level.' };
+    const { service, automation, taskService, client } = sendBack();
+    client.getPullRequest.mockResolvedValue({ state: 'open', merged: false, headRef: pr.head.ref, headSha: 'h1', labels: [] } as never);
+    taskService.wouldWait.mockResolvedValue(new BotBusyError('builder'));
+
+    expect(await service.fromMessage({ repoName: REPO.name, prNumber: 31, actor: 'jane@acme.test', reason: 'Accept any heading level.', brief })).toEqual({
+      started: true,
+      round: 1,
+      waiting: 'running `implement` on openadlc-testbed#280',
+    });
+    expect(automation.moveStage).toHaveBeenCalledWith(expect.objectContaining({ to: 'build', direction: 'person' }));
+    expect(taskService.open).not.toHaveBeenCalled();
+    expect(waits()).toEqual([expect.objectContaining({ payload: expect.objectContaining({ by: 'jane@acme.test', brief: [brief] }) })]);
+  });
+
+  describe('across a restart', () => {
+    const brief = { name: 'message.md', title: 'What jane asked of you', content: 'Accept any heading level.' };
+    const recorded = {
+      type: PATCH_ROUND_WAITING,
+      at: '2026-11-09T21:00:53.000Z',
+      payload: {
+        subjectRef: 'openadlc-testbed#31',
+        repo: REPO.name,
+        pr: 31,
+        issue: 7,
+        botId: 'bot-builder',
+        bot: 'builder',
+        round: 1,
+        by: 'jane@acme.test',
+        head: 'h1',
+        busyWith: 'running `implement` on openadlc-testbed#280',
+        brief: [brief],
+      },
+    };
+    const now = Date.parse('2026-11-10T09:00:00.000Z');
+
+    beforeEach(() => {
+      world.issue = { number: 7, stage: 'build', prNumber: 31, labels: ['adlc:build'], repoName: REPO.name };
+      world.events = [recorded];
+      world.botTasks = [];
+    });
+
+    it('reads a standing wait back and starts it, with its brief, when the seat has room', async () => {
+      const { service, taskService } = sendBack();
+      expect(await service.loadWaits(now)).toBe(1);
+      expect(service.waitingSeats()).toEqual(['bot-builder']);
+
+      expect(await service.startWaiting(['bot-builder'])).toEqual(['openadlc-testbed#31: patch round 1 started']);
+      expect(taskService.open).toHaveBeenCalledWith(expect.objectContaining({ kind: 'patch', round: 1, extraContext: [brief] }));
+    });
+
+    it('does not read back a wait a later round answered, or whose card left Build', async () => {
+      world.onSubjects = [{ id: 'p1', kind: 'patch', state: 'done', subjectRef: 'openadlc-testbed#31', createdAt: '2026-11-09T22:00:00.000Z' }];
+      expect(await sendBack().service.loadWaits(now)).toBe(0);
+
+      world.onSubjects = [];
+      world.issue = { number: 7, stage: 'review', prNumber: 31, labels: ['adlc:review'], repoName: REPO.name };
+      expect(await sendBack().service.loadWaits(now)).toBe(0);
+    });
+
+    it('lets go of a wait whose card left Build before its seat had room', async () => {
+      const { service, taskService } = sendBack();
+      await service.loadWaits(now);
+      world.issue = { number: 7, stage: 'review', prNumber: 31, labels: ['adlc:review'], repoName: REPO.name };
+
+      expect(await service.startWaiting(['bot-builder'])).toEqual([
+        'openadlc-testbed#31: patch round no longer waiting: a round was opened on it since, or its card left Build',
+      ]);
+      expect(taskService.open).not.toHaveBeenCalled();
+      expect(service.waitingSeats()).toEqual([]);
+    });
   });
 });
 

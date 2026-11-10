@@ -469,7 +469,11 @@ export class MessageStarts {
           brief,
           commentUrl: input.message.githubUrl,
         });
-        return sent.started ? { started: true, what: `patch round ${sent.round} on pull request #${pr}` } : no(sent.why);
+        if (!sent.started) return no(sent.why);
+        // Turned away by a busy builder or a full host: the round waits on the
+        // builder's seat with the message as its brief (ADR 0044).
+        if (sent.waiting) return { started: true, what: `patch round ${sent.round} on pull request #${pr} once ${route.bot} has room (it is ${sent.waiting})` };
+        return { started: true, what: `patch round ${sent.round} on pull request #${pr}` };
       }
       const last = view.tasks.find((task) => task.kind === 'implement' && task.subjectRef === item.refs.issue);
       if (!last) return no(`${item.key} has no build to run again`);
