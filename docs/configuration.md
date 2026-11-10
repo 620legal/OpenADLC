@@ -223,6 +223,19 @@ default, `always` or sampled; a seat its own label or path asks for, a
 asked. A dependency change (`deps`) gets the seats its labels ask for. Read by
 `Automation.decideReviewers` in `apps/bridge/src/automation.ts`.
 
+`trigger.labels` matches the pull request's own labels and the labels of the
+issues it closes in the same repository, so a `safety` label intake or design
+put on an issue asks the security seat for the builder's pull request, which
+carries no labels of its own. The issues are read from GitHub each time seats
+are chosen (`Automation.closingIssueLabels`), so a trigger label added to the
+issue after the pull request opened counts the next time, and nothing is
+written to the pull request. Only labels some seat's `trigger.labels` names are
+taken from an issue, and only for triggers: an issue's `revert` or `deps`
+never reaches the fast path or scope. The reason the seat was asked names the
+issue (`label safety on #251 put this in the security lens`). An issue that
+cannot be read counts as unlabelled: the seats are chosen from the pull
+request's own labels, and nothing is held for it.
+
 One lens is more than a word: the seat with `lens: security` (the first, if
 more than one has it) is the security seat. It is asked on every change to how
 CI runs, whatever its trigger, and its approval of that head is what lets
