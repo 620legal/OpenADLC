@@ -33,6 +33,10 @@ regexes = [
   '''^1800003600\.55e64a713ef5fed11eac66d38c157758eb45f2473d58705e088827f7e12b4835$''',
   # A repository name the generic rule reads as a key because it follows `api,`.
   '''^janedoe/OpenADLC$''',
+  # RFC 8291 Appendix A's published auth secret, which the Web Push
+  # encryption test (apps/bridge/src/web-push.test.ts) reproduces byte for
+  # byte; the generic rule reads it as a key because it follows `auth:`.
+  '''^BTBZMqHH6r4Tts7J_aSIgg$''',
 ]
 
 # The redaction's own tests write a key the ways it arrives, and gitleaks

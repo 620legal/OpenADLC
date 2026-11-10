@@ -120,7 +120,10 @@ describe('the buttons', () => {
     await act(async () => button(host, 'Turn on notifications on this device').click());
     expect(pushMock.turnOn).toHaveBeenCalledWith('BKEY');
     expect(addPushDevice).toHaveBeenCalledWith(subscription, expect.any(String));
-    expect(host.textContent).toContain('(this device)');
+    // The endpoint's fingerprint is hashed with crypto.subtle, which settles
+    // outside the microtasks act() waits for: under make ci's load the list
+    // was read before it had marked this device. Wait for it instead.
+    await act(() => vi.waitFor(() => expect(host.textContent).toContain('(this device)')));
     expect(host.textContent).toContain('Notifications are on for this device');
     expect(window.localStorage.getItem('openadlc-push-device')).not.toContain('https://');
   });
