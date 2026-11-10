@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 vi.mock('@openadlc/db', () => ({ audit: vi.fn(), people: {}, users: {} }));
 
 import { LOCAL_REFUSAL, registerMyNotificationsRoutes, type MyNotificationsDeps } from './my-notifications-routes.js';
-import { memoryNotifyStore, Notifier } from './notify.js';
+import { memoryNotifyStore, Notifier, PERSONAL_KIND_REFUSAL, PERSONAL_SERVER_REFUSAL } from './notify.js';
 import { Router } from './router.js';
 
 /**
@@ -83,6 +83,21 @@ describe('Your channel', () => {
       status: 400,
       body: { error: expect.stringContaining('hooks.slack.com') },
     });
+  });
+
+  it('refuses a webhook and an ntfy server of the caller’s own, and saves neither', async () => {
+    const { store, audited, call } = await start();
+    expect(await call('PUT', '/v1/me/notifications', 'a@example.com', { kind: 'webhook', target: 'http://169.254.169.254/latest' })).toMatchObject({
+      status: 400,
+      body: { error: PERSONAL_KIND_REFUSAL },
+    });
+    expect(await call('PUT', '/v1/me/notifications', 'a@example.com', { kind: 'ntfy', target: TOPIC, server: 'http://10.0.0.5' })).toMatchObject({
+      status: 400,
+      body: { error: PERSONAL_SERVER_REFUSAL },
+    });
+    expect(store.personSecrets).toEqual({});
+    expect(store.settings.personNotify).toBeUndefined();
+    expect(audited).toEqual([]);
   });
 
   it('says there is nothing to test before a channel is saved', async () => {

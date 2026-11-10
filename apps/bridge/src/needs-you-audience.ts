@@ -1,5 +1,5 @@
 import { people as peopleStore, settings } from '@openadlc/db';
-import { costCapAnswer, parsePersonRoles, personRoleLabel, viewPersonRoles } from '@openadlc/shared';
+import { costCapAnswer, parsePersonRoles, personRoleByName, personRoleLabel, viewPersonRoles } from '@openadlc/shared';
 import type { AttentionItem, AttentionKind } from './attention.js';
 
 /**
@@ -27,6 +27,12 @@ export interface Audience {
   people: string[];
   /** Why it is for everyone, when it fell back there: "no one holds Legal yet". */
   why?: string;
+  /**
+   * Worked out on a pass whose read of People or the roles failed: from the
+   * last read that worked, or, with none, the admins' alone. Such a pass
+   * sends no routed notification and mentions nobody (`mayNotify`).
+   */
+  unread?: true;
 }
 
 /** How each kind finds its audience. */
@@ -73,6 +79,12 @@ export interface AudiencePerson {
 export interface AudienceFacts {
   people: readonly AudiencePerson[];
   roles: readonly { id: string; name: string; members: readonly string[] }[];
+  /**
+   * Set when this pass could not read them: `last` is the last read that
+   * worked, `none` means there has been none, and `people` and `roles` are
+   * empty. Absent, they were read now.
+   */
+  unread?: 'last' | 'none';
 }
 
 /** What a question's gate says about whom it is for. */
@@ -94,7 +106,11 @@ function everyone(why: string): Audience {
 }
 
 function roleAudience(roleId: string | null | undefined, asked: string | null | undefined, facts: AudienceFacts): Audience {
-  const role = roleId ? facts.roles.find((one) => one.id === roleId) : undefined;
+  // A gate that opened while the roles could not be read kept only the name
+  // it asked for, so it is found by that name: left at no id, a Legal question
+  // asked during an outage would have said "no role here is called Legal",
+  // and been everyone's, for good.
+  const role = roleId ? facts.roles.find((one) => one.id === roleId) : personRoleByName(asked, facts.roles);
   if (!role) {
     const named = asked?.trim();
     return everyone(named ? `no role here is called ${named}` : 'the question names no role');
@@ -129,23 +145,41 @@ export function openGatesFor(
   gates: readonly { id: string; options: readonly string[]; personRole?: string | null; personRoleAsked?: string | null }[],
   facts: AudienceFacts,
   planChanges: ReadonlySet<string>,
+  consoleRole: ConsoleRole = null,
 ): number {
   const viewer = viewerOf(identity, facts);
   return gates.filter((gate) => {
     const audience = questionAudience({ ...gate, planChange: planChanges.has(gate.id), costCap: isCostCapGate(gate.options) }, facts);
-    return visibleTo(viewer, { audience });
+    return visibleTo(viewer, { audience }, consoleRole);
   }).length;
+}
+
+/**
+ * With no read of People and the roles yet, whom an item is for cannot be
+ * told, and widening it to everyone because a read failed would show a Legal
+ * question to everyone it was kept from. So it is the admins', known by the
+ * console role a viewer signed in with (`visibleTo`), until a read works.
+ */
+const ADMINS_UNREAD: Audience = { for: 'admins', name: 'admins', people: [], unread: true };
+
+function marked(audience: Audience, facts: AudienceFacts): Audience {
+  if (!facts.unread) return audience;
+  return facts.unread === 'none' ? { ...ADMINS_UNREAD } : { ...audience, unread: true };
 }
 
 /** A question's audience, from what its gate says: the same for its card, its comment and its notification. */
 export function questionAudience(routing: QuestionRouting, facts: AudienceFacts): Audience {
-  if (routing.planChange) return approvers(facts);
-  if (routing.costCap) return admins(facts);
-  return roleAudience(routing.personRole, routing.personRoleAsked, facts);
+  if (routing.planChange) return marked(approvers(facts), facts);
+  if (routing.costCap) return marked(admins(facts), facts);
+  return marked(roleAudience(routing.personRole, routing.personRoleAsked, facts), facts);
 }
 
 /** An item's audience, read from its kind and what it carries. */
 export function audienceOf(item: Pick<AttentionItem, 'kind' | 'question' | 'awaiting'>, facts: AudienceFacts): Audience {
+  return marked(kindAudience(item, facts), facts);
+}
+
+function kindAudience(item: Pick<AttentionItem, 'kind' | 'question' | 'awaiting'>, facts: AudienceFacts): Audience {
   switch (AUDIENCE[item.kind]) {
     case 'question':
       return questionAudience(item.question ?? {}, facts);
@@ -186,11 +220,28 @@ function normalized(email: string): string {
   return email.trim().replace(/^accounts\.google\.com:/i, '').replace(/^user:/i, '').trim().toLowerCase();
 }
 
-/** Whether an item is in a viewer's Needs you: one for everyone, or for no one in particular, is everyone's. */
-export function visibleTo(viewer: Pick<AudiencePerson, 'id'> | null, item: Pick<AttentionItem, 'audience'>): boolean {
+/** The console role a viewer signed in with, as the router gives it; null when unknown. */
+export type ConsoleRole = 'admin' | 'user' | null;
+
+/**
+ * Whether an item is in a viewer's Needs you: one for everyone, or for no one
+ * in particular, is everyone's. One that is the admins' because People could
+ * not be read is in the list of whoever signed in as an admin.
+ */
+export function visibleTo(viewer: Pick<AudiencePerson, 'id'> | null, item: Pick<AttentionItem, 'audience'>, consoleRole: ConsoleRole = null): boolean {
   const audience = item.audience;
   if (!audience || audience.for === 'everyone') return true;
+  if (audience.unread && audience.for === 'admins' && audience.people.length === 0) return consoleRole === 'admin';
   return viewer !== null && audience.people.includes(viewer.id);
+}
+
+/**
+ * Whether a notification, or a mention, may go out about an item on this
+ * pass: not when it is routed and who it is routed to was not read now. It
+ * goes out on a later pass that reads them.
+ */
+export function mayNotify(audience: Audience | null | undefined): boolean {
+  return !audience?.unread || audience.for === 'everyone';
 }
 
 /** The people a notification about an item goes to, each on their own channel; undefined when it is for everyone. */
@@ -200,15 +251,32 @@ export function routedPeople(item: Pick<AttentionItem, 'audience'>): string[] | 
 }
 
 /**
- * The facts read once per request: People, and the roles with their members
- * still in it. A read that fails is no one and no role, which makes every
- * item everyone's: a list too long beats one that hides a question.
+ * Keeps the last read of People and the roles that worked, and gives it, so
+ * marked, when a read fails: a database hiccup must not hand a Legal question
+ * to everyone, nor hide an approval from the approvers. With no read yet the
+ * facts say so (`unread: 'none'`), and items are the admins' alone.
  */
-export async function readAudienceFacts(): Promise<AudienceFacts> {
-  const [people, raw] = await Promise.all([
-    (async () => peopleStore.listPeople())().catch(() => []),
-    (async () => settings.getSetting('personRoles'))().catch(() => null),
-  ]);
+export function lastGoodAudienceFacts(
+  read: () => Promise<AudienceFacts>,
+  say: (line: string) => void = console.warn,
+): () => Promise<AudienceFacts> {
+  let last: AudienceFacts | null = null;
+  return async () => {
+    try {
+      const fresh = await read();
+      last = fresh;
+      return fresh;
+    } catch (error) {
+      const why = error instanceof Error ? error.message : String(error);
+      say(`[bridge] could not read People and the roles for Needs you, so ${last ? 'the last read is used' : 'routed items are the admins’ alone'}: ${why}`);
+      return last ? { ...last, unread: 'last' } : { people: [], roles: [], unread: 'none' };
+    }
+  };
+}
+
+/** People, and the roles with their members still in it, read now; throws when either cannot be. */
+export async function readFreshAudienceFacts(): Promise<AudienceFacts> {
+  const [people, raw] = await Promise.all([peopleStore.listPeople(), settings.getSetting('personRoles')]);
   const ids = people.map((person) => person.id);
   return {
     people: people.map((person) => ({
@@ -222,3 +290,10 @@ export async function readAudienceFacts(): Promise<AudienceFacts> {
     roles: viewPersonRoles(parsePersonRoles(raw), ids),
   };
 }
+
+/**
+ * The facts read once per request, and the last read that worked when one
+ * fails (`lastGoodAudienceFacts`). One for the bridge, so the gates, the list
+ * and the notifications share what was last read.
+ */
+export const readAudienceFacts = lastGoodAudienceFacts(readFreshAudienceFacts);

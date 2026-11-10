@@ -6,7 +6,7 @@ import { testOutcome } from '@/components/notification-settings';
 import { SettingsCard } from '@/components/settings-sections';
 import { Button } from '@/components/ui/button';
 // Types only: '@/lib/api' reads the server's environment on import.
-import type { NotifyTransportKind, PersonalNotificationUpdate, PersonalNotificationView } from '@/lib/api';
+import type { PersonalNotificationUpdate, PersonalNotificationView, PersonalNotifyKind } from '@/lib/api';
 import { cn } from '@/lib/cn';
 
 /**
@@ -18,23 +18,25 @@ import { cn } from '@/lib/cn';
  *
  * The target is a credential, as the install's is: shown back masked, and
  * sent only when something is typed in the field.
+ *
+ * Only an ntfy topic, sent to the install's own ntfy server, or a Slack
+ * incoming webhook: anyone signed in sets this, and a webhook or a server of
+ * their own would have the bridge post to any address they typed.
  */
 
-const KINDS: { kind: NotifyTransportKind; label: string }[] = [
+const KINDS: { kind: PersonalNotifyKind; label: string }[] = [
   { kind: 'ntfy', label: 'ntfy' },
   { kind: 'slack', label: 'Slack' },
-  { kind: 'webhook', label: 'Webhook' },
 ];
 
-const TARGET_LABEL: Record<NotifyTransportKind, string> = { ntfy: 'Topic', slack: 'Incoming-webhook URL', webhook: 'URL' };
+const TARGET_LABEL: Record<PersonalNotifyKind, string> = { ntfy: 'Topic', slack: 'Incoming-webhook URL' };
 
 const INPUT =
   'w-full rounded-md border border-edge-strong bg-surface px-2.5 py-1.5 text-[13px] text-body placeholder:text-dim focus-visible:outline-2 focus-visible:outline-link';
 
 export function PersonalNotificationSettings({ initial }: { initial: PersonalNotificationView }) {
   const [view, setView] = useState(initial);
-  const [kind, setKind] = useState<NotifyTransportKind>(initial.kind ?? 'ntfy');
-  const [server, setServer] = useState(initial.kind === 'ntfy' ? (initial.server ?? '') : '');
+  const [kind, setKind] = useState<PersonalNotifyKind>(initial.kind ?? 'ntfy');
   const [target, setTarget] = useState('');
   const [busy, setBusy] = useState<'save' | 'stop' | 'test' | null>(null);
   const [said, setSaid] = useState<{ text: string; failed: boolean } | null>(null);
@@ -56,7 +58,6 @@ export function PersonalNotificationSettings({ initial }: { initial: PersonalNot
 
   function saveChannel() {
     const update: PersonalNotificationUpdate = { kind };
-    if (kind === 'ntfy') update.server = server.trim() || 'https://ntfy.sh';
     if (target.trim()) update.target = target.trim();
     void save(update, 'save');
   }
@@ -96,10 +97,9 @@ export function PersonalNotificationSettings({ initial }: { initial: PersonalNot
       </div>
 
       {kind === 'ntfy' && (
-        <label className="flex flex-col gap-1 border-t border-well py-2.5">
-          <span className="text-[13px] font-semibold text-body">Server</span>
-          <input aria-label="Your server" value={server} placeholder="https://ntfy.sh" onChange={(event) => setServer(event.target.value)} className={INPUT} />
-        </label>
+        <p className="border-t border-well py-2.5 text-[12.5px] text-muted">
+          Sent to the install’s ntfy server{view.server ? `, ${view.server}` : ''}: subscribe to your topic there.
+        </p>
       )}
 
       <label className="flex flex-col gap-1 border-t border-well py-2.5">

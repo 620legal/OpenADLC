@@ -1,5 +1,5 @@
 import type { AttentionItem } from './attention.js';
-import { routedPeople } from './needs-you-audience.js';
+import { mayNotify, routedPeople } from './needs-you-audience.js';
 import { itemLink, type Notifier } from './notify.js';
 
 /** The Needs-you kinds sent as they appear, each under the notification of the same name. */
@@ -118,6 +118,10 @@ export class WaitingNotices {
           await store.record(type, { item: key, baseline: true });
           continue;
         }
+        // Who it is routed to was not read on this pass: it is left unrecorded,
+        // so the next pass that reads them sends it, rather than sent to the
+        // wrong people now or to no one for good.
+        if (!mayNotify(item.audience)) continue;
         const subject = item.subject.item ?? item.subject.ref;
         // To the item's people when it is routed to some, each on their own
         // channel; one record per occurrence either way, so none is sent twice.

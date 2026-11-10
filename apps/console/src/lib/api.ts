@@ -592,6 +592,8 @@ export interface AttentionAudience {
   name: string;
   people: string[];
   why?: string;
+  /** Worked out while People could not be read: from the last read, or the admins' alone with none. */
+  unread?: true;
 }
 
 /** A pull request's declared command, as the bridge's `pull-commands.ts` says it for the person asking. */
@@ -1019,8 +1021,12 @@ export interface NotificationSettingsUpdate {
  * Your channel (`GET /v1/me/notifications`): where the bridge tells you about
  * the Needs-you items routed to you. `target` is masked, as the install's is.
  */
+/** What a person may choose for their own channel: no webhook, which could aim the bridge at any address (ADR 0035). */
+export type PersonalNotifyKind = 'ntfy' | 'slack';
+
 export interface PersonalNotificationView {
-  kind: NotifyTransportKind | null;
+  kind: PersonalNotifyKind | null;
+  /** The install's ntfy server, which a person's topic is sent to. */
   server: string | null;
   target: string | null;
   last: { at: string; event: string; ok: boolean; status: number | null; error: string | null } | null;
@@ -1028,8 +1034,7 @@ export interface PersonalNotificationView {
 
 /** What a save of Your channel sends: a null kind stops it; an omitted target keeps the one saved. */
 export interface PersonalNotificationUpdate {
-  kind: NotifyTransportKind | null;
-  server?: string;
+  kind: PersonalNotifyKind | null;
   target?: string;
 }
 

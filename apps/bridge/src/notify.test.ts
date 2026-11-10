@@ -14,6 +14,8 @@ import {
   parsePersonNotify,
   personalNotificationView,
   savePersonalNotification,
+  PERSONAL_KIND_REFUSAL,
+  PERSONAL_SERVER_REFUSAL,
   saveNotificationSettings,
   TEST_TEXT,
 } from './notify.js';
@@ -343,7 +345,7 @@ describe('a person’s own channel', () => {
         notifyTransport: JSON.stringify({ kind: 'slack', setAt: '2026-11-02T00:00:00.000Z', setBy: 'janedoe' }),
         personNotify: JSON.stringify({
           people: Object.fromEntries(
-            Object.entries(people).map(([id, one]) => [id, { kind: one.kind, ...(one.kind === 'ntfy' ? { server: 'https://ntfy.sh' } : {}), setAt: '2026-11-03T00:00:00.000Z' }]),
+            Object.entries(people).map(([id, one]) => [id, { kind: one.kind, setAt: '2026-11-03T00:00:00.000Z' }]),
           ),
         }),
       },
@@ -405,7 +407,7 @@ describe('a person’s own channel', () => {
     const store = memoryNotifyStore();
     const saved = await savePersonalNotification(store, 'p-a', { kind: 'ntfy', target: ALICE_TOPIC }, 'a@example.com', new Date('2026-11-10T00:00:00Z'));
     expect(saved).toEqual({ ok: true, change: { kind: 'ntfy', targetChanged: true } });
-    expect(JSON.parse(store.settings.personNotify ?? '{}')).toEqual({ people: { 'p-a': { kind: 'ntfy', server: 'https://ntfy.sh', setAt: '2026-11-10T00:00:00.000Z' } } });
+    expect(JSON.parse(store.settings.personNotify ?? '{}')).toEqual({ people: { 'p-a': { kind: 'ntfy', setAt: '2026-11-10T00:00:00.000Z' } } });
     expect(store.settings.personNotify).not.toContain(ALICE_TOPIC);
     expect(store.personSecrets['p-a']).toBe(ALICE_TOPIC);
     expect(store.secret).toBeNull();
@@ -420,8 +422,55 @@ describe('a person’s own channel', () => {
     const store = memoryNotifyStore();
     await expect(savePersonalNotification(store, 'p-a', { kind: 'slack', target: 'https://example.com/x' }, 'a')).resolves.toMatchObject({ ok: false, error: expect.stringContaining('hooks.slack.com') });
     await expect(savePersonalNotification(store, 'p-a', { kind: 'ntfy' }, 'a')).resolves.toEqual({ ok: false, error: 'Enter the ntfy topic' });
-    await expect(savePersonalNotification(store, 'p-a', { kind: 'ntfy', target: 't', server: 'https://u:p@ntfy.example.com' }, 'a')).resolves.toMatchObject({ ok: false });
     expect(store.settings.personNotify).toBeUndefined();
+  });
+
+  // Any signed-in person sets their own channel, and the bridge posts to it
+  // from inside the install: an address they chose could reach a metadata
+  // endpoint or a service beside the bridge.
+  it('refuses a webhook, a server of the person’s own, and a Slack URL that is not hooks.slack.com', async () => {
+    const store = memoryNotifyStore();
+    await expect(savePersonalNotification(store, 'p-a', { kind: 'webhook', target: 'http://169.254.169.254/latest' }, 'a')).resolves.toEqual({
+      ok: false,
+      error: PERSONAL_KIND_REFUSAL,
+    });
+    await expect(savePersonalNotification(store, 'p-a', { kind: 'ntfy', target: 'topic', server: 'http://10.0.0.5:8080' }, 'a')).resolves.toEqual({
+      ok: false,
+      error: PERSONAL_SERVER_REFUSAL,
+    });
+    for (const target of [
+      'http://hooks.slack.com/services/T/B/x',
+      'https://hooks.slack.com.evil.example/services/x',
+      'https://hooks.slack.com@169.254.169.254/x',
+      'https://user:pass@hooks.slack.com/services/x',
+      'https://hooks.slack.com:8443/services/x',
+      'https://evil.example/https://hooks.slack.com/',
+    ]) {
+      await expect(savePersonalNotification(store, 'p-a', { kind: 'slack', target }, 'a'), target).resolves.toMatchObject({ ok: false });
+    }
+    await expect(savePersonalNotification(store, 'p-a', { kind: 'ntfy', target: 'http://10.0.0.5/topic' }, 'a')).resolves.toMatchObject({ ok: false });
+    expect(store.settings.personNotify).toBeUndefined();
+    expect(store.personSecrets).toEqual({});
+  });
+
+  it('never posts to a channel a person may not set, however it was stored, and sends nothing to it on a test', async () => {
+    const fetchSpy = answering(200);
+    const store = withPeople({ 'p-a': { kind: 'webhook', target: 'http://169.254.169.254/latest' }, 'p-b': { kind: 'slack', target: 'https://evil.example/x' } });
+    const notifier = new Notifier(configWith(''), store);
+    await expect(notifier.send({ event: 'gate_opened', to: null, text: 'q', link: 'l', people: ['p-a', 'p-b'] })).resolves.toBe('logged');
+    await expect(notifier.testPerson('p-a')).resolves.toBeNull();
+    await expect(notifier.testPerson('p-b')).resolves.toBeNull();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('sends a person’s ntfy topic to the install’s own ntfy server, and follows no redirect from a person’s channel', async () => {
+    const fetchSpy = answering(200);
+    const store = withPeople({ 'p-a': { kind: 'ntfy', target: ALICE_TOPIC } });
+    store.settings.notifyTransport = JSON.stringify({ kind: 'ntfy', server: 'https://ntfy.example.com', setAt: '2026-11-02T00:00:00.000Z', setBy: 'janedoe' });
+    await new Notifier(configWith(''), store).send({ event: 'gate_opened', to: null, text: 'q', link: 'l', people: ['p-a'] });
+    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('https://ntfy.example.com/');
+    expect(init.redirect).toBe('error');
   });
 
   it('is stopped by the person, and forgotten when they are removed', async () => {

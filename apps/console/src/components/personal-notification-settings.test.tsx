@@ -6,8 +6,8 @@ vi.mock('@/app/actions', () => ({ savePersonalNotifications: vi.fn(), testPerson
 import { PersonalNotificationSettings } from './personal-notification-settings';
 
 /**
- * Your channel: a person's own ntfy topic, Slack webhook or webhook, where the
- * items routed to them go. The saved target is shown masked, never whole.
+ * Your channel: a person's own ntfy topic or Slack webhook, where the items
+ * routed to them go. The saved target is shown masked, never whole.
  */
 function render(initial: Parameters<typeof PersonalNotificationSettings>[0]['initial']): string {
   return renderToStaticMarkup(<PersonalNotificationSettings initial={initial} />).replace(/<!-- -->/g, '');
@@ -29,5 +29,16 @@ describe('Your channel', () => {
     expect(html).not.toContain('>Stop<');
     expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Send a test<\/button>/);
     expect(html).toContain('you still have the badge, desktop alerts and GitHub’s mention');
+  });
+
+  // Anyone signed in sets this: a webhook, or an ntfy server of their own,
+  // would have the bridge post to any address they typed.
+  it('offers ntfy and Slack only, and no server field: a topic goes to the install’s own server', () => {
+    const html = render({ kind: 'ntfy', server: 'https://ntfy.example.com', target: '…9z8y', last: null });
+    expect(html).toContain('value="ntfy"');
+    expect(html).toContain('value="slack"');
+    expect(html).not.toContain('value="webhook"');
+    expect(html).not.toContain('aria-label="Your server"');
+    expect(html).toContain('Sent to the install’s ntfy server, https://ntfy.example.com');
   });
 });

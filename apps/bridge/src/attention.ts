@@ -52,7 +52,7 @@ export { standingPersonAsks, standingPersonAwaits, type HeldPlanChange, type Per
 import { ACCOUNTS_STEP, RECONNECT } from './health/words.js';
 import type { Router } from './router.js';
 import type { SubjectTitle } from './subject-titles.js';
-import { isCostCapGate, viewerOf, visibleTo, withAudiences, type Audience, type AudienceFacts } from './needs-you-audience.js';
+import { isCostCapGate, viewerOf, visibleTo, withAudiences, type Audience, type AudienceFacts, type ConsoleRole } from './needs-you-audience.js';
 import {
   ignoredSubjects,
   issueForSubject,
@@ -2519,11 +2519,16 @@ export interface AttentionDeps {
  * routed to them, and those that fell back to everyone. Anything that needs
  * every item (`WaitingNotices`, the board's counts) reads `withAudiences`, not this.
  */
-export async function attentionFor(identity: string, items: readonly AttentionItem[], deps: Pick<AttentionDeps, 'audience'>): Promise<AttentionItem[]> {
+export async function attentionFor(
+  identity: string,
+  items: readonly AttentionItem[],
+  deps: Pick<AttentionDeps, 'audience'>,
+  consoleRole: ConsoleRole = null,
+): Promise<AttentionItem[]> {
   if (!deps.audience || deps.audience.local) return [...items];
   const facts = await deps.audience.facts();
   const viewer = viewerOf(identity, facts);
-  return withAudiences(items, facts, false).filter((item) => visibleTo(viewer, item));
+  return withAudiences(items, facts, false).filter((item) => visibleTo(viewer, item, consoleRole));
 }
 
 /**
@@ -2797,5 +2802,7 @@ export async function readAttention(now: Date, deps: AttentionDeps = {}): Promis
 }
 
 export function registerAttentionRoutes(router: Router, deps: AttentionDeps = {}): void {
-  router.get('/v1/attention', async ({ identity }) => ({ items: await attentionFor(identity, attentionItems(await readAttention(new Date(), deps)), deps) }));
+  router.get('/v1/attention', async ({ identity, role }) => ({
+    items: await attentionFor(identity, attentionItems(await readAttention(new Date(), deps)), deps, role),
+  }));
 }

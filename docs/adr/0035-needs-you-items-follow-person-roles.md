@@ -41,7 +41,15 @@ the issue asked for the change to show on the next load without that.
   gate by id (`gates.person_role`), so a rename keeps routing it, and as asked
   (`gates.person_role_asked`), so a card can say no role is called that. A
   `plan_change` marker's role is ignored: approvers decide plan changes.
-  Members are read live.
+  Members are read live. A gate kept with no id is found by the name it asked
+  for on each read, so one opened while the roles could not be read is not
+  everyone's for good.
+- **A failed read never widens an item.** People and the roles are read
+  through `lastGoodAudienceFacts`: when a read fails, the last one that worked
+  is used; with none yet, every item is the admins', known by the console role
+  the viewer signed in with, and the board stays up. A pass that did not read
+  them sends no routed notification and mentions nobody; `WaitingNotices`
+  leaves such an item unrecorded, so a later pass sends it.
 - **`GET /v1/attention` is per viewer.** It returns the items whose audience
   includes the signed-in person, matched by email, and the ones for everyone.
   The badge, the tab title and favicon count, desktop alerts and the board's
@@ -53,9 +61,12 @@ the issue asked for the change to show on the next load without that.
   item is that person's and notifications go to the install's channel, as
   before.
 - **Each person may have a channel of their own.** The `personNotify` setting
-  holds `{people: {[personId]: {kind, server?, setAt}}}`, and the target is the
+  holds `{people: {[personId]: {kind, setAt}}}`, and the target is the
   secret `notify-target:person:<id>`, written only by that person through
-  `/v1/me/notifications`. An item routed to people is sent to each one's own
+  `/v1/me/notifications`. It is an ntfy topic, sent to the install's own ntfy
+  server, or a Slack URL on `hooks.slack.com`, and nothing else: anyone signed
+  in sets it, and the bridge posts to it from inside the install. Save, test
+  and send all check it, and a person's channel follows no redirect. An item routed to people is sent to each one's own
   channel and **never** to the install's; a person with none gets nothing
   from the bridge, and still has the badge, the desktop alert and GitHub's
   mention. The install's channel is the admins': it carries what is for
@@ -77,6 +88,12 @@ the issue asked for the change to show on the next load without that.
 - **Falling back to the install's channel for a member with no channel of
   their own.** The shared channel would then reach everyone on it, which is
   what routing is for not doing.
+- **A webhook or an ntfy server of a person's own.** Either is a URL any
+  signed-in person chooses and the bridge posts to from its own network,
+  which is a request forgery: a metadata endpoint or a service beside the
+  bridge. Only the install's channel, which an admin sets, keeps them.
+- **Falling back to everyone when People cannot be read.** A database hiccup
+  would show a Legal question to everyone it was kept from, and page them.
 - **Matching a question's role by id.** Bots never see a custom role's id,
   and asking them to would put an install's internals in every skill.
 

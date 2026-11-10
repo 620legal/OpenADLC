@@ -1,6 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import type { AttentionItem, AttentionKind } from './attention.js';
-import { AUDIENCE, audienceOf, openGatesFor, questionAudience, routedPeople, viewerOf, visibleTo, withAudiences, type AudienceFacts } from './needs-you-audience.js';
+import {
+  AUDIENCE,
+  audienceOf,
+  lastGoodAudienceFacts,
+  mayNotify,
+  openGatesFor,
+  questionAudience,
+  routedPeople,
+  viewerOf,
+  visibleTo,
+  withAudiences,
+  type AudienceFacts,
+} from './needs-you-audience.js';
 
 const A = { id: 'p-alice', name: 'Alice', email: 'alice@example.com', githubLogin: 'alice', consoleRole: 'user' as const, approves: false };
 const B = { id: 'p-bob', name: 'Bob', email: 'bob@example.com', githubLogin: 'bob', consoleRole: 'user' as const, approves: false };
@@ -132,5 +144,63 @@ describe('whose list an item is in', () => {
     expect(visibleTo(A, { audience: audienceOf(gate, FACTS) })).toBe(true);
     expect(visibleTo(A, { audience: audienceOf(gate, moved) })).toBe(false);
     expect(visibleTo(B, { audience: audienceOf(gate, moved) })).toBe(true);
+  });
+});
+
+// A database hiccup while People or the roles were read used to make every
+// item everyone's: a Legal question showed to everyone it was kept from.
+describe('when People and the roles cannot be read', () => {
+  const failing = () => Promise.reject(new Error('connection reset'));
+
+  it('keeps the last read that worked, and marks what it worked out so nothing is sent from it', async () => {
+    let fail = false;
+    const lines: string[] = [];
+    const read = lastGoodAudienceFacts(() => (fail ? failing() : Promise.resolve(FACTS)), (line) => lines.push(line));
+    expect(await read()).toBe(FACTS);
+    fail = true;
+    const kept = await read();
+    expect(kept).toMatchObject({ people: FACTS.people, roles: FACTS.roles, unread: 'last' });
+    expect(lines[0]).toContain('the last read is used');
+
+    const legal = audienceOf(question({ personRole: 'legal', personRoleAsked: 'Legal' }), kept);
+    expect(legal).toEqual({ for: 'role', name: 'Legal', people: ['p-alice'], unread: true });
+    expect(visibleTo(A, { audience: legal })).toBe(true);
+    expect(visibleTo(B, { audience: legal })).toBe(false);
+    expect(mayNotify(legal)).toBe(false);
+
+    fail = false;
+    expect(await read()).toBe(FACTS);
+  });
+
+  it('with no read yet, shows every item to admins alone, by the role they signed in with, and widens none to everyone', async () => {
+    const lines: string[] = [];
+    const none = await lastGoodAudienceFacts(failing, (line) => lines.push(line))();
+    expect(none).toEqual({ people: [], roles: [], unread: 'none' });
+    expect(lines[0]).toContain('admins’ alone');
+
+    for (const one of [question({ personRole: 'legal', personRoleAsked: 'Legal' }), question({}), item('task_failed'), item('promote_held'), item('check_failed')]) {
+      const audience = audienceOf(one, none);
+      expect(audience).toMatchObject({ for: 'admins', people: [], unread: true });
+      expect(visibleTo(null, { audience }, 'admin')).toBe(true);
+      expect(visibleTo(null, { audience }, 'user')).toBe(false);
+      expect(visibleTo(null, { audience })).toBe(false);
+      expect(mayNotify(audience)).toBe(false);
+      expect(routedPeople({ audience })).toBeUndefined();
+    }
+    const gates = [{ id: 'g-1', options: ['yes', 'no'], personRole: 'legal', personRoleAsked: 'Legal' }];
+    expect(openGatesFor('ada@example.com', gates, none, new Set(), 'admin')).toBe(1);
+    expect(openGatesFor('alice@example.com', gates, none, new Set(), 'user')).toBe(0);
+  });
+
+  it('routes a gate that opened while the roles could not be read by the name it asked for', () => {
+    // Opened in an outage: no id, the name kept as asked.
+    const gate = question({ personRole: null, personRoleAsked: 'legal' });
+    expect(audienceOf(gate, FACTS)).toEqual({ for: 'role', name: 'Legal', people: ['p-alice'] });
+  });
+
+  it('still notifies about an item that is everyone’s from a fresh read', () => {
+    expect(mayNotify(audienceOf(question({}), FACTS))).toBe(true);
+    expect(mayNotify(audienceOf(question({ personRole: 'legal' }), FACTS))).toBe(true);
+    expect(mayNotify(undefined)).toBe(true);
   });
 });

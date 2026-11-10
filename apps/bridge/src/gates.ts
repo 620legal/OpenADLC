@@ -26,7 +26,7 @@ import {
 } from '@openadlc/shared';
 import type { Actors } from './actors.js';
 import { itemLink, type Notifier } from './notify.js';
-import { isCostCapGate, questionAudience, routedPeople, type AudienceFacts } from './needs-you-audience.js';
+import { isCostCapGate, mayNotify, questionAudience, routedPeople, type AudienceFacts } from './needs-you-audience.js';
 import { acceptOnAnswer } from './design-memory.js';
 import { moveRequest } from './request-lifecycle.js';
 import { HttpFailure } from './router.js';
@@ -419,8 +419,11 @@ export class Gates {
 
     // The role a question names is resolved once, here, and kept by id, so a
     // rename keeps routing it; who holds it is read on every load. A name the
-    // install has no role by is kept as asked, so the card can say so. People
-    // and roles that cannot be read are none: the question goes to everyone.
+    // install has no role by is kept as asked, so the card can say so. When
+    // People and the roles could not be read now, the id is resolved from the
+    // last read that worked, or left for each read to find by the name asked;
+    // and the gate mentions nobody and notifies nobody it routes to, since
+    // who that is was not read (`mayNotify`).
     const asked = request ? null : questionRole(input.role);
     const facts = this.audience ? await this.audience.facts().catch(() => null) : null;
     const personRole = asked && facts ? (personRoleByName(asked, facts.roles)?.id ?? null) : null;
@@ -429,7 +432,7 @@ export class Gates {
         ? questionAudience({ personRole, personRoleAsked: asked, planChange: request !== null, costCap: isCostCapGate(options) }, facts)
         : null;
     const forRole =
-      audience?.for === 'role' && facts
+      audience?.for === 'role' && facts && mayNotify(audience)
         ? {
             name: audience.name,
             logins: audience.people.map((id) => facts.people.find((person) => person.id === id)?.githubLogin ?? '').filter(Boolean),
@@ -513,14 +516,19 @@ export class Gates {
     // approval settles: nobody is waited on, unless applying it fails below.
     // Routed, it goes to its people's own channels and not the install's.
     const people = audience ? routedPeople({ audience }) : undefined;
-    const notify = () =>
-      this.notifier?.send({
+    const notify = async () => {
+      if (!mayNotify(audience)) {
+        console.warn(`[bridge] not notifying about the question on ${task.subjectRef}: who it is for could not be read now`);
+        return;
+      }
+      await this.notifier?.send({
         event: 'gate_opened',
         to: addressedTo,
         ...(people ? { people } : {}),
         text: `${botAtStart(bot)} is waiting on an answer about ${task.subjectRef}: ${input.question}`,
         link: itemLink(this.consoleUrl, task.subjectRef),
       });
+    };
     if (!settles) await notify();
 
     await threads.addMessage({

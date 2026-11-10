@@ -730,8 +730,14 @@ clears when one does. With nothing set it passes; with only
 
 **Your channel.** On a cloud install, everyone signed in to the console can
 set a channel of their own in **Settings → Notifications → Your channel**: an
-ntfy topic, a Slack incoming webhook or a webhook URL, checked as the
-install's are. A [Needs-you item routed](#needs-you-routing) to some people is
+ntfy topic or a Slack incoming webhook. There is no webhook and no server of
+your own: anyone signed in sets this, and the bridge posts to it from inside
+the install, so an address a person typed could reach a metadata endpoint or a
+service beside the bridge. A topic is sent to the install's own ntfy server
+(the one its channel uses when that is ntfy, `https://ntfy.sh` otherwise), and
+a Slack URL must be `https://hooks.slack.com/…`, with no user, password or
+port. Save and Send a test refuse anything else, a send skips a stored channel
+that does not pass, and a person's channel follows no redirect. A [Needs-you item routed](#needs-you-routing) to some people is
 sent to each of their own channels, and **not** to the install's. The
 install's channel is an admin's: it carries what is for everyone (an item that
 fell back, `cap_warning`, `promote_waiting`, `check_failing` and
@@ -744,8 +750,8 @@ fell back, `cap_warning`, `promote_waiting`, `check_failing` and
   per-person switches.
 - The target is kept only in the secret store, as
   `notify-target:person:<person id>`, and shown back masked. The
-  `personNotify` setting holds each person's kind, ntfy server and when it was
-  set: `{"people": {"<person id>": {"kind": "ntfy", "server": "https://ntfy.sh", "setAt": "…"}}}`.
+  `personNotify` setting holds each person's kind and when it was set:
+  `{"people": {"<person id>": {"kind": "ntfy", "setAt": "…"}}}`.
   Only `PUT /v1/me/notifications` writes it, and `PATCH /v1/install` refuses it.
 - Each delivery is recorded as `notify.delivery` with `source: "person"` and
   the person's id. The `notifications` health check counts only the install's
@@ -754,8 +760,8 @@ fell back, `cap_warning`, `promote_waiting`, `check_failing` and
 - Removing a person, or merging them into someone else, deletes their channel
   and its secret. Backup and restore carry both with the install.
 - The API, for any signed-in person, acting only on their own channel:
-  `GET /v1/me/notifications`, `PUT /v1/me/notifications` (`{kind, server?,
-  target?}`; `kind: null` stops it) and `POST /v1/me/notifications/test`. Each
+  `GET /v1/me/notifications`, `PUT /v1/me/notifications` (`{kind, target?}`,
+  `kind` `ntfy` or `slack`; `kind: null` stops it) and `POST /v1/me/notifications/test`. Each
   save is audited as `notify.personal_configured` with `{person, kind,
   targetChanged}`, never the target. A local install refuses them: its one
   person's channel is the install's.
@@ -796,9 +802,11 @@ A routed card says "For Legal", "For approvers", "For admins" or "For you".
 
 - **The role a question names** is resolved when its gate opens and kept on the
   gate by id (`gates.person_role`), with the name as asked
-  (`gates.person_role_asked`). Renaming a custom role keeps routing it; a role
-  added after the gate opened does not route it. Bots name roles as people see
-  them, never by a custom role's `pr_` id.
+  (`gates.person_role_asked`). Renaming a custom role keeps routing it. A gate
+  kept with no id (the name matched no role, or the roles could not be read)
+  is found by the name it asked for on each read, so a role of that name added
+  later routes it. Bots name roles as people see them, never by a custom
+  role's `pr_` id.
 - **The GitHub comment** for a routed question mentions its people with a
   GitHub login on a line before the question: "For Legal: @alice @bob".
 - **Who may answer is not routed.** Anyone in People answers a question, from
@@ -810,6 +818,12 @@ A routed card says "For Legal", "For approvers", "For admins" or "For you".
 - **A local install** has one console identity, so nothing is routed: every
   item is that person's, its card says nothing of whom it is for, and
   notifications go to the install's channel as before.
+- **When People or the roles cannot be read**, nothing widens to everyone.
+  The bridge uses the last read that worked; with none since it started,
+  every item is for the admins, by the console role they signed in with, and
+  the card says "For admins". On such a pass no routed notification is sent
+  and the question's comment mentions nobody; a waiting merge or a stopped
+  review is sent on the next pass that reads them.
 
 ## People
 

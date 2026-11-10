@@ -3,10 +3,8 @@ import type { IdentityMode } from './identity.js';
 import {
   personalNotificationView,
   savePersonalNotification,
-  TRANSPORT_KINDS,
   type Notifier,
   type PersonalNotificationInput,
-  type TransportKind,
 } from './notify.js';
 import { HttpFailure, type Router } from './router.js';
 
@@ -40,10 +38,11 @@ export function liveMyNotificationsDeps(identityMode: IdentityMode, notifier: No
   };
 }
 
-function kindIn(value: unknown): TransportKind | null {
+// Any string goes on to the save, which refuses a webhook or an unknown kind in words a person can act on.
+function kindIn(value: unknown): string | null {
   if (value === null) return null;
-  if (typeof value === 'string' && (TRANSPORT_KINDS as readonly string[]).includes(value)) return value as TransportKind;
-  throw new HttpFailure(400, 'kind is ntfy, slack, webhook, or null to stop');
+  if (typeof value === 'string') return value;
+  throw new HttpFailure(400, 'kind is ntfy, slack, or null to stop');
 }
 
 export function registerMyNotificationsRoutes(router: Router, deps: MyNotificationsDeps): void {
@@ -63,7 +62,7 @@ export function registerMyNotificationsRoutes(router: Router, deps: MyNotificati
   router.add('PUT', '/v1/me/notifications', async ({ body, identity }) => {
     const { notifier, personId } = await mine(identity);
     const raw = await body<Record<string, unknown> | null>();
-    if (!raw || typeof raw !== 'object' || !('kind' in raw)) throw new HttpFailure(400, 'send {kind, server?, target?}; kind null stops your channel');
+    if (!raw || typeof raw !== 'object' || !('kind' in raw)) throw new HttpFailure(400, 'send {kind, target?}; kind null stops your channel');
     const input: PersonalNotificationInput = {
       kind: kindIn(raw.kind),
       ...(typeof raw.server === 'string' ? { server: raw.server } : {}),

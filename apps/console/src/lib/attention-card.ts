@@ -121,7 +121,6 @@ export function unblocksLine(item: Pick<AttentionItem, 'unblocks' | 'subject'>):
 
 // ---------------------------------------------------------------- work and system
 
-/** Whose an item is: the bridge says (`group`); an older bridge's is read from its kind. */
 /**
  * Whom an item is for, in the line under its headline (ADR 0035): its role,
  * the approvers, the admins, or you; or everyone, with why, when it came to
@@ -144,6 +143,7 @@ export function audienceLine(item: Pick<AttentionItem, 'audience'>): string | nu
   }
 }
 
+/** Whose an item is: the bridge says (`group`); an older bridge's is read from its kind. */
 export type AttentionGroup = 'work' | 'system';
 
 /** Every kind, classified, as the bridge's `groupOf` has it: a new kind does not compile until it is given a group. */

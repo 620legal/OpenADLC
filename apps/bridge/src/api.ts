@@ -33,6 +33,7 @@ import {
   threads,
   withAdvisoryLock,
   workItems,
+  type Role,
 } from '@openadlc/db';
 import {
   ADDABLE_SEAT_ROLES,
@@ -1092,21 +1093,23 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
   const audienceFacts = deps.audienceFacts ?? readAudienceFacts;
   const local = config.identityMode === 'local';
   /** The open questions in one viewer's Needs you, for the board's count; every one on a local install. */
-  const waitingOnYou = async (identity: string, gates: readonly { id: string; options: string[] }[]): Promise<number> => {
+  const waitingOnYou = async (identity: string, role: Role, gates: readonly { id: string; options: string[] }[]): Promise<number> => {
     if (local || gates.length === 0) return gates.length;
     const [facts, planChanges] = await Promise.all([
       audienceFacts(),
       (async () => leases.planChangesOfGates(gates.map((gate) => gate.id)))().catch(() => new Map<string, unknown>()),
     ]);
-    return openGatesFor(identity, gates, facts, new Set(planChanges.keys()));
+    return openGatesFor(identity, gates, facts, new Set(planChanges.keys()), role);
   };
   // The count is one number on the board: a gate row it cannot route (one read
-  // without its options) took the whole GET /v1/board down with it. Counting
-  // every open question, as before routing, keeps the board up.
-  const waitingOnYouOrAll = (identity: string, gates: readonly { id: string; options: string[] }[]): Promise<number> =>
-    waitingOnYou(identity, gates).catch((error: unknown) => {
-      console.warn(`[bridge] could not route the board's waiting count, so it counts every open question: ${error instanceof Error ? error.message : error}`);
-      return gates.length;
+  // without its options) took the whole GET /v1/board down with it. It is
+  // counted as if nobody could be read, every open question for an admin and
+  // none for anyone else, which keeps the board up without counting a routed
+  // question for everyone (`needs-you-audience.ts`).
+  const waitingOnYouOrAdmins = (identity: string, role: Role, gates: readonly { id: string; options: string[] }[]): Promise<number> =>
+    waitingOnYou(identity, role, gates).catch((error: unknown) => {
+      console.warn(`[bridge] could not route the board's waiting count, so it counts as the admins': ${error instanceof Error ? error.message : error}`);
+      return role === 'admin' ? gates.length : 0;
     });
   // Named, so the notifications' look at Needs you reads the same items, by
   // the same ids, as the board (`notify-waiting.ts`).
@@ -1173,7 +1176,7 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
     recheck: () => deps.health?.runSoon(['signing-key']),
   });
 
-  router.get('/v1/board', async ({ query, identity }) => {
+  router.get('/v1/board', async ({ query, identity, role }) => {
     const repoFilter = query.get('repo');
     const repoName = !repoFilter || repoFilter === 'all' ? undefined : repoFilter;
     // Once the install is numbered, a card is a work item's, and an item with
@@ -1405,7 +1408,7 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
         detail: entry.detail,
         heldFor: heldForPerson(entry),
       })),
-      waitingOnYou: await waitingOnYouOrAll(identity, openGates),
+      waitingOnYou: await waitingOnYouOrAdmins(identity, role, openGates),
       working: activeSessions.filter((session) => session.state === 'working').length,
       idle: activeSessions.filter((session) => session.state === 'idle').length,
       // Tasks running across the install, which the board counts above its columns.

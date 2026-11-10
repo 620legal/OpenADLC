@@ -2589,10 +2589,10 @@ describe('GET /v1/attention, routed by person role', () => {
   let bridgeUrl: string;
   let facts: import('./needs-you-audience.js').AudienceFacts;
 
-  const start = async (identityMode: 'iap' | 'local') => {
+  const start = async (identityMode: 'iap' | 'local', access?: (method: string, path: string, identity: string) => Promise<'admin' | 'user'>) => {
     const { registerConsoleApi } = await import('./api.js');
     const { Router } = await import('./router.js');
-    const router = new Router();
+    const router = new Router(undefined, undefined, undefined, access);
     registerConsoleApi(router, {
       config: { gitHubClientId: '', webhookSecret: '', humans: [], identityMode } as never,
       hostd: {} as never,
@@ -2656,6 +2656,16 @@ describe('GET /v1/attention, routed by person role', () => {
     facts = { ...facts, roles: [{ id: 'legal', name: 'Legal', members: [] }] };
     const a = await listOf('a@example.com');
     expect(a.find((one) => one.id === 'gate:gate-legal')?.audience).toMatchObject({ for: 'everyone', why: 'no one holds Legal yet' });
+  });
+
+  it('with People unread and no read before, shows a routed question to the admin who signed in and to no one else', async () => {
+    await start('iap', async (_method, _path, identity) => (identity === 'ada@example.com' ? 'admin' : 'user'));
+    facts = { people: [], roles: [], unread: 'none' };
+    const admin = await listOf('ada@example.com');
+    const user = await listOf('a@example.com');
+    expect(admin.filter((one) => one.id.startsWith('gate:')).map((one) => one.id).sort()).toEqual(['gate:gate-legal', 'gate:gate-privacy']);
+    expect(admin.find((one) => one.id === 'gate:gate-legal')?.audience).toMatchObject({ for: 'admins', people: [] });
+    expect(user.filter((one) => one.id.startsWith('gate:'))).toEqual([]);
   });
 
   it('routes nothing on a local install: every item is the one person’s, with no audience', async () => {

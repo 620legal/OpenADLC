@@ -92,6 +92,43 @@ export type TransportKind = (typeof TRANSPORT_KINDS)[number];
 
 export const NTFY_SERVER = 'https://ntfy.sh';
 
+/**
+ * The kinds a person may choose for their own channel. Any signed-in person
+ * may set one, so a URL they typed would be one the bridge posts to from
+ * inside the install: a generic webhook, or an ntfy server of their own,
+ * could aim it at a metadata endpoint or a service on the bridge's network.
+ * So there is no webhook, ntfy is only a topic on the install's own server,
+ * and Slack is only hooks.slack.com. The install's channel, which only an
+ * admin sets, keeps all three.
+ */
+export const PERSONAL_KINDS = ['ntfy', 'slack'] as const;
+export type PersonalKind = (typeof PERSONAL_KINDS)[number];
+
+export const PERSONAL_KIND_REFUSAL = 'Your channel is an ntfy topic or a Slack incoming webhook: a webhook to another address is set only for the install, by an admin';
+export const PERSONAL_SERVER_REFUSAL = 'Your ntfy topic is on the install’s own ntfy server: it takes no server of its own';
+export const PERSONAL_SLACK_REFUSAL = 'A Slack incoming-webhook URL is https://hooks.slack.com/…, with no user, password or port: copy it from the app’s Incoming Webhooks page';
+const NTFY_TOPIC = /^[A-Za-z0-9_-]{1,64}$/;
+
+export function isPersonalKind(value: unknown): value is PersonalKind {
+  return typeof value === 'string' && (PERSONAL_KINDS as readonly string[]).includes(value);
+}
+
+/** Whether a person's own target may be posted to: a topic name for ntfy, a hooks.slack.com URL for Slack, nothing else. */
+export function personalTargetRefusal(kind: PersonalKind, target: string): string | null {
+  if (kind === 'ntfy') {
+    return NTFY_TOPIC.test(target) ? null : 'An ntfy topic is 1 to 64 letters, digits, - or _: the name after the server in the ntfy app, without the server';
+  }
+  let url: URL;
+  try {
+    url = new URL(target);
+  } catch {
+    return PERSONAL_SLACK_REFUSAL;
+  }
+  if (url.protocol !== 'https:' || url.hostname !== 'hooks.slack.com' || url.port || url.username || url.password) return PERSONAL_SLACK_REFUSAL;
+  if (!target.startsWith('https://hooks.slack.com/')) return PERSONAL_SLACK_REFUSAL;
+  return null;
+}
+
 /** What `notifyTransport` holds. The target is not in it: it is the `notify-target` secret. */
 export interface StoredTransport {
   kind: TransportKind;
@@ -285,9 +322,7 @@ export function databaseNotifyStore(): NotifyStore {
 
 /** One person's own channel as `personNotify` keeps it. The target is the secret `notify-target:person:<id>`. */
 export interface StoredPersonChannel {
-  kind: TransportKind;
-  /** ntfy's server; absent for the other two. */
-  server?: string;
+  kind: PersonalKind;
   /** When it last changed: only a delivery since then says it works. */
   setAt: string;
 }
@@ -315,13 +350,9 @@ export function parsePersonNotify(raw: string | null, people?: readonly string[]
   for (const [id, entry] of Object.entries(given as Record<string, unknown>)) {
     if (known && !known.has(id)) continue;
     if (!entry || typeof entry !== 'object') continue;
-    const { kind, server, setAt } = entry as Record<string, unknown>;
-    if (!(TRANSPORT_KINDS as readonly string[]).includes(kind as string) || typeof setAt !== 'string') continue;
-    out[id] = {
-      kind: kind as TransportKind,
-      ...(kind === 'ntfy' ? { server: typeof server === 'string' && server ? server : NTFY_SERVER } : {}),
-      setAt,
-    };
+    const { kind, setAt } = entry as Record<string, unknown>;
+    if (!isPersonalKind(kind) || typeof setAt !== 'string') continue;
+    out[id] = { kind, setAt };
   }
   return { people: out };
 }
@@ -389,14 +420,24 @@ export class Notifier {
 
   /**
    * One person's own channel, read on every send like the install's. A kind
-   * whose secret is gone is no channel, as it is for the install's.
+   * whose secret is gone is no channel, as it is for the install's; so is a
+   * target that is not one a person may set (`personalTargetRefusal`), so a
+   * row written some other way is never posted to. ntfy goes to the install's
+   * own server.
    */
   async personTransport(personId: string): Promise<Transport | null> {
     const stored = parsePersonNotify(await this.store.personSetting().catch(() => null)).people[personId];
     if (!stored) return null;
     const target = await this.store.personTarget(personId).catch(() => null);
-    if (!target) return null;
-    return { kind: stored.kind, target, ...(stored.server ? { server: stored.server } : {}), source: 'person', setAt: stored.setAt, person: personId };
+    if (!target || personalTargetRefusal(stored.kind, target)) return null;
+    const server = stored.kind === 'ntfy' ? await this.installNtfyServer() : null;
+    return { kind: stored.kind, target, ...(server ? { server } : {}), source: 'person', setAt: stored.setAt, person: personId };
+  }
+
+  /** The install's ntfy server: the one its own channel uses when that is ntfy, ntfy.sh otherwise. */
+  async installNtfyServer(): Promise<string> {
+    const stored = parseStoredTransport(await this.store.setting('notifyTransport').catch(() => null));
+    return (stored?.kind === 'ntfy' && stored.server && ntfyOrigin(stored.server)) || NTFY_SERVER;
   }
 
   /**
@@ -510,7 +551,9 @@ export class Notifier {
    */
   private async deliver(transport: Transport, message: Message): Promise<DeliveryResult> {
     const { url, init } = requestFor(transport, message);
-    const result = await fetch(url, { ...init, signal: AbortSignal.timeout(5000) })
+    // A person's own channel is not followed anywhere else: a redirect from
+    // where it was checked to go is the same reach a URL of their own was.
+    const result = await fetch(url, { ...init, ...(transport.source === 'person' ? { redirect: 'error' as const } : {}), signal: AbortSignal.timeout(5000) })
       .then((response): DeliveryResult => ({ ok: response.ok, status: response.status, error: response.ok ? null : response.statusText || null }))
       .catch((error: unknown): DeliveryResult => ({ ok: false, status: null, error: messageOf(error) }));
     const safe: DeliveryResult = { ...result, error: result.error === null ? null : redactTarget(result.error, transport.target) };
@@ -692,7 +735,7 @@ export async function saveNotificationSettings(
 
 /** What Your channel shows a person: never the target whole. */
 export interface PersonalNotificationView {
-  kind: TransportKind | null;
+  kind: PersonalKind | null;
   server: string | null;
   target: string | null;
   last: { at: string; event: string; ok: boolean; status: number | null; error: string | null } | null;
@@ -702,31 +745,36 @@ export async function personalNotificationView(notifier: Notifier, personId: str
   const transport = await notifier.personTransport(personId);
   const last = transport ? await notifier.lastDelivery(transport).catch(() => null) : null;
   return {
-    kind: transport?.kind ?? null,
+    kind: transport && isPersonalKind(transport.kind) ? transport.kind : null,
     server: transport?.server ?? null,
     target: transport ? maskTarget(transport.kind, transport.target) : null,
     last: last ? { at: last.at, event: last.event, ok: last.ok, status: last.status, error: last.error } : null,
   };
 }
 
-/** What `PUT /v1/me/notifications` is given: null clears the channel; an absent or empty target keeps the one saved, for the same kind. */
+/**
+ * What `PUT /v1/me/notifications` is given: null clears the channel; an absent
+ * or empty target keeps the one saved, for the same kind. `kind` and `server`
+ * are taken as sent, so a webhook or a server is refused in words rather
+ * than dropped.
+ */
 export interface PersonalNotificationInput {
-  kind: TransportKind | null;
+  kind: string | null;
   server?: string;
   target?: string;
 }
 
 /** What a save of Your channel changed, as it is audited: never the target. */
 export interface PersonalNotificationChange {
-  kind: TransportKind | null;
+  kind: PersonalKind | null;
   targetChanged: boolean;
 }
 
 /**
- * Saves one person's own channel: the kind and server to their entry in
- * `personNotify`, the target to `notify-target:person:<id>` only. The same
- * refusals as the install's channel, in the same words. The setting is one
- * row for everyone, so it is read and written under one lock.
+ * Saves one person's own channel: the kind to their entry in `personNotify`,
+ * the target to `notify-target:person:<id>` only. Only an ntfy topic, on the
+ * install's server, or a hooks.slack.com URL (`PERSONAL_KINDS`). The setting
+ * is one row for everyone, so it is read and written under one lock.
  */
 export async function savePersonalNotification(
   store: NotifyStore,
@@ -735,18 +783,20 @@ export async function savePersonalNotification(
   by: string,
   now: Date = new Date(),
 ): Promise<{ ok: false; error: string } | { ok: true; change: PersonalNotificationChange }> {
-  if (input.kind !== null && !(TRANSPORT_KINDS as readonly string[]).includes(input.kind)) return { ok: false, error: 'Choose ntfy, Slack or a webhook' };
+  if (input.kind !== null && !isPersonalKind(input.kind)) return { ok: false, error: PERSONAL_KIND_REFUSAL };
+  if (typeof input.server === 'string' && input.server.trim()) return { ok: false, error: PERSONAL_SERVER_REFUSAL };
+  const wanted = input.kind as PersonalKind | null;
   return store.lockPeople(async () => {
     const all = parsePersonNotify(await store.personSetting());
     const stored = all.people[personId] ?? null;
-    if (input.kind === null) {
+    if (wanted === null) {
       if (!stored && !(await store.personTarget(personId))) return { ok: true, change: { kind: null, targetChanged: false } };
       delete all.people[personId];
       await store.setPersonTarget(personId, null);
       await store.writePerson(Object.keys(all.people).length > 0 ? JSON.stringify(all) : '', by);
       return { ok: true, change: { kind: null, targetChanged: true } };
     }
-    const kind = input.kind;
+    const kind = wanted;
     const saved = await store.personTarget(personId);
     const given = typeof input.target === 'string' ? input.target.trim() : '';
     if (!given && !(stored?.kind === kind && saved)) {
@@ -755,22 +805,16 @@ export async function savePersonalNotification(
         error: stored ? `Enter the ${TARGET_WORDS[kind]}: the one saved is kept only when the kind stays ${stored.kind}` : `Enter the ${TARGET_WORDS[kind]}`,
       };
     }
-    if (given) {
-      const refusal = targetRefusal(kind, given);
-      if (refusal) return { ok: false, error: refusal };
-    }
-    let server: string | undefined;
-    if (kind === 'ntfy') {
-      const origin = ntfyOrigin((typeof input.server === 'string' ? input.server.trim() : '') || (stored?.kind === 'ntfy' ? stored.server ?? '' : '') || NTFY_SERVER);
-      if (!origin) return { ok: false, error: SERVER_REFUSAL };
-      server = origin;
-    }
+    // The one kept is checked too: a target saved under rules since tightened
+    // is not carried into a new save.
+    const refusal = personalTargetRefusal(kind, given || saved || '');
+    if (refusal) return { ok: false, error: refusal };
     const targetChanged = given ? given !== saved : false;
-    const moved = !stored || stored.kind !== kind || (stored.server ?? null) !== (server ?? null) || targetChanged;
+    const moved = !stored || stored.kind !== kind || targetChanged;
     // The secret first, as for the install's: an entry with no target reads as no channel.
     if (targetChanged) await store.setPersonTarget(personId, given);
     if (moved) {
-      all.people[personId] = { kind, ...(server ? { server } : {}), setAt: now.toISOString() };
+      all.people[personId] = { kind, setAt: now.toISOString() };
       await store.writePerson(JSON.stringify(all), by);
     }
     return { ok: true, change: { kind, targetChanged } };
