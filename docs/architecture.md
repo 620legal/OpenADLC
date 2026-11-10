@@ -530,6 +530,49 @@ none yet, says its kind of work instead ("writing the change").
    changes on a pull request no builder holds, the bridge comments, labels it
    `needs-human` and records `review.stalled`, once for each head, so it shows
    as a stalled review.
+
+   A head that conflicts with its base is resolved before any seat is asked
+   ([ADR 0042](adr/0042-a-conflicting-head-is-resolved-before-review.md)).
+   After the local-CI hold, the review start reads the pull request's
+   mergeability once (`mergeabilityOf`, `apps/bridge/src/mergeability.ts`).
+   Conflicting is `mergeable: false` or `mergeable_state: dirty`. Unknown is
+   `mergeable` null with the state `unknown` or none. Every other state is
+   not a conflict. This applies to an issue's pull request, whoever pushed.
+   It does not apply to the merge line's own update, to a lead-only
+   resolution, or to a crew branch with no issue (an ADR, a QA suite), which
+   are reviewed as before.
+   - A mergeable head is reviewed in the same delivery, with no wait.
+   - A conflicting head asks no seat. `review-gate` stays pending ("conflicts
+     with `<base>`: the builder merges it in before review"), the card stays
+     where it is, and `ConflictRounds.start({ beforeReview: true })` opens the
+     resolution round below. That round uses none of the loop's `maxRounds`,
+     and its push is always reviewed in full. Its `conflict.sent_back` carries
+     `why` "it conflicted before any review", which Insights does not count as
+     sent back. A pull request already being resolved gets no second round.
+   - An unknown head sets the gate pending ("waiting for GitHub to say whether
+     it conflicts with `<base>`") and is held off the delivery. GitHub fails a
+     delivery after 10 s, and a wait inside one would be redelivered and
+     start the review twice. `MergeabilityWait` re-reads every 5 s. A
+     definite answer decides as above. Once 60 s have passed since the first
+     unknown read, the reviews start as before. A head that moved, closed or
+     went to draft meanwhile is left to the newer delivery. It records
+     `review.mergeability_waiting` `{repo, repoFullName, pr, head, at}` and
+     `review.mergeability_decided`
+     `{repo, pr, head, answer: conflicting | mergeable | unknown | moved, waitedMs, at}`.
+     At start-up, a wait with no decision is read once and decided at once.
+
+   A head that GitHub reports conflicting only after its wait timed out is
+   caught by the next push, by the patch-round notice below, or by the merge
+   line's own update. A builder usually pushes from its running `implement`
+   task, so a resolution round opened at that push finds the seat busy. It
+   is started when the seat frees, by the `StageRunner`
+   (`ConflictRounds.waitingSeats` and `startWaiting`, rebuilt from
+   `conflict.resolving` at start-up by `load`). The recovery runs a failed
+   `resolve-conflict` task again with its card in Build or Review. Every
+   patch round, whatever started it (findings, missing local CI, red CI, a
+   person's message), reads the pull request once. When it conflicts, the
+   round gets `conflict.md`: merge the base first, not a rebase, then do the
+   rest of the round.
 6. **Merge.** A pull request whose `review-gate` passes joins the **merge line**:
    one repository at a time, the bridge brings the front one up to date with
    the base branch, with the builder's credential (the automation account's

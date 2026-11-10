@@ -54,6 +54,10 @@ import {
   REPO_DEFAULTS,
 } from '@openadlc/shared';
 import { touchesConfig, type GitHubClient } from '@openadlc/github';
+import { mergeabilityOf, type Decide, type MergeabilityWait } from './mergeability.js';
+
+/** A repository as the store reads it. */
+type RepoRow = NonNullable<Awaited<ReturnType<typeof repos.getRepoByName>>>;
 import { ABANDONED_STOP, abandonMoveReason, howClosed, isAbandonMove, putAbandonedLabel, type HowClosed } from './abandoned.js';
 import type { Attribution } from './attribution.js';
 import type { Automation } from './automation.js';
@@ -1928,7 +1932,17 @@ export class Webhooks {
     return true;
   }
 
-  private conflicts: Pick<ConflictRounds, 'pushed' | 'resolving'> | null = null;
+  private conflicts: (Pick<ConflictRounds, 'pushed' | 'resolving'> & Partial<Pick<ConflictRounds, 'start'>>) | null = null;
+  private mergeability: Pick<MergeabilityWait, 'hold' | 'resume'> | null = null;
+
+  /**
+   * Holds a head GitHub has not computed mergeability for, off the delivery;
+   * set once at start-up (main.ts). Without it the review start reads no
+   * mergeability, as before ADR 0042.
+   */
+  useMergeabilityWait(wait: Pick<MergeabilityWait, 'hold' | 'resume'>): void {
+    this.mergeability = wait;
+  }
   private stacks: Pick<Stacking, 'pushed'> | null = null;
 
   /** Tells a stacked pull request's update onto the base from any other push; set once at start-up (main.ts). */
@@ -1937,7 +1951,7 @@ export class Webhooks {
   }
 
   /** Tells a push that resolves a merge-line conflict from any other; set once at start-up (main.ts). */
-  useConflictRounds(rounds: Pick<ConflictRounds, 'pushed' | 'resolving'>): void {
+  useConflictRounds(rounds: Pick<ConflictRounds, 'pushed' | 'resolving'> & Partial<Pick<ConflictRounds, 'start'>>): void {
     this.conflicts = rounds;
   }
 
@@ -2534,6 +2548,150 @@ export class Webhooks {
       }
     }
 
+    // A head that conflicts with its base is resolved before any seat is
+    // asked (ADR 0042): #257 conflicted with main once #256 merged, and three
+    // seats reviewed it on two heads only for the lead to block it each time
+    // on "not mergeable". An issue's pull request only, since a lease names
+    // the builder that resolves it; whoever pushed, since a conflict is the
+    // branch's. Not the line's own update, which the line handles, and not a
+    // resolution the lead re-checks, which is one.
+    if (forIssue && !lineUpdate && !resolution && this.mergeability) {
+      const held = await this.conflictCheck(repo, repoFullName, pr, forIssue);
+      if (held) return;
+    }
+
+    await this.openReviews(repo, repoFullName, pr, forIssue, resolution);
+  }
+
+  /**
+   * What the review start does with a head's mergeability, read once with no
+   * wait: a clean head is reviewed in this delivery; a conflicting one goes to
+   * its builder; an unknown one waits off the delivery, since GitHub fails one
+   * that takes longer than 10 s and sends it again (`mergeability.ts`). True
+   * when the reviews are not opened here.
+   */
+  private async conflictCheck(
+    repo: RepoRow,
+    repoFullName: string,
+    pr: NonNullable<WebhookPayload['pull_request']>,
+    forIssue: number,
+  ): Promise<boolean> {
+    const base = pr.base?.ref ?? repo.defaultBranch ?? 'main';
+    // Already being resolved — a stacked update that conflicted, or a round
+    // opened by an earlier push and still waiting on its builder: no second.
+    if (this.conflicts && (await this.conflicts.resolving(repo.name, pr.number).catch(() => false))) {
+      await this.automation.setReviewGate({
+        repoFullName,
+        prNumber: pr.number,
+        sha: pr.head.sha,
+        state: 'pending',
+        description: `conflicts with ${base}: the builder merges it in before review`,
+      });
+      return true;
+    }
+    const client = await asAutomation(this.automation['actors'], this.config).catch(() => null);
+    const now = client ? await client.getPullRequest(repoFullName, pr.number).catch(() => null) : null;
+    // Not readable is not known to conflict: reviewed as before.
+    if (!now) return false;
+    const answer = mergeabilityOf(now);
+    if (answer === 'mergeable') return false;
+    if (answer === 'conflicting') {
+      await this.holdForConflict(repo, repoFullName, pr, base);
+      return true;
+    }
+    await this.automation.setReviewGate({
+      repoFullName,
+      prNumber: pr.number,
+      sha: pr.head.sha,
+      state: 'pending',
+      description: `waiting for GitHub to say whether it conflicts with ${base}`,
+    });
+    await this.mergeability!.hold({ repo: repo.name, repoFullName, pr: pr.number, head: pr.head.sha }, this.decideMergeability(repo, pr, forIssue));
+    return true;
+  }
+
+  /** What a hold on a head's mergeability does once GitHub says, or the wait runs out. */
+  private decideMergeability(repo: RepoRow, pr: NonNullable<WebhookPayload['pull_request']>, forIssue: number): Decide {
+    return async (answer, now) => {
+      const base = now?.baseRef ?? pr.base?.ref ?? repo.defaultBranch ?? 'main';
+      // As GitHub has it now: its labels may have changed during the wait.
+      const current = now ? { ...pr, draft: now.draft, labels: now.labels.map((name) => ({ name })), base: { ref: base } } : pr;
+      if (answer === 'conflicting') return this.holdForConflict(repo, repo.fullName, current, base);
+      // Mergeable, or still unknown once the wait ran out: reviewed as before.
+      // One GitHub later finds conflicting is caught by the next push, the
+      // patch round's notice, or the merge line's own update.
+      await this.openReviews(repo, repo.fullName, current, forIssue, null);
+    };
+  }
+
+  /**
+   * A head that conflicts goes back to its builder before any seat is asked:
+   * the short resolution round on just the conflicted files, which uses none
+   * of the review loop's rounds (`ConflictRounds.start`), and the reviews run
+   * in full once it is pushed. The card stays where it is.
+   */
+  private async holdForConflict(repo: RepoRow, repoFullName: string, pr: NonNullable<WebhookPayload['pull_request']>, base: string): Promise<void> {
+    await this.automation.setReviewGate({
+      repoFullName,
+      prNumber: pr.number,
+      sha: pr.head.sha,
+      state: 'pending',
+      description: `conflicts with ${base}: the builder merges it in before review`,
+    });
+    await audit({ actor: 'bridge', action: 'review.held_for_conflict', target: `${repo.name}#${pr.number}`, payload: { sha: pr.head.sha, base } }).catch(() => undefined);
+    if (this.conflicts?.start) {
+      const result = await this.conflicts.start({ repoName: repo.name, prNumber: pr.number, baseRef: base, beforeReview: true }).catch((error: unknown) => {
+        console.warn(`[bridge] ${repoFullName}#${pr.number}: resolution round not opened: ${error instanceof Error ? error.message : error}`);
+        return null;
+      });
+      if (result) {
+        console.log(`[bridge] ${repoFullName}#${pr.number}: conflicts with ${base}; no seat is asked until it is resolved (${result})`);
+        return;
+      }
+    }
+    const client = await asAutomation(this.automation['actors'], this.config);
+    await this.patchRound(repo, repoFullName, pr, await bots.listBots(), client, {
+      by: 'openadlc',
+      reason: `#${pr.number} conflicts with ${base}, so no reviewer was asked. Merge ${base} into the branch and resolve the conflicts, run openadlc-ci, and push.`,
+    });
+  }
+
+  /**
+   * At start-up: each head a restart left waiting on GitHub's mergeability is
+   * read once and decided at once (`MergeabilityWait.resume`).
+   */
+  async resumeMergeabilityWaits(): Promise<string[]> {
+    if (!this.mergeability) return [];
+    return this.mergeability.resume(async (answer, now, hold) => {
+      if (!now) return;
+      const repo = await repos.getRepoByName(hold.repo).catch(() => null);
+      if (!repo) return;
+      const forIssue = issueNumberFromBranch(now.headRef);
+      if (!forIssue) return;
+      const pr: NonNullable<WebhookPayload['pull_request']> = {
+        number: now.number,
+        title: '',
+        draft: now.draft,
+        head: { sha: now.headSha, ref: now.headRef },
+        base: { ref: now.baseRef },
+        labels: now.labels.map((name) => ({ name })),
+        html_url: '',
+      };
+      await this.decideMergeability(repo, pr, forIssue)(answer, now, hold);
+    });
+  }
+
+  /**
+   * The review round on a head: its card to Review, its files, its seats
+   * asked and its gate set. A lead-only resolution asks the lead alone.
+   */
+  private async openReviews(
+    repo: RepoRow,
+    repoFullName: string,
+    pr: NonNullable<WebhookPayload['pull_request']>,
+    forIssue: number | null,
+    resolution: { before: string; files: string[]; at: string } | null,
+  ): Promise<void> {
     // A build already running when a person labelled its issue `openadlc:ignore`
     // finishes and opens its pull request; that is the task ending, not the
     // crew being let back in, so the issue stays where it is. The pull

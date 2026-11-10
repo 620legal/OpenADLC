@@ -1,4 +1,4 @@
-import { bots, leases, listEventsOfTypeWith, recordEvent, repos } from '@openadlc/db';
+import { bots, leases, listEventsOfType, listEventsOfTypeWith, recordEvent, repos } from '@openadlc/db';
 import type { GitHubClient } from '@openadlc/github';
 import { allShared, readDeliveryRulesFile, resolutionPolicyStrict, type ContextDocument } from '@openadlc/shared';
 import { mayDefineCi } from './automation.js';
@@ -39,6 +39,8 @@ export const CONFLICT_SENT_BACK = 'conflict.sent_back';
 export const FULL_REVIEW_WHY = {
   notShared: 'a conflicted file is not a shared one',
   beyondTheConflict: 'the resolution changed files beyond the conflict',
+  /** Opened at the review start, before any seat was asked (ADR 0042): nothing was sent back. */
+  beforeReview: 'it conflicted before any review',
 } as const;
 
 export type ResolutionReview = 'lead-only' | 'full';
@@ -53,6 +55,8 @@ interface ResolvingPayload {
   prFiles: string[];
   /** The branch it conflicts with; absent on a round recorded before it was kept. */
   base?: string;
+  /** The builder it was given to; absent on a round recorded before it was kept. */
+  botId?: string;
   /**
    * Set while the round has not started: `busy`, its builder or every host
    * had no room, and the merge sweep starts it once there is; `blocked`, the
@@ -60,6 +64,11 @@ interface ResolvingPayload {
    * hostd's refusal), which Try again or the recovery runs again.
    */
   pending?: 'busy' | 'blocked';
+  /**
+   * Opened at the review start, before any seat was asked (ADR 0042): always
+   * a full review after, since there is no approval to carry.
+   */
+  beforeReview?: boolean;
   at: string;
 }
 
@@ -104,6 +113,67 @@ export interface ConflictRoundDeps {
 export class ConflictRounds {
   constructor(private readonly deps: ConflictRoundDeps) {}
 
+  /**
+   * Rounds waiting on a busy builder, by `repo#pr`: the builder's id, the base
+   * and whether it is before review. The merge sweep starts one again only for
+   * a pull request whose gate passed (`MergeLine.enter`), and a round opened
+   * before review has no passed gate: it would never have started. The
+   * `StageRunner` asks for these when the builder's seat frees, which reads
+   * them without waiting on the database (`waitingSeats`).
+   */
+  private readonly waiting = new Map<string, { repo: string; pr: number; botId: string; base: string; beforeReview: boolean }>();
+
+  /** The builders a resolution round waits on, by bot id. */
+  waitingSeats(): string[] {
+    return [...new Set([...this.waiting.values()].map((round) => round.botId))];
+  }
+
+  /**
+   * Starts again each round waiting on one of these seats; what was done, a
+   * line each. A round still turned away stays waiting.
+   */
+  async startWaiting(seats: readonly string[]): Promise<string[]> {
+    const free = new Set(seats);
+    const lines: string[] = [];
+    for (const [key, round] of [...this.waiting]) {
+      if (!free.has(round.botId)) continue;
+      // Resolved meanwhile — the builder merged the base in from the task it
+      // was busy with — or fallen back to the whole round: nothing to start.
+      const still = await this.pending(round.repo, round.pr);
+      if (still?.pending !== 'busy') {
+        this.waiting.delete(key);
+        lines.push(`${key}: resolution round no longer waiting`);
+        continue;
+      }
+      const result = await this.start({ repoName: round.repo, prNumber: round.pr, baseRef: round.base, beforeReview: round.beforeReview }).catch(
+        (error: unknown) => `failed: ${error instanceof Error ? error.message : error}`,
+      );
+      lines.push(`${key}: resolution round ${result}`);
+    }
+    return lines;
+  }
+
+  /**
+   * At start-up: the rounds recorded as waiting on a busy builder that are
+   * still open, so `waitingSeats` knows them after a restart.
+   */
+  async load(read: (type: string, since: Date) => Promise<{ at: string; payload: unknown }[]> = listEventsOfType): Promise<number> {
+    const since = new Date((this.deps.now?.() ?? Date.now()) - 7 * 24 * 60 * 60 * 1000);
+    const rows = await read(CONFLICT_RESOLVING, since).catch(() => []);
+    const seen = new Set<string>();
+    for (const row of rows) {
+      const payload = row.payload as ResolvingPayload;
+      if (!payload?.repo || typeof payload.pr !== 'number') continue;
+      const key = `${payload.repo}#${payload.pr}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const round = await this.pending(payload.repo, payload.pr);
+      if (round?.pending !== 'busy' || !round.botId) continue;
+      this.waiting.set(key, { repo: round.repo, pr: round.pr, botId: round.botId, base: round.base ?? 'main', beforeReview: Boolean(round.beforeReview) });
+    }
+    return this.waiting.size;
+  }
+
   private record(type: string, payload: object): Promise<unknown> {
     const write = this.deps.record ?? ((input: { type: string; payload: unknown }) => recordEvent({ source: 'platform', ...input }));
     return write({ type, payload }).catch(() => undefined);
@@ -127,9 +197,18 @@ export class ConflictRounds {
   /**
    * The branch conflicts with the base: open the resolution round, or fall
    * back to the whole round when there is no builder to give it to or the
-   * files cannot be told.
+   * files cannot be told. `beforeReview` is the review start's (ADR 0042):
+   * no seat has been asked yet, so the reviews after it run in full.
    */
-  async start(input: { repoName: string; prNumber: number; baseRef: string }): Promise<'resolving' | 'pending' | 'sent_back'> {
+  async start(input: { repoName: string; prNumber: number; baseRef: string; beforeReview?: boolean }): Promise<'resolving' | 'pending' | 'sent_back'> {
+    const key = `${input.repoName}#${input.prNumber}`;
+    const result = await this.open(input);
+    if (result !== 'pending') this.waiting.delete(key);
+    return result;
+  }
+
+  private async open(input: { repoName: string; prNumber: number; baseRef: string; beforeReview?: boolean }): Promise<'resolving' | 'pending' | 'sent_back'> {
+    const beforeReview = Boolean(input.beforeReview);
     const repo = await repos.getRepoByName(input.repoName);
     const client = repo ? await this.deps.client().catch(() => null) : null;
     const pull = repo && client ? await client.getPullRequest(repo.fullName, input.prNumber).catch(() => null) : null;
@@ -139,7 +218,9 @@ export class ConflictRounds {
       await this.deps.backToBuild({
         repoName: input.repoName,
         prNumber: input.prNumber,
-        reason: `The branch left the merge line: it conflicts with ${input.baseRef}. Bring it up to date and resolve it, run openadlc-ci, and push.`,
+        reason: beforeReview
+          ? `The branch conflicts with ${input.baseRef}, so no reviewer was asked. Merge ${input.baseRef} into it and resolve the conflicts, run openadlc-ci, and push.`
+          : `The branch left the merge line: it conflicts with ${input.baseRef}. Bring it up to date and resolve it, run openadlc-ci, and push.`,
       });
       return 'sent_back';
     };
@@ -163,7 +244,8 @@ export class ConflictRounds {
       .then((text) => ({ text }))
       .catch(() => null);
     const policy = rules ? resolutionPolicyStrict(rules.text) : null;
-    const review: ResolutionReview = policy && !files.some(reviewedInFull) && allShared(files, policy) ? 'lead-only' : 'full';
+    // Before any review there is no approval to carry: always in full.
+    const review: ResolutionReview = !beforeReview && policy && !files.some(reviewedInFull) && allShared(files, policy) ? 'lead-only' : 'full';
 
     const builder = await bots.getBotById(lease.botId).catch(() => null);
     if (!builder) return fallBack('the builder holding its issue is no longer in the crew');
@@ -184,7 +266,7 @@ export class ConflictRounds {
         // Only the conflicted files: the round resolves, it does not rework.
         declaredPaths: files,
         whenBlocked: 'record',
-        extraContext: [resolutionBrief({ base: input.baseRef, files, review })],
+        extraContext: [resolutionBrief({ base: input.baseRef, files, review, beforeReview })],
       })
       // A start that answered with an error recorded a failed task that says
       // why: it was taken for a started round, which said "resolving" while
@@ -208,15 +290,21 @@ export class ConflictRounds {
       head: pull.headSha,
       prFiles: prFiles ?? [],
       base: input.baseRef,
+      botId: builder.id,
+      ...(beforeReview ? { beforeReview: true } : {}),
       at: this.at(),
     };
     if ('pending' in opened) {
+      // Busy waits on the builder's seat; blocked on Try again or the recovery.
+      if (opened.pending === 'busy') {
+        this.waiting.set(`${repo.name}#${input.prNumber}`, { repo: repo.name, pr: input.prNumber, botId: builder.id, base: input.baseRef, beforeReview });
+      } else this.waiting.delete(`${repo.name}#${input.prNumber}`);
       // Kept out of the merge line until it can start (`MergeLine.enter`), and
       // said once: the merge sweep asks again every few minutes.
       const already = await this.unstarted(repo.name, input.prNumber);
       if (already?.pending !== opened.pending) await this.record(CONFLICT_RESOLVING, { ...round, pending: opened.pending });
       if (!already) console.log(`[bridge] ${repo.name}#${input.prNumber}: conflicts with ${input.baseRef}; its resolution round waits to start (${opened.pending})`);
-      return 'pending';
+      return 'pending' as const;
     }
 
     await this.record(CONFLICT_RESOLVING, round);
@@ -225,10 +313,12 @@ export class ConflictRounds {
       .comment(
         repo.fullName,
         input.prNumber,
-        `This conflicts with ${input.baseRef} in ${files.map((file) => `\`${file}\``).join(', ')}. The builder is resolving just those files; ` +
-          (review === 'lead-only'
-            ? 'they are files many changes add to, so the lead re-checks the resolution and has to approve it before this merges; the other approvals stand.'
-            : 'the reviews run again once it is resolved.'),
+        `This conflicts with ${input.baseRef} in ${files.map((file) => `\`${file}\``).join(', ')}. The builder is resolving just those files` +
+          (beforeReview
+            ? ' before any reviewer is asked; the reviews run once it is resolved.'
+            : review === 'lead-only'
+              ? '; they are files many changes add to, so the lead re-checks the resolution and has to approve it before this merges; the other approvals stand.'
+              : '; the reviews run again once it is resolved.'),
       )
       .catch(() => undefined);
     return 'resolving';
@@ -282,7 +372,11 @@ export class ConflictRounds {
         pr: input.prNumber,
         issue: resolving.issue,
         files: resolving.files,
-        why: resolving.review === 'full' ? FULL_REVIEW_WHY.notShared : FULL_REVIEW_WHY.beyondTheConflict,
+        why: resolving.beforeReview
+          ? FULL_REVIEW_WHY.beforeReview
+          : resolving.review === 'full'
+            ? FULL_REVIEW_WHY.notShared
+            : FULL_REVIEW_WHY.beyondTheConflict,
         at: this.at(),
       });
     }
@@ -442,12 +536,12 @@ export async function resolutionRetry(
     .filter(({ payload }) => payload?.repo === repoName && payload.pr === prNumber && Array.isArray(payload.files) && payload.files.length > 0)
     .sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
   if (!newest) return null;
-  const { files, review, base } = newest.payload;
-  return { files, brief: resolutionBrief({ base: base ?? defaultBase, files, review }) };
+  const { files, review, base, beforeReview } = newest.payload;
+  return { files, brief: resolutionBrief({ base: base ?? defaultBase, files, review, beforeReview: Boolean(beforeReview) }) };
 }
 
 /** What the builder is told the round is for. */
-function resolutionBrief(input: { base: string; files: string[]; review: ResolutionReview }): ContextDocument {
+function resolutionBrief(input: { base: string; files: string[]; review: ResolutionReview; beforeReview?: boolean }): ContextDocument {
   return {
     name: 'resolve-conflict.md',
     title: 'Resolve the conflict with the base',
@@ -458,7 +552,9 @@ function resolutionBrief(input: { base: string; files: string[]; review: Resolut
       '',
       `Merge \`${input.base}\` into your branch and resolve only these files, keeping what both sides meant: usually both sides' additions, in a sensible order. Change nothing else. Commit the merge, then run \`openadlc-ci\` on it and push.`,
       '',
-      input.review === 'lead-only'
+      input.beforeReview
+        ? 'No one has reviewed this yet: once you push, the reviews run.'
+        : input.review === 'lead-only'
         ? 'These are files many changes add to: the lead re-checks your resolution, and the other approvals stand if you change nothing but these files and what the base brought. Anything else you change makes it a full review again.'
         : 'Once you push, the reviews run again in full.',
     ].join('\n'),

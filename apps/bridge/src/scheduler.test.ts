@@ -2860,6 +2860,23 @@ describe('a task that failed for something a health check proves, once that chec
     await run(['bot-sign-in:bot-atlas']);
     expect(retry).not.toHaveBeenCalled();
   });
+
+  it('runs a conflict resolution round again with its card in Build, where the review start opened it before any seat', async () => {
+    // Opened before review, the card stays in Build: held as Review work, the
+    // round was never run again and the pull request waited unreviewed.
+    store.tasks = [failed({ botId: 'bot-atlas', kind: 'patch', skill: 'resolve-conflict', exitReason: 'git push failed: remote: Bad credentials' })];
+    store.issues = [{ repoName: 'openadlc-testbed', number: 1, prNumber: 2, stage: 'build', labels: [] }];
+    const { retry, run } = recovering();
+
+    await run(['bot-sign-in:bot-atlas']);
+
+    expect(retry).toHaveBeenCalledWith('t1', RECOVERY_ACTOR);
+    // Moved on past both, it is held.
+    store.issues = [{ repoName: 'openadlc-testbed', number: 1, prNumber: 2, stage: 'merged', labels: [] }];
+    retry.mockClear();
+    await run(['bot-sign-in:bot-atlas']);
+    expect(retry).not.toHaveBeenCalled();
+  });
 });
 
 describe('the sweep that comes back for a failed task the recovery could not run', () => {

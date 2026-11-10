@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { CONFLICT_RESOLVED, CONFLICT_RESOLVING, CONFLICT_SENT_BACK, ConflictRounds, leadOnlyResolutionTo, resolutionRetry } from './conflict-round.js';
+import { CONFLICT_RESOLVED, CONFLICT_RESOLVING, CONFLICT_SENT_BACK, ConflictRounds, FULL_REVIEW_WHY, leadOnlyResolutionTo, resolutionRetry } from './conflict-round.js';
 import { BotBusyError, HostFullError } from './task-service.js';
 
 const REPO = { id: 'repo-1', name: 'shop', fullName: 'janedoe/shop', defaultBranch: 'main' };
@@ -399,5 +399,103 @@ describe('a resolution round that cannot start yet', () => {
     expect(again?.brief).toMatchObject({ name: 'resolve-conflict.md' });
     expect(again?.brief.content).toContain('Your branch conflicts with `release` in:');
     expect(await resolutionRetry('shop', 32, 'main', read)).toBeNull();
+  });
+});
+
+describe('a branch that conflicts before any seat reviewed it', () => {
+  beforeEach(() => {
+    world.lease = { id: 'lease-7', botId: 'bot-1' };
+  });
+
+  const briefOf = (open: ReturnType<typeof rounds>['open']) =>
+    (open.mock.calls[0] as unknown as [{ extraContext: { name: string; content: string }[] }])[0].extraContext.find((doc) => doc.name === 'resolve-conflict.md');
+
+  it('is always reviewed in full after, even in files the repository calls shared, and says no one has reviewed it', async () => {
+    // README.md alone conflicts, which the defaults call shared: at the front
+    // of the line that is a lead-only re-check, but before review there is no
+    // approval to carry.
+    const { subject, open, client, events } = rounds();
+
+    expect(await subject.start({ repoName: 'shop', prNumber: 31, baseRef: 'main', beforeReview: true })).toBe('resolving');
+
+    expect(events[0]?.payload).toMatchObject({ review: 'full', beforeReview: true, files: ['README.md'] });
+    expect(briefOf(open)?.content).toContain('No one has reviewed this yet: once you push, the reviews run.');
+    expect(client.comment).toHaveBeenCalledWith(
+      'janedoe/shop',
+      31,
+      expect.stringContaining('The builder is resolving just those files before any reviewer is asked; the reviews run once it is resolved.'),
+    );
+  });
+
+  it('is not counted as sent back once its resolution is pushed', async () => {
+    const { subject, events } = rounds();
+    await subject.start({ repoName: 'shop', prNumber: 31, baseRef: 'main', beforeReview: true });
+
+    const review = await subject.pushed({ repoName: 'shop', repoFullName: 'janedoe/shop', prNumber: 31, before: BEFORE, after: AFTER, baseRef: 'main', prFiles: ['README.md', 'src/cart.ts'] });
+
+    expect(review?.review).toBe('full');
+    expect(events.find((event) => event.type === CONFLICT_SENT_BACK)?.payload).toMatchObject({ why: FULL_REVIEW_WHY.beforeReview });
+  });
+
+  it('waits on a busy builder, and starts when its seat frees, keeping that it is before review', async () => {
+    const { subject, open, events } = rounds();
+    open.mockRejectedValueOnce(new BotBusyError('atlas'));
+
+    expect(await subject.start({ repoName: 'shop', prNumber: 31, baseRef: 'main', beforeReview: true })).toBe('pending');
+    expect(subject.waitingSeats()).toEqual(['bot-1']);
+
+    // Another seat freeing starts nothing.
+    expect(await subject.startWaiting(['bot-2'])).toEqual([]);
+    expect(open).toHaveBeenCalledTimes(1);
+
+    const lines = await subject.startWaiting(['bot-1']);
+
+    expect(lines).toEqual(['shop#31: resolution round resolving']);
+    expect(open).toHaveBeenCalledTimes(2);
+    expect(subject.waitingSeats()).toEqual([]);
+    expect(events.at(-1)?.payload).toMatchObject({ beforeReview: true, review: 'full' });
+    expect(events.at(-1)?.payload.pending).toBeUndefined();
+  });
+
+  it('stays waiting when the seat is still busy when asked', async () => {
+    const { subject, open } = rounds();
+    open.mockRejectedValueOnce(new BotBusyError('atlas'));
+    await subject.start({ repoName: 'shop', prNumber: 31, baseRef: 'main', beforeReview: true });
+    open.mockRejectedValueOnce(new BotBusyError('atlas'));
+
+    await subject.startWaiting(['bot-1']);
+
+    expect(subject.waitingSeats()).toEqual(['bot-1']);
+  });
+
+  it('knows the rounds waiting on a busy builder again after a restart', async () => {
+    const before = rounds();
+    before.open.mockRejectedValueOnce(new BotBusyError('atlas'));
+    await before.subject.start({ repoName: 'shop', prNumber: 31, baseRef: 'release', beforeReview: true });
+    // A round that started, and one blocked rather than busy, are not waiting on a seat.
+    await before.subject.start({ repoName: 'shop', prNumber: 32, baseRef: 'main' });
+    before.open.mockResolvedValueOnce({ taskId: 'task-3', session: null, error: 'held at a cap' } as never);
+    await before.subject.start({ repoName: 'shop', prNumber: 33, baseRef: 'main' });
+
+    // A fresh instance over the same events, as the bridge is after a restart.
+    const after = new ConflictRounds({
+      taskService: { open: before.open } as never,
+      client: async () => before.client as never,
+      backToBuild: before.backToBuild,
+      record: async () => undefined,
+      events: async (type, about) =>
+        before.events.filter((event) => event.type === type && event.payload.repo === about.repo && event.payload.pr === about.pr).map(({ at, payload }) => ({ at, payload })),
+    });
+    const read = async (type: string) =>
+      before.events
+        .filter((event) => event.type === type)
+        .sort((a, b) => Date.parse(b.at) - Date.parse(a.at))
+        .map(({ at, payload }) => ({ at, payload }));
+
+    expect(await after.load(read)).toBe(1);
+    expect(after.waitingSeats()).toEqual(['bot-1']);
+
+    await after.startWaiting(['bot-1']);
+    expect(before.open).toHaveBeenLastCalledWith(expect.objectContaining({ subjectRef: 'shop#31', extraContext: [expect.objectContaining({ content: expect.stringContaining('`release`') })] }));
   });
 });

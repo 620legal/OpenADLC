@@ -851,6 +851,8 @@ export class GitHubClient {
     baseRef: string;
     labels: string[];
     mergeableState: string | null;
+    /** GitHub's `mergeable`: false when it conflicts, null while GitHub has not computed it for this head. */
+    mergeable: boolean | null;
     autoMerge: boolean;
     /** Who opened it. */
     author: string | null;
@@ -871,6 +873,7 @@ export class GitHubClient {
       base: { ref: string };
       labels: { name: string }[];
       mergeable_state?: string | null;
+      mergeable?: boolean | null;
       auto_merge?: unknown;
       user?: { login: string } | null;
       merged_by?: { login: string } | null;
@@ -888,6 +891,7 @@ export class GitHubClient {
       baseRef: pull.base.ref,
       labels: pull.labels.map((label) => label.name),
       mergeableState: pull.mergeable_state ?? null,
+      mergeable: typeof pull.mergeable === 'boolean' ? pull.mergeable : null,
       author: pull.user?.login ?? null,
       mergedBy: pull.merged_by?.login ?? null,
       autoMerge: Boolean(pull.auto_merge),
