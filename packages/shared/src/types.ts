@@ -227,6 +227,13 @@ export interface Task {
   endedAt: string | null;
   exitReason: string | null;
   costUsd: number;
+  /**
+   * Whether its runs are billed to an API key; false on a subscription seat,
+   * whose cost is an estimate. Absent from an older bridge, which billed all.
+   */
+  billed?: boolean;
+  /** The part of `costUsd` that was an estimate on a subscription, not billed. */
+  unbilledUsd?: number;
   round: number;
 }
 
@@ -299,13 +306,18 @@ export interface LedgerEntry {
   tokensIn: number;
   tokensOut: number;
   costUsd: number;
+  /** False for a run on a subscription seat: its cost is an estimate, not billed. Absent from an older bridge. */
+  billed?: boolean;
   at: string;
 }
 
 export interface BudgetState {
   period: string;
   capUsd: number;
+  /** Billed spend this month: runs on an API key. What the cap and warnings count. */
   spentUsd: number;
+  /** This month's estimated cost of runs on subscriptions, not billed and not capped. Absent from an older bridge. */
+  estimateUsd?: number;
   state: 'ok' | 'warning' | 'stopped';
 }
 

@@ -182,6 +182,7 @@ export function AppHeader({ page, repo = 'all', data }: { page: Page; repo?: str
           {data.spend && (
             <span>
               · {money(data.spend.spentUsd, { whole: data.spend.spentUsd === 0 })} of {money(data.spend.capUsd, { whole: true })}
+              {data.spend.estimateUsd ? <Estimate usd={data.spend.estimateUsd} /> : null}
             </span>
           )}
           {/* The board has its own row of what needs you right under this. */}
@@ -208,6 +209,15 @@ function StatusDot({ working, ready }: { working: boolean; ready: boolean }) {
   );
 }
 
+/**
+ * What runs on subscriptions would have cost, beside billed spend: never part
+ * of it, and never drawn on the cap's bar
+ * (docs/adr/0050-a-subscription-run-is-estimated-not-billed.md).
+ */
+function Estimate({ usd }: { usd: number }) {
+  return <span title="estimated on subscriptions, not billed"> · {money(usd)} est.</span>;
+}
+
 function Spend({ spend }: { spend: NonNullable<HeaderData['spend']> }) {
   const { percent, width, tone } = spendLevel(spend);
   return (
@@ -215,7 +225,10 @@ function Spend({ spend }: { spend: NonNullable<HeaderData['spend']> }) {
       className="hidden items-center gap-2 text-[12.5px] text-soft lg:flex"
       title={`${percent.toFixed(1)} percent of this month's cap`}
     >
-      {money(spend.spentUsd, { whole: spend.spentUsd === 0 })} of {money(spend.capUsd, { whole: true })}
+      <span>
+        {money(spend.spentUsd, { whole: spend.spentUsd === 0 })} of {money(spend.capUsd, { whole: true })}
+        {spend.estimateUsd ? <Estimate usd={spend.estimateUsd} /> : null}
+      </span>
       <span className="block h-1 w-14 overflow-hidden rounded-full bg-well">
         <span
           className={cn(

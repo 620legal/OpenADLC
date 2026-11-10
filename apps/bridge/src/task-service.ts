@@ -1699,7 +1699,7 @@ export class TaskService {
    * usage arrives after its gate paused the task), and no more in one report
    * than the cap plus one step, past which `stop` would already have tripped.
    */
-  async recordUsage(input: { taskId: string } & UsageReport): Promise<{ stop: boolean; spent: number; cap: number; stepUsd: number }> {
+  async recordUsage(input: { taskId: string } & UsageReport): Promise<UsageAnswer> {
     const problem = usageProblem(input as unknown as Record<string, unknown>);
     if (problem) throw new UsageRefusedError(problem);
     const task = await tasks.getTask(input.taskId);
@@ -1717,8 +1717,9 @@ export class TaskService {
     // global and repository per-task caps, not this task's, which a raise
     // has made larger.
     const stepUsd = await this.taskCap(task.repoId);
-    if (input.costUsd > task.costCapUsd + stepUsd) {
-      throw new UsageRefusedError(`costUsd must be at most ${task.costCapUsd + stepUsd}, the task's cap and one step: no one engine call costs more`);
+    const cap = stopAtUsd(task, stepUsd);
+    if (input.costUsd > cap + stepUsd) {
+      throw new UsageRefusedError(`costUsd must be at most ${cap + stepUsd}, where the task stops and one step: no one engine call costs more`);
     }
 
     await costs.recordUsage({
@@ -1730,21 +1731,25 @@ export class TaskService {
       tokensIn: input.tokensIn,
       tokensOut: input.tokensOut,
       costUsd: input.costUsd,
+      // As hostd read the bot's account when this session started; never
+      // from the report, or a session could turn its own cap off.
+      billed: task.billed !== false,
     });
-    const spent = await tasks.addTaskCost(task.id, input.costUsd);
+    const spent = await tasks.addTaskCost(task.id, input.costUsd, task.billed !== false);
 
     const period = costs.currentPeriod();
     await costs.ensureBudget(period, this.config.costs.monthlyCapUsd, this.config.costs.warningAt);
 
-    return { stop: spent >= task.costCapUsd, spent, cap: task.costCapUsd, stepUsd };
+    return { stop: spent >= cap, spent, cap, stepUsd, billed: task.billed !== false };
   }
 
-  async headroom(taskId: string, estimateUsd: number): Promise<{ stop: boolean; spent: number; cap: number; stepUsd: number }> {
+  async headroom(taskId: string, estimateUsd: number): Promise<UsageAnswer> {
     const task = await tasks.getTask(taskId);
     if (!task) throw new Error('unknown task');
     const spent = await costs.taskSpend(taskId);
     const stepUsd = await this.taskCap(task.repoId);
-    return { stop: spent + estimateUsd > task.costCapUsd, spent, cap: task.costCapUsd, stepUsd };
+    const cap = stopAtUsd(task, stepUsd);
+    return { stop: spent + estimateUsd > cap, spent, cap, stepUsd, billed: task.billed !== false };
   }
 
   /**
@@ -1757,6 +1762,39 @@ export class TaskService {
     await spendingLimits.seedGlobal(this.config.costs.monthlyCapUsd, fallback);
     return spendingLimits.effectiveTaskCap(repoId, fallback);
   }
+}
+
+/**
+ * What `/usage` and `/headroom` answer. `cap` is where this task stops: its
+ * cap on a billed run, the runaway guard on a subscription run. `billed` says
+ * which, so the runner can say so in its prompt.
+ */
+export interface UsageAnswer {
+  stop: boolean;
+  spent: number;
+  cap: number;
+  stepUsd: number;
+  billed: boolean;
+}
+
+/**
+ * How many per-task caps a subscription run may reach, as an estimate, before
+ * it is stopped with the same cap question. A subscription bills no money per
+ * call, so only a loop is worth stopping: the largest real task so far was
+ * about $36 estimated. Fixed by the person who filed #285.
+ */
+export const RUNAWAY_GUARD_MULTIPLE = 10;
+
+/**
+ * Where a task stops: its cap on a billed run; on a subscription run its cap
+ * plus nine steps, which is 10× the per-task cap when it starts ($150 at $15).
+ * Additive rather than 10 × the cap, so a "continue for another $15" moves the
+ * guard by the $15 the question names, not by $150
+ * (docs/adr/0050-a-subscription-run-is-estimated-not-billed.md).
+ */
+export function stopAtUsd(task: { costCapUsd: number; billed?: boolean }, stepUsd: number): number {
+  // Only an explicit false is a subscription: a row that does not say is billed.
+  return task.billed === false ? task.costCapUsd + (RUNAWAY_GUARD_MULTIPLE - 1) * stepUsd : task.costCapUsd;
 }
 
 /** How far back a dismissal's asking again is looked for: GitHub redelivers within days. */

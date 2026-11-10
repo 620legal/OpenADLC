@@ -15,6 +15,7 @@ import {
   cardWork,
   ignoredSubjects,
   isActive,
+  estimateOf,
   issueForSubject,
   repoOfSubject,
   REVIEW_STALLED,
@@ -162,6 +163,8 @@ export interface RequestCard {
    */
   issues: { repo: string; number: number; url: string | null }[];
   costUsd: number;
+  /** The part of `costUsd` that ran on a subscription: an estimate, not billed. */
+  estimateUsd: number;
   active: BoardTask[];
   last: CardTask | null;
 }
@@ -568,6 +571,7 @@ export function boardWork(input: BoardWorkInput): BoardWork {
       number: pull.number,
       prNumber: pull.number,
       costUsd: Math.round(mine.reduce((total, task) => total + task.costUsd, 0) * 10_000) / 10_000,
+      estimateUsd: estimateOf(mine),
       active,
       last: ended ? asCardTask(ended, botName) : null,
       reviewRound: null,
@@ -637,6 +641,7 @@ export function boardWork(input: BoardWorkInput): BoardWork {
       issueNumber: issues[0]?.number ?? null,
       issues,
       costUsd: Math.round(mine.reduce((total, task) => total + task.costUsd, 0) * 10_000) / 10_000,
+      estimateUsd: estimateOf(mine),
       active: active.map(onCard),
       last: ended[0] ? asCardTask(ended[0], botName) : null,
     });
@@ -1172,7 +1177,7 @@ export function loosePulls(
   });
 }
 
-type GroupableCard = { ref: string; repo: string; assignees: string[]; gateOpen: boolean; costUsd?: number; active?: CardTask[] };
+type GroupableCard = { ref: string; repo: string; assignees: string[]; gateOpen: boolean; costUsd?: number; estimateUsd?: number; active?: CardTask[] };
 
 /**
  * One card per work item (docs/adr/0009-work-items.md).
@@ -1265,6 +1270,9 @@ function summed<C extends Partial<GroupableCard>>(card: C, others: readonly Grou
   merged.gateOpen = all.some((one) => one.gateOpen);
   if (all.some((one) => one.costUsd !== undefined)) {
     merged.costUsd = Math.round(all.reduce((total, one) => total + (one.costUsd ?? 0), 0) * 10_000) / 10_000;
+  }
+  if (all.some((one) => one.estimateUsd !== undefined)) {
+    merged.estimateUsd = Math.round(all.reduce((total, one) => total + (one.estimateUsd ?? 0), 0) * 10_000) / 10_000;
   }
   if (all.some((one) => one.active)) merged.active = all.flatMap((one) => one.active ?? []);
   return merged;

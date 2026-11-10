@@ -214,7 +214,26 @@ function messageTurn(fence: string, messages: readonly string[]): string {
   ].join('\n');
 }
 
-function buildPrompt(env: RunnerEnv, skillDir: string, policy: ToolsPolicy, fence: string, messages: readonly string[] = []): string {
+/**
+ * The prompt's line about spend. A subscription run is not billed: its cost is
+ * an estimate, and only the runaway guard stops it, so telling it a $15 cap
+ * would make it stop and ask well before anything stops it
+ * (docs/adr/0050-a-subscription-run-is-estimated-not-billed.md).
+ */
+export function capLine(cap: { usd: number; billed: boolean }): string {
+  return cap.billed
+    ? `your spend cap for this task is $${cap.usd}`
+    : `this task runs on a subscription: its cost is an estimate, not billed, and it is stopped at a runaway guard of $${cap.usd} estimated`;
+}
+
+function buildPrompt(
+  env: RunnerEnv,
+  skillDir: string,
+  policy: ToolsPolicy,
+  fence: string,
+  messages: readonly string[] = [],
+  cap: { usd: number; billed: boolean } = { usd: env.costCap, billed: true },
+): string {
   const parts: string[] = [];
   const skillDoc = join(skillDir, 'SKILL.md');
   if (existsSync(skillDoc)) parts.push(readFileSync(skillDoc, 'utf8'));
@@ -270,7 +289,7 @@ function buildPrompt(env: RunnerEnv, skillDir: string, policy: ToolsPolicy, fenc
       // a builder dropped its plan's heading to get one through.
       'anything longer than a line that you post to GitHub — a comment, a pull request, a review, an issue — you write to a file under .openadlc-scratch/ and give with --body-file; nothing there is committed',
       DATA_NOT_INSTRUCTIONS,
-      `stop and ask rather than guessing; your spend cap for this task is $${env.costCap}`,
+      `stop and ask rather than guessing; ${capLine(cap)}`,
     ]
       .filter(Boolean)
       .join('\n'),
@@ -365,6 +384,19 @@ async function main(): Promise<void> {
   let lostTake: string | null = null;
 
   /**
+   * Where this task stops, as the bridge last answered: its cap on a billed
+   * run, the runaway guard on a subscription run. `env.costCap` is only what a
+   * bridge that does not say is taken to mean; the session never decides
+   * whether it is billed.
+   */
+  const cap = { usd: env.costCap, billed: true };
+  const noteCap = (answer: Record<string, unknown>) => {
+    const usd = Number(answer.cap);
+    if (answer.cap != null && Number.isFinite(usd) && usd > 0) cap.usd = usd;
+    if (typeof answer.billed === 'boolean') cap.billed = answer.billed;
+  };
+
+  /**
    * The one question a task at its cap asks; answering "continue" is what
    * raises the cap. What it adds is the install's per-task cap, which the
    * ledger says with every answer; a bridge that does not say is offered the
@@ -373,17 +405,18 @@ async function main(): Promise<void> {
    * would be the dead end the question exists to avoid.
    */
   const askAtCap = async (spentUsd: number, ledger: Record<string, unknown>): Promise<string | null> => {
+    noteCap(ledger);
     const opened = await post(
       env.bridgeUrl,
       `/internal/tasks/${env.taskId}/gate`,
       costCapGate({
-        capUsd: env.costCap,
+        capUsd: cap.usd,
         stepUsd: Number(ledger.stepUsd ?? env.costCap),
         spentUsd,
         subjectRef: env.subjectRef,
       }),
     );
-    return opened.gateId ? null : `stopped at the $${env.costCap} cost cap, and the bridge did not open the question that lets a person continue it`;
+    return opened.gateId ? null : `stopped at the $${cap.usd} cost cap, and the bridge did not open the question that lets a person continue it`;
   };
 
   // A session with no headroom used to pause with no question open, so there
@@ -392,6 +425,7 @@ async function main(): Promise<void> {
   // A bridge that does not answer is no headroom: the engine would run with
   // nothing to stop it at the cap.
   const room = await postLedger(env.bridgeUrl, `/internal/tasks/${env.taskId}/headroom`, () => ({ estimateUsd: 0.5 }), env.ledgerRetryMs);
+  if (room) noteCap(room);
   if (!room) {
     failed = 'the bridge did not say how much of the cost cap is left, so the engine was not started';
   } else if (room.stop === true) {
@@ -461,6 +495,7 @@ async function main(): Promise<void> {
     if (paused || failed) throw new Error(`the session stops here: ${failed || 'the task paused'}`);
     if (asked || sentBack) return null;
     const left = await postLedger(env.bridgeUrl, `/internal/tasks/${env.taskId}/headroom`, () => ({ estimateUsd: 0.5 }), env.ledgerRetryMs);
+    if (left) noteCap(left);
     if (!left || left.stop === true) return null;
     const messages = await takeInbox();
     if (!messages) {
@@ -480,7 +515,7 @@ async function main(): Promise<void> {
   // run, so it is not taken and lost.
   const waiting = paused || failed ? [] : await takeInbox();
   if (!waiting) failed = INBOX_NOT_TAKEN;
-  const prompt = buildPrompt(env, skillDir, policy, fence, waiting ?? []);
+  const prompt = buildPrompt(env, skillDir, policy, fence, waiting ?? [], cap);
 
   const events: AsyncIterable<EngineEvent> | EngineEvent[] = paused || failed
     ? []
@@ -493,7 +528,7 @@ async function main(): Promise<void> {
         env: {},
         model: recorded.model,
         tools: policy,
-        costHeadroomUsd: env.costCap,
+        costHeadroomUsd: cap.usd,
         ...(engine.takesMessages ? { nextTurn } : {}),
       });
 
@@ -608,12 +643,13 @@ async function main(): Promise<void> {
           `/internal/tasks/${env.taskId}/usage`,
           () => ({ ...unrecorded, engine: engine.name, model: recorded.model, modelAlias: recorded.modelAlias }),
           env.ledgerRetryMs,
-          () => unrecorded.costUsd >= env.costCap / 2,
+          () => unrecorded.costUsd >= cap.usd / 2,
         );
         if (!result) {
           failed = USAGE_NOT_RECORDED;
           break;
         }
+        noteCap(result);
         unrecorded.tokensIn = 0;
         unrecorded.tokensOut = 0;
         unrecorded.costUsd = 0;
@@ -626,9 +662,9 @@ async function main(): Promise<void> {
         // run reported as paused at the cap would do its work again on
         // "continue". The next run's headroom check asks instead.
         if (result.stop === true && event.final) {
-          console.log(`[skill] the run's totals reached the $${env.costCap} cap after it finished; $${spent.toFixed(2)} spent`);
+          console.log(`[skill] the run's totals reached the $${cap.usd} cap after it finished; $${spent.toFixed(2)} spent`);
         } else if (result.stop === true && !asked && !sentBack) {
-          console.log(`[skill] paused at the $${env.costCap} cap after $${spent.toFixed(2)}`);
+          console.log(`[skill] paused at the $${cap.usd} cap after $${spent.toFixed(2)}`);
           failed = await askAtCap(spent, result);
           paused = !failed;
         }

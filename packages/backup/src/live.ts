@@ -142,7 +142,7 @@ export async function readHistory(): Promise<ArchivedHistory> {
     query<Record<string, unknown>>('select actor, action, target, payload, at from audit order by id'),
     query<Record<string, unknown>>(
       `select b.slot as seat, l.engine, l.model, l.model_alias, l.prompt_hash, l.tokens_in, l.tokens_out,
-              l.cost_usd::text as cost_usd, l.at
+              l.cost_usd::text as cost_usd, l.billed, l.at
          from ledger l join bots b on b.id = l.bot_id
         order by l.id`,
     ),
@@ -237,6 +237,7 @@ export async function readHistory(): Promise<ArchivedHistory> {
       tokensIn: Number(row.tokens_in),
       tokensOut: Number(row.tokens_out),
       costUsd: Number(row.cost_usd),
+      billed: row.billed !== false,
       at: iso(row.at),
     })),
     requests: requests.map((row) => ({
@@ -963,15 +964,16 @@ export function restoreDb(sql: Sql): UndoDb {
         if (!botId || spend.model.startsWith('newest:')) continue;
         const alias = spend.modelAlias?.startsWith('newest:') ? spend.modelAlias : null;
         const row = await sql.query(
-          `insert into ledger (task_id, bot_id, engine, model, model_alias, prompt_hash, tokens_in, tokens_out, cost_usd, at)
-           select null, $1::uuid, $2::text, $3::text, $4::text, $5::text, $6::int, $7::int, $8::numeric, $9::timestamptz
+          `insert into ledger (task_id, bot_id, engine, model, model_alias, prompt_hash, tokens_in, tokens_out, cost_usd, at, billed)
+           select null, $1::uuid, $2::text, $3::text, $4::text, $5::text, $6::int, $7::int, $8::numeric, $9::timestamptz, $10::boolean
            where not exists (
              select 1 from ledger
               where bot_id = $1::uuid and model = $3::text and cost_usd = $8::numeric
                 and at >= $9::timestamptz and at < $9::timestamptz + interval '1 millisecond'
            )
            returning id`,
-          [botId, spend.engine, spend.model, alias, spend.promptHash, spend.tokensIn, spend.tokensOut, spend.costUsd, spend.at],
+          // A row from an archive before #285 says nothing, and was billed.
+          [botId, spend.engine, spend.model, alias, spend.promptHash, spend.tokensIn, spend.tokensOut, spend.costUsd, spend.at, spend.billed !== false],
         );
         counts.ledger += row.rowCount ?? 0;
         for (const added of row.rows) ids.ledger.push(String(added.id));

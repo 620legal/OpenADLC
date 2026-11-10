@@ -370,6 +370,16 @@ describe('what a card has cost', () => {
     expect(cardCost(card({ costUsd: 0.12, gateOpen: true, active: [task({ kind: 'intake', state: 'paused' })] }), money)).toBe('$0.12');
     expect(cardCost(card({ costUsd: 0 }), money)).toBeNull();
   });
+
+  it('says the part run on a subscription as an estimate, apart from billed spend', () => {
+    expect(cardCost(card({ costUsd: 1.74, estimateUsd: 1.74 }), money)).toBe('$1.74 est.');
+    expect(cardCost(card({ costUsd: 0.84, estimateUsd: 0.84, active: [task({ kind: 'implement', state: 'running' })] }), money)).toBe(
+      '$0.84 est. so far',
+    );
+    expect(cardCost(card({ costUsd: 1.74, estimateUsd: 0.74 }), money)).toBe('$1.00 + $0.74 est.');
+    // All billed, or a bridge that does not say: as before.
+    expect(cardCost(card({ costUsd: 1.74, estimateUsd: 0 }), money)).toBe('$1.74');
+  });
 });
 
 describe('the card the builder takes next', () => {

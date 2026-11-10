@@ -23,6 +23,7 @@ import {
   releaseComputer,
   resumedAfterAnswer,
   seatHasRoom,
+  setBilled,
   staleUnstarted,
   listTasksSince,
   liveTaskOn,
@@ -448,6 +449,32 @@ describe('adding to what a task cost', () => {
   it('adds an amount of 0 or more, and reads the total back', async () => {
     vi.mocked(queryOne).mockResolvedValueOnce({ cost_usd: '0.4200' });
     expect(await addTaskCost('task-1', 0.04)).toBe(0.42);
+  });
+
+  it('adds a subscription run to its estimate as well as its cost, and a billed run to its cost alone', async () => {
+    vi.mocked(queryOne).mockResolvedValue({ cost_usd: '1' });
+
+    await addTaskCost('task-1', 0.5, false);
+    await addTaskCost('task-1', 0.25);
+
+    const [sql, unbilled] = vi.mocked(queryOne).mock.calls[0] ?? [];
+    expect(String(sql).replace(/\s+/g, ' ')).toContain('unbilled_usd = unbilled_usd + case when $3::boolean then 0 else $2 end');
+    expect(unbilled).toEqual(['task-1', 0.5, false]);
+    expect(vi.mocked(queryOne).mock.calls[1]?.[1]).toEqual(['task-1', 0.25, true]);
+  });
+
+  it('reads a row from before the change as billed with no estimate, and one marked otherwise as it says', async () => {
+    vi.mocked(queryOne).mockResolvedValueOnce(ROW).mockResolvedValueOnce({ ...ROW, billed: false, unbilled_usd: '3.2500' });
+    expect(await getTask('task-1')).toMatchObject({ billed: true, unbilledUsd: 0 });
+    expect(await getTask('task-1')).toMatchObject({ billed: false, unbilledUsd: 3.25 });
+  });
+});
+
+describe('whether a task is billed', () => {
+  it('is written by hostd onto the task row', async () => {
+    vi.mocked(query).mockResolvedValueOnce([]);
+    await setBilled('task-1', false);
+    expect(vi.mocked(query).mock.calls[0]).toEqual(['update tasks set billed = $2, updated_at = now() where id = $1', ['task-1', false]]);
   });
 
   it('refuses a negative cost, NaN or Infinity before any query runs', async () => {

@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { bots, modelAccounts } from '@openadlc/db';
+import { bots, modelAccounts, tasks } from '@openadlc/db';
 import { modelPricesEnv, type ModelPrice } from '@openadlc/engines';
 import {
   engineKeyRef,
@@ -198,6 +198,21 @@ export async function readEngineCredential(
 
 const run = promisify(execFile);
 
+/**
+ * Whether a run on this credential is billed: false only on a subscription
+ * account, whose calls cost no money. A key account, the per-bot key from
+ * before accounts, a scripted run and anything unread are billed: when unsure,
+ * the run counts toward the caps
+ * (docs/adr/0050-a-subscription-run-is-estimated-not-billed.md).
+ */
+export function isBilled(credential: Pick<EngineCredential, 'source' | 'kind'>): boolean {
+  if (process.env.OPENADLC_SCRIPTED_ENGINES === '1') return true;
+  return !(credential.source === 'account' && credential.kind === 'subscription');
+}
+
+/** Writes whether a task's runs are billed onto its row; `tasks.setBilled` outside tests. */
+export type BilledRecorder = (taskId: string, billed: boolean) => Promise<void>;
+
 /** The real OpenSSH binary, preferred over whatever PATH resolves first. */
 async function resolveSshKeygen(): Promise<string | null> {
   const { existsSync } = await import('node:fs');
@@ -288,6 +303,7 @@ export class SessionEnvMinter {
     private readonly locate: LoginLocator = onTheHost,
     /** The driver's agent, where its sessions run; the host's when it has none. */
     private readonly signing: SigningAgentStarter = hostSigningAgent,
+    private readonly markBilled: BilledRecorder = tasks.setBilled,
   ) {}
 
   /**
@@ -365,6 +381,19 @@ export class SessionEnvMinter {
           `give ${input.bot} an account on the assignment step`,
       );
     }
+    // Decided here, from the credential this session is about to present, and
+    // written before the env is returned, so before the engine can report any
+    // usage. The bridge copies it from the task row onto every ledger row; a
+    // session never says it, or it could turn its own cap off. A failed write
+    // leaves the row as it was, billed for a task that never ran on a
+    // subscription.
+    const billed = isBilled(credential);
+    await this.markBilled(input.taskId, billed).catch((error: unknown) => {
+      console.warn(
+        `[hostd] ${input.taskId}: could not record whether its runs are billed (${billed}); the task keeps the value it had — ` +
+          `${error instanceof Error ? error.message : String(error)}`,
+      );
+    });
     if (credential.source === 'fallback' && credential.key) {
       // A key stored before model accounts existed. An install that has one has not lost it,
       // and the log is how an operator can see that it has not been moved.

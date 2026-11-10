@@ -737,7 +737,12 @@ export function nextUp(column: Pick<BoardColumn, 'stage' | 'cards'>): ReadonlyMa
 export function cardCost(card: BoardCard, format: (usd: number) => string): string | null {
   if (!card.costUsd || card.costUsd <= 0) return null;
   const spending = (card.active ?? []).some((task) => task.state === 'running' || task.state === 'queued');
-  return spending && card.stage !== 'done' ? `${format(card.costUsd)} so far` : format(card.costUsd);
+  // The part that ran on a subscription is an estimate, not billed: said as
+  // one, apart from billed spend (docs/adr/0050-a-subscription-run-is-estimated-not-billed.md).
+  const estimate = Math.min(Math.max(card.estimateUsd ?? 0, 0), card.costUsd);
+  const billed = Math.round((card.costUsd - estimate) * 10_000) / 10_000;
+  const said = estimate <= 0 ? format(card.costUsd) : billed <= 0 ? `${format(estimate)} est.` : `${format(billed)} + ${format(estimate)} est.`;
+  return spending && card.stage !== 'done' ? `${said} so far` : said;
 }
 
 /**

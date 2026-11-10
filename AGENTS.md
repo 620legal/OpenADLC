@@ -122,7 +122,11 @@ A change that makes one of these possible is wrong even when its tests pass:
   where GitHub's plan cannot hold a reviewer, a person releasing the promote
   OpenADLC holds for them in Needs you.
 - Usage is written to the ledger before an engine's output is acted on, so a cap
-  stops work between turns.
+  stops work between turns: the per-task cap on a billed run, the runaway guard
+  (10× the per-task cap) on a subscription run. Only billed rows count toward
+  the monthly, bot and provider limits and the leasing budget; whether a run is
+  billed is decided by hostd from its credential, never reported by the session
+  (docs/adr/0050-a-subscription-run-is-estimated-not-billed.md).
 - A credential is kept only in the secret store, apart from the exceptions
   [docs/security.md](docs/security.md#secrets) lists on purpose: the webhook
   secret and the database password in `install.json` (0600), OpenAI and xAI

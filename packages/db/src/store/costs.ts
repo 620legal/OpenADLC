@@ -11,6 +11,7 @@ interface LedgerRow {
   tokens_in: number;
   tokens_out: number;
   cost_usd: string;
+  billed: boolean;
   at: Date;
 }
 
@@ -37,6 +38,18 @@ export function currentPeriod(now = new Date()): string {
  * ran, so spend near the turn of a month went against the wrong month's cap.
  * Bounds also let the `ledger_at` index answer.
  */
+/**
+ * Which ledger rows a month's sum counts. `billed` (the default) is spend: runs
+ * on an API key, which the caps, the leasing budget and `cap_warning` count.
+ * `estimate` is runs on a subscription seat, priced as if billed and shown
+ * beside it, but not spend (docs/adr/0050-a-subscription-run-is-estimated-not-billed.md).
+ */
+export type SpendKind = 'billed' | 'estimate';
+
+function billedFilter(which: SpendKind, column = 'billed'): string {
+  return which === 'billed' ? `and ${column}` : `and not ${column}`;
+}
+
 function inPeriod(column: string, param = '$1'): string {
   const start = `(${param}::text || '-01')::timestamp`;
   return `${column} >= ${start} at time zone 'UTC' and ${column} < (${start} + interval '1 month') at time zone 'UTC'`;
@@ -55,6 +68,8 @@ export async function recordUsage(input: {
   tokensIn: number;
   tokensOut: number;
   costUsd: number;
+  /** False for a run on a subscription seat, as the task was when its session started. */
+  billed?: boolean;
 }): Promise<void> {
   if (input.model.startsWith('newest:')) throw new LedgerAliasError(input.model);
   // The caps sum this column: a negative amount cancels real spend, and NaN
@@ -66,8 +81,8 @@ export async function recordUsage(input: {
   const alias = input.modelAlias && input.modelAlias.startsWith('newest:') ? input.modelAlias : null;
 
   await query(
-    `insert into ledger (task_id, bot_id, engine, model, model_alias, prompt_hash, tokens_in, tokens_out, cost_usd)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+    `insert into ledger (task_id, bot_id, engine, model, model_alias, prompt_hash, tokens_in, tokens_out, cost_usd, billed)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
     [
       input.taskId,
       input.botId,
@@ -78,13 +93,14 @@ export async function recordUsage(input: {
       input.tokensIn,
       input.tokensOut,
       input.costUsd,
+      input.billed ?? true,
     ],
   );
 }
 
 export async function listLedger(limit = 200): Promise<LedgerEntry[]> {
   const rows = await query<LedgerRow>(
-    `select id, task_id, bot_id, engine, model, model_alias, tokens_in, tokens_out, cost_usd, at
+    `select id, task_id, bot_id, engine, model, model_alias, tokens_in, tokens_out, cost_usd, billed, at
      from ledger order by at desc limit $1`,
     [limit],
   );
@@ -98,6 +114,7 @@ export async function listLedger(limit = 200): Promise<LedgerEntry[]> {
     tokensIn: row.tokens_in,
     tokensOut: row.tokens_out,
     costUsd: Number(row.cost_usd),
+    billed: row.billed,
     at: row.at.toISOString(),
   }));
 }
@@ -131,9 +148,9 @@ const PROVIDER_OF_ENGINE = `case engine
          else engine end`;
 
 /** Month-to-date spend, the number the global monthly cap is compared with. */
-export async function monthSpend(period: string): Promise<number> {
+export async function monthSpend(period: string, which: SpendKind = 'billed'): Promise<number> {
   const row = await queryOne<{ total: string }>(
-    `select coalesce(sum(cost_usd), 0)::text as total from ledger where ${inPeriod('at')}`,
+    `select coalesce(sum(cost_usd), 0)::text as total from ledger where ${inPeriod('at')} ${billedFilter(which)}`,
     [period],
   );
   return Number(row?.total ?? 0);
@@ -145,11 +162,14 @@ export async function monthSpend(period: string): Promise<number> {
  * The ledger records the engine. The cap is the provider that engine calls:
  * claude is Anthropic, codex is OpenAI, grok is xAI.
  */
-export async function spendByProvider(period: string): Promise<{ provider: string; costUsd: number }[]> {
+export async function spendByProvider(
+  period: string,
+  which: SpendKind = 'billed',
+): Promise<{ provider: string; costUsd: number }[]> {
   return (
     await query<{ provider: string; cost_usd: string }>(
       `select ${PROVIDER_OF_ENGINE} as provider, coalesce(sum(cost_usd), 0)::text as cost_usd
-       from ledger where ${inPeriod('at')}
+       from ledger where ${inPeriod('at')} ${billedFilter(which)}
        group by 1 order by 1`,
       [period],
     )
@@ -157,21 +177,21 @@ export async function spendByProvider(period: string): Promise<{ provider: strin
 }
 
 /** One bot's month-to-date spend. The bot row, not the GitHub login it shares. */
-export async function spendForBot(period: string, botId: string): Promise<number> {
+export async function spendForBot(period: string, botId: string, which: SpendKind = 'billed'): Promise<number> {
   const row = await queryOne<{ total: string }>(
     `select coalesce(sum(cost_usd), 0)::text as total from ledger
-     where bot_id = $2 and ${inPeriod('at')}`,
+     where bot_id = $2 and ${inPeriod('at')} ${billedFilter(which)}`,
     [period, botId],
   );
   return Number(row?.total ?? 0);
 }
 
 /** One repository's month-to-date spend, from the tasks the ledger rows belong to. */
-export async function spendForRepo(period: string, repoId: string): Promise<number> {
+export async function spendForRepo(period: string, repoId: string, which: SpendKind = 'billed'): Promise<number> {
   const row = await queryOne<{ total: string }>(
     `select coalesce(sum(l.cost_usd), 0)::text as total
      from ledger l join tasks t on t.id = l.task_id
-     where t.repo_id = $2 and ${inPeriod('l.at')}`,
+     where t.repo_id = $2 and ${inPeriod('l.at')} ${billedFilter(which, 'l.billed')}`,
     [period, repoId],
   );
   return Number(row?.total ?? 0);
@@ -181,12 +201,13 @@ export async function spendForRepo(period: string, repoId: string): Promise<numb
 export async function spendByBotInRepo(
   period: string,
   repoId: string,
+  which: SpendKind = 'billed',
 ): Promise<{ botId: string; costUsd: number }[]> {
   return (
     await query<{ bot_id: string; cost_usd: string }>(
       `select l.bot_id, coalesce(sum(l.cost_usd), 0)::text as cost_usd
        from ledger l join tasks t on t.id = l.task_id
-       where t.repo_id = $2 and ${inPeriod('l.at')}
+       where t.repo_id = $2 and ${inPeriod('l.at')} ${billedFilter(which, 'l.billed')}
        group by l.bot_id order by l.bot_id`,
       [period, repoId],
     )
@@ -197,13 +218,14 @@ export async function spendByBotInRepo(
 export async function spendByProviderInRepo(
   period: string,
   repoId: string,
+  which: SpendKind = 'billed',
 ): Promise<{ provider: string; costUsd: number }[]> {
   return (
     await query<{ provider: string; cost_usd: string }>(
       `select ${PROVIDER_OF_ENGINE.replaceAll('engine', 'l.engine')} as provider,
               coalesce(sum(l.cost_usd), 0)::text as cost_usd
        from ledger l join tasks t on t.id = l.task_id
-       where t.repo_id = $2 and ${inPeriod('l.at')}
+       where t.repo_id = $2 and ${inPeriod('l.at')} ${billedFilter(which, 'l.billed')}
        group by 1 order by 1`,
       [period, repoId],
     )
@@ -282,11 +304,16 @@ export async function refreshBudget(period: string, warningAt: number): Promise<
      on conflict (period) do nothing`,
     [period],
   );
-  const spentRow = await queryOne<{ total: string }>(
-    `select coalesce(sum(cost_usd), 0)::text as total from ledger where ${inPeriod('at')}`,
+  // Only billed rows are spend: a subscription run's estimate neither stops
+  // leasing nor raises `cap_warning`. The estimate is read beside it, not stored.
+  const spentRow = await queryOne<{ total: string; estimate: string }>(
+    `select coalesce(sum(cost_usd) filter (where billed), 0)::text as total,
+            coalesce(sum(cost_usd) filter (where not billed), 0)::text as estimate
+     from ledger where ${inPeriod('at')}`,
     [period],
   );
   const spent = Number(spentRow?.total ?? 0);
+  const estimateUsd = Number(spentRow?.estimate ?? 0);
   const row = await queryOne<{ period: string; cap_usd: string; spent_usd: string; state: BudgetState['state'] }>(
     `update budgets set
        spent_usd = $2,
@@ -304,13 +331,22 @@ export async function refreshBudget(period: string, warningAt: number): Promise<
     period: row.period,
     capUsd: Number(row.cap_usd),
     spentUsd: Number(row.spent_usd),
+    estimateUsd,
     state: row.state,
   };
 }
 
 export async function getBudget(period: string): Promise<BudgetState | null> {
-  const row = await queryOne<{ period: string; cap_usd: string; spent_usd: string; state: BudgetState['state'] }>(
-    'select period, cap_usd, spent_usd, state from budgets where period = $1',
+  const row = await queryOne<{
+    period: string;
+    cap_usd: string;
+    spent_usd: string;
+    estimate_usd: string | null;
+    state: BudgetState['state'];
+  }>(
+    `select period, cap_usd, spent_usd, state,
+            (select coalesce(sum(cost_usd), 0)::text from ledger where ${inPeriod('at')} and not billed) as estimate_usd
+     from budgets where period = $1`,
     [period],
   );
   return row
@@ -318,6 +354,7 @@ export async function getBudget(period: string): Promise<BudgetState | null> {
         period: row.period,
         capUsd: Number(row.cap_usd),
         spentUsd: Number(row.spent_usd),
+        estimateUsd: Number(row.estimate_usd ?? 0),
         state: row.state,
       }
     : null;

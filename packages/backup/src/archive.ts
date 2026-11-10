@@ -240,6 +240,13 @@ export interface ArchivedLedgerEntry {
   tokensIn: number;
   tokensOut: number;
   costUsd: number;
+  /**
+   * False for a run on a subscription: its cost is an estimate, not billed.
+   * Absent from an archive written before #285, which restores as billed, as
+   * the row was. Without it a restore turned every subscription row back into
+   * spend against the caps.
+   */
+  billed?: boolean;
   at: string;
 }
 
@@ -753,6 +760,11 @@ function asNumber(value: unknown, what: string): number {
   return value;
 }
 
+function asBoolean(value: unknown, what: string): boolean {
+  if (typeof value !== 'boolean') throw new Error(`the archive is damaged: ${what} is not true or false`);
+  return value;
+}
+
 function asNumberOrNull(value: unknown, what: string): number | null {
   if (value === null || value === undefined) return null;
   return asNumber(value, what);
@@ -960,6 +972,7 @@ function asHistory(value: unknown): ArchivedHistory | null {
         tokensIn: asNumber(row.tokensIn, `ledger row ${index} tokensIn`),
         tokensOut: asNumber(row.tokensOut, `ledger row ${index} tokensOut`),
         costUsd: asNumber(row.costUsd, `ledger row ${index} costUsd`),
+        ...(row.billed === undefined ? {} : { billed: asBoolean(row.billed, `ledger row ${index} billed`) }),
         at: asString(row.at, `ledger row ${index} at`),
       };
     }),

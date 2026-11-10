@@ -5,6 +5,24 @@ import { headerData, spendLevel } from './header';
 const header = (budget: { spentUsd: number; capUsd: number; state: string }) =>
   headerData({ repos: [], crew: [], budget, needsYou: 0 });
 
+describe('the header’s spend and the subscription estimate', () => {
+  it('carries the estimate beside billed spend only when there is one', () => {
+    expect(headerData({ repos: [], crew: [], budget: { spentUsd: 10, capUsd: 100, estimateUsd: 140 }, needsYou: 0 }).spend).toEqual({
+      spentUsd: 10,
+      capUsd: 100,
+      estimateUsd: 140,
+    });
+    expect(headerData({ repos: [], crew: [], budget: { spentUsd: 10, capUsd: 100, estimateUsd: 0 }, needsYou: 0 }).spend).toEqual({
+      spentUsd: 10,
+      capUsd: 100,
+    });
+  });
+
+  it('colours the bar from billed spend alone', () => {
+    expect(spendLevel({ spentUsd: 10, capUsd: 100, estimateUsd: 5000 })).toMatchObject({ width: 10, tone: 'signal' });
+  });
+});
+
 describe('the header’s spend colour', () => {
   it('follows the bridge’s state, whatever warningAt is set to', () => {
     // warningAt 0.75: the bridge already warns at 80 percent.
