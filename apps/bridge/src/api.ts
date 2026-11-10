@@ -1100,6 +1100,14 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
     ]);
     return openGatesFor(identity, gates, facts, new Set(planChanges.keys()));
   };
+  // The count is one number on the board: a gate row it cannot route (one read
+  // without its options) took the whole GET /v1/board down with it. Counting
+  // every open question, as before routing, keeps the board up.
+  const waitingOnYouOrAll = (identity: string, gates: readonly { id: string; options: string[] }[]): Promise<number> =>
+    waitingOnYou(identity, gates).catch((error: unknown) => {
+      console.warn(`[bridge] could not route the board's waiting count, so it counts every open question: ${error instanceof Error ? error.message : error}`);
+      return gates.length;
+    });
   // Named, so the notifications' look at Needs you reads the same items, by
   // the same ids, as the board (`notify-waiting.ts`).
   const attentionDeps: AttentionDeps = {
@@ -1397,7 +1405,7 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
         detail: entry.detail,
         heldFor: heldForPerson(entry),
       })),
-      waitingOnYou: await waitingOnYou(identity, openGates),
+      waitingOnYou: await waitingOnYouOrAll(identity, openGates),
       working: activeSessions.filter((session) => session.state === 'working').length,
       idle: activeSessions.filter((session) => session.state === 'idle').length,
       // Tasks running across the install, which the board counts above its columns.
