@@ -4,7 +4,7 @@ import { leadReviewer, maxTasksOf, PLAN_CHANGE_REVIEW_SKILL, REPO_DEFAULTS, type
 import { seatsWaitedOn, type Automation } from './automation.js';
 import type { DispatchGate } from './dispatch-gate.js';
 import type { TaskService } from './task-service.js';
-import { dependencyIsSatisfied, hasIgnoreLabel, missingLabels, parseDependencyRefs } from '@openadlc/shared';
+import { dependencyIsSatisfied, dependencyRepository, hasIgnoreLabel, missingLabels, parseDependencyRefs, type ShipsByRelease } from '@openadlc/shared';
 import { isActive, issueNumberFromBranch, REVIEW_STALLED } from './work.js';
 import { INTAKE_STALLED } from './intake-events.js';
 import { SEAT_WAIT_WINDOW_MS, STAGE_WAITING_ON_SEAT, standingSeatWaits, type SeatWait, type SeatWaitPayload } from './seat-waits.js';
@@ -111,6 +111,17 @@ export class StageHandoff {
    * the board reads, and read back from those at start (`restoreWaits`).
    */
   private readonly waiting = new Map<string, SeatWait>();
+  /**
+   * Whether a repository ships by release (`releaseShipping`), for
+   * `markReadiness`. Set after construction: `main.ts` builds the delivery
+   * rules after the stage hand-off. Unset, none does, the stricter rule.
+   */
+  private shipsByRelease: ShipsByRelease | null = null;
+
+  /** Judges a merged dependency by its repository's delivery rules from now on, as the dispatcher does. */
+  useShipsByRelease(lookup: ShipsByRelease): void {
+    this.shipsByRelease = lookup;
+  }
 
   constructor(
     private readonly automation: Automation,
@@ -449,6 +460,7 @@ export class StageHandoff {
    * before the work it waited on had shipped. One labelled `openadlc:ignore`
    * is read from its record, as the dispatcher reads it
    * (`resolveDependency`), so the label set here is the one it would unblock.
+   * A merged one counts where its own repository ships by release, as there.
    */
   private async markReadiness(
     repo: { id: string; name: string; fullName: string },
@@ -456,8 +468,14 @@ export class StageHandoff {
     known: { labels: string[]; body: string | null },
   ): Promise<void> {
     if (known.labels.includes('start:now') || known.labels.includes('blocked')) return;
-    const resolved = await Promise.all(parseDependencyRefs(known.body).map((ref) => issues.resolveDependency(repo, ref)));
-    const waiting = resolved.some((dependency) => !dependencyIsSatisfied(dependency.issue, dependency.ignored));
+    const lookup = this.shipsByRelease;
+    const resolved = await Promise.all(
+      parseDependencyRefs(known.body).map(async (ref) => ({
+        ...(await issues.resolveDependency(repo, ref)),
+        delivery: { shipsByRelease: lookup ? await lookup(dependencyRepository(ref, repo.fullName)).catch(() => false) : false },
+      })),
+    );
+    const waiting = resolved.some((dependency) => !dependencyIsSatisfied(dependency.issue, dependency.ignored, dependency.delivery));
     await this.automation.setBlocked(repo.fullName, issueNumber, waiting);
   }
 

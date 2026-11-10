@@ -446,6 +446,194 @@ describe('a dependency in another repository the install manages', () => {
   });
 });
 
+/**
+ * #254 waited on #251, and #255 on #252 and #254, after each had merged: the
+ * repository ships by release, no deploy ever labels a merge there, and a
+ * person swapped `blocked` for `start:now` by hand each time.
+ */
+describe('a merged dependency, judged by its own repository', () => {
+  const ELSEWHERE = { id: 'repo-shop', fullName: 'owner/a' };
+  const MERGED = ['adlc:merged'];
+
+  function answering() {
+    const posted: { url: string; body: unknown }[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init?: { body?: string }) => {
+        posted.push({ url, body: init?.body ? JSON.parse(init.body) : null });
+        return new Response('{"changed":true}', { status: 200, headers: { 'content-type': 'application/json' } });
+      }),
+    );
+    return posted;
+  }
+
+  /** A dispatcher that is told which repositories ship by release, and records what it asked. */
+  function releasing(...names: string[]) {
+    const asked: string[] = [];
+    const shipsByRelease = vi.fn(async (fullName: string) => (asked.push(fullName), names.includes(fullName.toLowerCase())));
+    const built = new Dispatcher({
+      bridgeUrl: 'http://127.0.0.1:1',
+      internalSecret: 'secret',
+      costs: { monthlyCapUsd: 100, perTaskCapUsd: 15, warningAt: 0.8, onCap: { stopLeasing: true } } as never,
+      leaseHours: 12,
+      dryRun: true,
+      shipsByRelease,
+    });
+    return { built, asked, shipsByRelease };
+  }
+
+  const blocked = (body: string) =>
+    vi.mocked(issues.listBlockedIssues).mockImplementation(async (repoId: string) =>
+      repoId === 'repo-api' ? ([{ repoId, number: 12, labels: ['blocked', 'adlc:build'], body, declaredPaths: [] }] as never) : [],
+    );
+  const routable = (body: string) =>
+    vi.mocked(issues.listRoutableIssues).mockImplementation(async (repoId: string) => (repoId === 'repo-api' ? ([{ ...issue(repoId, 1), body }] as never) : []));
+  /** #11 in this repository, as the store and the board's list have it. */
+  const ownDependency = (labels: string[], stage = 'merged') => {
+    const row = { repoId: 'repo-api', number: 11, stage, labels };
+    vi.mocked(issues.getIssue).mockImplementation(async (repoId: string, number: number) => (repoId === 'repo-api' && number === 11 ? (row as never) : null));
+    vi.mocked(issues.listIssues).mockImplementation(async (name?: string) => (name === 'api' ? ([row] as never) : []));
+  };
+  const elsewhere = (labels: string[], stage = 'merged') => {
+    vi.mocked(repos.getRepoByName).mockImplementation(async (name: string) => (name.toLowerCase() === 'owner/a' ? (ELSEWHERE as never) : null));
+    vi.mocked(issues.getIssue).mockImplementation(async (repoId: string, number: number) =>
+      repoId === ELSEWHERE.id && number === 1 ? ({ repoId, number, stage, labels } as never) : null,
+    );
+  };
+
+  afterEach(() => {
+    vi.mocked(issues.listBlockedIssues).mockImplementation(async () => []);
+    vi.mocked(issues.listRoutableIssues).mockImplementation(async (repoId: string) => [issue(repoId, repoId === 'repo-api' ? 1 : 2)] as never);
+    vi.mocked(issues.listIssues).mockImplementation(async () => []);
+    vi.mocked(issues.getIssue).mockImplementation(async () => null);
+    vi.mocked(repos.getRepoByName).mockImplementation(async () => null);
+    vi.unstubAllGlobals();
+  });
+
+  const OWN = `${BODY}\n\n### Dependencies\n\n- #11`;
+  const CROSS = `${BODY}\n\n### Dependencies\n\n- owner/a#1`;
+
+  it('unblocks what waits on it where its repository ships by release, and leases it', async () => {
+    const posted = answering();
+    ownDependency(MERGED);
+    blocked(OWN);
+    routable(OWN);
+    const { built } = releasing('acme/api');
+    const decisions = await built.runOnce();
+    expect(posted.filter((one) => one.url.includes('/unblock'))).toEqual([
+      { url: 'http://127.0.0.1:1/internal/issues/api/12/unblock', body: { dependencies: ['#11'] } },
+    ]);
+    expect(decisions.some((one) => one.action === 'leased' && one.issue === 1)).toBe(true);
+  });
+
+  it('asks each repository once a pass, however many issues name it', async () => {
+    answering();
+    ownDependency(MERGED);
+    blocked(OWN);
+    routable(OWN);
+    const { built, shipsByRelease } = releasing('acme/api');
+    await built.runOnce();
+    expect(shipsByRelease).toHaveBeenCalledTimes(1);
+  });
+
+  it('holds it where its repository deploys, until testing has it', async () => {
+    const posted = answering();
+    ownDependency(MERGED);
+    blocked(OWN);
+    routable(OWN);
+    const decisions = await releasing().built.runOnce();
+    expect(posted.filter((one) => one.url.includes('/unblock'))).toEqual([]);
+    expect(decisions.find((one) => one.issue === 1 && one.action === 'skipped')?.reason).toBe('waits on #11, not shipped yet');
+
+    ownDependency([...MERGED, 'deployed:testing']);
+    const after = await releasing().built.runOnce();
+    expect(after.some((one) => one.action === 'unblocked' && one.issue === 12)).toBe(true);
+    expect(after.some((one) => one.action === 'leased' && one.issue === 1)).toBe(true);
+  });
+
+  it('holds it when the dispatcher is told nothing of releases, the stricter rule', async () => {
+    const posted = answering();
+    ownDependency(MERGED);
+    blocked(OWN);
+    await dispatcher().runOnce();
+    expect(posted.filter((one) => one.url.includes('/unblock'))).toEqual([]);
+  });
+
+  it('never counts one abandoned, wherever it is', async () => {
+    const posted = answering();
+    ownDependency([...MERGED, 'openadlc:abandoned']);
+    blocked(OWN);
+    routable(OWN);
+    const decisions = await releasing('acme/api').built.runOnce();
+    expect(posted.filter((one) => one.url.includes('/unblock'))).toEqual([]);
+    expect(decisions.some((one) => one.action === 'leased' && one.issue === 1)).toBe(false);
+  });
+
+  it('follows the dependency’s repository, not the dependent’s, across repositories', async () => {
+    // The dependent deploys; owner/a ships by release.
+    const posted = answering();
+    elsewhere(MERGED);
+    blocked(CROSS);
+    routable(CROSS);
+    const { built, asked } = releasing('owner/a');
+    const decisions = await built.runOnce();
+    expect(asked).toContain('owner/a');
+    expect(posted.filter((one) => one.url.includes('/unblock'))).toEqual([
+      { url: 'http://127.0.0.1:1/internal/issues/api/12/unblock', body: { dependencies: ['owner/a#1'] } },
+    ]);
+    expect(decisions.some((one) => one.action === 'leased' && one.issue === 1)).toBe(true);
+  });
+
+  it('holds it the other way round: the dependent ships by release, the dependency deploys', async () => {
+    const posted = answering();
+    elsewhere(MERGED);
+    blocked(CROSS);
+    routable(CROSS);
+    const decisions = await releasing('acme/api').built.runOnce();
+    expect(posted.filter((one) => one.url.includes('/unblock'))).toEqual([]);
+    expect(decisions.find((one) => one.issue === 1 && one.action === 'skipped')?.reason).toBe('waits on owner/a#1, not shipped yet');
+  });
+});
+
+describe('a blocked issue that names no dependency', () => {
+  function answering() {
+    const posted: { url: string; body: unknown }[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init?: { body?: string }) => {
+        posted.push({ url, body: init?.body ? JSON.parse(init.body) : null });
+        return new Response('{"changed":true}', { status: 200, headers: { 'content-type': 'application/json' } });
+      }),
+    );
+    return posted;
+  }
+
+  afterEach(() => {
+    vi.mocked(issues.listBlockedIssues).mockImplementation(async () => []);
+    vi.unstubAllGlobals();
+  });
+
+  it('is unblocked, with no section or one of prose only, unless it is labelled openadlc:ignore', async () => {
+    // Skipped, `blocked` stayed on until a person took it off.
+    const posted = answering();
+    vi.mocked(issues.listBlockedIssues).mockImplementation(async (repoId: string) =>
+      repoId === 'repo-api'
+        ? ([
+            { repoId, number: 12, labels: ['blocked', 'adlc:build'], body: BODY, declaredPaths: [] },
+            { repoId, number: 13, labels: ['blocked', 'adlc:build'], body: `${BODY}\n\n### Dependencies\n\nNone. This supersedes #3.`, declaredPaths: [] },
+            { repoId, number: 14, labels: ['blocked', 'adlc:build', 'openadlc:ignore'], body: BODY, declaredPaths: [] },
+          ] as never)
+        : [],
+    );
+    const decisions = await dispatcher().runOnce();
+    expect(posted.filter((one) => one.url.includes('/unblock'))).toEqual([
+      { url: 'http://127.0.0.1:1/internal/issues/api/12/unblock', body: { dependencies: [] } },
+      { url: 'http://127.0.0.1:1/internal/issues/api/13/unblock', body: { dependencies: [] } },
+    ]);
+    expect(decisions.filter((one) => one.action === 'unblocked').map((one) => one.reason)).toEqual(['it lists no dependency', 'it lists no dependency']);
+  });
+});
+
 describe('a repository a person paused', () => {
   const OTHER = { ...ACTIVE, id: 'repo-web', name: 'web', fullName: 'acme/web' };
 

@@ -859,6 +859,16 @@ columns work is in, and the label says nothing shipped.
   once its record in `ignored_issues` says it closed as completed, and never
   while it is open or if it closed as not planned, or for any other reason
   ([ADR 0020](adr/0020-an-ignored-dependency-counts-once-closed-as-completed.md)).
+  Otherwise a dependency has shipped, for what waits on it, in Done; in
+  Merged with `deployed:testing` where its own repository deploys; and in
+  Merged alone where its own repository ships by release, read from the
+  bridge's delivery rules (`releaseShipping`), a failed read counting as
+  not. Its card still waits in Ship for the release
+  ([ADR 0040](adr/0040-a-merged-dependency-counts-where-the-repository-ships-by-release.md)).
+  The dispatcher's unblock pass and lease check, the board's "Waiting on",
+  stacking and intake's hand-off all pass that answer to
+  `dependencyIsSatisfied`. A `blocked` issue whose Dependencies name nothing
+  is unblocked on the dispatcher's next pass, unless it is ignored.
   A pull request stacked on it
   stays out of the merge line and is held. Design memory it proposed is not
   accepted.
@@ -1147,7 +1157,7 @@ task's session, rather than waiting for the role's next task
 | **Lead reviewer** | The seat that reviews last: it reads every other seat's review and decides for the round; the others are advisory unless marked `blocking` |
 | **Merge line** | The order approved pull requests are brought up to date and landed in |
 | **Expected paths** | The files an issue says its change touches; the lease is granted them, and the merge line holds a crew pull request to the lease's paths, sending one that strays back to build |
-| **Dependencies** | An issue's `### Dependencies` section; it does not start until those have shipped. A line is `- #N` in its own repository, or `- owner/name#N` in another the install manages; one in a repository outside the install never ships ([ADR 0013](adr/0013-dependencies-across-repositories.md)). One labelled `openadlc:ignore` ships once GitHub says it closed as completed, read from `ignored_issues` ([ADR 0020](adr/0020-an-ignored-dependency-counts-once-closed-as-completed.md)) |
+| **Dependencies** | An issue's `### Dependencies` section; it does not start until those have shipped. A dependency has shipped in Done; in Merged with `deployed:testing` where its own repository deploys; in Merged alone where its own repository ships by release; and never when abandoned ([ADR 0040](adr/0040-a-merged-dependency-counts-where-the-repository-ships-by-release.md)). A `blocked` issue that names none is unblocked on the dispatcher's next pass. A line is `- #N` in its own repository, or `- owner/name#N` in another the install manages; one in a repository outside the install never ships ([ADR 0013](adr/0013-dependencies-across-repositories.md)). One labelled `openadlc:ignore` ships once GitHub says it closed as completed, read from `ignored_issues` ([ADR 0020](adr/0020-an-ignored-dependency-counts-once-closed-as-completed.md)) |
 | **Abandoned** | An issue in Done whose change never merged: closed by a person, or its pull request closed unmerged. It carries `openadlc:abandoned` and is not shipped |
 | **Model account** | An engine credential, a key or a subscription, that bots are assigned to |
 | **Driver** | How hostd gives a task a computer: `docker` or `local` |

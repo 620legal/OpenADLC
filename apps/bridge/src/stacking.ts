@@ -17,6 +17,7 @@ import {
   resolutionPolicy,
   tooManyAttempts,
   type ContextDocument,
+  type ShipsByRelease,
 } from '@openadlc/shared';
 import type { Started } from './build-start.js';
 import { sayOnCard } from './deploy-pipeline.js';
@@ -37,10 +38,10 @@ import { forgetHold, readHolds, recordHold, type ItemHold } from './item-hold.js
  * it: #256 was read so, and the security seat stopped at its cap. A B opened,
  * or pushed by its builder, after A merged is brought up to date before its
  * first round instead, and that update carries no approval (`carry: false`):
- * its round opens on the merged head. Every other push to B is reviewed as any push is: one from
- * the same head that touches the same files is still not the line's, since
- * the builder holds a token that can push anything, and a conflicted update
- * goes to a resolution round with its own re-review. If A is sent back to
+ * its round opens on the merged head. Every other push to B is reviewed as
+ * any push is: one from the same head that touches the same files is still
+ * not the line's, since the builder holds a token that can push anything, and
+ * a conflicted update goes to a resolution round with its own re-review. If A is sent back to
  * build, what B was built on is changing, so B is held, with a note on it;
  * and so it is if A is closed without merging.
  *
@@ -184,8 +185,14 @@ export interface StackingDeps {
    * reviews start, not after its reviewers read the other's diff in it too.
    */
   update?: (input: { repoName: string; prNumber: number; carry: boolean; why: string }) => Promise<string>;
+  /**
+   * Whether a repository ships by release (`releaseShipping`): there a merged
+   * dependency is met, as the dispatcher reads it, and is neither stacked on
+   * nor counted outstanding. Absent, none does, the stricter rule.
+   */
+  shipsByRelease?: ShipsByRelease;
   /** Says a line in a card's timeline (`sayOnCard`). */
-  say?:(subjects: readonly string[], text: string, payload: Record<string, unknown>) => Promise<boolean>;
+  say?: (subjects: readonly string[], text: string, payload: Record<string, unknown>) => Promise<boolean>;
   record?: (input: { type: string; payload: unknown }) => Promise<unknown>;
   events?: (type: string, since: Date) => Promise<{ at: string; payload: unknown }[]>;
   now?: () => number;
@@ -292,6 +299,11 @@ export class Stacking {
     paths: { shared: string[]; exclusive: string[] },
   ): Promise<string[]> {
     const done: string[] = [];
+    // Every dependency stacking judges is in this repository (ADR 0013), so
+    // its rules are asked once, and only when a dependency needs them.
+    let releasing: Promise<boolean> | undefined;
+    const shipsByRelease = () =>
+      (releasing ??= this.deps.shipsByRelease ? this.deps.shipsByRelease(repo.fullName).catch(() => false) : Promise.resolve(false));
     for (const issue of await issues.listBlockedIssues(repo.id).catch(() => [])) {
       if (hasIgnoreLabel(issue.labels) || hasPausedLabel(issue.labels) || issue.prNumber || issue.declaredPaths.length === 0) continue;
       if (await leases.getActiveLease(repo.id, issue.number).catch(() => null)) continue;
@@ -313,7 +325,7 @@ export class Stacking {
           continue;
         }
         const { issue: dependency, ignored } = await issues.resolveDependency(repo, ref).catch(() => ({ issue: null, ignored: null }));
-        if (dependencyIsSatisfied(dependency, ignored)) continue;
+        if (dependencyIsSatisfied(dependency, ignored, { shipsByRelease: await shipsByRelease() })) continue;
         // One labelled `openadlc:ignore` is a person's: its pull request is not
         // the crew's to stack on, in review or not.
         if (ignored || hasIgnoreLabel(dependency?.labels)) outstanding.push({ number: ref.number, stage: 'ignored', prNumber: null });

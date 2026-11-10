@@ -9,7 +9,7 @@ import { Afterwards, registerConsoleApi, retryDepsFor, startTriage, stopTask } f
 import { MessageStarts } from './message-starts.js';
 import { TaskInbox } from './task-inbox.js';
 import { SendBack } from './send-back.js';
-import { DeliveryKnowledge } from './delivery-rules.js';
+import { DeliveryKnowledge, releaseShipping } from './delivery-rules.js';
 import { DeployPipeline } from './deploy-pipeline.js';
 import { ReleaseShipping } from './release-shipping.js';
 import { isPrerequisiteRow } from './health/checks/crew.js';
@@ -224,6 +224,9 @@ async function main(): Promise<void> {
           // Which overlapping changes build side by side: the repository's own
           // `paths:` in .github/openadlc.yml, as the rest of its rules are read.
           pathPolicy: async (repo) => (await delivery.get(repo)).rules.paths,
+          // A merged dependency counts where its own repository ships by
+          // release, by the rules the release sweep acts on.
+          shipsByRelease: (repoFullName) => releases(repoFullName),
         })
       : null;
   const dispatchRuns = dispatcher ? new DispatchRunner(() => dispatcher.runOnce()) : null;
@@ -290,6 +293,7 @@ async function main(): Promise<void> {
     rebuild: (input) => sendBack.backToBuild(input),
     // One let go because what it was built on merged is brought up to date before its reviews start.
     update: (input) => mergeLine.updateStacked(input),
+    shipsByRelease: (repoFullName) => releases(repoFullName),
   });
   mergeLine.useStacking(stacking);
   // Approvals stand across a lead-only resolution and a stacked update; after
@@ -306,6 +310,11 @@ async function main(): Promise<void> {
   // the pipeline that dispatches its deploys as the app. OPENADLC_TESTING_URL is
   // read only as the deprecated fallback for a repository whose rules name no URL.
   const delivery = new DeliveryKnowledge(() => asAutomation(actors, config), config.testingUrl);
+  // Whether a dependency's repository ships by release, for every place that
+  // judges a dependency (ADR 0040). The dispatcher and stacking, built above,
+  // ask it only once they run; the stage hand-off is told here.
+  const releases = releaseShipping(delivery);
+  stages.useShipsByRelease(releases);
   const deployClient = async (repoFullName: string) =>
     (await appGate.client(repoFullName).catch(() => null)) ?? (await asAutomation(actors, config).catch(() => null));
   const pipeline = new DeployPipeline({
