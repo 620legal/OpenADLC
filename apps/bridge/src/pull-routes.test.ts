@@ -2,6 +2,7 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { PersonFlows } from './person-github.js';
+import { HeldMergeDecisions } from './held-merge-decide.js';
 import { HumanReviewDecisions } from './human-review-decide.js';
 import type { PullCommands } from './pull-commands.js';
 import { livePullOf, pullTargetOf, registerPullRoutes, type PullOf } from './pull-routes.js';
@@ -152,6 +153,64 @@ describe('deciding a held Human-review approval', () => {
     const refused = await post('approve', { head: HEAD, login: 'janedoe' });
     expect(refused.status).toBe(503);
     expect(((await refused.json()) as { error: string }).error).toContain('approve it on GitHub');
+  });
+});
+
+describe('merging a held pull request from the console', () => {
+  async function serveMerges(heldMerges: HeldMergeDecisions | null, flows: Partial<PersonFlows> = {}) {
+    const router = new Router(undefined, undefined, undefined, async () => 'user');
+    registerPullRoutes(router, {} as PullCommands, flows as PersonFlows, async (subject) => (subject === 'www#46' ? { repo: REPO, number: 46 } : null), null, heldMerges);
+    server = createServer((request, response) => void router.handle(request, response));
+    await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve));
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const as = { 'x-openadlc-identity': 'jane@example.com', 'content-type': 'application/json' };
+    const post = (body: unknown, identity = 'jane@example.com') =>
+      fetch(`${url}/v1/items/${encodeURIComponent('www#46')}/pull/held-merge/merge`, { method: 'POST', headers: { ...as, 'x-openadlc-identity': identity }, body: JSON.stringify(body) });
+    return { url, as, post };
+  }
+
+  it('hands Merge the pull request, the head and the person asking, and refuses a body without a head', async () => {
+    const merge = vi.fn(async () => ({ flow: { flowId: 'f', userCode: 'C', verificationUri: 'u', expiresInSeconds: 900 } }));
+    const { post } = await serveMerges({ merge } as never);
+    expect(await (await post({ head: HEAD })).json()).toEqual({ flow: { flowId: 'f', userCode: 'C', verificationUri: 'u', expiresInSeconds: 900 } });
+    expect(merge).toHaveBeenCalledWith({ repo: REPO, number: 46, head: HEAD, identity: 'jane@example.com' });
+    expect((await post({})).status).toBe(400);
+    expect(merge).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a direct call from someone GitHub does not let merge, not only by hiding the button', async () => {
+    const start = vi.fn();
+    const mergeAsPerson = vi.fn();
+    const decisions = new HeldMergeDecisions({
+      linkOf: async () => ({ githubLogin: 'bob', githubUserId: 2 }),
+      permissionOf: async () => 'read',
+      isCrew: async () => false,
+      held: async () => ({ head: HEAD, reason: 'auto-merge is not on for it' }),
+      pull: async () => ({ open: true, head: HEAD, url: 'https://github.com/620legal/www/pull/46' }),
+      blockers: async () => [],
+      flows: { start, state: vi.fn() } as never,
+      mergeAsPerson,
+      audit: vi.fn(),
+    });
+    const { post } = await serveMerges(decisions);
+    const refused = await post({ head: HEAD }, 'bob@example.com');
+    expect(refused.status).toBe(403);
+    expect(((await refused.json()) as { error: string }).error).toBe('@bob cannot merge in 620legal/www (GitHub says read); someone who can merges it.');
+    expect(start).not.toHaveBeenCalled();
+    expect(mergeAsPerson).not.toHaveBeenCalled();
+  });
+
+  it('says the merge’s sha once it lands, and so on a bridge that does not merge them', async () => {
+    const state = vi.fn(() => ({ state: 'done', result: { commentUrl: 'https://github.com/620legal/www/pull/46', mergedSha: 'b'.repeat(40) }, flowId: 'f', userCode: 'X', verificationUri: 'u', expiresInSeconds: 0 }));
+    const { url, as, post } = await serveMerges(null, { state } as never);
+    expect(await (await fetch(`${url}/v1/items/${encodeURIComponent('www#46')}/pull/flows/f`, { headers: as })).json()).toEqual({
+      state: 'sent',
+      commentUrl: 'https://github.com/620legal/www/pull/46',
+      mergedSha: 'b'.repeat(40),
+    });
+    const refused = await post({ head: HEAD });
+    expect(refused.status).toBe(503);
+    expect(((await refused.json()) as { error: string }).error).toContain('merge it on GitHub');
   });
 });
 

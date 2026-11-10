@@ -88,6 +88,11 @@ describe('every console route says who may call it', () => {
     }
   });
 
+  it('lets any console user ask to merge a held pull request or leave a held item, which the bridge checks', () => {
+    expect(ROUTE_ROLES['POST /v1/items/:subject/pull/held-merge/merge']).toBe('user');
+    expect(ROUTE_ROLES['POST /v1/attention/leave']).toBe('user');
+  });
+
   it('needs an admin for a route nobody classified', () => {
     expect(roleFor('POST', '/v1/something/new')).toBe('admin');
   });

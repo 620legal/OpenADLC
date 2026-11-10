@@ -1,6 +1,9 @@
-import { bots, issues, lastAudit, listEventsOfTypeWith, audit as writeAudit, personAccounts, repos } from '@openadlc/db';
+import { bots, issues, lastAudit, listEventsOfTypeWith, mergeLines, audit as writeAudit, personAccounts, repos } from '@openadlc/db';
 import { GitHubClient } from '@openadlc/github';
+import { mergeBlockers, mergeDecision, type Automation } from './automation.js';
+import { HeldMergeDecisions } from './held-merge-decide.js';
 import { decisionTarget, HumanReviewDecisions, type HumanReviewDeps } from './human-review-decide.js';
+import { heldForPerson } from './merge-line.js';
 import { resolveItem, type Item } from './items.js';
 import { theApp } from './people.js';
 import { PersonFlows, type FlowView, type PersonGitHubDeps } from './person-github.js';
@@ -190,6 +193,70 @@ export function liveHumanReviewDecisions(input: {
   return new HumanReviewDecisions(deps);
 }
 
+/** Merges a held pull request with the person's one-post token, squashed, only if its head is still `head` (ADR 0037). */
+export async function mergeAsPerson(accessToken: string, fullName: string, number: number, head: string): Promise<{ sha: string }> {
+  return new GitHubClient({ token: accessToken, actingAs: 'a person' }).mergePullRequest(fullName, number, head);
+}
+
+/**
+ * The live wiring of a held merge's decisions: reads as the automation
+ * account, recomputes every merge rule on the head through `Automation`, and
+ * merges as the person.
+ */
+export function liveHeldMergeDecisions(input: {
+  reader: () => Promise<GitHubClient | null>;
+  person: PersonGitHubDeps;
+  flows: PersonFlows;
+  automation: Pick<Automation, 'mergeFacts'>;
+}): HeldMergeDecisions {
+  const reader = async (): Promise<GitHubClient> => {
+    const client = await input.reader();
+    if (!client) throw new HttpFailure(503, 'OpenADLC has no GitHub account to read the pull request with yet. Finish connecting the automation account first.');
+    return client;
+  };
+  return new HeldMergeDecisions({
+    linkOf: (identity) => input.person.store.ofIdentity(identity),
+    permissionOf: async (fullName, login) => {
+      const client = await input.reader();
+      if (!client) return null;
+      const said = await client
+        .request<{ role_name?: string; permission?: string }>('GET', `/repos/${fullName}/collaborators/${encodeURIComponent(login)}/permission`)
+        .catch(() => null);
+      return said?.role_name ?? said?.permission ?? null;
+    },
+    isCrew: input.person.isCrew,
+    held: async (repo, pr) => {
+      const found = await repos.getRepoByName(repo);
+      if (!found) return null;
+      const entry = await mergeLines.entryFor(found.id, pr);
+      const reason = entry ? heldForPerson(entry) : null;
+      return entry && reason ? { head: entry.headSha ?? null, reason } : null;
+    },
+    pull: async (repo, number) => {
+      const client = await reader();
+      const pull = await client.getPullRequest(repo.fullName, number);
+      return { open: pull.state === 'open' && !pull.merged, head: pull.headSha, url: `https://github.com/${repo.fullName}/pull/${number}` };
+    },
+    blockers: async (repo, number) => {
+      const client = await reader();
+      const pull = await client.getPullRequest(repo.fullName, number);
+      const facts = await input.automation.mergeFacts({ fullName: repo.fullName, defaultBranch: repo.defaultBranch }, pull);
+      if (!facts) return null;
+      const blockers = mergeBlockers(facts);
+      // Fails closed: were the two ever to disagree, the merge line's own
+      // refusal stands, and nothing a person may override is assumed.
+      const decision = mergeDecision(facts);
+      if (!decision.land && blockers.length === 0) return [{ kind: 'unknown', reason: decision.reason }];
+      return blockers;
+    },
+    flows: input.flows,
+    mergeAsPerson,
+    audit: async (entry) => {
+      await writeAudit(entry);
+    },
+  });
+}
+
 /** A GitHub login a decision names, as GitHub allows one. */
 function loginOf(value: unknown): string {
   if (typeof value !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/.test(value)) throw new HttpFailure(400, 'login is the GitHub login the approval waits on');
@@ -213,6 +280,7 @@ export function registerPullRoutes(
   flows: PersonFlows,
   pullOf: PullOf = livePullOf,
   decisions: HumanReviewDecisions | null = null,
+  heldMerges: HeldMergeDecisions | null = null,
 ): void {
   const pullFor = async (subject: string | undefined) => {
     const found = await pullOf(subject ?? '');
@@ -251,13 +319,26 @@ export function registerPullRoutes(
     return decisions.reject({ repo, number, login: loginOf(input.login), head: headOf(input.head), identity, reason: typeof input.reason === 'string' ? input.reason : '' });
   });
 
+  /**
+   * A held merge merged from the console (`held-merge-decide.ts`): answers
+   * with the sign-in to merge as the person, whose flow is read as a
+   * command's is, with the merge's sha once it lands.
+   */
+  router.post('/v1/items/:subject/pull/held-merge/merge', async ({ params, body, identity }) => {
+    if (!heldMerges) throw new HttpFailure(503, 'This bridge does not merge held pull requests from the console; merge it on GitHub.');
+    const { repo, number } = await pullFor(params.subject);
+    const input = await body<{ head?: unknown }>();
+    return heldMerges.merge({ repo, number, head: headOf(input.head), identity });
+  });
+
   router.get('/v1/items/:subject/pull/flows/:flowId', async ({ params, identity }) => {
-    const seen = flows.state<{ commentUrl: string }>(params.flowId ?? '', identity);
+    const seen = flows.state<{ commentUrl: string; mergedSha?: string }>(params.flowId ?? '', identity);
     if (seen.state === 'none') return { state: 'none' };
-    const view = seen as FlowView<{ commentUrl: string }>;
+    const view = seen as FlowView<{ commentUrl: string; mergedSha?: string }>;
     return {
       state: view.state === 'done' ? 'sent' : view.state,
       ...(view.result ? { commentUrl: view.result.commentUrl } : {}),
+      ...(view.result?.mergedSha ? { mergedSha: view.result.mergedSha } : {}),
       ...(view.error ? { error: view.error } : {}),
     };
   });

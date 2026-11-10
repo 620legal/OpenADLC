@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { GitHubApiError, ReviewerStandings, type PullCommit } from '@openadlc/github';
-import { Automation, BLOCKED_READ_TIMEOUT_MS, CI_RUN_LAG_MS, CI_RUN_READ_TIMEOUT_MS, COMMITS_LISTED, FORBIDDEN_PUSH, LABEL_READ_BACKOFF_MS, ciKeysChanged, contentChanged, dismissalRefused, fastPathOf, mergeDecision, requestsTakenAway, reviewSample, seatsWaitedOn, standingApprovals, type BlockedFacts, type MergeFacts } from './automation.js';
+import { Automation, BLOCKED_READ_TIMEOUT_MS, CI_RUN_LAG_MS, CI_RUN_READ_TIMEOUT_MS, COMMITS_LISTED, FORBIDDEN_PUSH, LABEL_READ_BACKOFF_MS, ciKeysChanged, contentChanged, dismissalRefused, fastPathOf, mergeBlockers, mergeDecision, personMayMergeOver, requestsTakenAway, reviewSample, seatsWaitedOn, standingApprovals, type BlockedFacts, type MergeBlockerKind, type MergeFacts } from './automation.js';
 import { Attribution } from './attribution.js';
 import type { BridgeConfig } from './config.js';
 import { ConflictRounds } from './conflict-round.js';
@@ -1897,6 +1897,97 @@ describe('whether the bridge may merge a pull request', () => {
       { reviewer: 'openadlc-sydney-janedoe', person: false, commitId: HEAD, ofHead: true },
       { reviewer: 'openadlc-vega-janedoe', person: false, commitId: HEAD, ofHead: true },
     ]);
+  });
+
+  describe('every rule still unmet, for a person deciding a held merge (mergeBlockers)', () => {
+    const lease = (scope: Partial<NonNullable<MergeFacts['scope']>> = {}) => ({ crewBranch: true, issue: 11, closes: [11], declared: ['apps/api/src/route.ts'], crossCutting: false, ...scope });
+    const CI_CHANGE = { files: ['.github/workflows/ci.yml'] };
+    const SHARED = [
+      { name: 'openadlc-sydney-janedoe', slot: 'lead-reviewer', githubLogin: 'crew-janedoe' },
+      { name: 'openadlc-vega-janedoe', slot: 'second-reviewer', githubLogin: 'crew-janedoe' },
+    ];
+    // One fixture for each `refuse(` of `mergeDecision`, with the kind its first reason is.
+    const FIXTURES: [string, Partial<MergeFacts>, MergeBlockerKind][] = [
+      ['a fork', { headRepoFullName: 'mallory/openadlc' }, 'outside'],
+      ['another base', { baseRef: 'release' }, 'outside'],
+      ['needs-human', { held: true }, 'person'],
+      ['a draft', { draft: true }, 'github'],
+      ['a conflict', { mergeableState: 'dirty' }, 'github'],
+      ['a stale branch', { mergeableState: 'behind' }, 'person'],
+      ['blocked for nothing it can name', { mergeableState: 'blocked' }, 'person'],
+      ['blocked on a required check', { mergeableState: 'blocked', blocked: { rules: [{ type: 'required_status_checks', parameters: { required_status_checks: [{ context: 'e2e' }] } }], commits: null } as never }, 'github'],
+      ['a mergeable state not worked out', { mergeableState: null }, 'github'],
+      ['files cut short', { filesComplete: false }, 'unknown'],
+      ['a crew PR closing nothing', { scope: lease({ closes: [] }) }, 'person'],
+      ['a crew PR with no lease', { scope: lease({ declared: null }) }, 'person'],
+      ['a crew PR outside its lease', { scope: lease({ declared: ['docs/'] }) }, 'scope'],
+      ['a CI change a person merges', { ...CI_CHANGE, ciMergedBy: 'person' }, 'person'],
+      ['a CI change with no security seat', { ...CI_CHANGE, securitySeat: null }, 'person'],
+      ['a CI change with nothing to check signatures', { ...CI_CHANGE, checkedReviews: null }, 'person'],
+      ['a CI change the security seat did not approve', { ...CI_CHANGE, securitySeat: 'openadlc-atlas-janedoe' }, 'review'],
+      ['a commit status named ci', { statuses: [{ context: 'ci', state: 'success' }, { context: 'review-gate', state: 'success' }] }, 'check'],
+      ['a ci run not GitHub Actions’', { checkRuns: [job('check'), ciRun({ app: 'someone-else' })] }, 'check'],
+      ['a red check', { checkRuns: [job('check', 'failure'), ciRun()] }, 'check'],
+      ['ci not passed', { checkRuns: [job('check'), ciRun({ status: 'in_progress', conclusion: null })] }, 'check'],
+      ['review-gate not green', { gate: 'failure' }, 'check'],
+      ['Human review rules unread', { humanRulesUnknown: true }, 'unknown'],
+      ['history too long', { requestsTakenAway: null }, 'review'],
+      ['a request taken away', { requestsTakenAway: ['@janedoe'] }, 'review'],
+      ['a review pending on GitHub', { pendingOnGitHub: ['@janedoe'] }, 'review'],
+      ['a person asking for changes', { reviews: [by('openadlc-sydney-janedoe', 'APPROVED'), by('openadlc-vega-janedoe', 'APPROVED'), person('janedoe', 'CHANGES_REQUESTED')], askingPermission: new Map([['janedoe', 'write']]) }, 'review'],
+      ['a seat asking for changes', { reviews: [by('openadlc-sydney-janedoe', 'CHANGES_REQUESTED'), by('openadlc-vega-janedoe', 'APPROVED')] }, 'review'],
+      ['a seat that has not reviewed', { reviews: [by('openadlc-vega-janedoe', 'APPROVED')] }, 'review'],
+      ['a seat that approved another version', { reviews: [by('openadlc-sydney-janedoe', 'APPROVED', EARLIER), by('openadlc-vega-janedoe', 'APPROVED')] }, 'review'],
+      ['a seat’s approval nothing can check', { checkedReviews: null }, 'person'],
+      ['a seat’s approval whose signature fails', { checkedReviews: [] }, 'review'],
+      ['seats on a shared account, nothing to check', { crew: SHARED, checkedReviews: null }, 'person'],
+      ['a Human-review login not approved', { humansRequired: ['orzelig'] }, 'human_review'],
+      ['a Human-review approval without write access', { humansRequired: ['orzelig'], reviews: [by('openadlc-sydney-janedoe', 'APPROVED'), by('openadlc-vega-janedoe', 'APPROVED'), person('orzelig', 'APPROVED')], askingPermission: new Map([['orzelig', 'read']]) }, 'human_review'],
+      ['nobody asked', { requestedReviewers: [], reviews: [] }, 'review'],
+    ];
+
+    it.each(FIXTURES)('begins, for %s, with the reason mergeDecision gives, of the kind it is', (_name, overrides, kind) => {
+      const f = facts(overrides);
+      const decision = mergeDecision(f);
+      const blockers = mergeBlockers(f);
+
+      expect(decision.land).toBe(false);
+      expect(blockers[0]).toEqual({ kind, reason: decision.reason });
+      // The card's reading of the stored reason agrees with the press's.
+      expect(personMayMergeOver(decision.reason)).toBe(kind === 'person');
+    });
+
+    it('is empty where mergeDecision lands it', () => {
+      expect(mergeDecision(facts()).land).toBe(true);
+      expect(mergeBlockers(facts())).toEqual([]);
+    });
+
+    it('goes on past a CI change a person merges to a Human-review approval that is missing', () => {
+      // The hold that made a stored reason unsafe: mergeDecision stops at the
+      // CI change, and never says @orzelig has not approved.
+      const f = facts({ ...CI_CHANGE, ciMergedBy: 'person', humansRequired: ['orzelig'] });
+
+      expect(mergeDecision(f).reason).toBe('it changes how CI runs (.github/workflows/ci.yml), and in this repository a person merges those');
+      expect(mergeBlockers(f)).toEqual([
+        { kind: 'person', reason: 'it changes how CI runs (.github/workflows/ci.yml), and in this repository a person merges those' },
+        { kind: 'human_review', reason: '@orzelig has not approved this version' },
+      ]);
+    });
+
+    it('goes on past needs-human and a stale branch to a red check', () => {
+      const kinds = mergeBlockers(facts({ held: true, mergeableState: 'behind', checkRuns: [job('check', 'failure'), ciRun()] })).map((one) => one.kind);
+
+      expect(kinds).toEqual(['person', 'person', 'check']);
+    });
+
+    it('lets a person merge over the merge line’s own holds, and over nothing it does not know', () => {
+      expect(personMayMergeOver('auto-merge is not on for it')).toBe(true);
+      expect(personMayMergeOver('GitHub could not be read in full to check its approvals')).toBe(true);
+      expect(personMayMergeOver('the OpenADLC app could not get a token for janedoe/openadlc (the app’s card on the board, or openadlc doctor, says why)')).toBe(true);
+      expect(personMayMergeOver('GitHub refused the merge (405)')).toBe(false);
+      expect(personMayMergeOver('something new')).toBe(false);
+      expect(personMayMergeOver('')).toBe(false);
+    });
   });
 
   describe('where it would land', () => {

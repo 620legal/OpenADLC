@@ -116,7 +116,7 @@ import { NOTIFICATIONS_CHECK } from './health/checks/notifications.js';
 import { bridgeStopReason, stoppedByTheBridge, THE_BRIDGE } from './bridge-stops.js';
 import { asAutomation } from './automation-bot.js';
 import { livePersonGitHubDeps, PersonFlows, registerPersonGitHubRoutes } from './person-github.js';
-import { liveHumanReviewDecisions, livePullCommands, registerPullRoutes } from './pull-routes.js';
+import { liveHeldMergeDecisions, liveHumanReviewDecisions, livePullCommands, registerPullRoutes } from './pull-routes.js';
 import { DeployKnowledge, isTestingDeployChoice, testingDeployChoice, testingDeployStored } from './deploys.js';
 import { deploysNothingHere } from './deploy-pipeline.js';
 import { releaseEventsOf } from './health/checks/ships-by-release.js';
@@ -1032,6 +1032,29 @@ export async function stopTask(
 }
 
 /**
+ * A promote held for a person, as its card reads it: the pull request it was
+ * merged from, and that pull request's issue's title when the board holds it,
+ * so the card says what is being released.
+ */
+export function heldPromoteOf(
+  run: { sha: string; prNumber: number | null; promoteHeldAt: string | null; createdAt: string; detail: string | null },
+  repo: { name: string },
+  source: string | null | undefined,
+  known: readonly { repoName: string; prNumber: number | null; title: string }[],
+): HeldPromote {
+  const issue = run.prNumber !== null ? known.find((one) => one.repoName === repo.name && one.prNumber === run.prNumber) : undefined;
+  return {
+    repo: repo.name,
+    sha: run.sha,
+    since: run.promoteHeldAt ?? run.createdAt,
+    fileGoverned: source === 'file',
+    reason: run.detail ?? '',
+    pr: run.prNumber,
+    title: issue?.title ?? null,
+  };
+}
+
+/**
  * Registers the console's routes. Returns what stops what they started: the
  * look at Needs you for notifications, when a notifier was given.
  */
@@ -1069,7 +1092,9 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
   registerPersonGitHubRoutes(router, personGitHub, personFlows);
   // A held Human-review approval decided from the console (`human-review-decide.ts`).
   const humanReview = liveHumanReviewDecisions({ reader: () => asAutomation(deps.actors, config), person: personGitHub, flows: personFlows, sendBack: deps.sendBack ?? null });
-  registerPullRoutes(router, pullCommands, personFlows, undefined, humanReview);
+  // A held merge merged by a person from the console, as that person (`held-merge-decide.ts`).
+  const heldMerges = liveHeldMergeDecisions({ reader: () => asAutomation(deps.actors, config), person: personGitHub, flows: personFlows, automation: deps.automation });
+  registerPullRoutes(router, pullCommands, personFlows, undefined, humanReview, heldMerges);
   // hostd signs a subscription in and checks an account, where the bots think.
   registerModelAccountRoutes(router, {
     ...defaultModelAccountDeps(hostd),
@@ -1135,23 +1160,29 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
     // Promotes held for a person, and whether the file sets the rules that held them.
     heldPromotes: async () => {
       const [held, list] = await Promise.all([deployRuns.heldForPerson(), repos.listRepos()]);
+      // The issues the board holds name the pull request each was merged from,
+      // so the card names what is being released without a GitHub read.
+      const known = held.some((run) => run.prNumber !== null) ? await issues.listIssues().catch(() => []) : [];
       const out: HeldPromote[] = [];
       for (const run of held) {
         const repo = list.find((one) => one.id === run.repoId);
         if (!repo) continue;
         const source = deps.delivery ? (await deps.delivery.get(repo).catch(() => null))?.source : null;
-        out.push({
-          repo: repo.name,
-          sha: run.sha,
-          since: run.promoteHeldAt ?? run.createdAt,
-          fileGoverned: source === 'file',
-          reason: run.detail ?? '',
-        });
+        out.push(heldPromoteOf(run, repo, source, known));
       }
       return out;
     },
   };
-  registerAttentionRoutes(router, attentionDeps, (identity, login) => humanReview.mayDecide(identity, login));
+  registerAttentionRoutes(
+    router,
+    attentionDeps,
+    (identity, login) => humanReview.mayDecide(identity, login),
+    async (identity, repoName) => {
+      const repo = await repos.getRepoByName(repoName);
+      if (!repo) return { yours: false, status: 404, why: `${repoName} is not a repository this install manages.` };
+      return heldMerges.mayMerge(identity, repo);
+    },
+  );
   // Every item, each with whom it is for, so each is sent to its own people.
   const waitingNotices = deps.notifier
     ? new WaitingNotices({

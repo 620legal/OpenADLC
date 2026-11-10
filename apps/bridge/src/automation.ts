@@ -1377,6 +1377,238 @@ export function mergeDecision(facts: MergeFacts): {
 }
 
 /**
+ * What a merge rule still unmet is, for whether a person may merge over it
+ * from the console (docs/adr/0037-a-person-merges-a-held-pull-request-from-the-console.md):
+ * only `person` is a hold a person may decide. `check` is a required check,
+ * `review` a crew review or a request for changes, `human_review` a login
+ * AGENTS.md's Human review names, `unknown` something that could not be read,
+ * `github` what GitHub will not merge, `outside` a head or base this does not
+ * land, `scope` files outside a crew lease.
+ */
+export type MergeBlockerKind = 'person' | 'check' | 'review' | 'human_review' | 'unknown' | 'github' | 'outside' | 'scope';
+
+export interface MergeBlocker {
+  kind: MergeBlockerKind;
+  reason: string;
+}
+
+/**
+ * Every rule `mergeDecision` holds a pull request on, in its order and with
+ * its words, without stopping at the first. The merge line records only the
+ * first reason, and a hold such as a CI change returns before the Human
+ * review approvals are checked, so the stored reason alone could not show
+ * that a named person's approval is in place: a console Merge offered on it
+ * would have landed a change to `.github/workflows/` without @orzelig's
+ * approval. Empty when `mergeDecision` lands it. `mergeDecision` is left as
+ * it is, and `automation.test.ts` holds the first reason here to its reason.
+ */
+export function mergeBlockers(facts: MergeFacts): MergeBlocker[] {
+  const out: MergeBlocker[] = [];
+  const add = (kind: MergeBlockerKind, reason: string) => out.push({ kind, reason });
+  if (facts.headRepoFullName?.toLowerCase() !== facts.repoFullName.toLowerCase()) {
+    add('outside', `its head is in ${facts.headRepoFullName ?? 'a repository that is gone'}, not ${facts.repoFullName}`);
+  }
+  if (facts.baseRef !== facts.defaultBranch) add('outside', `it would land on ${facts.baseRef}, not the default branch ${facts.defaultBranch}`);
+  if (facts.held) add('person', 'it is held for a person (needs-human or openadlc:paused)');
+  if (facts.draft) add('github', 'it is a draft');
+  if (!facts.mergeableState || !LANDABLE.has(facts.mergeableState)) {
+    // Behind, or blocked for nothing OpenADLC can name, GitHub decides when
+    // the person presses Merge; its branch rules still apply to their merge.
+    // Blocked on a cause it names — a check, a review, unsigned commits — is
+    // GitHub's refusal already, and not one to offer a button over.
+    const reason = notLandable(facts);
+    const theirs = facts.mergeableState === 'behind' || (facts.mergeableState === 'blocked' && reason.startsWith(GITHUB_BLOCKED_UNSAID));
+    add(theirs ? 'person' : 'github', reason);
+  }
+  if (!facts.filesComplete) add('unknown', 'it changes more files than GitHub lists (3000), so the paths a person must review are not all known');
+  const scope = facts.scope;
+  if (scope?.crewBranch) {
+    if (scope.closes.length === 0) {
+      add('person', 'it is a crew pull request that closes no issue, so nothing declared what it may change; a person decides');
+    } else if (!scope.declared || scope.declared.length === 0) {
+      add('person', `OpenADLC has no lease for ${scope.issue ? `#${scope.issue}` : 'the issue its branch was cut for'} saying what it may change; a person decides`);
+    } else {
+      const verdict = filesOutsideScope([...facts.files], [...scope.declared]);
+      if (!verdict.inScope && !scope.crossCutting) {
+        const listed = verdict.outside.slice(0, 20).map((file) => `\`${file}\``).join(', ');
+        const more = verdict.outside.length > 20 ? ` and ${verdict.outside.length - 20} more` : '';
+        add(
+          'scope',
+          `it changes ${verdict.outside.length === 1 ? 'a file' : `${verdict.outside.length} files`} outside the paths its lease declared: ${listed}${more}. ` +
+            'Take them out of the branch, or ask for them with a `plan_change` marker',
+        );
+      }
+    }
+  }
+  const definesCi = [...facts.files.filter(changesCi), ...facts.ciKeysChanged];
+  if (definesCi.length > 0) {
+    const what = `it changes how CI runs (${definesCi.slice(0, 3).join(', ')}${definesCi.length > 3 ? ', …' : ''})`;
+    if (facts.ciMergedBy === 'person') add('person', `${what}, and in this repository a person merges those`);
+    else if (!facts.securitySeat) add('person', `${what}, and no security reviewer is set up to check it, so a person merges it`);
+    else if (!facts.checkedReviews) add('person', `${what}, and the security reviewer's verdict cannot be checked without signatures, so a person merges it`);
+    else {
+      const onThisDiff = (commitId: string | null) =>
+        Boolean(commitId) && (commitId === facts.headSha || facts.sameDiffAs.has(commitId as string) || facts.carriedFrom.has(commitId as string));
+      const verdict = securityVerdictOn(facts.checkedReviews, facts.crew, facts.securitySeat, onThisDiff);
+      if (verdict !== 'approve') add('review', `${what}, so the security reviewer must approve it as well, and has not approved this head${verdict ? ` (its verdict: ${verdict})` : ''}`);
+    }
+  }
+
+  if (facts.statuses.some((status) => status.context === REQUIRED_CHECK)) add('check', `a commit status named ${REQUIRED_CHECK} is on the head, and only GitHub Actions' check run counts`);
+  const runs = latestByName(facts.checkRuns);
+  const ci = runs.filter((run) => run.name === REQUIRED_CHECK);
+  if (ci.some((run) => run.app !== CI_APP || run.workflow?.toLowerCase() !== REQUIRED_CHECK || run.headSha !== facts.headSha)) {
+    add('check', `a ${REQUIRED_CHECK} check run on the head is not GitHub Actions' run of the ${REQUIRED_CHECK} workflow`);
+  }
+  const elsewhere = ci.map((run) => ciRunElsewhere(run.run, facts)).find((one) => one !== null);
+  if (elsewhere) {
+    const reason = `${REQUIRED_CHECK} on the head is not this pull request's run against ${facts.baseRef}: ${elsewhere.why}`;
+    add('check', elsewhere.again ? `${reason}; CI has to run on it again: push a commit to it, or close and reopen it` : reason);
+  }
+  const red = [
+    ...runs.filter((run) => run.status === 'completed' && RED.has(run.conclusion ?? '')).map((run) => run.name),
+    ...facts.statuses.filter((status) => RED.has(status.state)).map((status) => status.context),
+  ];
+  if (red.length > 0) add('check', `${[...new Set(red)].map(nameInReason).join(', ')} failed on the head`);
+  if (verdictFor([...ci], [REQUIRED_CHECK]) !== 'green') add('check', `${REQUIRED_CHECK} has not passed on the head`);
+  if (facts.gate !== 'success') add('check', 'review-gate as OpenADLC published it is not green on the head');
+  if (facts.humanRulesUnknown) add('unknown', 'the human review rules cannot be read from AGENTS.md on the default branch');
+  if (facts.requestsTakenAway === null) add('review', 'its history is too long to read, so who was asked for a review is not known');
+  else if (facts.requestsTakenAway.length > 0) {
+    add('review', `${facts.requestsTakenAway.join(', ')} ${facts.requestsTakenAway.length === 1 ? 'was' : 'were'} asked for a review and had the request taken away by someone who cannot decide that`);
+  }
+  if (facts.pendingOnGitHub.length > 0) {
+    add('review', `${facts.pendingOnGitHub.join(', ')} ${facts.pendingOnGitHub.length === 1 ? 'is asked for a review on GitHub and has' : 'are asked for a review on GitHub and have'} not given one`);
+  }
+
+  const loginOf = (seat: string) => facts.crew.find((bot) => bot.name === seat)?.githubLogin ?? null;
+  const shares = (seat: string) => {
+    const login = loginOf(seat);
+    return Boolean(login) && facts.crew.filter((bot) => sameLogin(bot.githubLogin, login)).length > 1;
+  };
+  const onShared = facts.requestedReviewers.filter(shares);
+  if (onShared.length > 0 && !facts.checkedReviews) {
+    add(
+      'person',
+      `${onShared.join(', ')} ${onShared.length === 1 ? 'signs' : 'sign'} in as an account other seats use too, and nothing here can check a signature to tell which seat wrote a review there, so a person merges it, or each of them gets a GitHub account of its own`,
+    );
+  }
+  const reviews = checkedForSharedSeats(facts.reviews, facts.checkedReviews, facts.crew, facts.requestedReviewers);
+  const unsigned = new Set(
+    facts.reviews
+      .filter((review) => !reviews.includes(review) && review.state !== 'COMMENTED' && review.state !== 'PENDING')
+      .map((review) => whoWrote(review.user, facts.crew, { bot: seatOf(review.body) }))
+      .flatMap((author) => (author.kind === 'openadlc' && author.bot ? [author.bot.name] : [])),
+  );
+  const approved = (review: { state: string; commitId: string | null } | undefined, seat: string | null): boolean => {
+    if (review?.state !== 'APPROVED' || !review.commitId) return false;
+    if (review.commitId === facts.headSha || facts.sameDiffAs.has(review.commitId)) return true;
+    return seat !== null && seat !== facts.leadRechecks && facts.carriedFrom.has(review.commitId);
+  };
+  const bySeat = new Map<string, (typeof facts.reviews)[number]>();
+  const byPerson = new Map<string, (typeof facts.reviews)[number]>();
+  for (const review of reviews) {
+    if (review.state === 'COMMENTED' || review.state === 'PENDING') continue;
+    const author = whoWrote(review.user, facts.crew, { bot: seatOf(review.body) });
+    if (author.kind === 'openadlc' && author.bot) bySeat.set(author.bot.name, review);
+    else if (author.kind === 'person') byPerson.set(review.user.toLowerCase(), review);
+  }
+  const asking = [...byPerson.entries()].filter(
+    ([login, review]) => review.state === 'CHANGES_REQUESTED' && !NO_SAY.has(facts.askingPermission.get(login) ?? 'unknown'),
+  );
+  if (asking.length > 0) add('review', `${asking.map(([login]) => `@${login}`).join(', ')} still asks for changes`);
+  const seatsAsking = [...bySeat.entries()]
+    .filter(([seat, review]) => review.state === 'CHANGES_REQUESTED' && facts.requestedReviewers.includes(seat))
+    .map(([seat]) => seat);
+  if (seatsAsking.length > 0) add('review', `${seatsAsking.join(', ')} still asks for changes`);
+
+  const signed = new Set((facts.checkedReviews ?? []).map((review) => review.id));
+  for (const seat of facts.requestedReviewers) {
+    const review = bySeat.get(seat);
+    if (!review && unsigned.has(seat)) {
+      add(
+        'review',
+        `${seat}'s review on ${loginOf(seat)}, an account other seats use too, is not signed by OpenADLC, so it may be another seat's; ${seat} reviews it again with OpenADLC's gh (gh pr review), which signs it, or a person merges it`,
+      );
+    } else if (!review) add('review', `${seat} has not reviewed it`);
+    else if (!approved(review, seat)) {
+      add(
+        'review',
+        review.state === 'APPROVED' && seat === facts.leadRechecks && review.commitId && facts.carriedFrom.has(review.commitId)
+          ? `${seat} re-checks the resolution of a conflict, and has approved only the version before it`
+          : review.state === 'APPROVED'
+            ? approvedAnother(seat, review, signed.has(review.id))
+            : `${seat}'s latest verdict is ${review.state.toLowerCase().replace('_', ' ')}`,
+      );
+    } else if (!facts.checkedReviews) {
+      // The approval is there, of this diff; only its signature cannot be
+      // checked here, and the rule's own words leave that to a person.
+      add('person', `${seat}'s approval cannot be checked: nothing here can check an OpenADLC signature, so a person merges it`);
+    } else if (!signed.has(review.id)) {
+      // A signature check that can run and fails may be a forgery
+      // (docs/runbooks/unsigned-post.md): never a person's to merge over.
+      add(
+        'review',
+        `${seat}'s approval is not signed by OpenADLC for this pull request, so it does not count; check the post (docs/runbooks/unsigned-post.md), then ${seat} reviews it again with OpenADLC's gh (gh pr review), which signs it, or a person merges it`,
+      );
+    }
+  }
+  for (const login of facts.humansRequired) {
+    const review = byPerson.get(login.toLowerCase());
+    if (!review || !approved(review, null)) {
+      add('human_review', review?.state === 'APPROVED' ? personApprovedAnother(login, review, facts.headSha) : `@${login} has not approved this version`);
+      continue;
+    }
+    const permission = facts.askingPermission.get(login.toLowerCase()) ?? 'unknown';
+    if (!MAY_APPROVE.has(permission)) {
+      add('human_review', `@${login} approved, but lacks write access to ${facts.repoFullName} (GitHub says ${permission}), so the approval does not count`);
+    }
+  }
+  if (facts.requestedReviewers.length === 0 && facts.humansRequired.length === 0) add('review', 'nobody was asked to review it');
+  return out;
+}
+
+/**
+ * The reasons the merge line records without running `mergeDecision` that a
+ * person may merge over: the bridge's merging is off here (`heldForPerson`'s
+ * fallback), GitHub could not be read in full, or the app could not get a
+ * token. A press runs `mergeBlockers` itself on the head as it is then.
+ */
+const LINE_REASONS_A_PERSON_MERGES = [
+  /^auto-merge is not on for it$/,
+  /^GitHub could not be read in full to check its approvals$/,
+  /^the OpenADLC app could not get a token for /,
+];
+
+/** How `whyBlocked` begins when GitHub says `blocked` and no cause it shows names why. */
+const GITHUB_BLOCKED_UNSAID = 'GitHub says it is blocked, and did not say why';
+
+/** The reasons `mergeBlockers` calls `person`, matched on the words each begins or ends with. */
+const PERSON_REASONS = [
+  /^GitHub says it is blocked, and did not say why/,
+  /^it is held for a person \(needs-human or openadlc:paused\)$/,
+  /^it is behind .+ requires a branch to be up to date before it merges: update it from /,
+  /^it is a crew pull request that closes no issue, so nothing declared what it may change; a person decides$/,
+  /^OpenADLC has no lease for .+ saying what it may change; a person decides$/,
+  /^it changes how CI runs \(.*\), and in this repository a person merges those$/,
+  /^it changes how CI runs \(.*\), and no security reviewer is set up to check it, so a person merges it$/,
+  /^it changes how CI runs \(.*\), and the security reviewer's verdict cannot be checked without signatures, so a person merges it$/,
+  /^.+ signs? in as an account other seats use too, and nothing here can check a signature to tell which seat wrote a review there, so a person merges it, or each of them gets a GitHub account of its own$/,
+  /^[\w-]+'s approval cannot be checked: nothing here can check an OpenADLC signature, so a person merges it$/,
+];
+
+/**
+ * Whether a person may merge over a held merge's stored first reason, read
+ * without a GitHub call so a card can decide whether to offer Merge. An
+ * allowlist that fails closed: words it does not know are not a person's to
+ * override. The press checks everything again with `mergeBlockers` either way.
+ */
+export function personMayMergeOver(reason: string): boolean {
+  const said = reason.trim();
+  return [...LINE_REASONS_A_PERSON_MERGES, ...PERSON_REASONS].some((pattern) => pattern.test(said));
+}
+
+/**
  * Why a seat's approval is not of the version that would land. A signed one
  * is of the head its signature names, whatever commit GitHub shows it on
  * (`asOfSignedHeads`), so the refusal names both when they differ; one whose

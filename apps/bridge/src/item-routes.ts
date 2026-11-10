@@ -188,6 +188,26 @@ export function registerItemRoutes(router: Router, deps: Pick<ApiDeps, 'actors' 
         },
       }).catch((error: unknown) => console.warn(`[bridge] the discussion of ${repoName}#${discussed} was not audited: ${error instanceof Error ? error.message : error}`));
     }
+    // Discuss on a held merge or a held promote (ADR 0037): the same message,
+    // and the hold stays; the row says which head or commit was discussed.
+    const held = heldAbout(input.about);
+    if (held && !sent.answered && discussed !== null && repoName) {
+      const promote = held.kind === 'held_promote';
+      await audit({
+        actor: identity,
+        action: promote ? 'deploy.promote_discussed' : 'pull.held_merge_discussed',
+        target: `${repoName}#${discussed}`,
+        payload: {
+          repo: repoName,
+          pr: discussed,
+          ...(promote ? { sha: held.sha } : { head: held.head }),
+          role: route.role,
+          messageId: sent.message.id,
+          commentUrl: sent.message.githubUrl ?? null,
+          by: identity,
+        },
+      }).catch((error: unknown) => console.warn(`[bridge] the discussion of ${repoName}#${discussed} was not audited: ${error instanceof Error ? error.message : error}`));
+    }
     return { ...sent, bot: bot.name, subject: route.subject, item: read.item.key, ...(start ? { start } : {}) };
   });
 }
@@ -204,6 +224,20 @@ export function humanReviewAbout(value: unknown): { login: string; head: string 
   if (typeof about.login !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/.test(about.login)) return null;
   if (typeof about.head !== 'string' || !/^[0-9a-f]{40}$/i.test(about.head)) return null;
   return { login: about.login, head: about.head };
+}
+
+/**
+ * What a message on a held merge or a held promote says it is about
+ * (Discuss); null for any other message, or one malformed. Only the head or
+ * the commit is read from it: the repository and pull request are the item's.
+ */
+export function heldAbout(value: unknown): { kind: 'held_merge'; head: string } | { kind: 'held_promote'; sha: string } | null {
+  if (!value || typeof value !== 'object') return null;
+  const about = value as Record<string, unknown>;
+  const commit = (one: unknown): one is string => typeof one === 'string' && /^[0-9a-f]{40}$/i.test(one);
+  if (about.kind === 'held_merge' && commit(about.head)) return { kind: 'held_merge', head: about.head };
+  if (about.kind === 'held_promote' && commit(about.sha)) return { kind: 'held_promote', sha: about.sha };
+  return null;
 }
 
 /** A managed repository, as linking by hand reads it. */

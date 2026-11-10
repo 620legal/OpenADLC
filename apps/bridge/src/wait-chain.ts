@@ -57,8 +57,12 @@ type Events = readonly { at: string; payload: unknown }[];
 export interface WaitFacts {
   /** Approved plan changes whose gate stays open until other work lets go of their paths. */
   heldPlanChanges?: readonly HeldPlanChange[];
-  /** Pull requests the merge line holds for a person, and why (`heldForPerson`). */
-  heldMerges?: readonly { repo: string; prNumber: number; reason: string; since: string }[];
+  /**
+   * Pull requests the merge line holds for a person, and why (`heldForPerson`),
+   * with the head the line holds (`merge_lines.head_sha`): a person's Merge is
+   * of that head, and Leave it lasts until it moves. Null when not recorded.
+   */
+  heldMerges?: readonly { repo: string; prNumber: number; reason: string; since: string; head?: string | null }[];
   /** The people asked to approve again (`PERSON_ASKED_AGAIN`), and the reviews people submitted (`REVIEW_SUBMITTED_ON`). */
   personAsks?: Events;
   personReviews?: Events;
@@ -296,7 +300,7 @@ export async function readWaitFacts(
   const heldMerges = line
     .map((entry) => ({ entry, reason: heldForPerson(entry) }))
     .filter((one): one is { entry: (typeof one)['entry']; reason: string } => one.reason !== null)
-    .map(({ entry, reason }) => ({ repo: entry.repoName, prNumber: entry.prNumber, reason, since: entry.enteredAt }));
+    .map(({ entry, reason }) => ({ repo: entry.repoName, prNumber: entry.prNumber, reason, since: entry.enteredAt, head: entry.headSha ?? null }));
   return { heldPlanChanges, heldMerges, personAsks, personReviews, personAwaits, roundsOpened, heldStacks: holds, stackLinks: links, stallEvents };
 }
 

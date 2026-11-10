@@ -56,6 +56,9 @@ export const ROUTE_ROLES: Readonly<Record<string, Role>> = {
   'GET /v1/tasks': 'user',
   'GET /v1/repos': 'user',
   'GET /v1/attention': 'user',
+  // Leave it on a held merge, Keep holding on a held promote: only an item in
+  // the caller's own Needs you, and nothing on GitHub changes (`attention.ts`).
+  'POST /v1/attention/leave': 'user',
   'GET /v1/health': 'user',
   'GET /v1/costs': 'user',
   'GET /v1/insights': 'user',
@@ -93,6 +96,10 @@ export const ROUTE_ROLES: Readonly<Record<string, Role>> = {
   // (`human-review-decide.ts`), so any console user may ask.
   'POST /v1/items/:subject/pull/human-review/approve': 'user',
   'POST /v1/items/:subject/pull/human-review/reject': 'user',
+  // A held merge merged from the console: refused by the bridge unless the
+  // caller's linked account may write to the repository and every rule still
+  // unmet is one a person may merge over (`held-merge-decide.ts`).
+  'POST /v1/items/:subject/pull/held-merge/merge': 'user',
   'GET /v1/items/:subject/pull/flows/:flowId': 'user',
   'GET /v1/items/:subject/pull/images/:commentId/:index': 'user',
   'POST /v1/threads/:bot/messages': 'user',

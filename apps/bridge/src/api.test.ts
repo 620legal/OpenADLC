@@ -313,6 +313,28 @@ afterEach(async () => {
   await new Promise<void>((resolve) => hostd.close(() => resolve()));
 });
 
+describe('a promote held for a person, as its card reads it (ADR 0037)', () => {
+  const run = { sha: 'abc1234def567890abc1234def567890abc12345', prNumber: 29, promoteHeldAt: '2026-11-10T01:00:00.000Z', createdAt: '2026-11-10T00:00:00.000Z', detail: 'GitHub’s plan cannot hold a reviewer.' };
+
+  it('names the pull request it was merged from, and its issue’s title when the board holds it', async () => {
+    const { heldPromoteOf } = await import('./api.js');
+    const known = [
+      { repoName: 'www', prNumber: 29, title: 'Rate-limit the webhook route' },
+      { repoName: 'api', prNumber: 29, title: 'Another repository’s' },
+    ];
+    expect(heldPromoteOf(run, { name: 'www' }, 'file', known)).toEqual({
+      repo: 'www',
+      sha: run.sha,
+      since: run.promoteHeldAt,
+      fileGoverned: true,
+      reason: run.detail,
+      pr: 29,
+      title: 'Rate-limit the webhook route',
+    });
+    expect(heldPromoteOf({ ...run, prNumber: null, promoteHeldAt: null, detail: null }, { name: 'www' }, null, known)).toMatchObject({ pr: null, title: null, since: run.createdAt, reason: '', fileGoverned: false });
+  });
+});
+
 describe('the console’s account routes', () => {
   it('check an account on the hostd the bridge was given, and keep the answer', async () => {
     const response = await fetch(`${bridgeUrl}/v1/model-accounts/${SEAT}/verify`, { method: 'POST' });
