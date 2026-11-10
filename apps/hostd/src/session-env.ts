@@ -303,7 +303,9 @@ export class SessionEnvMinter {
     private readonly locate: LoginLocator = onTheHost,
     /** The driver's agent, where its sessions run; the host's when it has none. */
     private readonly signing: SigningAgentStarter = hostSigningAgent,
-    private readonly markBilled: BilledRecorder = tasks.setBilled,
+    // Called through, not taken as `tasks.setBilled`: read when it runs, so a
+    // store without it fails into the warning below rather than the mint.
+    private readonly markBilled: BilledRecorder = async (taskId, billed) => tasks.setBilled(taskId, billed),
   ) {}
 
   /**
