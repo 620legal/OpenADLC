@@ -125,11 +125,6 @@ export const SETTING_KEYS = [
   // `on` or `off`; absent is on. Whether the bridge holds its macOS host awake
   // (`caffeinate -i`) while work is in flight. See the bridge's `keep-awake.ts`.
   'keepAwake',
-  // Where owner notifications go, as JSON: `{kind: 'ntfy'|'slack'|'webhook',
-  // server?, setAt, setBy}`. The target (a URL, or the ntfy topic) is not here:
-  // it is in the secret store as `notify-target`. Only PUT
-  // /v1/settings/notifications writes the two together. See the bridge's `notify.ts`.
-  'notifyTransport',
   // Each notification kind a person switched off, as JSON `{[kind]: false}`; absent is on.
   'notifyKinds',
   // The roles the install's people hold (Product, Legal, Engineering and the
@@ -137,12 +132,11 @@ export const SETTING_KEYS = [
   // /v1/people-roles and the prune when `humans` is saved write it. See the
   // bridge's `people-roles-routes.ts`.
   'personRoles',
-  // Each person's own notification channel, as JSON `{people: {[personId]:
-  // {kind, server?, setAt}}}`. The target (a URL, or the ntfy topic) is a
-  // credential and is never here: it is in the secret store as
-  // `notify-target:person:<id>`. Only /v1/me/notifications and removing a
-  // person write it. See the bridge's `notify.ts`.
-  'personNotify',
+  // `notifyTransport` and `personNotify` named ntfy, Slack or a webhook as
+  // where notifications went, until ADR 0049 retired them: migration 0165
+  // deletes them, the bridge's `PATCH /v1/install` refuses them in words
+  // (`RETIRED_SETTING_KEYS` in its `notify.ts`), and a restore of an older
+  // archive skips them as keys it does not know.
 ] as const;
 
 export type SettingKey = (typeof SETTING_KEYS)[number];

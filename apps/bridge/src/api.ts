@@ -109,10 +109,9 @@ import { onAccountsWorkedIn, registerAppReachRoutes, repositoryFrom, type AppRea
 import { engineUpdatesFor, registerEngineUpdateRoutes } from './engine-updates.js';
 import { selfUpdateAttentionFromSettings } from './self-update.js';
 import { ATTENTION_WINDOW_DAYS, attentionItems, ClosedSubjects, readAttention, registerAttentionRoutes, STOPPED_BY_A_PERSON, type AttentionDeps, type HeldPromote } from './attention.js';
-import { notificationSettingsView, saveNotificationSettings, type NotificationSettingsInput, type Notifier } from './notify.js';
+import { notificationSettingsView, RETIRED_CHANNEL_REFUSAL, RETIRED_SETTING_KEYS, saveNotificationSettings, type NotificationSettingsInput, type Notifier } from './notify.js';
 import { WaitingNotices } from './notify-waiting.js';
 import { openGatesFor, readAudienceFacts, withAudiences, type AudienceFacts } from './needs-you-audience.js';
-import { NOTIFICATIONS_CHECK } from './health/checks/notifications.js';
 import { bridgeStopReason, stoppedByTheBridge, THE_BRIDGE } from './bridge-stops.js';
 import { asAutomation } from './automation-bot.js';
 import { livePersonGitHubDeps, PersonFlows, registerPersonGitHubRoutes } from './person-github.js';
@@ -2073,10 +2072,10 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
     return { cap: minutes };
   });
 
-  // Settings → Notifications: where the bridge notifies a person, which
-  // kinds, and a test that proves it. The target is a credential (a Slack or
-  // webhook URL, or an ntfy topic anyone could subscribe to): it goes to the
-  // secret store only, and comes back masked.
+  // Settings → Notifications: which kinds of notification are on, for every
+  // device. Where they go is each person's devices (`/v1/me/push`, ADR 0048);
+  // ntfy, Slack and the webhook are retired (ADR 0049), and a request that
+  // still names one is told what to do instead.
   const notifierOrRefuse = (): Notifier => {
     if (!deps.notifier) throw new HttpFailure(503, 'this bridge sends no notifications: it was started without a notifier');
     return deps.notifier;
@@ -2085,19 +2084,14 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
   router.add('PUT', '/v1/settings/notifications', async ({ body, identity }) => {
     const notifier = notifierOrRefuse();
     const input = await body<NotificationSettingsInput | null>();
-    if (!input || typeof input !== 'object') throw new HttpFailure(400, 'send {kind, server?, target?, switches?}');
+    if (!input || typeof input !== 'object') throw new HttpFailure(400, 'send {switches}');
     const saved = await saveNotificationSettings(notifier.store, input, identity);
     if (!saved.ok) throw new HttpFailure(400, saved.error);
     await audit({ actor: identity, action: 'settings.notifications_changed', target: 'install', payload: { ...saved.change } });
-    // A new transport is unproved until a send gets through: the card says so now, not in five minutes.
-    deps.health?.runSoon([NOTIFICATIONS_CHECK]);
     return notificationSettingsView(notifier);
   });
   router.post('/v1/settings/notifications/test', async () => {
-    const result = await notifierOrRefuse().test();
-    if (!result) throw new HttpFailure(400, 'Nothing to test: choose where to notify you first');
-    deps.health?.runSoon([NOTIFICATIONS_CHECK]);
-    return result;
+    throw new HttpFailure(410, RETIRED_CHANNEL_REFUSAL, { code: 'retired' });
   });
 
   // How long the bridge was away, and what the start after it resumed or
@@ -3323,6 +3317,9 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
     }
 
     for (const [key, value] of Object.entries(input)) {
+      // Where ntfy, Slack or a webhook was set, before ADR 0049 retired them:
+      // said before the unknown-key check, so whoever sends one learns why.
+      if ((RETIRED_SETTING_KEYS as readonly string[]).includes(key)) throw new HttpFailure(400, RETIRED_CHANNEL_REFUSAL);
       if (!settings.isSettingKey(key)) throw new HttpFailure(400, `${key} is not a setting`);
       // The bridge's own: written from GitHub's answer when humans is saved,
       // so a login is never pinned to an account somebody typed in.
@@ -3347,13 +3344,7 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
       // resume written here skipped its audit and what a resume starts.
       if (key === 'workPausedSeats') throw new HttpFailure(400, 'pause and resume a seat with POST /v1/crew/<bot>/pause and /v1/crew/<bot>/resume, which are audited');
       if (key === 'heldItems') throw new HttpFailure(400, 'hold and release a work item with POST /v1/items/<subject>/pause and /v1/items/<subject>/resume, which are audited');
-      // Its target is in the secret store, written beside it: set apart, a
-      // kind could name a transport whose target is another kind's.
-      if (key === 'notifyTransport' || key === 'notifyKinds') {
-        throw new HttpFailure(400, `${key} is written by PUT /v1/settings/notifications, which keeps where notifications go and its target together`);
-      }
-      // Each entry is one person's, written by them beside their own secret.
-      if (key === 'personNotify') throw new HttpFailure(400, 'personNotify is written by each person with PUT /v1/me/notifications, which keeps their channel and its target together');
+      if (key === 'notifyKinds') throw new HttpFailure(400, 'notifyKinds is written by PUT /v1/settings/notifications, which checks each kind');
       if (key === 'unownedIssues') throw new HttpFailure(400, 'unownedIssues is kept by the intake sweep; answer each issue with POST /v1/repos/<repo>/unowned/intake, /ignore or /close');
       if (typeof value !== 'string') throw new HttpFailure(400, `${key} must be a string`);
 

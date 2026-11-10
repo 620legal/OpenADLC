@@ -316,6 +316,29 @@ describe('an archive written before a backup could be chosen', () => {
   });
 });
 
+describe('an archive written before ntfy, Slack and the webhook were retired', () => {
+  it('restores, leaving out the channels’ settings and targets and keeping the switches', async () => {
+    // ADR 0049: written back, the targets would be credentials nothing reads,
+    // and the settings would name a channel nothing sends to.
+    const contents = archive();
+    contents.settings.notifyTransport = JSON.stringify({ kind: 'ntfy', server: 'https://ntfy.sh', setAt: '2026-06-01T00:00:00.000Z', setBy: 'alex' });
+    contents.settings.personNotify = JSON.stringify({ people: { p1: { kind: 'slack', setAt: '2026-06-01T00:00:00.000Z' } } });
+    contents.settings.notifyKinds = JSON.stringify({ cap_warning: false });
+    contents.secrets['notify-target'] = 'zzz-ntfy-topic-zzz';
+    contents.secrets['notify-target:person:p1'] = 'https://hooks.slack.com/services/zzz';
+
+    const { recorded, plan } = await restoreOnto(contents);
+
+    expect(recorded.settings).toMatchObject({ notifyKinds: JSON.stringify({ cap_warning: false }) });
+    expect(recorded.settings).not.toHaveProperty('notifyTransport');
+    expect(recorded.settings).not.toHaveProperty('personNotify');
+    expect(recorded.secrets.has('notify-target')).toBe(false);
+    expect(recorded.secrets.has('notify-target:person:p1')).toBe(false);
+    expect(plan.settings.unknown).toEqual(expect.arrayContaining(['notifyTransport', 'personNotify']));
+    expect(plan.secrets.skipped).toEqual(expect.arrayContaining(['notify-target', 'notify-target:person:p1']));
+  });
+});
+
 describe('an assignment nobody chose', () => {
   it('is not restored: it came from config/bots.yaml, which this install reads for itself', () => {
     const found = sourceInstall();

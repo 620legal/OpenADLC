@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseYamlFile, reviewRulesSchema } from '@openadlc/shared';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { DEFAULT_REVIEW, eventRetentionDaysFrom, identityModeFrom, loadBridgeConfig } from './config.js';
+import { DEFAULT_REVIEW, eventRetentionDaysFrom, identityModeFrom, loadBridgeConfig, RETIRED_WEBHOOK_WARNING, retiredEnvWarning } from './config.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const saved = process.env.OPENADLC_IDENTITY_MODE;
@@ -168,5 +168,26 @@ describe('a key config/ does not read', () => {
       vi.unstubAllEnvs();
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe('OPENADLC_NOTIFY_WEBHOOK, retired (ADR 0049)', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('is said once at start when set, and nothing when blank or unset', () => {
+    expect(retiredEnvWarning({ OPENADLC_NOTIFY_WEBHOOK: 'https://x' })).toBe(RETIRED_WEBHOOK_WARNING);
+    expect(RETIRED_WEBHOOK_WARNING).toContain('ignored');
+    expect(RETIRED_WEBHOOK_WARNING).toContain('Settings → Notifications');
+    expect(retiredEnvWarning({ OPENADLC_NOTIFY_WEBHOOK: '  ' })).toBeNull();
+    expect(retiredEnvWarning({})).toBeNull();
+  });
+
+  it('is not read into the config, and does not stop the bridge starting', () => {
+    vi.stubEnv('OPENADLC_NOTIFY_WEBHOOK', 'https://hooks.example.invalid/x');
+    const config = loadBridgeConfig();
+    expect(config).not.toHaveProperty('notifyWebhook');
+    expect(JSON.stringify(config)).not.toContain('hooks.example.invalid');
   });
 });

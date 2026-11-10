@@ -1105,51 +1105,19 @@ export interface SpendingScope {
 /** The kinds of notification a person can switch off, in the order Settings lists them. */
 export const NOTIFY_SWITCHES = ['gate_opened', 'merge_waiting', 'review_stalled', 'cap_warning', 'promote_waiting', 'check_failing'] as const;
 export type NotifySwitch = (typeof NOTIFY_SWITCHES)[number];
-export type NotifyTransportKind = 'ntfy' | 'slack' | 'webhook';
 
 /**
- * Settings → Notifications as the bridge shows it (`GET /v1/settings/notifications`).
- * `target` is masked: the host and last four characters, never the whole
- * URL or topic, which are credentials.
+ * Settings → Notifications as the bridge shows it (`GET /v1/settings/notifications`):
+ * which kinds are on, for every device. Where they go is each person's
+ * devices (`pushDevices`); ntfy, Slack and the webhook are retired (ADR 0049).
  */
 export interface NotificationSettingsView {
-  /** Settings, `OPENADLC_NOTIFY_WEBHOOK`, or nowhere. */
-  source: 'settings' | 'env' | 'none';
-  kind: NotifyTransportKind | null;
-  server: string | null;
-  target: string | null;
   switches: Record<NotifySwitch, boolean>;
-  /** The newest send since the transport was set, a test or a real one. */
-  last: { at: string; event: string; ok: boolean; status: number | null; error: string | null } | null;
 }
 
-/** What a save sends. An omitted target keeps the one saved; a null kind clears it. */
+/** What a save sends. */
 export interface NotificationSettingsUpdate {
-  kind?: NotifyTransportKind | null;
-  server?: string;
-  target?: string;
-  switches?: Partial<Record<NotifySwitch, boolean>>;
-}
-
-/**
- * Your channel (`GET /v1/me/notifications`): where the bridge tells you about
- * the Needs-you items routed to you. `target` is masked, as the install's is.
- */
-/** What a person may choose for their own channel: no webhook, which could aim the bridge at any address (ADR 0035). */
-export type PersonalNotifyKind = 'ntfy' | 'slack';
-
-export interface PersonalNotificationView {
-  kind: PersonalNotifyKind | null;
-  /** The install's ntfy server, which a person's topic is sent to. */
-  server: string | null;
-  target: string | null;
-  last: { at: string; event: string; ok: boolean; status: number | null; error: string | null } | null;
-}
-
-/** What a save of Your channel sends: a null kind stops it; an omitted target keeps the one saved. */
-export interface PersonalNotificationUpdate {
-  kind: PersonalNotifyKind | null;
-  target?: string;
+  switches: Partial<Record<NotifySwitch, boolean>>;
 }
 
 /**
@@ -1541,7 +1509,6 @@ export const api = {
     get<InsightsView>(`/v1/insights?days=${options.days}${options.repo ? `&repo=${encodeURIComponent(options.repo)}` : ''}`),
   spendingLimits: () => get<SpendingLimitsView>('/v1/spending/limits'),
   notifications: () => get<NotificationSettingsView>('/v1/settings/notifications'),
-  myNotifications: () => get<PersonalNotificationView>('/v1/me/notifications'),
   pushDevices: () => get<PushDevicesView>('/v1/me/push'),
   hosts: () => get<HostsView>('/v1/hosts'),
   attention: () => get<{ items: AttentionItem[] }>('/v1/attention'),

@@ -25,10 +25,8 @@ import {
   ensureInternalSecret,
   FileSecretStore,
   internalSecretRef,
+  isRetiredNotifyTargetRef,
   modelAccountRef,
-  notifyTargetRef,
-  PERSON_NOTIFY_TARGET_PREFIX,
-  personNotifyTargetRef,
   PUSH_DEVICE_PREFIX,
   pushDeviceRef,
   pushVapidKeyRef,
@@ -89,18 +87,17 @@ describe('the console secret', () => {
   });
 });
 
-describe('a person’s own notification target', () => {
-  it('is kept per person, apart from the install’s, under a ref the store accepts', async () => {
-    const ref = personNotifyTargetRef('6f1c2d3e-0000-4000-8000-000000000001');
-    expect(ref).toBe('notify-target:person:6f1c2d3e-0000-4000-8000-000000000001');
-    expect(ref.startsWith(PERSON_NOTIFY_TARGET_PREFIX)).toBe(true);
-    expect(ref).not.toBe(notifyTargetRef());
-
-    const root = mkdtempSync(join(tmpdir(), 'openadlc-secrets-'));
-    const store = new FileSecretStore(root);
-    await store.set(ref, 'https://ntfy.sh/alice-topic');
-    expect(await store.get(ref)).toBe('https://ntfy.sh/alice-topic');
-    rmSync(root, { recursive: true, force: true });
+describe('a retired notification target', () => {
+  it('is the install’s ntfy, Slack or webhook target, or a person’s by id, and nothing beside them', () => {
+    // ADR 0049: the bridge deletes these at start and a backup leaves them,
+    // so a ref that only looks like one must not be taken with them.
+    expect(isRetiredNotifyTargetRef('notify-target')).toBe(true);
+    expect(isRetiredNotifyTargetRef('notify-target:person:p1')).toBe(true);
+    expect(isRetiredNotifyTargetRef('notify-target:person:6f1c2d3e-0000-4000-8000-000000000001')).toBe(true);
+    expect(isRetiredNotifyTargetRef('notify-targetx')).toBe(false);
+    expect(isRetiredNotifyTargetRef('notify-target:person:')).toBe(false);
+    expect(isRetiredNotifyTargetRef('push-device:p1:d1')).toBe(false);
+    expect(isRetiredNotifyTargetRef('push-vapid-key')).toBe(false);
   });
 });
 

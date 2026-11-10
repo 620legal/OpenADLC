@@ -1,23 +1,19 @@
 import { audit, people as peopleStore, users as usersStore } from '@openadlc/db';
 import type { IdentityMode } from './identity.js';
-import {
-  personalNotificationView,
-  savePersonalNotification,
-  type Notifier,
-  type PersonalNotificationInput,
-} from './notify.js';
+import { RETIRED_CHANNEL_REFUSAL, type Notifier } from './notify.js';
 import { addDevice, devicesView, removeDevice, type PushStore } from './push-devices.js';
 import { HttpFailure, type Router } from './router.js';
 
 /**
- * Your channel, in Settings → Notifications: where the bridge tells one
- * person about the Needs-you items routed to them (ADR 0035). Each route acts
- * only on the caller's own person, found by the email they signed in with,
- * so nobody reads or changes anyone else's. The target is a credential, kept
- * in the secret store and shown masked, as the install's is.
+ * A person's own devices, in Settings → Notifications: where the bridge
+ * pushes the Needs-you items routed to them (ADR 0048), and, for an admin,
+ * the ones for everyone. Each route acts only on the caller's own person,
+ * found by the email they signed in with, so nobody reads or changes anyone
+ * else's.
+ *
+ * Their own ntfy or Slack channel, `/v1/me/notifications`, is retired (ADR
+ * 0049): its routes stay, read and write nothing, and say what to do instead.
  */
-
-export const LOCAL_REFUSAL = 'A local install has one person: its channel is the install’s, in Settings → Notifications';
 
 export interface MyNotificationsDeps {
   identityMode: IdentityMode;
@@ -26,14 +22,17 @@ export interface MyNotificationsDeps {
   personOf(identity: string): Promise<{ id: string } | null>;
   /** On a local install every identity is the operator, whose devices these are. */
   operator?(): Promise<{ id: string } | null>;
-  /** Writes the audit entry of a save: never the target. */
+  /** Writes the audit entry of a save: never the subscription. */
   audit?(entry: { actor: string; action: string; target: string; payload: Record<string, unknown> }): Promise<void>;
+  /** A device was added or removed: the `notifications` check reads whether an admin has one now, not in five minutes. */
+  devicesChanged?(): void;
 }
 
-export function liveMyNotificationsDeps(identityMode: IdentityMode, notifier: Notifier | null): MyNotificationsDeps {
+export function liveMyNotificationsDeps(identityMode: IdentityMode, notifier: Notifier | null, devicesChanged?: () => void): MyNotificationsDeps {
   return {
     identityMode,
     notifier,
+    ...(devicesChanged ? { devicesChanged } : {}),
     personOf: (identity) => peopleStore.personByEmail(usersStore.normalizeEmail(identity)),
     operator: () => peopleStore.operator(),
     audit: async (entry) => {
@@ -42,58 +41,18 @@ export function liveMyNotificationsDeps(identityMode: IdentityMode, notifier: No
   };
 }
 
-// Any string goes on to the save, which refuses a webhook or an unknown kind in words a person can act on.
-function kindIn(value: unknown): string | null {
-  if (value === null) return null;
-  if (typeof value === 'string') return value;
-  throw new HttpFailure(400, 'kind is ntfy, slack, or null to stop');
-}
-
 export function registerMyNotificationsRoutes(router: Router, deps: MyNotificationsDeps): void {
-  const mine = async (identity: string): Promise<{ notifier: Notifier; personId: string }> => {
-    if (deps.identityMode === 'local') throw new HttpFailure(400, LOCAL_REFUSAL, { code: 'local' });
-    if (!deps.notifier) throw new HttpFailure(503, 'this bridge sends no notifications: it was started without a notifier');
-    const person = await deps.personOf(identity);
-    if (!person) throw new HttpFailure(403, 'You are not a person in People: ask an admin to add you under Settings → People', { code: 'not-a-person' });
-    return { notifier: deps.notifier, personId: person.id };
+  const retired = async (): Promise<never> => {
+    throw new HttpFailure(410, RETIRED_CHANNEL_REFUSAL, { code: 'retired' });
   };
-
-  router.get('/v1/me/notifications', async ({ identity }) => {
-    const { notifier, personId } = await mine(identity);
-    return personalNotificationView(notifier, personId);
-  });
-
-  router.add('PUT', '/v1/me/notifications', async ({ body, identity }) => {
-    const { notifier, personId } = await mine(identity);
-    const raw = await body<Record<string, unknown> | null>();
-    if (!raw || typeof raw !== 'object' || !('kind' in raw)) throw new HttpFailure(400, 'send {kind, target?}; kind null stops your channel');
-    const input: PersonalNotificationInput = {
-      kind: kindIn(raw.kind),
-      ...(typeof raw.server === 'string' ? { server: raw.server } : {}),
-      ...(typeof raw.target === 'string' ? { target: raw.target } : {}),
-    };
-    const saved = await savePersonalNotification(notifier.store, personId, input, identity);
-    if (!saved.ok) throw new HttpFailure(400, saved.error);
-    await deps.audit?.({
-      actor: identity,
-      action: 'notify.personal_configured',
-      target: `person:${personId}`,
-      payload: { person: personId, kind: saved.change.kind, targetChanged: saved.change.targetChanged },
-    });
-    return personalNotificationView(notifier, personId);
-  });
-
-  router.post('/v1/me/notifications/test', async ({ identity }) => {
-    const { notifier, personId } = await mine(identity);
-    const result = await notifier.testPerson(personId);
-    if (!result) throw new HttpFailure(400, 'Nothing to test: choose where to notify you first');
-    return result;
-  });
+  router.get('/v1/me/notifications', retired);
+  router.add('PUT', '/v1/me/notifications', retired);
+  router.post('/v1/me/notifications/test', retired);
 
   // ---------------------------------------------------------------- this device (ADR 0048)
   //
-  // Push to each device the person turned notifications on in. Unlike Your
-  // channel, a local install has these too: its one person is the operator,
+  // Push to each device the person turned notifications on in. A local
+  // install has these too: its one person is the operator,
   // and the computer the console runs on can take push over 127.0.0.1. The
   // subscription goes to the secret store; only the device's name, when it
   // was added and its push service's host come back or reach the audit log.
@@ -121,6 +80,7 @@ export function registerMyNotificationsRoutes(router: Router, deps: MyNotificati
       target: `person:${personId}`,
       payload: { person: personId, device: added.device.id, name: added.device.name, service: added.service },
     });
+    deps.devicesChanged?.();
     return added.device;
   });
 
@@ -134,6 +94,7 @@ export function registerMyNotificationsRoutes(router: Router, deps: MyNotificati
       target: `person:${personId}`,
       payload: { person: personId, device: removed.id, name: removed.name, service: removed.service },
     });
+    deps.devicesChanged?.();
     return { removed: removed.id };
   });
 

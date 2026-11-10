@@ -4,7 +4,7 @@ import type { BridgeConfig } from './config.js';
 import { effectiveConfig } from './effective-config.js';
 import { resolveGithubAccount } from './human-ids.js';
 import type { IdentityMode } from './identity.js';
-import { databaseNotifyStore, forgetPersonalNotification } from './notify.js';
+import { databasePushStore, forgetDevices } from './push-devices.js';
 import { iapAccess, type IapAccess, type Roles } from './roles.js';
 import { HttpFailure, type Router } from './router.js';
 
@@ -68,8 +68,8 @@ export interface PeopleRouteDeps {
   /** The GitHub account the signed-in person linked, for `GET /v1/me`. */
   githubOf?: (identity: string) => Promise<{ login: string } | null>;
   /**
-   * Takes away a person's own notification channel and its secret, once they
-   * are removed or merged into someone else: left, the secret outlived them.
+   * Takes away a person's push devices and their subscriptions, once they are
+   * removed or merged into someone else: left, the secrets outlived them.
    */
   forgetChannel?: (personId: string, by: string) => Promise<void>;
 }
@@ -99,15 +99,15 @@ export function livePeopleDeps(config: BridgeConfig, roles: PeopleRouteDeps['rol
           : await personAccounts.ofIdentity(usersStore.normalizeEmail(identity));
       return linked ? { login: linked.githubLogin } : null;
     },
-    forgetChannel: (personId, by) => forgetPersonalNotification(databaseNotifyStore(), personId, by),
+    forgetChannel: (personId) => forgetDevices(databasePushStore(), personId),
     ...(config.identityMode === 'iap' ? { access: (email: string) => iapAccess(email, consoleMembers) } : {}),
   };
 }
 
-/** Forgets a person's own channel; a failure is said and leaves the person's change done, since the channel is read only for people who exist. */
+/** Forgets a person's devices; a failure is said and leaves the person's change done, since devices are read only for people who exist. */
 async function forgetChannel(deps: PeopleRouteDeps, personId: string, by: string): Promise<void> {
   await deps.forgetChannel?.(personId, by).catch((error: unknown) => {
-    console.warn(`[bridge] could not remove the notification channel of person ${personId}: ${error instanceof Error ? error.message : error}`);
+    console.warn(`[bridge] could not remove the push devices of person ${personId}: ${error instanceof Error ? error.message : error}`);
   });
 }
 

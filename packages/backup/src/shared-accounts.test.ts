@@ -179,10 +179,11 @@ describe('backing up a crew that shares one GitHub account', () => {
     expect(contents.secrets['ssh-signing-qa']).toBe('zzz-qa-signing-zzz');
   });
 
-  it('carries where notifications go with the install, so a restored transport has its target', () => {
-    // Left out as "not something a backup carries", a restore brought back
-    // `notifyTransport` with no `notify-target`, and every send failed.
-    expect(classifySecret('notify-target', SHARED_SEATS)).toEqual({ group: 'install' });
+  it('never carries a retired ntfy, Slack or webhook target, the install’s or a person’s', () => {
+    // ADR 0049: one the bridge has not deleted yet is a credential nothing reads.
+    const never = { group: 'never', reason: 'a notification channel OpenADLC no longer sends to' };
+    expect(classifySecret('notify-target', SHARED_SEATS)).toEqual(never);
+    expect(classifySecret('notify-target:person:p1', SHARED_SEATS)).toEqual(never);
   });
 
   it('sorts a sign-in filed under an account’s name as that account’s seats’, not as belonging to no bot', () => {

@@ -32,7 +32,7 @@ const STALL = item({
 
 function setUp(initial: AttentionItem[], options: { seen?: boolean } = {}) {
   const store = memoryNotifyStore();
-  const notifier = new Notifier({ notifyWebhook: '', consoleUrl: CONSOLE } as never, store);
+  const notifier = new Notifier({ consoleUrl: CONSOLE } as never, store);
   const send = vi.spyOn(notifier, 'send');
   let items = initial;
   const notices = new WaitingNotices({ notifier, items: async () => items, consoleUrl: CONSOLE, say: () => undefined });
@@ -136,7 +136,7 @@ describe('the merge-waiting and review-stopped notifications', () => {
     set([MERGE]);
     await notices.pass();
 
-    const again = new Notifier({ notifyWebhook: '', consoleUrl: CONSOLE } as never, store);
+    const again = new Notifier({ consoleUrl: CONSOLE } as never, store);
     const send = vi.spyOn(again, 'send');
     await new WaitingNotices({ notifier: again, items: async () => [MERGE], consoleUrl: CONSOLE }).pass();
     expect(send).not.toHaveBeenCalled();
@@ -158,7 +158,7 @@ describe('the merge-waiting and review-stopped notifications', () => {
 
   it('sends nothing already waiting when the first look stopped part way', async () => {
     const store = memoryNotifyStore();
-    const notifier = new Notifier({ notifyWebhook: '', consoleUrl: CONSOLE } as never, store);
+    const notifier = new Notifier({ consoleUrl: CONSOLE } as never, store);
     const send = vi.spyOn(notifier, 'send');
     const first = { ...MERGE, since: '2026-11-01T18:00:00.000Z' };
     const second = { ...MERGE, id: 'merge:openadlc#15', since: '2026-11-01T19:00:00.000Z' };
@@ -185,7 +185,7 @@ describe('the merge-waiting and review-stopped notifications', () => {
   it('carries on after a look that failed', async () => {
     const say = vi.fn();
     const notices = new WaitingNotices({
-      notifier: new Notifier({ notifyWebhook: '', consoleUrl: CONSOLE } as never, memoryNotifyStore()),
+      notifier: new Notifier({ consoleUrl: CONSOLE } as never, memoryNotifyStore()),
       items: async () => {
         throw new Error('the database blinked');
       },
