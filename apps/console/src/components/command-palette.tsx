@@ -60,7 +60,7 @@ export function CommandPalette({ data, repo = 'all' }: { data: HeaderData; repo?
         />
       )}
       {intake && (
-        <IntakeDialog repos={data.repos} labelOf={(name) => labelIn(data.crew, name)} defaultRepo={repo} open onOpenChange={setIntake} />
+        <IntakeDialog repos={data.repos} labelOf={(name) => labelIn(data.crew, name)} open onOpenChange={setIntake} />
       )}
     </>
   );
