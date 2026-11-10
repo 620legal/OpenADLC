@@ -78,7 +78,7 @@ import { chooseIssueText, editNotTaken } from './vouched-text.js';
 import { workflowFile, type DeployPipeline, type RevertOutcome } from './deploy-pipeline.js';
 import { releaseOf, type GitHubRelease } from './release-shipping.js';
 import type { DeliveryKnowledge } from './delivery-rules.js';
-import { askPeopleAgain, awaitPeople, BotBusyError, crewReviewsOn, REVERT_BRANCH_PREFIX, REVIEW_START_REFUSED, reviewStartLock, SubjectClosedError, type TaskService } from './task-service.js';
+import { askPeopleAgain, awaitPeople, BotBusyError, BuilderWorkingError, crewReviewsOn, REVERT_BRANCH_PREFIX, REVIEW_START_REFUSED, reviewStartLock, SubjectClosedError, type TaskService } from './task-service.js';
 import { FORBIDDEN_PUSH, ciKeysChanged, contentChanged, fastPathOf, forbiddenPushGate, reviewSample } from './automation.js';
 import { continuesBranch } from './build-left.js';
 import { BRANCH_UPDATED_BY_LINE, DEPLOY_PATH_BRANCH_PREFIX, headInRepository, issueNumberFromBranch, issuesMergedBy, madeByLineUpdate, ownIssueOf, REVIEW_ROUND_OPENED, REVIEW_STALLED, REVIEW_SUBMITTED_ON, scopeLabelAcceptedFrom } from './work.js';
@@ -2981,6 +2981,13 @@ export class Webhooks {
         // Merged or closed since the read above, which the start said and
         // audited: no other seat is asked either.
         if (error instanceof SubjectClosedError) break;
+        // Its builder is working on it: no seat starts on a head it is about
+        // to replace. The round and the gate above stand, and the seats are
+        // asked on the head it leaves when its task ends (`builderEnded`).
+        if (error instanceof BuilderWorkingError) {
+          console.log(`[bridge] ${repo.name}#${pr.number}: no review started yet: ${error.message}`);
+          break;
+        }
         console.warn(`[bridge] review task for ${reviewer} not started: ${error instanceof Error ? error.message : error}`);
       }
     }

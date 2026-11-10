@@ -11,7 +11,7 @@ import { Automation, mergeDecision, type MergeFacts } from './automation.js';
 import { attentionItems } from './attention.js';
 import { recordDesignMemory } from './design-memory.js';
 import { linkIssue, linkPull } from './work-items.js';
-import { BotBusyError, TaskService } from './task-service.js';
+import { BotBusyError, BuilderWorkingError, TaskService, builderOn } from './task-service.js';
 import { DispatchGate } from './dispatch-gate.js';
 import { alreadyLanded } from './gates.js';
 import { StageHandoff } from './stage-handoff.js';
@@ -9770,6 +9770,8 @@ describe('a push that changed the diff, whoever made it', () => {
     );
 
     expect(await stages.onTaskDone({ kind: 'patch', subjectRef: 'openadlc#118', taskId: patch!.id as string, branch: BRANCH })).toBe('review');
+    // The round's end asks the seats, whatever way it ended.
+    await stages.builderEnded({ kind: 'patch', subjectRef: 'openadlc#118', branch: BRANCH });
 
     expect(reviewStanding).toHaveBeenCalledWith('janedoe/openadlc', expect.objectContaining({ number: 118, head: { sha: UPDATED, ref: BRANCH } }));
     expect(reviewsBy(SECOND)).toEqual(['2026-10-23T01:01:28.000Z', '2026-10-23T01:20:00.000Z']);
@@ -9777,6 +9779,74 @@ describe('a push that changed the diff, whoever made it', () => {
     expect(reviewsBy(LEAD)).toEqual([]);
     expect(open).not.toHaveBeenCalledWith(expect.objectContaining({ bot: LEAD.name }));
     expect(log.some((event) => event.type === 'review.stalled')).toBe(false);
+  });
+
+  it('starts no seat on a push while the builder’s round is running, records the round and the gate, and asks the seats on its head once it ends (#265)', async () => {
+    // #257: a round a person's message started ran while the lead reviewed
+    // the head it replaced.
+    const db = await import('@openadlc/db');
+    const { webhooks, open, gates, taskService } = bridge();
+    // The start the bridge makes holds a review as `openNow` does.
+    const opening = open.getMockImplementation()!;
+    open.mockImplementation(async (input) => {
+      const builder = input.kind === 'review' ? await builderOn(input.subjectRef, (input as { branch?: string }).branch, (input as { issueNumber?: number }).issueNumber) : null;
+      if (builder) throw new BuilderWorkingError(input.subjectRef, builder);
+      return opening(input);
+    });
+    const listed = vi.mocked(db.tasks.listTasksOnSubjects).getMockImplementation()!;
+    vi.mocked(db.tasks.listTasksOnSubjects).mockImplementation((async (refs: readonly string[]) =>
+      store.botTasks.filter((task) => refs.includes(task.subjectRef as string))) as never);
+
+    try {
+      at('01:01:28');
+      await pushed(webhooks, EARLIER, BUILT);
+      done();
+
+      // 01:10, the person's message starts a patch round; at 01:16:07 it pushes, with its checks passed.
+      store.botTasks.push({ id: 'task-patch', botId: BUILDER.id, kind: 'patch', subjectRef: 'openadlc#118', state: 'running', branch: BRANCH, createdAt: '2026-10-23T01:10:00.000Z' });
+      store.localCiPasses.add(UPDATED);
+      at('01:16:07');
+      await pushed(webhooks, BUILT, UPDATED);
+
+      expect(rounds()).toEqual([
+        { sha: BUILT, at: '2026-10-23T01:01:28.000Z' },
+        { sha: UPDATED, at: '2026-10-23T01:16:07.000Z' },
+      ]);
+      expect(gates.at(-1)).toEqual({ sha: UPDATED, state: 'pending', description: `waiting on ${SECOND.name}` });
+      expect(reviewsBy(SECOND)).toEqual(['2026-10-23T01:01:28.000Z']);
+      expect(console.warn).not.toHaveBeenCalled();
+
+      // The gate sweep, and the lead's turn, start nothing either.
+      at('01:18:00');
+      const input = { repo: { name: 'openadlc' }, prNumber: 118, branch: BRANCH, issueNumber: 108 };
+      expect(await taskService.openMissingReviews({ ...input, waitingOn: [SECOND.name] })).toEqual([]);
+      expect(await taskService.openLeadReview({ ...input, seat: LEAD.name, since: null })).toBeNull();
+      expect(store.botTasks.filter((task) => task.kind === 'review' && task.state === 'running')).toEqual([]);
+
+      // 01:20, the round ends: the second reviewer is asked on the head it left.
+      at('01:20:00');
+      done();
+      const reviewStanding = vi.fn(async () => ({
+        gate: { state: 'pending', description: `waiting on ${SECOND.name}` },
+        decision: { reviewers: [SECOND.name, LEAD.name], lead: LEAD.name, approvers: [LEAD.name], reasons: {}, humanReviewRequired: false },
+        posted: [],
+        leadDue: null,
+      }));
+      const stages = new StageHandoff(
+        { moveStage: vi.fn(async () => ({ moved: true })), reviewRules: () => ({ reviewers: [{ seat: LEAD.name, lead: true }, { seat: SECOND.name }] }), reviewStanding } as never,
+        taskService,
+        null,
+        null,
+        null,
+        async () => ({ draft: false, headSha: UPDATED, headRef: BRANCH, baseRef: 'main', labels: [] }),
+      );
+      await stages.builderEnded({ kind: 'patch', subjectRef: 'openadlc#118', branch: BRANCH });
+
+      expect(reviewsBy(SECOND)).toEqual(['2026-10-23T01:01:28.000Z', '2026-10-23T01:20:00.000Z']);
+      expect(reviewsBy(LEAD)).toEqual([]);
+    } finally {
+      vi.mocked(db.tasks.listTasksOnSubjects).mockImplementation(listed);
+    }
   });
 });
 

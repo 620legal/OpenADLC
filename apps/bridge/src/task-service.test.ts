@@ -6,6 +6,8 @@ const store = vi.hoisted(() => ({
   health: [] as Record<string, unknown>[],
   healthReadable: true,
   reviewTasks: [] as { botId: string; subjectRef: string; state: string }[],
+  /** Every task on a subject, whatever its kind (`listTasksOnSubjects`): a builder working on a pull request. */
+  onSubjects: [] as { id: string; kind: string; subjectRef: string; state: string; branch?: string | null }[],
   issues: [] as { repoName: string; number: number; prNumber: number | null; labels: string[] }[],
   /** When the current round of reviews began (`review.round_opened`), or null when none was recorded. */
   roundAt: null as string | null,
@@ -76,6 +78,7 @@ vi.mock('@openadlc/db', () => ({
     discardUnstarted: vi.fn(async () => undefined),
     pausedWithAnswer: vi.fn(async () => []),
     createTask: vi.fn(async (input: { botId: string }) => ({ id: 'task-2', ...input })),
+    listTasksOnSubjects: vi.fn(async (refs: readonly string[]) => store.onSubjects.filter((task) => refs.includes(task.subjectRef))),
     listTasksForSubjects: vi.fn(async (_kind: string, refs: readonly string[]) =>
       store.reviewTasks.filter((task) => refs.includes(task.subjectRef)),
     ),
@@ -97,6 +100,7 @@ import type { HostdClient } from './hostd-client.js';
 import { causeOfFailure } from './health/checks/crew.js';
 import {
   BotBusyError,
+  BuilderWorkingError,
   HostFullError,
   ItemHeldError,
   PrerequisiteNotReadyError,
@@ -2039,6 +2043,85 @@ describe('a bot that must be able to work before a task starts', () => {
         quiet.mockRestore();
       }
       expect(busy.mock.calls.map(([call]) => call.bot)).toEqual([SECURITY.name, LEAD.name]);
+    });
+  });
+
+  describe('a pull request whose builder is working on it (#265)', () => {
+    // #257: a round a person's message started ran while the lead reviewed
+    // the head it was about to replace.
+    const BRANCH = 'agent/x/1-issue-1';
+    const patch = (state: string) => ({ id: 'task-patch', kind: 'patch', subjectRef: 'openadlc#2', state, branch: BRANCH });
+    const build = (state: string, branch = BRANCH) => ({ id: 'task-build', kind: 'implement', subjectRef: 'openadlc#1', state, branch });
+    const input = { repo: { name: 'openadlc' }, prNumber: 2, branch: BRANCH, issueNumber: 1 };
+
+    afterEach(() => {
+      store.onSubjects = [];
+    });
+
+    it.each([
+      ['a queued patch round on it', patch('queued')],
+      ['a running patch round on it', patch('running')],
+      ['the running build that opened it, on its branch', build('running')],
+    ])('starts no review, and records nothing, with %s', async (_what, builder) => {
+      store.onSubjects = [builder];
+      const { tasksService, startTask } = readyService();
+
+      const refused = await tasksService.open({ ...REVIEW, bot: SECURITY.name, branch: BRANCH, issueNumber: 1 }).catch((error: unknown) => error);
+
+      expect(refused).toBeInstanceOf(BuilderWorkingError);
+      expect(refused).toMatchObject({ status: 409 });
+      expect((refused as Error).message).toMatch(/^the builder's (patch round|build) on openadlc#2 is (queued|running); the review seats are asked on the head it leaves when it ends$/);
+      expect(tasks.createTask).not.toHaveBeenCalled();
+      expect(startTask).not.toHaveBeenCalled();
+    });
+
+    it.each<[string, ReturnType<typeof patch>]>([
+      ['a paused patch round: it may wait on a person for days', patch('paused')],
+      ...['done', 'failed', 'stopped'].map((state): [string, ReturnType<typeof patch>] => [`a patch round ${state}`, patch(state)]),
+      ['a build on another branch', build('running', 'agent/x/1-issue-1-again')],
+    ])('starts the review with %s', async (_what, builder) => {
+      store.onSubjects = [builder];
+      const { tasksService } = readyService();
+
+      await expect(tasksService.open({ ...REVIEW, bot: SECURITY.name, branch: BRANCH, issueNumber: 1 })).resolves.toMatchObject({ taskId: 'task-2' });
+    });
+
+    it('holds only reviews: the patch round itself starts beside a review already running, and stops nothing', async () => {
+      store.onSubjects = [{ id: 'task-review', kind: 'review', subjectRef: 'openadlc#2', state: 'running' }, patch('running')];
+      const { tasksService } = readyService();
+
+      await expect(tasksService.open({ ...REVIEW, kind: 'patch', skill: 'implement', bot: SECURITY.name, branch: BRANCH, issueNumber: 1 })).resolves.toMatchObject({ taskId: 'task-2' });
+      expect(tasks.updateTaskState).not.toHaveBeenCalled();
+    });
+
+    it('asks no seat from the gate sweep, the lead’s turn or a dismissal, said once for the round, and the dismissal still recorded', async () => {
+      store.onSubjects = [patch('running')];
+      store.askedAgain = [];
+      const { tasksService } = readyService();
+      const open = vi.spyOn(tasksService, 'open').mockResolvedValue({ taskId: 'task-2', session: 's' });
+      const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+      try {
+        expect(await tasksService.openMissingReviews({ ...input, waitingOn: [SECURITY.name] })).toEqual([]);
+        expect(await tasksService.openMissingReviews({ ...input, waitingOn: [SECURITY.name] })).toEqual([]);
+        expect(await tasksService.openLeadReview({ ...input, seat: LEAD.name, since: null })).toBeNull();
+        expect(await tasksService.askAgain({ ...input, seat: SECURITY.name, reviewId: 41 })).toBeNull();
+        expect(open).not.toHaveBeenCalled();
+        expect(warn).not.toHaveBeenCalled();
+        expect(log.mock.calls.map(([line]) => String(line))).toEqual([
+          `[bridge] openadlc#2: the gate waits on ${SECURITY.name}, not asked yet: the builder's patch round on openadlc#2 is running; the review seats are asked on the head it leaves when it ends`,
+        ]);
+        // So the seat is asked past its dismissed review once the round ends.
+        expect(store.askedAgain).toEqual([{ at: expect.any(String), payload: { subjectRef: 'openadlc#2', reviewId: '41', seat: SECURITY.name } }]);
+
+        store.onSubjects = [patch('done')];
+        expect(await tasksService.openMissingReviews({ ...input, waitingOn: [SECURITY.name] })).toHaveLength(1);
+        expect(open).toHaveBeenCalledWith(expect.objectContaining({ bot: SECURITY.name, kind: 'review', subjectRef: 'openadlc#2' }));
+      } finally {
+        log.mockRestore();
+        warn.mockRestore();
+      }
     });
   });
 

@@ -955,6 +955,17 @@ back, is a card in Needs you.
 Review to build is the review loop: changes requested, or CI that fails again
 after its rerun, moves the card to Build and opens the builder's patch round,
 keeping its lease; the next push that changes the diff moves it to Review.
+No review seat starts on a pull request while its builder is queued or
+running on it — a patch round on the pull request, of any kind, or the build
+that opened it, on its head branch. A push, a seat finishing, the gate sweep
+and a person's message start none (`BuilderWorkingError`, from
+`TaskService.openNow`); the push still records its round and sets the gate. A
+review already running finishes. When the builder's task ends — done,
+failed, stopped, or paused on a person — the seats are asked on the head it
+left (`StageHandoff.builderEnded`): the new head's round if it pushed, the
+lead deciding again if it did not, the lead's re-check on a lead-only
+conflict resolution
+([ADR 0043](adr/0043-no-review-seat-starts-while-its-builder-works.md)).
 Closing a crew pull request unmerged releases its lease and stops its
 reviews; reopening it takes the lease again for the same builder and paths
 (`lease.reacquired`), moves the issue to Review and asks the reviewers again,

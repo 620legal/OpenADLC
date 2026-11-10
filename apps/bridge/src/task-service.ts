@@ -173,6 +173,55 @@ export class SubjectClosedError extends Error {
 }
 
 /**
+ * A review asked for on a pull request whose builder is working on it: a
+ * patch round on the pull request, or the build that opened it, queued or
+ * running. On #257 a builder round a person's message started ran while the
+ * lead reviewed the head it was about to replace, and that review was paid
+ * for and thrown away. Nothing is recorded; the seats are asked on the head
+ * the builder leaves when its task ends (`StageHandoff.builderEnded`).
+ */
+export class BuilderWorkingError extends Error {
+  readonly status = 409;
+
+  constructor(
+    readonly subjectRef: string,
+    readonly builder: { id: string; kind: string; state: string },
+  ) {
+    super(builderWorkingWords(subjectRef, builder));
+    this.name = 'BuilderWorkingError';
+  }
+}
+
+/** What is said while a builder holds a pull request's reviews back, here and in a message's answer. */
+export function builderWorkingWords(subjectRef: string, builder: { kind: string; state: string }): string {
+  const what = builder.kind === 'patch' ? 'patch round' : 'build';
+  return `the builder's ${what} on ${subjectRef} is ${builder.state}; the review seats are asked on the head it leaves when it ends`;
+}
+
+/**
+ * The builder task working on a pull request, if one is: a `patch` task on
+ * the pull request, or an `implement` task on the issue it closes whose
+ * branch is the pull request's head, queued or running. A paused one does
+ * not count: it may wait on a person for days, and the head it left can be
+ * reviewed meanwhile. A read that fails holds nothing, as a hold's does
+ * (`heldWords`): a review started on a head that then moves is asked again,
+ * where one never started waits for good.
+ */
+export async function builderOn(subjectRef: string, branch: string | null | undefined, issueNumber: number | null | undefined): Promise<Task | null> {
+  const repo = subjectRef.slice(0, subjectRef.lastIndexOf('#'));
+  const issueRef = issueNumber ? `${repo}#${issueNumber}` : null;
+  const on = await (async () => tasks.listTasksOnSubjects(issueRef ? [subjectRef, issueRef] : [subjectRef]))().catch(() => null);
+  return (
+    on?.find(
+      (task) =>
+        (task.state === 'queued' || task.state === 'running') &&
+        ((task.kind === 'patch' && task.subjectRef === subjectRef) ||
+          (task.kind === 'implement' && issueRef !== null && task.subjectRef === issueRef && Boolean(branch) && task.branch === branch)),
+    ) ?? null
+  );
+}
+
+/**
  * A bot that cannot do the task yet: its GitHub sign-in is not working, it is
  * not in the repository, or hostd is not answering. Nothing is recorded, so
  * no failed task lands on the board beside the card that already says what to
@@ -604,6 +653,28 @@ export class TaskService {
     return true;
   }
 
+  /** The pull requests whose reviews a working builder held back, with the builder task's id: said once a task, not every sweep. */
+  private readonly builderSaid = new Map<string, string>();
+
+  /**
+   * Whether the pull request's builder is working on it, so no review on it
+   * starts (`openNow` refuses every one, `BuilderWorkingError`): said once
+   * for each builder task, and forgotten once it ends. The seats are asked on
+   * the head it leaves (`StageHandoff.builderEnded`).
+   */
+  private async builderHolds(subjectRef: string, branch: string, issueNumber: number | null, seats: readonly string[]): Promise<boolean> {
+    const builder = await builderOn(subjectRef, branch, issueNumber);
+    if (!builder) {
+      this.builderSaid.delete(subjectRef);
+      return false;
+    }
+    if (this.builderSaid.get(subjectRef) !== builder.id) {
+      this.builderSaid.set(subjectRef, builder.id);
+      console.log(`[bridge] ${subjectRef}: the gate waits on ${seats.join(', ')}, not asked yet: ${builderWorkingWords(subjectRef, builder)}`);
+    }
+    return true;
+  }
+
   /** Throws `PrerequisiteNotReadyError` when this bot cannot do a task in the repository yet. */
   async assertReady(bot: { id: string; name: string }, repoName: string | null): Promise<void> {
     const blockers = (await this.blocked([bot], repoName)).get(bot.name);
@@ -666,6 +737,9 @@ export class TaskService {
     // A held piece of work starts no review: asked every sweep, each start
     // was refused, and said so, for as long as the hold stood.
     if (await this.reviewsHeld(subjectRef, candidates.map((bot) => bot.name))) return [];
+    // Nor while its builder works on it: the seats would review a head it is
+    // about to replace. They are asked when its task ends.
+    if (await this.builderHolds(subjectRef, input.branch, input.issueNumber, candidates.map((bot) => bot.name))) return [];
     const blocked = await this.blocked(candidates, input.repo.name);
 
     const started: string[] = [];
@@ -691,8 +765,9 @@ export class TaskService {
         });
         started.push(`${subjectRef}: started ${bot.name}’s review${opened.error ? ` (${opened.error.slice(0, 80)})` : ''}`);
       } catch (error) {
-        // Closed since the gate was read: no other seat is asked either.
-        if (error instanceof SubjectClosedError) break;
+        // Closed since the gate was read, or its builder started since: no
+        // other seat is asked either.
+        if (error instanceof SubjectClosedError || error instanceof BuilderWorkingError) break;
         // A reviewer busy with another pull request is asked again on the
         // next sweep; that is not worth a line every time it is.
         if (!(error instanceof BotBusyError)) {
@@ -749,6 +824,7 @@ export class TaskService {
     );
     if (already) return null;
     if (await this.reviewsHeld(subjectRef, [lead.name])) return null;
+    if (await this.builderHolds(subjectRef, input.branch, input.issueNumber, [lead.name])) return null;
     try {
       const opened = await this.open({
         bot: lead.name,
@@ -773,7 +849,12 @@ export class TaskService {
     } catch (error) {
       // Busy with another pull request: the gate sweep asks again. Closed:
       // nothing does, and nothing needs to.
-      if (!(error instanceof BotBusyError) && !(error instanceof PrerequisiteNotReadyError) && !(error instanceof SubjectClosedError)) {
+      if (
+        !(error instanceof BotBusyError) &&
+        !(error instanceof PrerequisiteNotReadyError) &&
+        !(error instanceof SubjectClosedError) &&
+        !(error instanceof BuilderWorkingError)
+      ) {
         console.warn(`[bridge] the lead's review of ${subjectRef} not started: ${error instanceof Error ? error.message : error}`);
       }
       return null;
@@ -810,6 +891,9 @@ export class TaskService {
 
     const had = await tasks.listTasksForSubjects('review', [subjectRef]).catch(() => null);
     if (had?.some((task) => task.botId === bot.id && ['queued', 'running', 'paused'].includes(task.state))) return null;
+    // Recorded above all the same, so the seat is asked again, past its
+    // dismissed review, on the head the builder leaves.
+    if (await this.builderHolds(subjectRef, input.branch, input.issueNumber, [bot.name])) return null;
     try {
       const opened = await this.open({
         bot: bot.name,
@@ -827,7 +911,12 @@ export class TaskService {
       return `${subjectRef}: started ${bot.name}’s review again${opened.error ? ` (${opened.error.slice(0, 80)})` : ''}`;
     } catch (error) {
       // Busy, or not able to work yet: the gate sweep asks again.
-      if (!(error instanceof BotBusyError) && !(error instanceof PrerequisiteNotReadyError) && !(error instanceof SubjectClosedError)) {
+      if (
+        !(error instanceof BotBusyError) &&
+        !(error instanceof PrerequisiteNotReadyError) &&
+        !(error instanceof SubjectClosedError) &&
+        !(error instanceof BuilderWorkingError)
+      ) {
         console.warn(`[bridge] ${bot.name}'s review of ${subjectRef} not asked again: ${error instanceof Error ? error.message : error}`);
       }
       return null;
@@ -985,6 +1074,13 @@ export class TaskService {
     // not opened, so an answer still goes on.
     const held = await heldWords(input.subjectRef);
     if (held) throw new ItemHeldError(held);
+    // No review starts while the pull request's builder works on it, however
+    // it was asked for: a push, a seat finishing, the gate sweep, a person's
+    // message. One already running finishes; only new starts are held.
+    if (input.kind === 'review') {
+      const builder = await builderOn(input.subjectRef, input.branch, input.issueNumber);
+      if (builder) throw new BuilderWorkingError(input.subjectRef, builder);
+    }
     const cap = await this.taskCap(repo?.id ?? null);
     const blockers = (await this.blocked([found], repo?.name ?? input.repo ?? null)).get(found.name);
     if (blockers) {

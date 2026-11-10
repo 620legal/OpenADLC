@@ -208,6 +208,20 @@ function roleWork(input: { role: string; bot: string; view: StartView; item: Pic
   if (view.stage !== 'review') return nothing(`${who} reviews a pull request in Review, and ${where}`);
   const reviewing = mine.find((task) => task.kind === 'review' && task.subjectRef === prSubject);
   if (reviewing) return alreadyGoing(reviewing, `its review of pull request #${pr}`);
+  // No seat starts while the builder works on the pull request: it would
+  // review a head the builder is about to replace (`BuilderWorkingError`,
+  // which the start itself throws should one begin after this is read).
+  const builder = view.tasks.find(
+    (task) =>
+      (task.state === 'queued' || task.state === 'running') &&
+      ((task.kind === 'patch' && task.subjectRef === prSubject) ||
+        (task.kind === 'implement' && task.subjectRef === issueSubject && Boolean(facts.pull?.headRef) && task.branch === facts.pull?.headRef)),
+  );
+  if (builder) {
+    return nothing(
+      `the builder's ${builder.kind === 'patch' ? 'patch round' : 'build'} on pull request #${pr} is ${going(builder.state)}; the review seats are asked on the head it leaves when it ends, and read this on the pull request then`,
+    );
+  }
   if (role === 'review_lead') {
     // The lead decides last, from every other seat's review of this round:
     // started beside one, it would decide without it, and its review would
@@ -517,6 +531,8 @@ export class MessageStarts {
       if (error instanceof Error && error.name === 'BotBusyError') {
         return no(`${route.bot} is running all the tasks it may at once; write again once one of them ends`);
       }
+      // A builder started on the pull request since the view was read
+      // (`BuilderWorkingError`) is said in its own words, as any refusal is.
       throw error;
     }
   }

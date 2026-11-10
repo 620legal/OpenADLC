@@ -178,6 +178,27 @@ describe('what a message to a role starts', () => {
     expect(said('review_second', 'second-reviewer', { ...second, tasks: IN_REVIEW.tasks })).toMatchObject({ kind: 'starts' });
   });
 
+  it('starts no review while the builder works on the pull request: the seats are asked on the head it leaves (#265)', () => {
+    const PULL = { pull: { state: 'open' as const, headRef: 'agent/builder/5-scope', headSha: 'abc1234' } };
+    const patching = { ...IN_REVIEW, tasks: [task({ bot: 'builder', role: 'implement', kind: 'patch', state: 'running' }), ...IN_REVIEW.tasks] };
+    for (const [role, bot] of [
+      ['review_lead', 'lead-reviewer'],
+      ['review_second', 'second-reviewer'],
+    ]) {
+      expect(said(role!, bot!, patching, PULL)).toEqual({
+        kind: 'nothing',
+        why: "the builder's patch round on pull request #7 is under way; the review seats are asked on the head it leaves when it ends, and read this on the pull request then",
+      });
+    }
+    // The build that opened it, still running on its branch.
+    const building = { ...IN_REVIEW, tasks: [task({ bot: 'builder', role: 'implement', kind: 'implement', subjectRef: 'app#5', branch: 'agent/builder/5-scope', state: 'queued' })] };
+    expect(said('review_second', 'second-reviewer', building, PULL)).toMatchObject({ kind: 'nothing', why: expect.stringContaining("the builder's build on pull request #7") });
+    // A round paused on a person holds nothing, and a build on another branch is not this pull request's.
+    const paused = { ...IN_REVIEW, tasks: [task({ bot: 'builder', role: 'implement', kind: 'patch', state: 'paused' })] };
+    expect(said('review_second', 'second-reviewer', paused, PULL)).toMatchObject({ kind: 'starts' });
+    expect(said('review_second', 'second-reviewer', building, { pull: { ...PULL.pull, headRef: 'agent/builder/5-other' } })).toMatchObject({ kind: 'starts' });
+  });
+
   it('is nothing on a held item, a paused seat or paused work, saying which', () => {
     expect(said('implement', 'builder', { ...IN_REVIEW, held: { by: 'janedoe', why: 'waiting for the release' } })).toEqual({
       kind: 'nothing',
@@ -350,6 +371,41 @@ describe('starting a role’s work from a message', () => {
       expect(await send(starts, { access: undefined })).toEqual({ kind: 'nothing', why: 'only a person signed in to the console starts work with a message' });
       expect(enqueue).not.toHaveBeenCalled();
     });
+  });
+
+  it('starts no reviewer’s review while the builder’s round runs, and says so (#265)', async () => {
+    const { starts, calls } = starter();
+    const started = await starts.start({
+      route: { bot: 'lead-reviewer', botId: 'b-lead', role: 'review_lead', subject: 'app#7' },
+      read: read('review', { tasks: [task({ bot: 'builder', role: 'implement', kind: 'patch', state: 'running' }), ...IN_REVIEW.tasks] }),
+      text: 'Look at the scope check again.',
+      identity: 'janedoe@example.com',
+      access: 'admin',
+      message,
+    });
+    expect(started).toMatchObject({ kind: 'nothing', why: expect.stringContaining("the builder's patch round on pull request #7 is under way") });
+    expect(calls.open).not.toHaveBeenCalled();
+    expect(world.events).toEqual([]);
+  });
+
+  it('says why when the builder started after the item was read, and the start refused it', async () => {
+    const refused = Object.assign(new Error("the builder's patch round on app#7 is queued; the review seats are asked on the head it leaves when it ends"), { name: 'BuilderWorkingError' });
+    const { starts, calls } = starter();
+    calls.open.mockRejectedValueOnce(refused);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const started = await starts.start({
+        route: { bot: 'lead-reviewer', botId: 'b-lead', role: 'review_lead', subject: 'app#7' },
+        read: read('review'),
+        text: 'Look at the scope check again.',
+        identity: 'janedoe@example.com',
+        access: 'admin',
+        message,
+      });
+      expect(started).toEqual({ kind: 'nothing', why: refused.message });
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it('starts a reviewer’s review again, briefed with the message, and records it as asked again', async () => {
