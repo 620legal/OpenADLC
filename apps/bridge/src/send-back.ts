@@ -18,6 +18,7 @@ import type { BridgeConfig } from './config.js';
 import type { MergeLine } from './merge-line.js';
 import type { StageHandoff } from './stage-handoff.js';
 import type { TaskService } from './task-service.js';
+import { mergeabilityOf } from './mergeability.js';
 import { publicNameOf } from './thread-view.js';
 import { DEPLOY_PATH_BRANCH_PREFIX, issueNumberFromBranch, REVIEW_STALLED, SEND_BACK_STALLED, SEND_BACK_TO_PERSON, stageOfTask } from './work.js';
 
@@ -659,6 +660,12 @@ export class SendBack {
     const inDiff =
       input.client && !input.leasePathsOnly ? await input.client.listPullFilesAsNamed(input.repoFullName, input.pr.number).catch(() => []) : [];
     const declaredPaths = [...new Set([...(input.lease.declaredPaths ?? []), ...inDiff])];
+    // A round on a branch that conflicts is told so, whatever started it: the
+    // builder answered #257's findings without merging main, and the lead's
+    // only blocker was "not mergeable" twice over. Read once, with no wait: an
+    // unknown answer or a failed read adds nothing.
+    const conflict = await this.conflictNotice(input.repoFullName, input.pr.number);
+    const extraContext = [...(input.brief ?? []), ...(conflict ? [conflict] : [])];
     // A round the builder cannot start yet is recorded, and is still its: a
     // card says why, and the recovery runs it. Only a refusal is not.
     return this.deps.taskService
@@ -680,7 +687,7 @@ export class SendBack {
         // Only this review starts a patch round: one the builder cannot
         // do yet is recorded, for the recovery to run once it can.
         whenBlocked: 'record',
-        ...(input.brief && input.brief.length > 0 ? { extraContext: input.brief } : {}),
+        ...(extraContext.length > 0 ? { extraContext } : {}),
       })
       .then(
         (opened) => ({ refused: null, error: opened.error ?? null }),
@@ -690,6 +697,14 @@ export class SendBack {
           return { refused: why, error: why };
         },
       );
+  }
+
+  /** `conflict.md`, when GitHub says the pull request's branch conflicts with its base now. */
+  private async conflictNotice(repoFullName: string, prNumber: number): Promise<ContextDocument | null> {
+    const client = (await this.deps.client?.().catch(() => null)) ?? null;
+    const pull = client ? await client.getPullRequest(repoFullName, prNumber).catch(() => null) : null;
+    if (!pull || mergeabilityOf(pull) !== 'conflicting') return null;
+    return conflictBrief(pull.baseRef);
   }
 
   /**
@@ -963,4 +978,13 @@ export function recordComment(input: {
     ...(input.staffed ? [] : ['', `Nobody staffs ${title(input.to)} in this repository, so a person takes it from here.`]),
     renderMarker({ event: 'send_back', from: input.from, to: input.to, by: input.by, round: input.round, ...(input.person ? { person: true } : {}) }),
   ].join('\n');
+}
+
+/** What a patch round on a conflicting branch is told first (`conflict.md`). */
+export function conflictBrief(base: string): ContextDocument {
+  return {
+    name: 'conflict.md',
+    title: 'Your branch conflicts with the base',
+    content: `Your branch conflicts with \`${base}\`. Merge \`${base}\` into it first (\`git merge origin/${base}\`, not a rebase), resolve the conflicts, then do the rest of this round; run \`openadlc-ci\` on the result and push.`,
+  };
 }

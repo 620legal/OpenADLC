@@ -63,6 +63,7 @@ import { actsForOn, askAsTheApp, theApp } from './people.js';
 import { resolveHumanIdsWith } from './human-ids.js';
 import { UnlabeledIntake, openIssuesOn } from './unlabeled-intake.js';
 import { ConflictRounds } from './conflict-round.js';
+import { MergeabilityWait } from './mergeability.js';
 import { Stacking } from './stacking.js';
 import { startBuild } from './build-start.js';
 import { recordUnowned } from './unowned-issues.js';
@@ -190,9 +191,14 @@ async function main(): Promise<void> {
   // What a seat running all it may at once turned away starts once the seat
   // may have room: a task of its ending, its tasks at once raised, or found
   // with room by the runner's look every minute (`stage-runner.ts`).
+  // And a conflict resolution round a busy builder turned away before any
+  // review (ADR 0042): only the merge line started those again, and only for
+  // a pull request whose gate passed, which one before review never has.
+  // Read through a holder, since the rounds are made below.
+  let resolutionRounds: Pick<ConflictRounds, 'startWaiting' | 'waitingSeats'> | null = null;
   const stageRuns = new StageRunner({
-    start: (seats) => stages.sweep({ seats }),
-    waitedOn: () => stages.waitingOnSeats().map((wait) => wait.botId),
+    start: async (seats) => [...(await stages.sweep({ seats })), ...((await resolutionRounds?.startWaiting(seats)) ?? [])],
+    waitedOn: () => [...stages.waitingOnSeats().map((wait) => wait.botId), ...(resolutionRounds?.waitingSeats() ?? [])],
     hasRoom: (seat) => tasks.seatHasRoom(seat),
   });
   // A task stopped from outside its own session — a card's Cancel, its pull
@@ -279,6 +285,7 @@ async function main(): Promise<void> {
     },
   });
   mergeLine.useConflictRounds(conflictRounds);
+  resolutionRounds = conflictRounds;
   // An issue that depends on one in review starts from its branch, and lands
   // after it (`stacking.ts`).
   const stacking = new Stacking({
@@ -351,6 +358,15 @@ async function main(): Promise<void> {
   webhooks.useStopTask(stopFreeing);
   webhooks.useConflictRounds(conflictRounds);
   webhooks.useStacking(stacking);
+  // A head GitHub has not computed mergeability for waits for it, off the
+  // delivery and for a minute at most, before any seat is asked (ADR 0042).
+  const mergeabilityWait = new MergeabilityWait({
+    read: async (fullName, number) => {
+      const client = await asAutomation(actors, config);
+      return client ? client.getPullRequest(fullName, number) : null;
+    },
+  });
+  webhooks.useMergeabilityWait(mergeabilityWait);
   // GitHub Actions minutes: each completed run's, read from its jobs as the
   // automation account, and the month's cap the merge line holds at.
   webhooks.useCiUsage((delivery) =>
@@ -985,6 +1001,21 @@ async function main(): Promise<void> {
         if (count > 0) console.log(`[bridge] ${count} issue(s) wait on a busy seat; each starts when its seat has room`);
       })
       .catch((error: unknown) => console.warn(`[bridge] could not read which issues wait on a busy seat: ${error instanceof Error ? error.message : error}`));
+    // The resolution rounds a busy builder had turned away, and the heads a
+    // restart left waiting on GitHub's mergeability: the minute has passed,
+    // so each is decided at once.
+    void conflictRounds
+      .load()
+      .then((count) => {
+        if (count > 0) console.log(`[bridge] ${count} conflict resolution round(s) wait on a busy builder; each starts when its seat has room`);
+      })
+      .catch((error: unknown) => console.warn(`[bridge] could not read which resolution rounds wait on a builder: ${error instanceof Error ? error.message : error}`));
+    void webhooks
+      .resumeMergeabilityWaits()
+      .then((lines) => {
+        for (const line of lines) console.log(`[bridge] mergeability: ${line}`);
+      })
+      .catch((error: unknown) => console.warn(`[bridge] could not pick up the heads waiting on GitHub's mergeability: ${error instanceof Error ? error.message : error}`));
     stageRuns.start();
     console.log(`[bridge] listening on :${config.port}`);
     console.log(`[bridge] hostd at ${config.hostdUrl}`);
@@ -1008,6 +1039,7 @@ async function main(): Promise<void> {
     await keepAwake.stop();
     dispatchRuns?.stop();
     stageRuns.stop();
+    mergeabilityWait.stop();
     names.stop();
     health.stop();
     stopConsoleApi();

@@ -566,6 +566,63 @@ describe('a review sending the work back to build', () => {
   });
 });
 
+describe('a patch round on a branch that conflicts with its base', () => {
+  // #257: the builder answered the findings without merging main, and the
+  // lead's only blocker was "not mergeable (CONFLICTING)" on two heads.
+  const pr = { number: 31, head: { ref: 'agent/builder/7-issue-7' } };
+  const crew = [{ id: 'bot-builder', name: 'builder' }];
+  const contextOf = (taskService: ReturnType<typeof sendBack>['taskService']) =>
+    ((taskService.open.mock.calls[0] as unknown as [{ extraContext?: { name: string; content: string }[] }])[0].extraContext ?? []).map((doc) => doc.name);
+
+  it('is told to merge the base first, whatever started it', async () => {
+    world.issue = { number: 7, stage: 'review', prNumber: 31, labels: ['adlc:review'] };
+    const { service, taskService, client } = sendBack();
+    client.getPullRequest.mockResolvedValue({ state: 'open', headRef: pr.head.ref, baseRef: 'main', mergeable: false, mergeableState: 'dirty' } as never);
+
+    await service.reviewRound({ repo: REPO, repoFullName: REPO.fullName, pr, crew, client: null, by: 'lead-reviewer', reason: 'the cache is never invalidated' });
+
+    const doc = ((taskService.open.mock.calls[0] as unknown as [{ extraContext: { name: string; content: string }[] }])[0].extraContext ?? []).find(
+      (entry) => entry.name === 'conflict.md',
+    );
+    expect(doc?.content).toContain('Your branch conflicts with `main`. Merge `main` into it first (`git merge origin/main`, not a rebase)');
+  });
+
+  it('is told nothing of the kind when the branch is mergeable, or GitHub has not said', async () => {
+    for (const now of [
+      { mergeable: true, mergeableState: 'clean' },
+      { mergeable: null, mergeableState: 'unknown' },
+    ]) {
+      world.issue = { number: 7, stage: 'review', prNumber: 31, labels: ['adlc:review'] };
+      const { service, taskService, client } = sendBack();
+      client.getPullRequest.mockResolvedValue({ state: 'open', headRef: pr.head.ref, baseRef: 'main', ...now } as never);
+
+      await service.reviewRound({ repo: REPO, repoFullName: REPO.fullName, pr, crew, client: null, by: 'lead-reviewer', reason: 'x' });
+
+      expect(contextOf(taskService)).not.toContain('conflict.md');
+    }
+  });
+
+  it('is told beside a person’s message, which it keeps', async () => {
+    world.issue = { number: 7, stage: 'review', prNumber: 31, labels: ['adlc:review'] };
+    const brief = { name: 'message.md', title: 'What jane asked of you', content: 'Accept any heading level.' };
+    const { service, taskService, client } = sendBack();
+    client.getPullRequest.mockResolvedValue({
+      state: 'open',
+      merged: false,
+      headRef: pr.head.ref,
+      headSha: 'abc1234',
+      baseRef: 'main',
+      labels: [],
+      mergeable: false,
+      mergeableState: 'dirty',
+    } as never);
+
+    await service.fromMessage({ repoName: REPO.name, prNumber: 31, actor: 'jane@acme.test', reason: 'x', brief, commentUrl: 'https://github.test/c/1' });
+
+    expect(contextOf(taskService)).toEqual(['message.md', 'conflict.md']);
+  });
+});
+
 describe('a person’s message to the builder on a pull request', () => {
   // core#5 on 2026-10-24: a person asked the builder to fix #7's scope check,
   // the message was a comment and nothing else, and #7 stayed red.
