@@ -1,6 +1,6 @@
 import { listEventsOfTypeWith, recordEvent, tasks } from '@openadlc/db';
 import type { StageHandoff } from './stage-handoff.js';
-import { pauseHoldEndsAt } from './task-service.js';
+import { PAUSED_BUILDER_HOLD_MS, pauseHoldEndsAt } from './task-service.js';
 
 /** Recorded when a builder round's pause starts holding its review seats: `{ task, pausedAt, until, subjectRef }`. */
 export const REVIEW_PAUSE_HELD = 'review.pause_held';
@@ -39,7 +39,8 @@ export interface PauseHoldsDeps {
  * change, whose pause already asked the seats.
  */
 export class PauseHolds {
-  private readonly timers = new Map<string, { clear(): void }>();
+  /** Each held task's lapse timer, with the pause it is for. */
+  private readonly timers = new Map<string, { pausedAt: string; timer: { clear(): void } }>();
   private readonly now: () => number;
   private readonly setTimer: (fn: () => void, ms: number) => { clear(): void };
 
@@ -54,17 +55,26 @@ export class PauseHolds {
       });
   }
 
-  /** A builder task that has just paused: its hold is recorded, and its lapse set. */
+  /**
+   * A builder task that has just paused: its lapse is set, and its hold
+   * recorded. The timer is set first: if the event write fails, the lapse
+   * still asks the seats, where a pause before this change would have asked
+   * them at once; only a restart inside the window loses it then, as `load`
+   * finds no `review.pause_held`. The runner reports a pause again while the
+   * task is already on it (`paused_at` is not restamped), and that report
+   * neither records a second hold nor moves the timer.
+   */
   async paused(task: PausedTask): Promise<void> {
     if (!isBuilder(task) || !task.pausedAt) return;
     const until = pauseHoldEndsAt(task);
     if (until === null) return;
+    if (this.timers.get(task.id)?.pausedAt === task.pausedAt) return;
+    this.schedule(task.id, task.pausedAt, until);
     await recordEvent({
       source: 'platform',
       type: REVIEW_PAUSE_HELD,
       payload: { task: task.id, pausedAt: task.pausedAt, until: new Date(until).toISOString(), subjectRef: task.subjectRef },
     });
-    this.schedule(task.id, task.pausedAt, until);
   }
 
   /**
@@ -76,8 +86,11 @@ export class PauseHolds {
     this.timers.delete(taskId);
     const task = await tasks.getTask(taskId);
     if (!task || task.state !== 'paused' || task.pausedAt !== pausedAt || !isBuilder(task)) return false;
+    // A pause reported again after its lapse sets a new timer for a window
+    // already over; the seats were asked once for this pause, and only once.
+    if ((await listEventsOfTypeWith(REVIEW_PAUSE_HOLD_LAPSED, { task: task.id, pausedAt })).length > 0) return false;
     await recordEvent({ source: 'platform', type: REVIEW_PAUSE_HOLD_LAPSED, payload: { task: task.id, pausedAt, subjectRef: task.subjectRef } });
-    console.log(`[bridge] ${task.subjectRef}: the builder's ${task.kind} round is still paused on a question after 15 minutes; its review seats are asked`);
+    console.log(`[bridge] ${task.subjectRef}: the builder's ${task.kind} round is still paused on a question after ${PAUSED_BUILDER_HOLD_MS / 60_000} minutes; its review seats are asked`);
     await this.deps.stages.builderEnded({ kind: task.kind, subjectRef: task.subjectRef, branch: task.branch });
     return true;
   }
@@ -112,12 +125,12 @@ export class PauseHolds {
 
   /** A builder task that has ended: its hold has nothing left to ask. */
   forget(taskId: string): void {
-    this.timers.get(taskId)?.clear();
+    this.timers.get(taskId)?.timer.clear();
     this.timers.delete(taskId);
   }
 
   stop(): void {
-    for (const timer of this.timers.values()) timer.clear();
+    for (const { timer } of this.timers.values()) timer.clear();
     this.timers.clear();
   }
 
@@ -128,7 +141,7 @@ export class PauseHolds {
         console.warn(`[bridge] the review seats held by paused task ${taskId} were not asked: ${error instanceof Error ? error.message : error}`),
       );
     }, Math.max(0, until - this.now()) + LAPSE_SLACK_MS);
-    this.timers.set(taskId, timer);
+    this.timers.set(taskId, { pausedAt, timer });
   }
 }
 

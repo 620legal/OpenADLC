@@ -139,6 +139,46 @@ describe('a builder round paused on a question', () => {
     expect(store.events).toEqual([]);
   });
 
+  it('still asks the seats at the lapse when the hold could not be recorded', async () => {
+    const { recordEvent } = await import('@openadlc/db');
+    vi.mocked(recordEvent).mockRejectedValueOnce(new Error('connection reset'));
+    const task = patchRound();
+    store.tasks.set(task.id, task);
+    const pauseHolds = holds();
+
+    await expect(pauseHolds.paused(task)).rejects.toThrow('connection reset');
+    await advance(PAUSED_BUILDER_HOLD_MS + 2_000);
+
+    expect(builderEnded).toHaveBeenCalledTimes(1);
+  });
+
+  it('records one hold and moves no timer when the same pause is reported again', async () => {
+    const task = patchRound();
+    store.tasks.set(task.id, task);
+    const pauseHolds = holds();
+    await pauseHolds.paused(task);
+
+    await advance(10 * 60_000);
+    await pauseHolds.paused(task);
+    expect(store.events.map((event) => event.type)).toEqual([REVIEW_PAUSE_HELD]);
+
+    await advance(5 * 60_000 + 2_000);
+    expect(builderEnded).toHaveBeenCalledTimes(1);
+  });
+
+  it('asks the seats once when the same pause is reported again after its lapse', async () => {
+    const task = patchRound();
+    store.tasks.set(task.id, task);
+    const pauseHolds = holds();
+    await pauseHolds.paused(task);
+    await advance(PAUSED_BUILDER_HOLD_MS + 2_000);
+    expect(builderEnded).toHaveBeenCalledTimes(1);
+
+    await pauseHolds.paused(task);
+    await advance(PAUSED_BUILDER_HOLD_MS + 2_000);
+    expect(builderEnded).toHaveBeenCalledTimes(1);
+  });
+
   it('sets nothing off after stop', async () => {
     const task = patchRound();
     store.tasks.set(task.id, task);

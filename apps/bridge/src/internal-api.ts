@@ -632,7 +632,7 @@ export function registerInternalApi(
         .catch((error: unknown) =>
           console.warn(
             state === 'paused'
-              ? `[bridge] the hold of ${ended.subjectRef}'s review seats was not recorded: ${error instanceof Error ? error.message : error}`
+              ? `[bridge] the hold of ${ended.subjectRef}'s review seats was not recorded (its lapse is still set, but a restart inside the window loses it): ${error instanceof Error ? error.message : error}`
               : `[bridge] the review seats on ${ended.subjectRef}'s pull request were not asked: ${error instanceof Error ? error.message : error}`,
           ),
         );
