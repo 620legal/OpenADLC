@@ -1,7 +1,7 @@
 import { createECDH, randomBytes } from 'node:crypto';
 import { settings } from '@openadlc/db';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { addDevice, memoryPushStore } from './push-devices.js';
+import { addDevice, memoryPushStore, sendToDevices } from './push-devices.js';
 import {
   isNotifiable,
   itemLink,
@@ -27,6 +27,13 @@ import {
  * Each goes as push to the console app and nowhere else (ADR 0049).
  */
 const CONFIG = { consoleUrl: 'http://127.0.0.1:47300' } as never;
+
+// The real send, watched: a test of every device must go through the path a
+// real notification takes, and the link is sealed inside the push it sends.
+vi.mock('./push-devices.js', async (original) => {
+  const real = await original<typeof import('./push-devices.js')>();
+  return { ...real, sendToDevices: vi.fn(real.sendToDevices) };
+});
 
 function answering(status: number) {
   return vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status }));
@@ -145,6 +152,39 @@ describe('push to the console app is the only channel (ADR 0049)', () => {
     const spy = answering(201);
     const push = await withDevices(['p-admin'], ['p-admin']);
     await expect(new Notifier(CONFIG, memoryNotifyStore({ push })).send({ event: 'gate_opened', to: null, text: 'q', link: 'l', people: ['p-a'] })).resolves.toBe('logged');
+    expect(spy).not.toHaveBeenCalled();
+  });
+});
+
+describe('Send a test notification tests every device of one person (ADR 0053)', () => {
+  it('sends through sendToDevices to each of their devices and no one else’s, whatever the switches, linking to Notifications', async () => {
+    const spy = answering(201);
+    const push = await withDevices(['p-a', 'p-b'], ['p-b']);
+    // Two of p-a's: a second subscription, as a second browser would add.
+    await addDevice(push, 'p-a', { subscription: { endpoint: 'https://fcm.googleapis.com/fcm/send/p-a2-secret', keys: browserKeys() }, name: 'Mac · Chrome' });
+    const off = Object.fromEntries(NOTIFY_SWITCHES.map((name) => [name, false]));
+    const notifier = new Notifier(CONFIG, memoryNotifyStore({ settings: { notifyKinds: JSON.stringify(off) }, push }));
+    vi.mocked(sendToDevices).mockClear();
+
+    const answer = await notifier.testDevices('p-a');
+
+    expect(pushedTo(spy)).toEqual(['p-a', 'p-a2']);
+    expect(vi.mocked(sendToDevices)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(sendToDevices).mock.calls[0]?.slice(1, 3)).toEqual([
+      ['p-a'],
+      { event: 'test', text: 'OpenADLC can reach you on this device.', link: 'http://127.0.0.1:47300/settings/notifications' },
+    ]);
+    expect(answer.devices.map((device) => device.name).sort()).toEqual(['Mac · Chrome', 'p-a']);
+    expect(answer.devices.every((device) => device.ok && device.status === 201 && device.error === null)).toBe(true);
+    const deliveries = push.log.filter((event) => event.type === 'notify.delivery');
+    expect(deliveries.map((event) => event.payload.device).sort()).toEqual(answer.devices.map((device) => device.id).sort());
+    expect(deliveries.every((event) => event.payload.person === 'p-a' && event.payload.event === 'test')).toBe(true);
+  });
+
+  it('answers no devices, and sends nothing, for someone who has none', async () => {
+    const spy = answering(201);
+    const push = await withDevices(['p-b'], ['p-b']);
+    await expect(new Notifier(CONFIG, memoryNotifyStore({ push })).testDevices('p-a')).resolves.toEqual({ devices: [] });
     expect(spy).not.toHaveBeenCalled();
   });
 });

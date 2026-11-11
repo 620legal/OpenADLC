@@ -7,6 +7,7 @@ import {
   type NotificationSettingsUpdate,
   type NotificationSettingsView,
   type NotificationTestResult,
+  type PushTestAll,
   type PushSubscriptionInput,
   type PersonRolesView,
   type RemovalChoices,
@@ -1106,6 +1107,20 @@ export async function removePushDevice(id: string): Promise<{ ok: boolean; error
 export async function testPushDevice(id: string): Promise<{ ok: boolean; error?: string; result?: NotificationTestResult }> {
   try {
     const result = await call<NotificationTestResult>(`/v1/me/push/devices/${encodeURIComponent(id)}/test`, 'POST', {});
+    revalidatePath('/settings/notifications');
+    return { ok: true, result };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : 'the test was not sent' };
+  }
+}
+
+/**
+ * Sends a test to every one of the signed-in person's devices at once, through
+ * the path a real notification takes, and how each went (ADR 0053).
+ */
+export async function testAllPushDevices(): Promise<{ ok: boolean; error?: string; result?: PushTestAll }> {
+  try {
+    const result = await call<PushTestAll>('/v1/me/push/test', 'POST', {});
     revalidatePath('/settings/notifications');
     return { ok: true, result };
   } catch (error) {
