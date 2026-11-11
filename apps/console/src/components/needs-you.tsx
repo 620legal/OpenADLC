@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { type ReactNode, useEffect, useRef, useState, useTransition } from 'react';
+import { type ReactNode, useEffect, useId, useRef, useState, useTransition } from 'react';
 import { useRole } from '@/components/app-header';
 import {
   abandonRequest,
@@ -48,6 +48,9 @@ import {
   alarming,
   audienceLine,
   decisionButtons,
+  decisionStatus,
+  decisionWhy,
+  DISCUSS_HINT,
   faceActions,
   groupCounts,
   groupOf,
@@ -64,8 +67,10 @@ import {
   reviewVerdict,
   reviewerName,
   stripItems,
+  othersWaiting,
   unblockedOf,
   waiting as waitingOf,
+  waitsOnOthers,
   type DecisionButton,
   type HeldMergeButton,
 } from '@/lib/attention-card';
@@ -270,6 +275,46 @@ export function NeedsList({
       )}
       {notices.length > 0 && <Recoveries items={notices} now={now} open />}
     </div>
+  );
+}
+
+/**
+ * Held approvals that are someone else's to decide, under their own heading
+ * and counted nowhere (ADR 0058): the viewer can Remind or Discuss, so they
+ * are shown, but they are not what the badge counts. Nothing when there are none.
+ */
+export function OthersWaitingList({
+  items,
+  now,
+  onOpenBot,
+  onOpenItem,
+  selected = null,
+  onCards,
+}: {
+  items: readonly AttentionItem[];
+  now: string;
+  onOpenBot: OpenBot;
+  onOpenItem?: OpenItem;
+  selected?: string | null;
+  onCards?: OnCards;
+}) {
+  const others = othersWaiting(items);
+  const heading = useId();
+  if (others.length === 0) return null;
+  return (
+    <section aria-labelledby={heading} data-others-waiting className="flex flex-col gap-2">
+      <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-0.5">
+        <h2 id={heading} className="text-[13.5px] font-semibold text-body">
+          Waiting on others
+        </h2>
+        <span className="text-[12px] text-muted">Decisions that are someone else's. They are not counted in Needs you.</span>
+      </div>
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+        {others.map((item) => (
+          <NeedsCard key={item.id} item={item} now={now} onOpenBot={onOpenBot} onOpenItem={onOpenItem} showRepo elsewhere={false} selected={selected === item.id} onCards={onCards} />
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -530,8 +575,22 @@ function NeedsCard({
       )}
     </p>
   );
+  // A held approval leads with what it is about, its whole title, and says
+  // whose approval it waits for under it. The bridge's headline said that in
+  // a sentence that wrapped to two lines while the title was cut to one (#308).
+  const status = decisionStatus(item);
+  const titled = Boolean(item.decision);
+  const title = titled ? (
+    <>
+      {number && <span className="font-normal text-dim">{number} </span>}
+      {subject.title ?? item.headline}
+    </>
+  ) : (
+    item.headline
+  );
   // Cut to a line on the card; whole in the sheet, which has the room.
   const subjectLine = (wrap: boolean) =>
+    !titled &&
     (number || subject.title) && (
       <p data-subject className={cn('text-[12.5px] text-soft', wrap ? 'break-words' : 'truncate')}>
         {number && <span className="text-dim">{number} </span>}
@@ -574,11 +633,24 @@ function NeedsCard({
         {kindIcon(item.kind)}
       </span>
       <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-        <div className="flex items-baseline gap-2">
-          <h3 className="line-clamp-2 text-[13px] font-semibold text-body">{item.headline}</h3>
-          {(showRepo || elsewhere) && subject.repo && <RepoBadge name={subject.repo} className="self-center" />}
-          <span className="ml-auto shrink-0 text-[11.5px] text-dim">{ago(item.since, now)}</span>
-        </div>
+        {titled ? (
+          <>
+            <h3 className="break-words text-[13px] font-semibold text-body">{title}</h3>
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+              <span data-status className="text-[12px] text-soft">
+                {status}
+              </span>
+              {(showRepo || elsewhere) && subject.repo && <RepoBadge name={subject.repo} />}
+              <span className="ml-auto shrink-0 text-[11.5px] text-dim">{ago(item.since, now)}</span>
+            </div>
+          </>
+        ) : (
+          <div className="flex items-baseline gap-2">
+            <h3 className="line-clamp-2 text-[13px] font-semibold text-body">{item.headline}</h3>
+            {(showRepo || elsewhere) && subject.repo && <RepoBadge name={subject.repo} className="self-center" />}
+            <span className="ml-auto shrink-0 text-[11.5px] text-dim">{ago(item.since, now)}</span>
+          </div>
+        )}
         {audienceNote}
         {subjectLine(false)}
         {item.context && (
@@ -656,8 +728,10 @@ function NeedsCard({
                 action={action}
                 // Beside a question's choices nothing is the one to press:
                 // approving the rest of the work is not made the easy click.
-                // Nor beside a pull request's commands, which come first.
-                primary={index === 0 && choices.length === 0 && !item.pull}
+                // Nor beside a pull request's commands, which come first, nor
+                // after a held approval's own buttons: Review it on GitHub was
+                // the dark button on a card whose viewer could Remind (#308).
+                primary={index === 0 && choices.length === 0 && !item.pull && !item.decision}
                 pending={pending}
                 active={active}
                 onOpenBot={onOpenBot}
@@ -697,10 +771,15 @@ function NeedsCard({
             }}
           >
             <div className="flex items-start gap-2">
-              <DialogTitle className="text-[14px]">{item.headline}</DialogTitle>
+              <DialogTitle className="break-words text-[14px]">{title}</DialogTitle>
               <DialogClose className="ml-auto shrink-0 text-[12.5px] text-muted hover:text-body">Close</DialogClose>
             </div>
-            <div className="flex items-center gap-2 text-[11.5px] text-dim">
+            <div className="flex flex-wrap items-center gap-2 text-[11.5px] text-dim">
+              {status && (
+                <span data-status className="text-[12px] text-soft">
+                  {status}
+                </span>
+              )}
               {subject.repo && <RepoBadge name={subject.repo} />}
               <span>{ago(item.since, now)}</span>
             </div>
@@ -747,7 +826,7 @@ function NeedsCard({
                     <ActionButton
                       key={`${action.kind}-${index}`}
                       action={action}
-                      primary={index === 0 && choices.length === 0}
+                      primary={index === 0 && choices.length === 0 && !item.decision}
                       pending={pending}
                       active={active}
                       onOpenBot={openFromSheet}
@@ -1009,6 +1088,9 @@ function DoneLine({ done }: { done: Done }) {
 }
 
 const BUTTON = 'inline-flex h-11 items-center justify-center gap-1.5 whitespace-nowrap rounded-md px-3 text-[12.5px] md:h-7 md:px-2.5';
+/** A held approval's own buttons: Approve and Reject with what each does next, Remind and Discuss plain. */
+const DECIDE =
+  'inline-flex min-h-11 items-center rounded-md border border-edge-strong bg-panel px-3 py-2 text-left text-[12.5px] leading-snug text-body transition-colors hover:border-attention/60 hover:bg-attention/10 focus-visible:outline-2 focus-visible:outline-link disabled:opacity-60 md:min-h-7 md:px-2.5 md:py-1';
 const PRIMARY = `${BUTTON} flex-1 bg-body font-medium text-surface transition-colors hover:bg-soft disabled:opacity-60 md:flex-none`;
 const SECONDARY = `${BUTTON} border border-edge-strong text-soft transition-colors hover:border-dim hover:text-body disabled:opacity-60`;
 
@@ -1723,6 +1805,11 @@ export function HumanReviewDecisionPanel({
   const notYet = view ? remindAgainLine(view.remindAfter, clock) : null;
   // Reminding yourself is meaningless, and a bridge from before Remind has no route for it.
   const mayRemind = decision.yours !== true && !(request.kind === 'failed' && request.older);
+  // Someone else's card names the person once, in its status line (#308).
+  const theirs = waitsOnOthers(item);
+  const who = theirs ? 'them' : undefined;
+  const why = decisionWhy(item)!;
+  const hint = useId();
 
   // An Approve's sign-in, read until the person approves its code or it ends.
   useEffect(() => {
@@ -1745,6 +1832,7 @@ export function HumanReviewDecisionPanel({
   const press = (button: DecisionButton) => {
     if (busy || done) return;
     setError(null);
+    if (button === 'remind') return remind();
     if (button === 'reject') return setStep({ kind: 'reject', reason: '' });
     if (button === 'discuss') return setStep({ kind: 'discuss', text: '', role: 'review_lead' });
     setBusy(true);
@@ -1780,7 +1868,9 @@ export function HumanReviewDecisionPanel({
     });
   };
 
-  const LABEL: Record<DecisionButton, string> = { approve: 'Approve', reject: 'Reject', discuss: 'Discuss' };
+  const LABEL: Record<Exclude<DecisionButton, 'remind'>, string> = { approve: 'Approve', reject: 'Reject', discuss: 'Discuss' };
+  // Remind stays after a message is sent; the others go once one is done.
+  const shown = buttons.filter((button) => (button === 'remind' ? mayRemind : !done));
 
   return (
     <div data-decision-panel className="flex flex-col gap-2 rounded-md border border-edge bg-surface px-2.5 py-2 text-[12px] leading-snug">
@@ -1791,8 +1881,8 @@ export function HumanReviewDecisionPanel({
         </p>
       )}
       <p data-why className="text-soft">
-        <span className="font-medium text-body">Why you are asked: </span>
-        <MarkdownInline text={decision.why} />
+        <span className="font-medium text-body">{why.lead}</span>
+        <MarkdownInline text={why.text} />
       </p>
       <div data-reviews className="flex flex-col gap-1 text-soft">
         <span className="font-medium text-body">What the reviewers found:</span>
@@ -1831,13 +1921,14 @@ export function HumanReviewDecisionPanel({
         <div data-review-request className="flex flex-col gap-0.5 text-soft">
           <p data-request-line>
             {view
-              ? requestLine(view, clock)
-              : request.kind === 'failed' && requestLine({ login: decision.login, request: { state: 'unknown', why: request.why.replace(/\.$/, '') } }, clock)}
+              ? requestLine(view, clock, who)
+              : request.kind === 'failed' && requestLine({ login: decision.login, request: { state: 'unknown', why: request.why.replace(/\.$/, '') } }, clock, who)}
           </p>
           {remindedSaid && <p data-reminded>{remindedSaid}</p>}
         </div>
       )}
-      {decision.yours !== true && decision.notYours && (
+      {/* On someone else's card it only said the status line again. */}
+      {decision.yours !== true && !theirs && decision.notYours && (
         <p data-not-yours className="text-muted">
           {decision.notYours}{' '}
           {decision.settingsUrl && (
@@ -1847,41 +1938,55 @@ export function HumanReviewDecisionPanel({
           )}
         </p>
       )}
-      {step.kind === 'idle' && !done && buttons.length > 0 && (
-        <div role="group" aria-label="Decision" className="flex flex-wrap gap-1.5">
-          {buttons.map((button) => (
-            <button
-              key={button}
-              type="button"
-              data-decide={button}
-              disabled={busy}
-              onClick={() => press(button)}
-              className="inline-flex min-h-11 items-center rounded-md border border-edge-strong bg-panel px-3 py-2 text-left text-[12.5px] leading-snug text-body transition-colors hover:border-attention/60 hover:bg-attention/10 focus-visible:outline-2 focus-visible:outline-link disabled:opacity-60 md:min-h-7 md:px-2.5 md:py-1"
-            >
-              <span className="flex flex-col gap-0.5">
-                <span>{busy && button === 'approve' ? 'Starting…' : LABEL[button]}</span>
-                <span data-next className="text-[11.5px] leading-snug text-muted">
-                  {decision.next[button]}
-                </span>
-              </span>
-            </button>
-          ))}
-        </div>
-      )}
-      {step.kind === 'idle' && mayRemind && (
-        // Asks GitHub to request their review again, so GitHub notifies them.
-        // Off while the hour since the last one runs; the bridge refuses it
-        // then too, from anyone, so this only keeps off a press it would refuse.
-        <div data-remind className="flex flex-col gap-1">
-          <button
-            type="button"
-            data-remind-button
-            disabled={reminding || notYet !== null}
-            onClick={remind}
-            className="inline-flex min-h-11 w-fit items-center rounded-md border border-edge-strong bg-panel px-3 py-2 text-left text-[12.5px] leading-snug text-body transition-colors hover:border-attention/60 hover:bg-attention/10 focus-visible:outline-2 focus-visible:outline-link disabled:opacity-60 md:min-h-7 md:px-2.5 md:py-1"
-          >
-            {reminding ? 'Reminding…' : remindLabel(decision.login)}
-          </button>
+      {step.kind === 'idle' && (shown.length > 0 || notYet || remindError) && (
+        <div className="flex flex-col gap-1">
+          <div role="group" aria-label="Decision" className="flex flex-wrap items-start gap-1.5">
+            {shown.map((button) => {
+              if (button === 'remind') {
+                // Asks GitHub to request their review again, so GitHub
+                // notifies them. Off while the hour since the last one runs;
+                // the bridge refuses it then too, from anyone, so this only
+                // keeps off a press it would refuse.
+                return (
+                  <button
+                    key={button}
+                    type="button"
+                    data-remind-button
+                    disabled={reminding || notYet !== null}
+                    onClick={remind}
+                    className={cn(DECIDE, 'w-fit')}
+                  >
+                    {reminding ? 'Reminding…' : remindLabel(decision.login)}
+                  </button>
+                );
+              }
+              if (button === 'discuss') {
+                // A button named Discuss, its one line beside it: drawn as a
+                // bordered box holding a paragraph, it read as a disabled
+                // field. What it does in full opens with the box (#308).
+                return (
+                  <span key={button} className="flex flex-col gap-0.5">
+                    <button type="button" data-decide={button} aria-describedby={hint} disabled={busy} onClick={() => press(button)} className={cn(DECIDE, 'w-fit')}>
+                      {LABEL[button]}
+                    </button>
+                    <span id={hint} data-hint className="text-[11.5px] leading-snug text-muted">
+                      {DISCUSS_HINT}
+                    </span>
+                  </span>
+                );
+              }
+              return (
+                <button key={button} type="button" data-decide={button} disabled={busy} onClick={() => press(button)} className={DECIDE}>
+                  <span className="flex flex-col gap-0.5">
+                    <span>{busy && button === 'approve' ? 'Starting…' : LABEL[button]}</span>
+                    <span data-next className="text-[11.5px] leading-snug text-muted">
+                      {decision.next[button]}
+                    </span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
           {notYet && (
             <p data-remind-again className="text-[11.5px] text-muted">
               {notYet}
@@ -1938,6 +2043,9 @@ export function HumanReviewDecisionPanel({
             sendDiscuss(step.text, step.role);
           }}
         >
+          <p data-discuss-next className="text-soft">
+            {decision.next.discuss}
+          </p>
           <label className="flex items-center gap-1.5 text-soft">
             To
             <select

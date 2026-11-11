@@ -1262,14 +1262,16 @@ describe('a held decision’s sheet', () => {
     expect(card.querySelector('[data-discuss]')).not.toBeNull();
   });
 
-  it('wraps the title in the sheet, and cuts it to a line on the card', async () => {
+  it('leads with the whole title, on the card and in the sheet (#308)', async () => {
     await render([APPROVAL]);
     const card = container.querySelector('article')!;
-    expect(card.querySelector('[data-subject]')!.className).toContain('truncate');
+    const heading = card.querySelector('h3')!;
+    expect(heading.textContent).toBe(`#39 ${LONG_TITLE}`);
+    expect(clippedWithin(heading, card)).toBe(false);
+    expect(heading.className).not.toMatch(/\btruncate\b|line-clamp/);
     await click(button('Show more', card));
-    const title = sheet()!.querySelector('[data-subject]')!;
-    expect(title.textContent).toContain(LONG_TITLE);
-    expect(title.className).not.toContain('truncate');
+    const title = sheet()!.querySelector('h2')!;
+    expect(title.textContent).toBe(`#39 ${LONG_TITLE}`);
     expect(title.className).toContain('break-words');
   });
 
@@ -1337,5 +1339,142 @@ describe('a held decision’s sheet', () => {
     for (const part of ['[data-what]', '[data-why]', '[data-consequences]']) expect(panel.querySelector(part)).not.toBeNull();
     expect(decides(panel)).toEqual(['keep', 'discuss']);
     expect(opened.textContent!.split(why)).toHaveLength(2);
+  });
+});
+
+/**
+ * A held approval that is someone else's to decide (#308, ADR 0058): listed
+ * under Waiting on others and counted nowhere, its card leads with its title
+ * and says why it waits, naming the person once.
+ */
+describe('a held approval that waits on someone else', () => {
+  const HEAD = '692cd1f88f3e45093ad9ba4e68e84d590af3b595';
+  const TITLE = 'Rate-limit every route the webhook receiver exposes, per client, with a clear 429 that says when to try again';
+  const NEXT = { approve: 'Posts your approval.', reject: 'Sends it back.', discuss: 'Sends your message to the lead reviewer, or the builder, who answers on the pull request.' };
+  const held = (decision: Partial<NonNullable<AttentionItem['decision']>>): AttentionItem => ({
+    id: 'approval:openadlc#40@janedoe',
+    kind: 'merge_waiting',
+    group: 'work',
+    headline: "Pull request #40 waits for @janedoe's approval",
+    subject: { repo: 'openadlc', number: 39, title: TITLE, ref: 'openadlc#39', url: null, item: 'openadlc#39' },
+    bot: null,
+    since: '2026-09-24T11:00:00.000Z',
+    detail: "The lead approved 692cd1f. It changes `infra/`, which AGENTS.md's Human review names @janedoe for.",
+    actions: [
+      { kind: 'human_review_approve', label: 'Approve', subject: 'openadlc#40', login: 'janedoe', head: HEAD },
+      { kind: 'human_review_reject', label: 'Reject', subject: 'openadlc#40', login: 'janedoe', head: HEAD },
+      { kind: 'human_review_discuss', label: 'Discuss', subject: 'openadlc#40', login: 'janedoe', head: HEAD },
+      { kind: 'open_url', label: 'Review it on GitHub', url: 'https://github.com/janedoe/openadlc/pull/40/files' },
+    ],
+    awaiting: { login: 'janedoe', again: false, paths: ['infra/'] },
+    decision: {
+      repo: 'openadlc',
+      pr: 40,
+      head: HEAD,
+      login: 'janedoe',
+      change: 'Limit each client to 60 requests a minute.',
+      why: "The lead approved 692cd1f. It changes `infra/`, which AGENTS.md's Human review names @janedoe for, so OpenADLC does not merge it until @janedoe approves it.",
+      whyWaits: "The lead approved 692cd1f. It changes `infra/`, which AGENTS.md's Human review names them for, so OpenADLC does not merge it until they approve it.",
+      reviews: [{ login: 'reviewer-bot', seat: 'lead-reviewer', state: 'approved', summary: 'Fine.', url: 'https://github.com/janedoe/openadlc/pull/40#pullrequestreview-5' }],
+      prUrl: 'https://github.com/janedoe/openadlc/pull/40',
+      diffUrl: 'https://github.com/janedoe/openadlc/pull/40/files',
+      next: NEXT,
+      ...decision,
+    },
+  });
+  const THEIRS = held({ yours: false, waitsOnOther: true, notYours: "This is @janedoe's to decide; you can Discuss it." });
+  const YOURS = held({ yours: true });
+  const QUESTION = item('q-1', 'question', 'work', 2, { question: { gateId: 'g-1', options: ['yes', 'no'] } });
+
+  async function page(items: AttentionItem[]): Promise<void> {
+    const header = headerData({ repos: [], crew: [], budget: null, needsYou: 1, attention: items });
+    await act(async () => root.render(<NeedsYouPage items={items} crew={[]} header={header} now={NOW} tab="work" />));
+  }
+  /** The card's words outside its buttons, the way a person reads its prose. */
+  const prose = (card: Element) => {
+    const copy = card.cloneNode(true) as Element;
+    for (const one of copy.querySelectorAll('button')) one.remove();
+    return copy.textContent ?? '';
+  };
+  const workTab = () => [...document.querySelectorAll('[role="tab"]')].find((tab) => tab.textContent?.startsWith('Work')) as HTMLElement;
+
+  it('is listed under Waiting on others on the Work tab, and is not counted', async () => {
+    await page([QUESTION, THEIRS]);
+    expect(workTab().textContent).toBe('Work 1');
+    const region = document.querySelector('section[aria-labelledby]')!;
+    expect(document.getElementById(region.getAttribute('aria-labelledby')!)!.textContent).toBe('Waiting on others');
+    expect(region.textContent).toContain('They are not counted in Needs you.');
+    expect([...region.querySelectorAll('article')].map((card) => card.getAttribute('data-card'))).toEqual([THEIRS.id]);
+    // The viewer's own list holds the question alone.
+    const panel = document.querySelector('[role="tabpanel"]:not([hidden])')!;
+    const own = [...panel.querySelectorAll('article')].filter((card) => !region.contains(card)).map((card) => card.getAttribute('data-card'));
+    expect(own).toEqual(['q-1']);
+  });
+
+  it('says nothing waits on you when only others’ decisions are left, with them listed under it', async () => {
+    await page([THEIRS]);
+    expect(workTab().textContent).toBe('Work 0');
+    expect(document.body.textContent).toContain('Nothing from the crew waits on you.');
+    expect(document.querySelector('section[aria-labelledby] article')).not.toBeNull();
+  });
+
+  it('leads with the whole title, says why it waits, and names the person once', async () => {
+    await render([THEIRS]);
+    // The board's strip leaves it out with the counts.
+    expect(container.querySelector('article')).toBeNull();
+    await page([THEIRS]);
+    const card = document.querySelector('article')!;
+    const heading = card.querySelector('h3')!;
+    expect(heading.textContent).toBe(`openadlc#39 ${TITLE}`);
+    expect(heading.className).not.toMatch(/\btruncate\b|line-clamp/);
+    expect(card.querySelector('[data-status]')!.textContent).toBe("Waits for @janedoe's approval");
+    const words = prose(card);
+    expect(words).toContain('Why it waits: ');
+    expect(words).not.toContain('Why you are asked');
+    expect(words.split('@janedoe')).toHaveLength(2);
+  });
+
+  it('puts Remind and Discuss before Review it on GitHub, which is not the primary', async () => {
+    await page([THEIRS]);
+    const card = document.querySelector('article')!;
+    const buttons = [...card.querySelectorAll('button, a')].filter((one) => one.tagName === 'BUTTON' || one.textContent?.trim() === 'Review it on GitHub');
+    const labels = buttons.map((one) => one.textContent?.trim());
+    expect(labels[0]).toBe('Remind @janedoe');
+    expect(labels[1]).toBe('Discuss');
+    expect(labels.indexOf('Review it on GitHub')).toBeGreaterThan(1);
+    const github = buttons.find((one) => one.textContent?.trim() === 'Review it on GitHub')!;
+    expect(github.className).not.toContain('bg-body');
+    expect(card.querySelector('[data-decide="approve"]')).toBeNull();
+  });
+
+  it('draws Discuss as a button named Discuss, its hint tied to it, and opens its box with what it does', async () => {
+    await page([THEIRS]);
+    const card = document.querySelector('article')!;
+    const discuss = button('Discuss', card);
+    const hint = document.getElementById(discuss.getAttribute('aria-describedby')!)!;
+    expect(hint.textContent).toBe('Ask the lead reviewer or the builder.');
+    expect(discuss.textContent).toBe('Discuss');
+    await click(discuss);
+    expect(card.querySelector('[data-discuss]')!.textContent).toContain(NEXT.discuss);
+  });
+
+  it('still offers the named person Approve, Reject and Discuss, title first, and says why they are asked', async () => {
+    await page([YOURS]);
+    expect(workTab().textContent).toBe('Work 1');
+    expect(document.querySelector('section[aria-labelledby]')).toBeNull();
+    const card = document.querySelector('article')!;
+    expect(card.querySelector('h3')!.textContent).toBe(`openadlc#39 ${TITLE}`);
+    expect(card.querySelector('[data-status]')!.textContent).toBe('Waits for your approval');
+    expect([...card.querySelectorAll('[data-decide]')].map((one) => one.getAttribute('data-decide'))).toEqual(['approve', 'reject', 'discuss']);
+    expect(button('Discuss', card).getAttribute('aria-describedby')).toBeTruthy();
+    expect(prose(card)).toContain('Why you are asked: ');
+    expect(card.querySelector('[data-remind-button]')).toBeNull();
+  });
+
+  it('keeps one that may be theirs counted: unlinked, or unknown', async () => {
+    await page([held({ yours: false, notYours: 'You have not linked a GitHub account.', settingsUrl: '/settings#your-github' })]);
+    expect(workTab().textContent).toBe('Work 1');
+    expect(document.querySelector('section[aria-labelledby]')).toBeNull();
+    expect(document.body.textContent).toContain('You have not linked a GitHub account.');
   });
 });

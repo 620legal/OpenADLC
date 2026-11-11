@@ -145,3 +145,32 @@ describe('the console’s name and logo, read for the layout', () => {
     }
   });
 });
+
+describe('how many wait on the viewer, for the header', () => {
+  it('leaves out a fixed notice and a held approval that is someone else’s, as Work’s count does (ADR 0058)', async () => {
+    const { waitingCount } = await import('./api');
+    const { groupCounts } = await import('./attention-card');
+    const held = (decision: Record<string, unknown>) =>
+      ({
+        id: `approval:api#40@${String(decision.login)}`,
+        kind: 'merge_waiting',
+        headline: 'Pull request #40 waits',
+        subject: { repo: 'api', number: 40, title: null, ref: 'api#40', url: null },
+        bot: null,
+        since: '2026-09-29T10:00:00.000Z',
+        detail: '',
+        actions: [],
+        decision: { repo: 'api', pr: 40, head: 'a'.repeat(40), change: null, why: 'Because.', reviews: null, prUrl: '', diffUrl: '', next: { approve: '', reject: '', discuss: '' }, ...decision },
+      }) as never;
+    const items = [
+      held({ login: 'janedoe', yours: false, waitsOnOther: true }),
+      held({ login: 'sam', yours: false, notYours: 'You have not linked a GitHub account.' }),
+      held({ login: 'ana', yours: true }),
+      { id: 'health:x', kind: 'check_fixed', headline: 'Fixed', subject: { repo: null, number: null, title: null, ref: null, url: null }, bot: null, since: '2026-09-29T10:00:00.000Z', detail: '', actions: [] } as never,
+      { id: 'health:y', kind: 'check_failed', headline: 'Broken', subject: { repo: null, number: null, title: null, ref: null, url: null }, bot: null, since: '2026-09-29T10:00:00.000Z', detail: '', actions: [] } as never,
+    ];
+    expect(waitingCount(items)).toBe(3);
+    const counts = groupCounts(items);
+    expect(waitingCount(items)).toBe(counts.work + counts.system);
+  });
+});

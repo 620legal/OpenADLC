@@ -111,19 +111,57 @@ export function isDecisionAction(action: AttentionAction): action is Extract<Att
   return action.kind === 'human_review_approve' || action.kind === 'human_review_reject' || action.kind === 'human_review_discuss';
 }
 
-export type DecisionButton = 'approve' | 'reject' | 'discuss';
+export type DecisionButton = 'approve' | 'reject' | 'discuss' | 'remind';
 
 /**
- * The buttons a viewer gets on a held Human-review approval, in the bridge's
- * order: all three for the person it waits on, as the bridge says from their
- * linked account (`decision.yours`), and Discuss alone for anyone else. The
- * bridge refuses Approve and Reject from anyone else too; this only keeps a
- * button off a card it would refuse.
+ * The buttons a viewer gets on a held Human-review approval: Approve, Reject
+ * and Discuss, in the bridge's order, for the person it waits on, as the
+ * bridge says from their linked account (`decision.yours`); for anyone else
+ * Remind first, the one thing they can do to move it (#307), then Discuss.
+ * The bridge refuses Approve and Reject from anyone else too; this only keeps
+ * a button off a card it would refuse. The panel leaves Remind off where the
+ * bridge has no route for it.
  */
 export function decisionButtons(item: Pick<AttentionItem, 'decision' | 'actions'>): DecisionButton[] {
   if (!item.decision) return [];
   const offered = item.actions.filter(isDecisionAction).map((action): DecisionButton => (action.kind === 'human_review_approve' ? 'approve' : action.kind === 'human_review_reject' ? 'reject' : 'discuss'));
-  return item.decision.yours === true ? offered : offered.filter((button) => button === 'discuss');
+  if (item.decision.yours === true) return offered;
+  return ['remind', ...offered.filter((button) => button === 'discuss')];
+}
+
+/** Discuss's one line on a held approval's card; what it does in full is at the top of the box it opens. */
+export const DISCUSS_HINT = 'Ask the lead reviewer or the builder.';
+
+/**
+ * Whether a held approval is someone else's to decide, as the bridge says
+ * from the viewer's linked account (`decision.waitsOnOther`, set only on a
+ * 403). Not `yours === false`: an unlinked viewer may be the person, and a
+ * lookup that failed knows nothing, and either would have moved a person's
+ * own approval out of their count (ADR 0058).
+ */
+export function waitsOnOthers(item: Pick<AttentionItem, 'decision'>): boolean {
+  return item.decision?.waitsOnOther === true;
+}
+
+/**
+ * The line under a held approval's title: whose approval it waits for. The
+ * bridge's headline said it in a sentence that wrapped to two lines while the
+ * item's own title was cut to one (#308).
+ */
+export function decisionStatus(item: Pick<AttentionItem, 'decision' | 'awaiting'>): string | null {
+  const decision = item.decision;
+  if (!decision) return null;
+  const again = item.awaiting?.again ? ' again' : '';
+  if (decision.yours === true) return `Waits for your approval${again}`;
+  return `Waits for @${decision.login}'s approval${again}`;
+}
+
+/** How a held approval's reason starts: to the person asked, or to someone it only waits on. */
+export function decisionWhy(item: Pick<AttentionItem, 'decision'>): { lead: string; text: string } | null {
+  const decision = item.decision;
+  if (!decision) return null;
+  if (waitsOnOthers(item)) return { lead: 'Why it waits: ', text: decision.whyWaits ?? decision.why };
+  return { lead: 'Why you are asked: ', text: decision.why };
 }
 
 // ---------------------------------------------------------------- a held merge and a held promote
@@ -184,11 +222,11 @@ function sinceShort(at: string, now: number): string {
  * the pull request: what tells whoever sees the card whether GitHub has
  * already told them.
  */
-export function requestLine(view: Pick<ReviewRequestView, 'login' | 'request'>, now: number): string {
+export function requestLine(view: Pick<ReviewRequestView, 'login' | 'request'>, now: number, who = `@${view.login}`): string {
   const request = view.request;
-  if (request.state === 'requested') return request.since ? `GitHub asked @${view.login} to review ${sinceShort(request.since, now)}.` : `GitHub has asked @${view.login} to review.`;
-  if (request.state === 'none') return `GitHub has no review request out to @${view.login}.`;
-  return `OpenADLC could not read whether GitHub asked @${view.login}: ${request.why}.`;
+  if (request.state === 'requested') return request.since ? `GitHub asked ${who} to review ${sinceShort(request.since, now)}.` : `GitHub has asked ${who} to review.`;
+  if (request.state === 'none') return `GitHub has no review request out to ${who}.`;
+  return `OpenADLC could not read whether GitHub asked ${who}: ${request.why}.`;
 }
 
 /** "Reminded 5 min ago by Ana.", or null when no one has. */
@@ -327,9 +365,19 @@ export function alarming(item: Pick<AttentionItem, 'kind' | 'severity'>): boolea
   return ALARMING.has(item.kind);
 }
 
-/** What waits on a person: a notice that something was fixed does not. */
-export function waiting<T extends Pick<AttentionItem, 'kind'>>(items: readonly T[]): T[] {
-  return items.filter((item) => item.kind !== 'check_fixed');
+/**
+ * What waits on a person: a notice that something was fixed does not, nor a
+ * held approval that is someone else's, which is under Waiting on others. The
+ * one place both are left out, so Work's count, the header, the board's strip,
+ * desktop alerts and a board card's mark all agree (ADR 0058).
+ */
+export function waiting<T extends Pick<AttentionItem, 'kind' | 'decision'>>(items: readonly T[]): T[] {
+  return items.filter((item) => item.kind !== 'check_fixed' && !waitsOnOthers(item));
+}
+
+/** Held approvals that are someone else's to decide: listed under Waiting on others, and counted nowhere. */
+export function othersWaiting<T extends Pick<AttentionItem, 'kind' | 'decision'>>(items: readonly T[]): T[] {
+  return items.filter((item) => item.kind !== 'check_fixed' && waitsOnOthers(item));
 }
 
 /** How many wait in each group, for the page's tabs and the header's badge. */

@@ -606,6 +606,8 @@ export interface HumanReviewDecision {
   change: string | null;
   /** Why they are asked: the paths and the Human review rule that names them. */
   why: string;
+  /** The same reason with the person as they / them / their, for a card that waits on someone else. Absent from an older bridge: then `why`. */
+  whyWaits?: string;
   /** The crew's reviews on the head; null when none were recorded, and the card links to GitHub. */
   reviews: HumanReviewSummary[] | null;
   prUrl: string;
@@ -616,6 +618,12 @@ export interface HumanReviewDecision {
   /** Why it is not the viewer's, and where to link an account when that is why. */
   notYours?: string;
   settingsUrl?: string;
+  /**
+   * Set when the viewer is known not to be the named person: it is under
+   * Waiting on others, and counted nowhere (ADR 0058). Unset for an unlinked
+   * viewer or a lookup that failed, which stay counted.
+   */
+  waitsOnOther?: true;
 }
 
 export type AttentionKind =
@@ -810,9 +818,13 @@ export interface AttentionMember {
   raw?: string;
 }
 
-/** How many items wait on a person: a notice that something was fixed does not. */
-export function waitingCount(items: readonly Pick<AttentionItem, 'kind'>[]): number {
-  return items.filter((item) => item.kind !== 'check_fixed').length;
+/**
+ * How many items wait on a person: a notice that something was fixed does
+ * not, nor a held approval that is someone else's (ADR 0058). The same rule as
+ * `attention-card`'s `waiting`, so the header's badge and Work's tab agree.
+ */
+export function waitingCount(items: readonly Pick<AttentionItem, 'kind' | 'decision'>[]): number {
+  return items.filter((item) => item.kind !== 'check_fixed' && item.decision?.waitsOnOther !== true).length;
 }
 
 /** A model account as the crew page names it. */

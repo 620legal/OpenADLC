@@ -82,6 +82,15 @@ only that (`apps/bridge/src/attention.ts`):
   **Clear all**. Each one leaves on its own after a day, and one cleared does not
   come back until it happens again: the check fails and recovers, or OpenADLC fixes
   the same thing once more.
+- **Waiting on others is listed apart.** A held Human-review approval that is
+  another GitHub account's to decide is under its own heading, **Waiting on
+  others**, below your own items on the Work tab. You see it there because you
+  can Remind or Discuss it, but you cannot decide it. It is not counted in
+  Work's tab, the header's badge, the board's strip or a board card's "needs
+  you", and it is not pushed to your devices. OpenADLC puts an item there only
+  when the account you linked is known not to be the named one. If you have not
+  linked an account, or GitHub could not be asked who the person is, it may be
+  yours: it stays in your list and is counted, with a line saying why (ADR 0058).
 
 `<bot>` below is how OpenADLC names a bot everywhere a person reads: its role and
 the GitHub account it acts as, "the second reviewer (janedoe-reviews)", or its
@@ -1959,15 +1968,26 @@ already waiting gets its card on the next sweep.
 
 ### Deciding it from the console
 
-The card describes the decision, so you can make it without opening GitHub. It shows:
+The card leads with the item's number and whole title, which wrap rather
+than being cut. The line under the title says whose approval it waits for:
+"Waits for your approval", or "Waits for @<login>'s approval" (with "again"
+when an approval is asked for again). The bridge's longer headline is kept
+for push notifications. The card describes the decision, so you can make it
+without opening GitHub. It shows:
 - **What it does**, from the issue's Outcome;
-- **Why you are asked**, the paths and the Human review rule that names you;
+- **Why you are asked**, the paths and the Human review rule that names you.
+  On a card that waits on someone else this reads **Why it waits**, and names
+  the person as "they", so the card names them once, in the line under the
+  title;
 - **What the reviewers found**, each crew review on the head, with a link to it and to the diff.
 
 The crew's reviews are recorded with the wait. A wait recorded before this
 change shows **Read the reviews on GitHub** instead.
 
-Under each button is what it does next.
+Under Approve and Reject is what each does next. Discuss is a plain button
+with one line under it, "Ask the lead reviewer or the builder."; what it does
+in full is at the top of the box it opens. **Review it on GitHub** comes after
+the card's own buttons, and is never the main one.
 
 - **Approve** shows a one-time code. Approve it on GitHub as the account you
   linked in Settings → Your GitHub account, and OpenADLC posts *your own*
@@ -1991,7 +2011,9 @@ Under each button is what it does next.
 
 Approve and Reject are only there for the person the card waits on, as the
 bridge reads it from the account you linked: your linked account id must be
-the named login's. Anyone else sees the description and Discuss. The bridge
+the named login's. Anyone else sees the description, **Remind @<login>** and
+Discuss, in that order, and finds the card under Waiting on others, not
+counted. The bridge
 refuses Approve and Reject from anyone else even when they are called
 directly. If you have not linked an account, the card says so and links to
 Settings → Your GitHub account.
@@ -2009,7 +2031,9 @@ card says "@<login> is not in People, so this came to the approvers.", with a
 link to Settings → People for an admin
 ([configuration](configuration.md#needs-you-routing)). The person is not in
 People, so OpenADLC has no device to notify. GitHub's review request is how it
-reaches them.
+reaches them. The approvers are not pushed about it either: it is under their
+Waiting on others, not counted. It is pushed once it routes to the person, for
+example when they are added to People (ADR 0058).
 
 The card reads, from the pull request's timeline, whether GitHub has a review
 request out to them:

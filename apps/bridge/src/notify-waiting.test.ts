@@ -195,4 +195,51 @@ describe('the merge-waiting and review-stopped notifications', () => {
     await expect(notices.pass()).resolves.toBe(0);
     expect(say).toHaveBeenCalledWith(expect.stringContaining('the database blinked'));
   });
+
+  describe('a held approval that is someone else’s (ADR 0058)', () => {
+    const since = '2026-11-03T10:00:00.000Z';
+    const decision = { repo: 'openadlc', pr: 12, head: 'a'.repeat(40), login: 'janedoe' } as never;
+    const APPROVAL = item({ id: 'approval:openadlc#12@janedoe', kind: 'merge_waiting', headline: 'Pull request #12 waits for @janedoe’s approval', since, decision });
+    const approvers = { for: 'approvers' as const, name: 'approvers', people: ['p-a', 'p-b'] };
+
+    it('is not sent while it is routed to the approvers, and is not recorded, so it is sent once it routes to the person', async () => {
+      const { send, store, notices, ready, set } = setUp([]);
+      await ready;
+      set([{ ...APPROVAL, audience: approvers }]);
+      await notices.pass();
+      expect(send).not.toHaveBeenCalled();
+      expect(await store.recorded('notify.merge_waiting', { item: `${APPROVAL.id}@${since}` })).toBe(false);
+
+      set([{ ...APPROVAL, audience: { for: 'person', name: 'Jane', people: ['p-j'] } }]);
+      await notices.pass();
+      await notices.pass();
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(send).toHaveBeenCalledWith(expect.objectContaining({ event: 'merge_waiting', people: ['p-j'] }));
+    });
+
+    it('is not sent to everyone either, when no one approves yet', async () => {
+      const { send, notices, ready, set } = setUp([]);
+      await ready;
+      set([{ ...APPROVAL, audience: { for: 'everyone', name: 'everyone', people: [], why: 'no one approves yet' } }]);
+      await notices.pass();
+      expect(send).not.toHaveBeenCalled();
+    });
+
+    it('is still sent on a local install, which routes nothing', async () => {
+      const { send, notices, ready, set } = setUp([]);
+      await ready;
+      set([APPROVAL]);
+      await notices.pass();
+      expect(send).toHaveBeenCalledTimes(1);
+    });
+
+    it('leaves a held merge on the approvers as it was: sent', async () => {
+      const { send, notices, ready, set } = setUp([]);
+      await ready;
+      set([{ ...MERGE, since, heldMerge: { repo: 'openadlc', pr: 12 } as never, audience: approvers }]);
+      await notices.pass();
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(send).toHaveBeenCalledWith(expect.objectContaining({ people: ['p-a', 'p-b'] }));
+    });
+  });
 });
