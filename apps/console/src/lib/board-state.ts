@@ -123,11 +123,26 @@ export function spendLine(card: Pick<BoardCard, 'costUsd'>, capUsd: number | nul
   return `${spent} of ${money(capUsd, { whole: Number.isInteger(capUsd) })}`;
 }
 
-// ---------------------------------------------------------------- the switch
+// ---------------------------------------------------------------- the view
 
 export type ViewName = 'stage' | 'state';
 
 export const VIEW_KEY = 'openadlc.board.view';
+
+/** The two views in words, as Settings → Appearance names them. */
+export const VIEW_WORDS: Record<ViewName, string> = { stage: 'By stage', state: 'By state' };
+
+/**
+ * What `saveView` announces in the page. The view is chosen in Appearance or
+ * with ⌘K, not on the board (ADR 0055), and ⌘K run on the board pushes to the
+ * route it is already on: the board does not remount, so a read on mount alone
+ * left it drawn as it was.
+ */
+export const VIEW_EVENT = 'openadlc:board-view';
+
+function viewOf(value: string | null | undefined): ViewName {
+  return value === 'state' ? 'state' : 'stage';
+}
 
 /**
  * The view this browser chose, or By stage: on a first visit, for a value it
@@ -137,19 +152,48 @@ export const VIEW_KEY = 'openadlc.board.view';
  */
 export function storedView(): ViewName {
   try {
-    return globalThis.localStorage?.getItem(VIEW_KEY) === 'state' ? 'state' : 'stage';
+    return viewOf(globalThis.localStorage?.getItem(VIEW_KEY));
   } catch {
     return 'stage';
   }
 }
 
-/** Remembers the choice in this browser; where storage throws, it holds for this page. */
+/**
+ * Remembers the choice in this browser and tells the page. Where storage
+ * throws, the page is told all the same, so the board in front of the person
+ * still follows for as long as it is open.
+ */
 export function saveView(view: ViewName): void {
   try {
     globalThis.localStorage?.setItem(VIEW_KEY, view);
   } catch {
     // A private window, or site data blocked.
   }
+  try {
+    globalThis.dispatchEvent?.(new CustomEvent<ViewName>(VIEW_EVENT, { detail: view }));
+  } catch {
+    // Somewhere with no events to send: nothing in the page to tell.
+  }
+}
+
+/**
+ * Calls `listener` with the view each time it is chosen: in this page
+ * (`saveView`), or in another tab of this browser (its `storage` event).
+ * Returns the unsubscribe.
+ */
+export function onViewChange(listener: (view: ViewName) => void): () => void {
+  const target = globalThis as typeof globalThis & Partial<Pick<Window, 'addEventListener' | 'removeEventListener'>>;
+  if (typeof target.addEventListener !== 'function' || typeof target.removeEventListener !== 'function') return () => {};
+  const onView = (event: Event) => listener(viewOf((event as CustomEvent<unknown>).detail as string | undefined));
+  const onStorage = (event: StorageEvent) => {
+    if (event.key === VIEW_KEY) listener(viewOf(event.newValue));
+  };
+  target.addEventListener(VIEW_EVENT, onView);
+  target.addEventListener('storage', onStorage);
+  return () => {
+    target.removeEventListener!(VIEW_EVENT, onView);
+    target.removeEventListener!('storage', onStorage);
+  };
 }
 
 // ---------------------------------------------------------------- the Live dot

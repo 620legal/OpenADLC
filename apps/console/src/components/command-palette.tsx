@@ -9,9 +9,10 @@ import { PAUSE_WORK, PauseForm } from '@/components/pause-work';
 import { DialogTitle } from '@/components/ui/dialog';
 import type { JumpItem, PaletteRead } from '@/lib/api';
 import { labelIn } from '@/lib/bot-label';
+import { saveView, storedView, type ViewName } from '@/lib/board-state';
 import { cn } from '@/lib/cn';
 import { filterCommands, paletteCommands, rankJump, type PaletteCommand } from '@/lib/command-palette';
-import type { HeaderData } from '@/lib/header';
+import { boardHref, type HeaderData } from '@/lib/header';
 import { isMac, isPaletteShortcut } from '@/lib/keys';
 
 /** Where the palette reads the jump list and whether anything is paused, each time it opens. */
@@ -22,8 +23,8 @@ const LAST_ROW = 'last row';
 
 /**
  * ⌘K (Ctrl+K off a Mac), on every page with the header: jump to a work item
- * by its key, number or title, go to a page, or act — file a request, pause
- * work, or go to where it resumes. Pressed again, or Esc, closes it.
+ * by its key, number or title, go to a page, or act — file a request, group
+ * the board, pause work, or go to where it resumes. Pressed again, or Esc, closes it.
  *
  * Mounted once by `AppShell`, with one listener in the capture phase, so the
  * shortcut reaches it while a text field has focus. The palette itself, and
@@ -102,8 +103,13 @@ function Palette({
   // or last only until Resume did.
   const [activeId, setActiveId] = useState<string | null>(null);
   const [pausing, setPausing] = useState(false);
+  // How the board is grouped, for which way the palette offers to group it.
+  // Read once: the palette mounts each time it opens.
+  const [view, setView] = useState<ViewName>('stage');
   const base = useId();
   const listId = `${base}-list`;
+
+  useEffect(() => setView(storedView()), []);
 
   useEffect(() => {
     let live = true;
@@ -125,12 +131,12 @@ function Palette({
 
   const rows = useMemo<Row[]>(() => {
     const items = read?.items ? rankJump(read.items, query) : [];
-    const commands = filterCommands(paletteCommands({ role, paused: read?.paused ?? null, repo }), query);
+    const commands = filterCommands(paletteCommands({ role, paused: read?.paused ?? null, repo, view }), query);
     return [
       ...items.map((item): Row => ({ id: `${base}-item-${item.number}`, kind: 'item', item })),
       ...commands.map((command): Row => ({ id: `${base}-${command.id}`, kind: 'command', command })),
     ];
-  }, [read, query, role, repo, base]);
+  }, [read, query, role, repo, view, base]);
   const found =
     activeId === null ? -1 : activeId === LAST_ROW ? rows.length - 1 : rows.findIndex((row) => row.id === activeId);
   const current = found < 0 ? 0 : found;
@@ -155,6 +161,12 @@ function Palette({
     if (command.group === 'go') return go(command.href);
     if (command.id === 'new-request') return onNewRequest();
     if (command.id === 'pause') return setPausing(true);
+    if (command.id === 'board-view') {
+      // Saved first: a board already open hears it and regroups, as the push
+      // to its own route does not remount it.
+      saveView(command.view);
+      return go(boardHref(repo));
+    }
     // Resume goes to where resuming is chosen; it resumes nothing itself.
     if (command.id === 'resume') return go(PAUSE_WORK);
   };

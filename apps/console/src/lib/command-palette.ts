@@ -1,4 +1,5 @@
 import type { JumpItem, Role } from '@/lib/api';
+import type { ViewName } from '@/lib/board-state';
 import { NAV } from '@/lib/header';
 
 /** How many items the palette lists for a query; past that, typing more is quicker than scrolling. */
@@ -62,22 +63,43 @@ export function rankJump(items: readonly JumpItem[], query: string): JumpItem[] 
 /** Something the palette does that is not opening an item. */
 export type PaletteCommand =
   | { id: string; group: 'go'; label: string; href: string }
-  | { id: 'new-request' | 'pause' | 'resume'; group: 'act'; label: string };
+  | { id: 'new-request' | 'pause' | 'resume'; group: 'act'; label: string }
+  /** Groups the board the other way from `view`'s, the one this command sets. */
+  | { id: 'board-view'; group: 'act'; label: string; view: ViewName };
 
 /**
  * Where the palette can go and what it can do, for this person: only what the
  * bridge lets their role do. Settings, Pause work and Resume are an admin's,
  * as their routes are; Resume shows only while something is paused, and goes
- * to Settings' Pause work card rather than resuming anything itself.
+ * to Settings' Pause work card rather than resuming anything itself. Grouping
+ * the board is everyone's: it is a choice of this browser's, and the one way a
+ * non-admin has to make it, since Appearance is an admin's (ADR 0055). Its id
+ * is the same either way, so a highlight held by id stays on it (#241).
  */
-export function paletteCommands({ role, paused, repo = 'all' }: { role: Role; paused: boolean | null; repo?: string }): PaletteCommand[] {
+export function paletteCommands({
+  role,
+  paused,
+  repo = 'all',
+  view = 'stage',
+}: {
+  role: Role;
+  paused: boolean | null;
+  repo?: string;
+  /** How the board is grouped in this browser now. */
+  view?: ViewName;
+}): PaletteCommand[] {
   const admin = role === 'admin';
   const nav = NAV.filter((item) => admin || item.page !== 'settings').map(
     (item): PaletteCommand => ({ id: `go:${item.page}`, group: 'go', label: item.label, href: item.href(repo) }),
   );
   // Needs you is reached from the header's badge, not the navigation, and is a place to go all the same.
   const go: PaletteCommand[] = [nav[0]!, { id: 'go:needs-you', group: 'go', label: 'Needs you', href: '/needs-you' }, ...nav.slice(1)];
-  const act: PaletteCommand[] = [{ id: 'new-request', group: 'act', label: 'New request' }];
+  const act: PaletteCommand[] = [
+    { id: 'new-request', group: 'act', label: 'New request' },
+    view === 'state'
+      ? { id: 'board-view', group: 'act', label: 'Group the board by stage', view: 'stage' }
+      : { id: 'board-view', group: 'act', label: 'Group the board by state', view: 'state' },
+  ];
   if (admin) act.push({ id: 'pause', group: 'act', label: 'Pause work' });
   if (admin && paused === true) act.push({ id: 'resume', group: 'act', label: 'Resume' });
   return [...go, ...act];

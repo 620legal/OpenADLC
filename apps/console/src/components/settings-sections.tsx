@@ -1,9 +1,15 @@
-import type { ReactNode } from 'react';
+'use client';
+
+// A client module for the Board row's toggle, which reads this browser's
+// storage; everything else here is plain props, which a server page passes as
+// readily as it did.
+import { useEffect, useState, type ReactNode } from 'react';
 import { CrewColors, RepositoryColors } from '@/components/color-choice';
 import { ConsoleBrandPart } from '@/components/console-brand';
 import { GitHubLinkCard } from '@/components/github-link-card';
 import { ThemeToggle } from '@/components/theme-toggle';
 import type { CrewMember } from '@/lib/api';
+import { onViewChange, saveView, storedView, VIEW_WORDS, type ViewName } from '@/lib/board-state';
 
 /** One section of settings, as a card with its heading and a line saying what it is. */
 export function SettingsCard({
@@ -122,6 +128,15 @@ function AppearanceCard({
         </div>
         <ThemeToggle />
       </div>
+      <div className="flex flex-wrap items-center gap-3 border-t border-well pb-0.5 pt-3">
+        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <span className="text-[13px] font-semibold text-body">Board</span>
+          <span className="text-[12px] text-muted">
+            How the board groups its cards in this browser: by the stages work moves through, or by what is running, waiting on you, waiting, or idle.
+          </span>
+        </div>
+        <BoardViewToggle />
+      </div>
       {withBrand && <ConsoleBrandPart />}
       {repositories && (
         <SettingsPart id="repository-colors" title="Repository colors" line="How the board tells repositories apart, always beside the name.">
@@ -134,5 +149,45 @@ function AppearanceCard({
         </SettingsPart>
       )}
     </SettingsCard>
+  );
+}
+
+const VIEWS: readonly ViewName[] = ['stage', 'state'];
+
+/**
+ * By stage or By state, kept in this browser under the key the board reads,
+ * and announced to a board open in this page or another tab (ADR 0055). Like
+ * `ThemeToggle`, nothing is checked until mounted: the server cannot see this
+ * browser's storage.
+ */
+function BoardViewToggle() {
+  const [view, setView] = useState<ViewName | null>(null);
+  useEffect(() => {
+    setView(storedView());
+    return onViewChange(setView);
+  }, []);
+
+  return (
+    <div role="radiogroup" aria-label="Board" className="flex shrink-0 rounded-lg bg-well p-0.5">
+      {VIEWS.map((option) => {
+        const active = view === option;
+        return (
+          <button
+            key={option}
+            type="button"
+            role="radio"
+            aria-checked={active}
+            aria-label={VIEW_WORDS[option]}
+            onClick={() => saveView(option)}
+            className={`h-10 rounded-md px-3 text-[12.5px] transition-colors focus-visible:outline-2 focus-visible:outline-link md:h-[30px] ${
+              active ? 'bg-panel font-medium text-body shadow-sm' : 'text-muted hover:text-body'
+            }`}
+            style={view === null ? { opacity: 0.6 } : undefined}
+          >
+            {VIEW_WORDS[option]}
+          </button>
+        );
+      })}
+    </div>
   );
 }

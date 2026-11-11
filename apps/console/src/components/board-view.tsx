@@ -21,7 +21,7 @@ import { stripItems } from '@/lib/attention-card';
 import { findBot, labelIn } from '@/lib/bot-label';
 import { withActivity, type BoardActivity } from '@/lib/board-activity';
 import { attemptMove, columnsWithMoves, movesBack, NO_MOVES, reconcile, type MoveState } from '@/lib/board-move';
-import { liveLine, saveView, spendLine, stateColumns, storedView, type StateColumn as StateColumnData, type ViewName } from '@/lib/board-state';
+import { liveLine, onViewChange, saveView, spendLine, stateColumns, storedView, type StateColumn as StateColumnData, type ViewName } from '@/lib/board-state';
 import { abandoned, awaitedApprovalsOf, cardBot, cardCost, cardStatus, heldApprovalsOf, nextUp, rootButton, runningStatus, sendBackLine, type CardContext, type CardStatus, type RootButton, type StatusTone } from '@/lib/card-status';
 import { cn } from '@/lib/cn';
 import { cardMatches, exactKey } from '@/lib/item';
@@ -156,13 +156,14 @@ export function BoardView({
 
   // By stage or By state, as this browser last chose. Read once drawn: the
   // server has no storage and always draws By stage, and a first drawing that
-  // differed from it would be thrown away.
+  // differed from it would be thrown away. It is chosen in Appearance or with
+  // ⌘K (ADR 0055), while this board stays mounted, so it follows `saveView`
+  // rather than reading storage once.
   const [view, setView] = useState<ViewName>('stage');
-  useEffect(() => setView(storedView()), []);
-  const choose = (next: ViewName) => {
-    setView(next);
-    saveView(next);
-  };
+  useEffect(() => {
+    setView(storedView());
+    return onViewChange(setView);
+  }, []);
 
   // The filter box: a work item's key in any case and with any prefix, or words of a title.
   const [filter, setFilter] = useState('');
@@ -411,11 +412,11 @@ export function BoardView({
                   />
                 </label>
               </form>
-              <ViewSwitch view={view} onChange={choose} />
               <LiveDot updatedAt={updatedAt} />
             </div>
             {view === 'state' ? (
               <>
+                <ByStateLine admin={admin} />
                 <section
                   aria-label="Board by state"
                   className="hidden min-h-[22rem] flex-1 gap-3 overflow-x-auto px-6 pb-6 pt-3 md:grid md:grid-cols-[repeat(4,minmax(12.5rem,1fr))]"
@@ -1046,30 +1047,25 @@ function StateColumn({ column, capOf, cards }: { column: StateColumnData; capOf:
   );
 }
 
-const VIEWS: readonly { view: ViewName; words: string }[] = [
-  { view: 'stage', words: 'By stage' },
-  { view: 'state', words: 'By state' },
-];
-
-/** By stage or By state, kept in this browser. */
-function ViewSwitch({ view, onChange }: { view: ViewName; onChange: (view: ViewName) => void }) {
+/**
+ * Said while the board is By state, with the way back. The switch that was on
+ * the toolbar took room every day for a choice made rarely (ADR 0055), so with
+ * it gone the board says itself where its stages went. Appearance is an
+ * admin's (ADR 0053); anyone else is pointed at ⌘K alone.
+ */
+function ByStateLine({ admin }: { admin: boolean }) {
   return (
-    <div role="group" aria-label="Group the board" className="inline-flex shrink-0 rounded-md border border-edge bg-panel p-0.5">
-      {VIEWS.map((one) => (
-        <button
-          key={one.view}
-          type="button"
-          aria-pressed={view === one.view}
-          onClick={() => onChange(one.view)}
-          className={cn(
-            'h-6 rounded px-2 text-[12px] focus-visible:outline-2 focus-visible:outline-link',
-            view === one.view ? 'bg-body font-medium text-surface' : 'text-soft hover:text-body',
-          )}
-        >
-          {one.words}
-        </button>
-      ))}
-    </div>
+    <p role="status" className="shrink-0 px-4 pt-2 text-[12px] text-dim md:px-6">
+      Grouped by state.{' '}
+      <button
+        type="button"
+        onClick={() => saveView('stage')}
+        className="text-link underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-link"
+      >
+        Group by stage
+      </button>
+      {admin ? ' · change it in Settings → Appearance or ⌘K' : ' · or ⌘K'}
+    </p>
   );
 }
 

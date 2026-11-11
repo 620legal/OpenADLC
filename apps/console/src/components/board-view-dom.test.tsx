@@ -516,11 +516,20 @@ describe('the board by state', () => {
     await act(async () => root.render(<BoardView board={board} crew={[BUILDER]} repo="all" header={header} attention={attention} now={NOW} />));
   }
 
-  const switchTo = async (words: string) => {
-    const button = [...container.querySelectorAll('[aria-label="Group the board"] button')].find((one) => one.textContent === words) as HTMLButtonElement;
-    await act(async () => button.click());
+  /** Chosen where it is chosen now: Appearance and ⌘K both call `saveView`. */
+  const choose = async (view: 'stage' | 'state') => {
+    const { saveView } = await import('@/lib/board-state');
+    await act(async () => saveView(view));
   };
   const byState = () => container.querySelector('[aria-label="Board by state"]');
+  const line = () => [...container.querySelectorAll('[role="status"]')].find((one) => one.textContent?.startsWith('Grouped by state')) ?? null;
+  /** No By stage | By state switch, pressed or as a radio, anywhere on the board. */
+  const expectNoSwitch = () => {
+    const named = [...container.querySelectorAll('[aria-pressed], [role="radio"]')].filter((one) => /^By (stage|state)$/.test(one.textContent ?? ''));
+    expect(named).toEqual([]);
+    expect(container.querySelector('[aria-label="Group the board"]')).toBeNull();
+    expect(container.querySelector('[role="radiogroup"]')).toBeNull();
+  };
   const refsIn = (state: string) =>
     [...(byState()?.querySelectorAll(`[data-state="${state}"] article`) ?? [])].map((card) => card.querySelector('h3')?.textContent);
 
@@ -529,28 +538,77 @@ describe('the board by state', () => {
     vi.stubGlobal('fetch', vi.fn(() => new Promise(() => undefined)));
   });
 
-  it('is By stage on a first visit, and By state after it was chosen, across a reload', async () => {
+  it('is By stage on a first visit, with no switch on the board and no line', async () => {
     await show(boardWith([RUNNING]));
     expect(container.querySelector('[aria-label="Board"]')).not.toBeNull();
     expect(byState()).toBeNull();
+    expect(line()).toBeNull();
+    expectNoSwitch();
+  });
 
-    await switchTo('By state');
+  it('is By state where this browser chose it, as the old switch stored it, with the line and a way back that holds', async () => {
+    localStorage.setItem('openadlc.board.view', 'state');
+    await show(boardWith([RUNNING]));
     expect(byState()).not.toBeNull();
     expect(container.querySelector('[aria-label="Board"]')).toBeNull();
-    expect(localStorage.getItem('openadlc.board.view')).toBe('state');
+    expectNoSwitch();
+    // An admin's, as a board drawn without a role is: Appearance is theirs to reach.
+    expect(line()?.textContent).toBe('Grouped by state. Group by stage · change it in Settings → Appearance or ⌘K');
 
-    // A reload: the page drawn afresh.
+    const back = [...line()!.querySelectorAll('button')].find((one) => one.textContent === 'Group by stage')!;
+    await act(async () => back.click());
+    expect(byState()).toBeNull();
+    expect(container.querySelector('[aria-label="Board"]')).not.toBeNull();
+    expect(line()).toBeNull();
+    expect(localStorage.getItem('openadlc.board.view')).toBe('stage');
+
+    // A reload: the page drawn afresh keeps By stage.
     act(() => root.unmount());
     root = createRoot(container);
     await show(boardWith([RUNNING]));
+    expect(byState()).toBeNull();
+  });
+
+  it('names ⌘K alone in the line for a non-admin, who cannot reach Appearance', async () => {
+    localStorage.setItem('openadlc.board.view', 'state');
+    const { RoleProvider } = await import('./app-header');
+    const { BoardView } = await import('./board-view');
+    const { headerData } = await import('@/lib/header');
+    const header = headerData({ repos: ['openadlc'], crew: [BUILDER], budget: null, needsYou: 0 });
+    await act(async () =>
+      root.render(
+        <RoleProvider role="user">
+          <BoardView board={boardWith([RUNNING])} crew={[BUILDER]} repo="all" header={header} attention={[]} now={NOW} />
+        </RoleProvider>,
+      ),
+    );
+    expect(line()?.textContent).toBe('Grouped by state. Group by stage · or ⌘K');
+  });
+
+  it('regroups, with no remount, when the view is chosen elsewhere in the page or in another tab', async () => {
+    await show(boardWith([RUNNING]));
+    const section = container.querySelector('[aria-label="Board"]')!.parentElement;
+    await choose('state');
     expect(byState()).not.toBeNull();
-    expect(container.querySelector('[aria-label="Group the board"] [aria-pressed="true"]')?.textContent).toBe('By state');
+    expect(line()).not.toBeNull();
+    expect(byState()!.parentElement).toBe(section);
+
+    await choose('stage');
+    expect(byState()).toBeNull();
+
+    // Another tab: the browser fires `storage` here, and writes storage itself.
+    await act(async () => {
+      localStorage.setItem('openadlc.board.view', 'state');
+      window.dispatchEvent(new StorageEvent('storage', { key: 'openadlc.board.view', newValue: 'state' }));
+    });
+    expect(byState()).not.toBeNull();
   });
 
   it('is By stage for a value it does not know, and where storage throws', async () => {
     localStorage.setItem('openadlc.board.view', 'columns');
     await show(boardWith([RUNNING]));
     expect(byState()).toBeNull();
+    expect(line()).toBeNull();
 
     act(() => root.unmount());
     root = createRoot(container);
@@ -565,7 +623,7 @@ describe('the board by state', () => {
     await show(boardWith([RUNNING]));
     expect(byState()).toBeNull();
     // Chosen anyway, it holds for the page.
-    await switchTo('By state');
+    await choose('state');
     expect(byState()).not.toBeNull();
   });
 

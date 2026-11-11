@@ -71,11 +71,22 @@ describe('the commands', () => {
   const ids = (role: 'admin' | 'user', paused: boolean | null) => paletteCommands({ role, paused }).map((command) => command.id);
 
   it('go to every page an admin has, Needs you among them', () => {
-    expect(ids('admin', false)).toEqual(['go:board', 'go:needs-you', 'go:crew', 'go:costs', 'go:insights', 'go:settings', 'new-request', 'pause']);
+    expect(ids('admin', false)).toEqual(['go:board', 'go:needs-you', 'go:crew', 'go:costs', 'go:insights', 'go:settings', 'new-request', 'board-view', 'pause']);
   });
 
   it('leave Settings, Pause work and Resume out for a user', () => {
-    expect(ids('user', true)).toEqual(['go:board', 'go:needs-you', 'go:crew', 'go:costs', 'go:insights', 'new-request']);
+    expect(ids('user', true)).toEqual(['go:board', 'go:needs-you', 'go:crew', 'go:costs', 'go:insights', 'new-request', 'board-view']);
+  });
+
+  it('group the board the other way from how it is, for an admin and a user alike', () => {
+    for (const role of ['admin', 'user'] as const) {
+      const of = (view?: 'stage' | 'state') => paletteCommands({ role, paused: false, view }).filter((command) => command.id === 'board-view');
+      expect(of('stage')).toEqual([{ id: 'board-view', group: 'act', label: 'Group the board by state', view: 'state' }]);
+      expect(of('state')).toEqual([{ id: 'board-view', group: 'act', label: 'Group the board by stage', view: 'stage' }]);
+      // A caller that does not say is By stage, the board's default.
+      expect(of()).toEqual(of('stage'));
+      expect(filterCommands(paletteCommands({ role, paused: false, view: 'state' }), 'group').map((command) => command.id)).toEqual(['board-view']);
+    }
   });
 
   it('offer Resume only while something is paused', () => {

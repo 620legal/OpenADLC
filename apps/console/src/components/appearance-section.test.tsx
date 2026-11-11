@@ -98,6 +98,71 @@ describe('Settings → Appearance', () => {
   });
 });
 
+describe('the Board row, in Appearance', () => {
+  beforeEach(() => localStorage.clear());
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('sits beside Color mode, and checks By stage on a first visit and for a value it does not know', async () => {
+    await mount();
+    const radiogroups = [...container.querySelectorAll('[role="radiogroup"]')].map((one) => one.getAttribute('aria-label'));
+    expect(radiogroups.slice(0, 2)).toEqual(['Color mode', 'Board']);
+    expect([...group('Board').querySelectorAll('[role="radio"]')].map((one) => one.textContent)).toEqual(['By stage', 'By state']);
+    expect(checked('Board')).toBe('By stage');
+
+    act(() => root.unmount());
+    root = createRoot(container);
+    localStorage.setItem('openadlc.board.view', 'columns');
+    await mount();
+    expect(checked('Board')).toBe('By stage');
+  });
+
+  it('checks By state where the board’s old switch stored it', async () => {
+    localStorage.setItem('openadlc.board.view', 'state');
+    await mount();
+    expect(checked('Board')).toBe('By state');
+  });
+
+  it('checks By stage where storage throws', async () => {
+    vi.stubGlobal('localStorage', {
+      getItem: () => {
+        throw new Error('SecurityError');
+      },
+      setItem: () => {
+        throw new Error('SecurityError');
+      },
+    });
+    await mount();
+    expect(checked('Board')).toBe('By stage');
+  });
+
+  it('stores a choice under the board’s key, checks it, and tells the page, so an open board follows', async () => {
+    const { VIEW_EVENT } = await import('@/lib/board-state');
+    const heard: unknown[] = [];
+    const hear = (event: Event) => heard.push((event as CustomEvent).detail);
+    window.addEventListener(VIEW_EVENT, hear);
+    try {
+      await mount();
+      await choose('Board', 'By state');
+      expect(localStorage.getItem('openadlc.board.view')).toBe('state');
+      expect(checked('Board')).toBe('By state');
+      expect(heard).toEqual(['state']);
+
+      await choose('Board', 'By stage');
+      expect(localStorage.getItem('openadlc.board.view')).toBe('stage');
+      expect(checked('Board')).toBe('By stage');
+    } finally {
+      window.removeEventListener(VIEW_EVENT, hear);
+    }
+  });
+
+  it('follows a choice made elsewhere, as with ⌘K', async () => {
+    await mount();
+    const { saveView } = await import('@/lib/board-state');
+    await act(async () => saveView('state'));
+    expect(checked('Board')).toBe('By state');
+  });
+});
+
 describe('repository colors, in Appearance', () => {
   it('lists each repository with its name and the palette, its color checked', async () => {
     await mount();
