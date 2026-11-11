@@ -148,15 +148,31 @@ and run yourself, and do not pass on, needs none of this.
 [`infra/local/install.sh`](../infra/local/install.sh) does this section and
 the [Requirements](#requirements) in one command, on macOS (Homebrew) or Linux
 (apt or dnf), asking before it installs anything; the README's quick start
-runs it. It is safe to run again. By hand, it is:
+runs it:
 
 ```bash
+curl -fsSL https://raw.githubusercontent.com/620legal/OpenADLC/main/infra/local/install.sh | bash
+```
+
+It says what the machine is missing and asks before installing it: Node 22+,
+pnpm, git, tmux, Docker ([OrbStack](https://orbstack.dev) on a Mac), cloudflared
+(so GitHub's webhooks reach a laptop), and on Linux the compiler node-pty needs.
+Then it clones this repository to `~/OpenADLC`, builds it and the bot image,
+writes the install to `~/.openadlc`, starts it and opens the console. Run it
+again to bring the checkout up to date; `--help` lists its options.
+
+Step by step, from a machine that has the [Requirements](#requirements), it is:
+
+```bash
+git clone https://github.com/620legal/OpenADLC.git && cd OpenADLC
 pnpm install
 pnpm build
 infra/local/build-bot-image.sh                     # the image each bot runs
 node apps/cli/bin/openadlc.mjs init --driver docker   # writes ~/.openadlc/install.json
-node apps/cli/bin/openadlc.mjs up
+node apps/cli/bin/openadlc.mjs up                     # then open the console link it prints
 ```
+
+`openadlc doctor` says what would break; `openadlc down` stops it.
 
 This applies migrations, loads `config/`, and starts hostd, the bridge and the
 console. The bridge also dispatches: it decides what starts next as soon as an
@@ -1166,6 +1182,25 @@ instead, once you know the account's id:
 printf '%s' "$ANTHROPIC_API_KEY" > ~/.openadlc/secrets/model-account-"$ACCOUNT_ID".secret
 chmod 600 ~/.openadlc/secrets/model-account-"$ACCOUNT_ID".secret
 ```
+
+### The seats and their default models
+
+Each seat is a role with its own model; change them on the Crew page
+([`config/bots.yaml`](../config/bots.yaml) is only the fresh install's default).
+
+| Seat | Does | Default model |
+|---|---|---|
+| intake | Clarifies the request, files the issue | Claude Sonnet |
+| system-engineer | Designs | Claude Opus |
+| builder | Implements, runs CI, opens the PR | Claude Opus |
+| lead-reviewer | Reviews last and decides | OpenAI Codex |
+| second-reviewer | A second opinion, on another provider | xAI Grok |
+| security-reviewer | Secrets, auth, injection, dependencies | OpenAI Codex |
+| sre · qa | Reverts after a red smoke, and reviews workflow, runbook and infrastructure changes · journeys and smoke tests | Claude Opus |
+
+Each seat follows its model family's newest release. A seat whose provider you
+have no account for is put on one you do in the Crew step; nothing switches it
+to another provider later.
 
 ### Subscriptions
 
@@ -2348,6 +2383,22 @@ Shell session it waits for you to click Authorize on Cloud Shell's prompt
 rather than sign you in again. It needs the GitHub CLI, signed in (it signs
 you in if not), to find the release's images and check them. `--skip-images`
 leaves out the build, `--plan-only` stops before the apply.
+
+Open Cloud Shell with this repository in it,
+
+[![Open in Cloud Shell](https://gstatic.com/cloudssh/images/open-btn.svg)](https://shell.cloud.google.com/cloudshell/editor?cloudshell_git_repo=https://github.com/620legal/OpenADLC&cloudshell_git_branch=main&cloudshell_print=infra/gcp/cloud-shell.txt&shellonly=true)
+
+and run `infra/gcp/install.sh --project <new-project-id>`, or paste this into
+any terminal with the [gcloud CLI](https://cloud.google.com/sdk/docs/install):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/620legal/OpenADLC/main/infra/gcp/install.sh | bash -s -- --project my-openadlc
+```
+
+Beside those confirmations, it asks you only who may open the console: you,
+by default. The console comes up on the install's own address (under nip.io, so
+no DNS record is needed; `--domain` serves it on a name of yours instead), and
+its walkthrough does the rest, GitHub included.
 
 **The images are a release's.** The bridge, hostd and the console run the
 newest [release](#releases)'s `service` and `console` images, which the

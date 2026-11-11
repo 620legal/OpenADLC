@@ -25,6 +25,17 @@ say) in `config/bots.yaml`, or have a person merge them with `ciMergeByPerson`.
 
 ## Trust boundaries
 
+### Spend caps
+
+Spend is capped per task and per month, and a cap stops the work and asks a
+person. The caps are set in Settings → Spending limits;
+[`config/costs.yaml`](../config/costs.yaml) seeds them on the install's first
+start. Only a billed run, on an API key, counts toward the monthly, bot and
+provider limits. A run on a subscription is estimated, not billed, and is
+stopped by the runaway guard, ten times the per-task cap
+([configuration](configuration.md#costsyaml--what-openadlc-may-spend),
+[ADR 0050](adr/0050-a-subscription-run-is-estimated-not-billed.md)).
+
 ### The container
 
 Each task runs in a computer of its own: under the `docker` driver a container,
@@ -898,7 +909,8 @@ at all. What does hold, whatever a session runs:
   repository below GitHub Enterprise), nobody is named, or the environment
   could not be read — the bridge holds the promote in Needs you until a person
   releases it. With `approval: auto` it waits only for the soak timer
-  (`soakMinutes`, 30 by default).
+  (`soakMinutes`, 30 by default). When a person must approve, OpenADLC never
+  leaves production's reviewer list empty.
 - **Starting a deploy:** OpenADLC's `gh` refuses the deploy skill
   `gh workflow run deploy-testing` and `promote-production`, by name, file
   name, path or number, `gh run rerun` and `gh api`; it may still run
@@ -2137,6 +2149,8 @@ tests, not against a live install. Each has a row, and the command that would
 prove it, in [docs/unverified.md](unverified.md#open):
 
 - IAP has not been seen refusing someone who is not in `console_members` (U21).
+- The deploy path (deploy, smoke, promote, revert) has not yet run against a
+  live environment. What it relies on GitHub to do is listed as U37 to U43.
 - The required reviewer `openadlc github apply` sets on `production` has not
   been seen sticking on a real organization's repository (U42). If it does
   not, a promote is not held for a person.
