@@ -2,7 +2,7 @@ import { audit, bots, costs, hasEventOfType, health, hosts, lastEventAt, leases,
 import { githubDidNotAnswer } from '@openadlc/github';
 import { attachmentsForTask } from './attachment-routes.js';
 import { stoppedByTheBridge } from './bridge-stops.js';
-import { botAtStart, headerFor, leaseExpiryFrom, maxTasksOf, pathMatches, resolveBotRef, sameLogin, seatOf, type ContextDocument, type HumanReviewRule, type Task, type TaskKind } from '@openadlc/shared';
+import { botAtStart, headerFor, leaseExpiryFrom, maxTasksOf, pathMatches, resolveBotRef, sameLogin, seatOf, withoutHeader, type ContextDocument, type HumanReviewRule, type Task, type TaskKind } from '@openadlc/shared';
 import type { BridgeConfig } from './config.js';
 import type { Context } from './context.js';
 import { effectiveConfig } from './effective-config.js';
@@ -1998,12 +1998,16 @@ export interface AwaitedReview {
 export const REVIEW_SUMMARY_CHARS = 600;
 
 /**
- * A review's body as a card says it: its HTML comments (the header marker, the
- * seat tag, the signature) taken out, and cut on a word at
- * `REVIEW_SUMMARY_CHARS`. A signature left in read as a line of base64.
+ * A review's body as a card says it: the bot's header (`**OpenADLC_x · second
+ * review agent**`) and its HTML comments (the seat tag, the signature) taken
+ * out, and cut on a word at `REVIEW_SUMMARY_CHARS`. Its markdown stays in; the
+ * console formats it. A signature left in read as a line of base64, and the
+ * header took the card's three lines from the verdict. The header goes first:
+ * its tag is what tells it from a bold line the reviewer wrote, and the
+ * comments take the tag with them.
  */
 export function reviewSummary(body: string, limit = REVIEW_SUMMARY_CHARS): string {
-  const text = body
+  const text = withoutHeader(body)
     .replace(/<!--[\s\S]*?(?:-->|$)/g, '')
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
