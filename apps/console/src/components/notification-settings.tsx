@@ -1,6 +1,5 @@
 'use client';
 
-import Link from 'next/link';
 import { useState } from 'react';
 import { saveNotifications } from '@/app/actions';
 import { SettingsCard } from '@/components/settings-sections';
@@ -30,40 +29,6 @@ export const SWITCH_LABEL: Record<NotifySwitch, string> = {
 export function testOutcome(result: NotificationTestResult): string {
   if (result.ok) return `Delivered${result.status === null ? '' : ` (${result.status})`}`;
   return `Not delivered: ${[result.status, result.error].filter((part) => part !== null && part !== '').join(' ')}`.trim();
-}
-
-/**
- * The line Settings shows for it: push, how many devices the signed-in
- * person has, and which kinds are off.
- */
-export function notificationsLine(view: NotificationSettingsView | null, devices: number | null): string {
-  const where =
-    devices === null
-      ? 'Push to the console app'
-      : devices === 0
-        ? 'Push to the console app · not on any of your devices yet'
-        : `Push to the console app · on your ${devices === 1 ? 'device' : `${devices} devices`}`;
-  if (!view) return where;
-  const off = (Object.keys(SWITCH_LABEL) as NotifySwitch[]).filter((name) => view.switches[name] === false);
-  return off.length === 0 ? where : `${where} · ${off.length} kind${off.length === 1 ? '' : 's'} off`;
-}
-
-/** Settings' card for it, linking to the page that changes it. */
-export function NotificationsSummary({ view, devices }: { view: NotificationSettingsView | null; devices: number | null }) {
-  return (
-    <SettingsCard
-      id="notifications"
-      title="Notifications"
-      line="OpenADLC tells you something needs you as push to the console app."
-      action={
-        <Link href="/settings/notifications" className="text-[12.5px] text-link hover:underline">
-          Set up notifications
-        </Link>
-      }
-    >
-      <p className={cn('text-[12.5px]', devices === 0 ? 'text-alarm' : 'text-muted')}>{notificationsLine(view, devices)}</p>
-    </SettingsCard>
-  );
 }
 
 export function NotificationSettings({ initial }: { initial: NotificationSettingsView }) {

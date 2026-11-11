@@ -1,4 +1,4 @@
-import Link from 'next/link';
+import { redirect } from 'next/navigation';
 import { AppShell } from '@/components/app-header';
 import { BackupCard } from '@/components/backup-card';
 import { BridgeDown } from '@/components/bridge-down';
@@ -11,17 +11,16 @@ import { CrewTable } from '@/components/github-accounts';
 import { RepositoriesCard } from '@/components/repositories-card';
 import { SettingsNav } from '@/components/settings-nav';
 import { ModelAccountsCard } from '@/components/model-accounts-card';
-import { NotificationsSummary } from '@/components/notification-settings';
 import { modelAccountsKey } from '@/lib/model-accounts-key';
 import { PeopleRolesSettings } from '@/components/people-roles-settings';
 import { PauseWorkCard } from '@/components/pause-work';
 import { SpendingSummary } from '@/components/spending-limits';
 import { AppearanceSection, SettingsCard } from '@/components/settings-sections';
-import { AdminsOnly } from '@/components/not-a-user';
 import { PeopleSection } from '@/components/people-section';
 import { api, readMe, type WorkPauses } from '@/lib/api';
 import { accountsFrom } from '@/lib/model-onboarding';
 import { colorMapOf } from '@/lib/repo-colors';
+import { navOmit } from '@/lib/settings';
 import { readHeader } from '@/lib/read-header';
 
 export const dynamic = 'force-dynamic';
@@ -37,17 +36,19 @@ export const dynamic = 'force-dynamic';
  * install, Egress, the names its tasks may reach beyond the host's own list,
  * with a host a check found refused offered by `?allow-host=`; the spending
  * caps, summarised, with the amounts edited on their own page; a backup of the
- * install; notifications, changed on their own page; pausing new work, across the install or in
+ * install; pausing new work, across the install or in
  * chosen repositories; who may use the console; the roles the install's people
  * hold; and how it looks: the color
  * mode, the console's name and logo, and each repository's and crew member's color.
+ * Hosts and Notifications are pages of their own, beside these in the
+ * navigation (ADR 0053).
  */
 export default async function SettingsPage({ searchParams }: { searchParams: Promise<{ 'allow-host'?: string | string[] }> }) {
-  // Settings are an admin's: a user has no link here, and the bridge refuses
-  // every change they could make. Someone who types the address is told so
-  // rather than shown a page of sections that could not be read.
+  // These sections are an admin's, and the bridge refuses a user every change
+  // they could make here. A user's Settings is Notifications alone (ADR
+  // 0053): the header's Settings link, which everyone has, lands them there.
   const me = await readMe();
-  if (me?.known && me.role !== 'admin') return <AdminsOnly email={me.email} identityMode={me.identityMode} what="Settings need" doing="changes settings" />;
+  if (me?.known && me.role !== 'admin') redirect('/settings/notifications');
 
   try {
     // The repositories and the crew are the page; the rest are parts of it a
@@ -77,16 +78,8 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
       // Shown only where tasks leave through an egress proxy: a laptop has no list to widen.
       api.egressHosts().catch(() => null),
     ]);
-    const [people, notifications, pushDevices, personRoles] = await Promise.all([
+    const [people, personRoles] = await Promise.all([
       api.people().catch(() => null),
-      // Which kinds are off, for its card; a bridge without the route leaves the card without them.
-      Promise.resolve()
-        .then(() => api.notifications())
-        .catch(() => null),
-      // How many of the signed-in person's devices take push, for the same card.
-      Promise.resolve()
-        .then(() => api.pushDevices())
-        .catch(() => null),
       // Left out, card and link, when the bridge cannot answer it.
       api.peopleRoles().catch(() => null),
     ]);
@@ -107,7 +100,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
     return (
       <AppShell page="settings" data={header}>
         <div className="mx-auto flex w-full max-w-[1100px] flex-col gap-5 px-4 py-6 md:flex-row md:gap-10 md:px-6 md:py-7">
-          <SettingsNav omit={[...(showEgress ? [] : ['egress']), ...(personRoles ? [] : ['roles'])]} />
+          <SettingsNav omit={navOmit({ egress, personRoles })} />
 
           <main className="flex min-w-0 max-w-[820px] flex-1 flex-col gap-[18px]">
             <h1 className="sr-only">Settings</h1>
@@ -159,20 +152,6 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
                 </>
               }
             />
-
-            {/* Read on their own page, `/settings/hosts`: Settings does not ask for them. */}
-            <SettingsCard
-              id="hosts"
-              title="Hosts"
-              line="The machines that run tasks: each one’s heartbeat, its tasks against its capacity, its CPUs and memory."
-            >
-              <Link href="/settings/hosts" className="self-start text-[12.5px] text-link hover:underline">
-                See the hosts
-              </Link>
-            </SettingsCard>
-
-            {/* Changed on their own page, `/settings/notifications`, where each device is turned on and tested. */}
-            <NotificationsSummary view={notifications} devices={pushDevices ? pushDevices.devices.length : null} />
 
             {showEgress && egress && (
               <SettingsCard id="egress" title="Egress" line="The names this install’s tasks may reach beyond the cloud host’s own list.">

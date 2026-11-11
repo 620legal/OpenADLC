@@ -713,6 +713,16 @@ each start until it is removed. **Settings → Notifications** is where everyone
 turns push on for their devices ([below](#notifications-on-your-devices)), and
 where an admin switches kinds off.
 
+**Where it is.** Notifications and Hosts are categories of Settings' own
+navigation, after System, each a page of its own (`/settings/notifications`,
+`/settings/hosts`) drawn with the same navigation and itself marked: a column
+beside the page on a computer, a row of pills above it on a phone. Settings is
+in the header for everyone signed in. Someone who is not an admin sees
+Notifications as the only category, and `/settings` takes them there; every
+other Settings page, Hosts included, says it needs an admin, and the bridge
+refuses them every admin route, `PUT /v1/settings/notifications` among them
+([ADR 0053](adr/0053-settings-is-everyones-and-a-non-admin-sees-notifications-alone.md)).
+
 **What is sent.** Each kind has its own switch, on until an admin turns it
 off (`notifyKinds`), for every device:
 
@@ -739,7 +749,11 @@ every admin's devices; on a local install, the operator's. Someone with no
 device gets nothing from the bridge; they still have the console's badge and
 desktop alert, and GitHub's own notification of a comment's mention.
 
-**The API.** `GET /v1/settings/notifications` answers `{switches}`, and
+**The API.** `POST /v1/me/push/test` (role `user`) sends a test to every
+device of the caller and no one else's, through the same send real
+notifications take, whatever the switches say, and answers
+`{devices: [{id, name, ok, status, error}]}`, empty when they have none.
+`GET /v1/settings/notifications` answers `{switches}`, and
 `PUT /v1/settings/notifications` takes `{switches}` and audits
 `settings.notifications_changed` with them. A body that still carries `kind`,
 `server` or `target` is refused with what to do instead, and so is
@@ -781,6 +795,15 @@ permission, and the device appears in the list as, say, "iPhone · Safari".
 Do this once on each device. The list shows each device's name, when it was
 added and how its last push went, with **Send a test** and **Remove**. You can
 have up to ten devices.
+
+**Testing them.** **Send a test notification**, at the top of the card, sends
+a test to every one of your devices at once, through the path a real
+notification takes, and says for each device "Delivered" or "Not delivered"
+with the push service's status and why. A device whose push service says it
+is gone (404 or 410) is removed, as any push removes it. With no devices the
+button cannot be pressed, and the card says to turn notifications on on this
+device first. Tapping the test opens the console's Notifications. The
+**Send a test** beside each device tests that one alone.
 
 **What arrives.**
 

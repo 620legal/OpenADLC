@@ -1,4 +1,4 @@
-import type { AttentionItem, CrewMember } from './api';
+import type { AttentionItem, CrewMember, Role } from './api';
 import { groupCounts, groupOf, waiting } from './attention-card';
 import type { BotFacts } from './bot-label';
 import { crewCounts, type CrewCounts } from './crew';
@@ -88,6 +88,18 @@ export const NAV: readonly { page: Exclude<Page, 'needs-you'>; label: string; hr
   { page: 'insights', label: 'Insights', href: () => '/insights' },
   { page: 'settings', label: 'Settings', href: () => '/settings' },
 ];
+
+/**
+ * The header's navigation for someone in this role: all of it, Settings
+ * included. Settings used to be an admin's alone, and a user had no way to
+ * Notifications, where they turn push on for their device. Their Settings is
+ * Notifications alone, and `/settings` sends them there (ADR 0053); the
+ * bridge still refuses them every admin route.
+ */
+export function navFor(role: Role): typeof NAV {
+  void role;
+  return NAV;
+}
 
 /**
  * How much of the cap is spent, and the colour that says whether that is fine.

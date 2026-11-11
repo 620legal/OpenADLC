@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AttentionItem } from './api';
-import { headerData, spendLevel } from './header';
+import { headerData, NAV, navFor, spendLevel } from './header';
 
 const header = (budget: { spentUsd: number; capUsd: number; state: string }) =>
   headerData({ repos: [], crew: [], budget, needsYou: 0 });
@@ -61,5 +61,15 @@ describe('the work the tab’s alerts watch', () => {
   it('is null when the page read no items', () => {
     expect(headerData({ repos: [], crew: [], budget: null, needsYou: 2 }).needsItems).toBeNull();
     expect(headerData({ repos: [], crew: [], budget: null, needsYou: null, attention: null }).needsItems).toBeNull();
+  });
+});
+
+describe('the header’s navigation', () => {
+  it('has Settings for everyone signed in, a user too: their Settings is Notifications (ADR 0053)', () => {
+    for (const role of ['admin', 'user'] as const) {
+      expect(navFor(role).map((item) => item.page), role).toEqual(['board', 'crew', 'costs', 'insights', 'settings']);
+      expect(navFor(role)).toBe(NAV);
+    }
+    expect(navFor('user').find((item) => item.page === 'settings')?.href('all')).toBe('/settings');
   });
 });

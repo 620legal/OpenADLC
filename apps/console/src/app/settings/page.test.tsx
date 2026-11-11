@@ -232,7 +232,13 @@ vi.mock('@/lib/api', () => ({
 vi.mock('@/lib/read-header', () => ({
   readHeader: async () => headerData({ repos: ['openadlc-testbed'], crew: [], budget: { spentUsd: 7.51, capUsd: 1500 }, needsYou: 0 }),
 }));
-vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: () => undefined }) }));
+/** `redirect` throws in Next, so nothing after it runs; so does this one. */
+const navigation = vi.hoisted(() => ({
+  redirect: (to: string): never => {
+    throw Object.assign(new Error(`redirect ${to}`), { redirectedTo: to });
+  },
+}));
+vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: () => undefined }), redirect: navigation.redirect }));
 
 async function page(allowHost?: string): Promise<string> {
   const { default: SettingsPage } = await import('./page');
@@ -249,30 +255,14 @@ function section(html: string, id: string): string {
 }
 
 describe('the settings page', () => {
-  it('is an admin’s: a user is told so, and shown none of it', async () => {
-    who.me = { known: true, email: 'bob@example.com', role: 'user', identityMode: 'iap' };
-    try {
-      const html = await page();
-      expect(html).toContain('Settings need an admin');
-      expect(html).toContain('bob@example.com');
-      expect(html).not.toContain('id="people"');
-      expect(html).not.toContain('id="backup"');
-      expect(html).not.toContain('OPENADLC_IDENTITY');
-    } finally {
-      who.me = ADMIN;
-    }
-  });
-
-  it('names the way back on a local install whose console identity is a user', async () => {
-    who.me = { known: true, email: 'console', role: 'user', identityMode: 'local' };
-    try {
-      const html = (await page()).replace(/<!-- -->/g, '');
-      expect(html).toContain('Settings need an admin');
-      expect(html).toContain('This console signs in as');
-      expect(html).toContain('OPENADLC_IDENTITY');
-      expect(html).toContain('openadlc up');
-    } finally {
-      who.me = ADMIN;
+  it('sends someone who is not an admin to Notifications, their part of Settings (ADR 0053)', async () => {
+    for (const identityMode of ['iap', 'local'] as const) {
+      who.me = { known: true, email: 'bob@example.com', role: 'user', identityMode };
+      try {
+        await expect(page()).rejects.toMatchObject({ redirectedTo: '/settings/notifications' });
+      } finally {
+        who.me = ADMIN;
+      }
     }
   });
 
@@ -316,6 +306,8 @@ describe('the settings page', () => {
       ['#models', 'AI models'],
       ['#crew', 'Crew'],
       ['#system', 'System'],
+      ['/settings/hosts', 'Hosts'],
+      ['/settings/notifications', 'Notifications'],
       ['#spending-limits', 'Spending limits'],
       ['#backup', 'Backup'],
       ['#pause', 'Pause work'],
@@ -491,12 +483,12 @@ describe('the settings page', () => {
     expect(await page()).not.toContain('id="keep-awake"');
   });
 
-  it('has a Hosts card that links to the page listing them, below System', async () => {
+  it('leaves Hosts and Notifications to their own pages, reached from the navigation, with no card of their own here', async () => {
     const html = await page();
-    const hosts = html.slice(html.indexOf('<section id="hosts"'), html.indexOf('</section>', html.indexOf('<section id="hosts"')));
-    expect(hosts).toMatch(/<h2 id="hosts-title"[^>]*>Hosts<\/h2>/);
-    expect(hosts).toMatch(/<a [^>]*href="\/settings\/hosts"[^>]*>See the hosts<\/a>/);
-    expect(html.indexOf('id="engine-updates"')).toBeLessThan(html.indexOf('<section id="hosts"'));
+    expect(html).not.toContain('id="hosts"');
+    expect(html).not.toContain('id="notifications"');
+    expect(html).not.toContain('See the hosts');
+    expect(html).not.toContain('Set up notifications');
   });
 
   it('has a Backup section of its own: Backup and Restore, each a row that opens its form', async () => {

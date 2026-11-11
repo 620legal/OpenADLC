@@ -4,6 +4,7 @@ import {
   addPushDevice,
   removePushDevice,
   testPushDevice,
+  testAllPushDevices,
   answerGate,
   fileRequest,
   killSession,
@@ -124,6 +125,20 @@ describe('this device’s notifications', () => {
     expect(await removePushDevice('d/1')).toEqual({ ok: true });
     expect(await testPushDevice('d/1')).toEqual({ ok: true, result: { ok: true, status: 201, error: null } });
     expect(calls).toEqual(['DELETE /v1/me/push/devices/d%2F1', 'POST /v1/me/push/devices/d%2F1/test']);
+  });
+
+  it('tests every device at once with one call, and gives back each one’s result', async () => {
+    const calls: string[] = [];
+    const answer = { devices: [{ id: 'd1', name: 'Mac · Chrome', ok: true, status: 201, error: null }] };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init: RequestInit) => {
+        calls.push(`${init.method} ${url.replace(/^.*\/v1/, '/v1')}`);
+        return Response.json(answer);
+      }),
+    );
+    expect(await testAllPushDevices()).toEqual({ ok: true, result: answer });
+    expect(calls).toEqual(['POST /v1/me/push/test']);
   });
 
   it('passes on the bridge’s refusal in its own words', async () => {

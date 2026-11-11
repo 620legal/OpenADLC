@@ -1154,6 +1154,11 @@ export interface NotificationTestResult {
   error: string | null;
 }
 
+/** What `POST /v1/me/push/test` answers: each of the signed-in person's devices, and how its test went. Empty when they have none. */
+export interface PushTestAll {
+  devices: (NotificationTestResult & { id: string; name: string })[];
+}
+
 export interface SpendingLimitsView {
   period: string;
   global: SpendingScope;
