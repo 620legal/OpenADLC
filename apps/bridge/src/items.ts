@@ -20,6 +20,7 @@ import { readHolds } from './item-hold.js';
 import { isActive, issueForSubject, parseRef, subjectsOf, type IssueFacts } from './work.js';
 import { formatKey } from './work-items.js';
 import type { MessageStart, StartFacts } from './message-starts.js';
+import type { WaitChain } from './wait-chain.js';
 
 /**
  * A work item: one request, the issue it became, and that issue's pull
@@ -383,6 +384,27 @@ export interface ItemView {
   settledPlanChanges?: SettledPlanChange[];
   /** Approve all on its issue, while it is on; null when it is not. Absent before it was read. */
   standingApproval?: { issueNumber: number; setBy: string; setAt: string } | null;
+  /**
+   * Why it isn't moving: its card's wait followed to its root, as the board
+   * read it (`itemWaitChain`); null when it does not wait. Absent from a read
+   * not given a way to follow waits.
+   */
+  waitChain?: WaitChain | null;
+}
+
+/**
+ * The item's wait chain, from the board's read of its card (`waits`, by the
+ * card's `repo#n`). Not asked for an item with no issue on the board, or one
+ * in Done: those have no card that waits, and each ask reads the whole board.
+ * A read that fails is no chain, as on the board.
+ */
+export async function itemWaitChain(
+  view: Pick<ItemView, 'repo' | 'issue'>,
+  waits: (ref: string) => Promise<WaitChain | null>,
+): Promise<WaitChain | null> {
+  const issue = view.issue;
+  if (!issue || !issue.onBoard || issue.stage === 'done' || !view.repo) return null;
+  return (async () => waits(`${view.repo}#${issue.number}`))().catch(() => null);
 }
 
 /** A plan change approved by the designer or a standing approval, as the item lists it. */
@@ -1141,7 +1163,7 @@ export interface ItemStarts {
  */
 export async function readItem(
   subject: string,
-  options: { starts?: ItemStarts | null } = {},
+  options: { starts?: ItemStarts | null; waits?: (ref: string) => Promise<WaitChain | null> } = {},
 ): Promise<{ item: Item; view: ItemView; repo: RepoRow | null; facts?: StartFacts } | null> {
   const resolved = await resolveItem(subject);
   if (!resolved) return null;
@@ -1174,5 +1196,6 @@ export async function readItem(
   const issueNumber = item.issue?.number ?? null;
   const standing = repo && issueNumber ? await (async () => standingApprovals.activeFor(repo.id, issueNumber))().catch(() => null) : null;
   view.standingApproval = standing ? { issueNumber: standing.issueNumber, setBy: standing.setBy, setAt: standing.setAt } : null;
+  if (options.waits) view.waitChain = await itemWaitChain(view, options.waits);
   return { item, view, repo, ...(facts ? { facts } : {}) };
 }

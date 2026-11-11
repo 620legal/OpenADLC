@@ -283,7 +283,12 @@ none yet, says its kind of work instead ("writing the change").
    item** of its own (`apps/bridge/src/items.ts`): the conversation about it is
    every thread about the request, the issue it becomes and that issue's pull
    request, whichever seat said it, labelled by the role that said it
-   (`GET /v1/items/:subject`, any member's subject opening the same item). A
+   (`GET /v1/items/:subject`, any member's subject opening the same item).
+   Why an item waits is its `waitChain` on that read: its card's wait as the
+   board of every repository follows it (`withWaitChains`, looked up by
+   `waitChainOf` in `api.ts`, never followed from the item alone), drawn on
+   its sheet as "Why it isn't moving", one step a line ending in the board
+   card's own button (`waitSteps` in `card-status.ts`; ADR 0054). A
    message written on an item answers the question the person picked, or the
    one question open on it — a task waiting on an answer is resumed by it,
    never started again beside itself; never a question about another item.

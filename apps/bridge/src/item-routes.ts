@@ -3,6 +3,7 @@ import type { GitHubClient } from '@openadlc/github';
 import { hasIgnoreLabel } from '@openadlc/shared';
 import { attachmentIds, claimableFor, claimWindowStart } from './attachment-routes.js';
 import type { ApiDeps } from './api.js';
+import type { WaitChain } from './wait-chain.js';
 import { readItem, requestSubject, resolveItem, routeItemMessage, type Item } from './items.js';
 import { requestPrefixOf } from './request-context.js';
 import { HttpFailure, STREAMING, type Router } from './router.js';
@@ -42,9 +43,16 @@ function shown<T extends { item: { issue: object | null } }>(subject: string, re
   return read;
 }
 
-export function registerItemRoutes(router: Router, deps: Pick<ApiDeps, 'actors' | 'gates' | 'taskService' | 'threadStream' | 'afterwards' | 'messageStarts'>): void {
+export function registerItemRoutes(
+  router: Router,
+  deps: Pick<ApiDeps, 'actors' | 'gates' | 'taskService' | 'threadStream' | 'afterwards' | 'messageStarts'> & {
+    /** Why a card waits, from the board's own read (`waitChainOf` in api.ts); absent, an item's read carries no `waitChain`. */
+    waitChainOf?: (ref: string) => Promise<WaitChain | null>;
+  },
+): void {
   // What a message would start, and whom it goes to by default, as the item is read.
   const starts = deps.messageStarts ?? null;
+  const waits = deps.waitChainOf;
   /**
    * One work item: the request, its issue and pull request, the whole
    * conversation about any of them labelled by role, the questions open on
@@ -53,7 +61,7 @@ export function registerItemRoutes(router: Router, deps: Pick<ApiDeps, 'actors' 
    */
   router.get('/v1/items/:subject', async ({ params }) => {
     const subject = params.subject ?? '';
-    return shown(subject, await readItem(subject, { starts })).view;
+    return shown(subject, await readItem(subject, { starts, ...(waits ? { waits } : {}) })).view;
   });
 
   /**

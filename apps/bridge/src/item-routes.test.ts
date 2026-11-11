@@ -287,6 +287,54 @@ describe('reading a work item', () => {
   });
 });
 
+describe('why a work item is not moving', () => {
+  const CHAIN = {
+    links: [{ from: 'api#12', to: 'api#9', kind: 'dependency' }],
+    end: { kind: 'person', ref: 'api#9', action: 'answer', number: 9, attentionId: 'gate:g-9', url: null },
+    behind: 2,
+  };
+
+  /** The item routes with the board's read of wait chains given as `waitChainOf`, on a server of their own. */
+  async function readWith(waitChainOf: ((ref: string) => Promise<unknown>) | undefined): Promise<Record<string, unknown>> {
+    const { registerItemRoutes } = await import('./item-routes.js');
+    const { Router } = await import('./router.js');
+    const router = new Router(undefined, undefined, undefined, async () => 'user');
+    registerItemRoutes(router, {
+      actors: {} as never,
+      gates: {} as never,
+      taskService: {} as never,
+      threadStream: { subscribe: () => () => undefined, watching: 0 } as never,
+      ...(waitChainOf ? { waitChainOf: waitChainOf as never } : {}),
+    });
+    const server = createServer((request, response) => void router.handle(request, response));
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    try {
+      const at = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+      return (await (await fetch(`${at}/v1/items/${encodeURIComponent('api#12')}`)).json()) as Record<string, unknown>;
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  }
+
+  it('carries the board’s wait chain for its card, asked for by the card’s ref', async () => {
+    const asked: string[] = [];
+    const view = await readWith(async (ref) => {
+      asked.push(ref);
+      return ref === 'api#12' ? CHAIN : null;
+    });
+    expect(asked).toEqual(['api#12']);
+    expect(view.waitChain).toEqual(CHAIN);
+  });
+
+  it('carries null for an item the board says does not wait', async () => {
+    expect(await readWith(async () => null)).toHaveProperty('waitChain', null);
+  });
+
+  it('carries no waitChain from a read given no way to follow waits', async () => {
+    expect(await readWith(undefined)).not.toHaveProperty('waitChain');
+  });
+});
+
 describe('a work item by its key', () => {
   const link = (id: number, itemId: string, kind: 'issue' | 'pull' | 'request', number: number | null, extra: Partial<(typeof world.links)[number]> = {}) => ({
     id,

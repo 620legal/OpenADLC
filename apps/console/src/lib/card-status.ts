@@ -427,31 +427,110 @@ export function rootActionWords(end: Extract<WaitEnd, { kind: 'person' }>, card:
  */
 export function chainLine(card: Pick<BoardCard, 'repo'>, chain: WaitChain): CardStatus | null {
   const { end } = chain;
-  const ref = (one: string) => refInWords(one, card.repo);
+  if (end.kind === 'self' && chain.links.length <= 1) return null;
+  const words = endWords(card, chain);
+  const mark = words.tone === 'muted' ? null : ('dot' as const);
+  if (end.kind === 'person' && !end.outside) {
+    const behind = chain.behind === 1 ? '1 item waits behind it' : `${chain.behind} items wait behind it`;
+    return { text: `${words.text} ${behind}.`, tone: words.tone, mark };
+  }
+  return { text: words.text, tone: words.tone, mark };
+}
+
+/** A piece of a wait's sentence: words, or a card the sentence names, which the sheet links to. */
+export type WaitPart = string | { ref: string; label: string };
+
+/** One line of "Why it isn't moving": a link of the wait, or its end (`end`). */
+export interface WaitStep {
+  parts: WaitPart[];
+  tone: StatusTone;
+  end?: true;
+}
+
+function partsText(parts: readonly WaitPart[]): string {
+  return parts.map((part) => (typeof part === 'string' ? part : part.label)).join('');
+}
+
+/** Where a wait ends, in parts: the board's sentence, with each card it names as one. */
+function endParts(card: Pick<BoardCard, 'repo'>, chain: WaitChain): { parts: WaitPart[]; tone: StatusTone } {
+  const { end } = chain;
+  const item = (ref: string): WaitPart => ({ ref, label: refInWords(ref, card.repo) });
   switch (end.kind) {
-    case 'person': {
-      if (end.outside) return { text: `Waits on ${ref(end.ref)}, which is built outside the crew.`, tone: 'attention', mark: 'dot' };
-      const behind = chain.behind === 1 ? '1 item waits behind it' : `${chain.behind} items wait behind it`;
-      return { text: `Waits on you: ${rootActionWords(end, card)}. ${behind}.`, tone: 'attention', mark: 'dot' };
-    }
+    case 'person':
+      if (end.outside) return { parts: ['Waits on ', item(end.ref), ', which is built outside the crew.'], tone: 'attention' };
+      return { parts: [`Waits on you: ${rootActionWords(end, card)}.`], tone: 'attention' };
     case 'self':
-      if (chain.links.length <= 1) return null;
-      return { text: `Waits on ${ref(end.ref)}, ${end.words}: needs no one.`, tone: 'muted', mark: null };
+      return { parts: ['Waits on ', item(end.ref), `, ${end.words}: needs no one.`], tone: 'muted' };
     case 'dead': {
       if (end.why === 'loop') {
-        const loop = (end.loop ?? [end.ref]).map(ref);
-        if (loop.length === 1) return { text: `Waits on a loop: ${loop[0]} waits on itself. It does not go on by itself.`, tone: 'attention', mark: 'dot' };
-        const around = [...loop.slice(1), loop[0]!].map((one) => `, which waits on ${one}`).join('').replace(/^, which/, '');
-        return { text: `Waits on a loop: ${loop[0]}${around}. ${loop.length <= 2 ? 'Neither' : 'None of them'} goes on by itself.`, tone: 'attention', mark: 'dot' };
+        const loop = end.loop ?? [end.ref];
+        if (loop.length === 1) return { parts: ['Waits on a loop: ', item(loop[0]!), ' waits on itself. It does not go on by itself.'], tone: 'attention' };
+        const around = [...loop.slice(1), loop[0]!].flatMap((one, index) => [index === 0 ? ' waits on ' : ', which waits on ', item(one)]);
+        return { parts: ['Waits on a loop: ', item(loop[0]!), ...around, `. ${loop.length <= 2 ? 'Neither' : 'None of them'} goes on by itself.`], tone: 'attention' };
       }
-      if (end.why === 'outside') return { text: `Waits on ${ref(end.ref)}, outside this install.`, tone: 'attention', mark: 'dot' };
+      if (end.why === 'outside') return { parts: ['Waits on ', item(end.ref), ', outside this install.'], tone: 'attention' };
       const closed = end.why === 'abandoned' ? 'closed without merging' : 'closed without being completed';
-      return { text: `Waits on ${ref(end.ref)}, which was ${closed}: it will never ship.`, tone: 'attention', mark: 'dot' };
+      return { parts: ['Waits on ', item(end.ref), `, which was ${closed}: it will never ship.`], tone: 'attention' };
     }
     case 'deep':
       // The links walked are the bridge's limit, so the sentence follows it if it changes.
-      return { text: `Waits on ${ref(end.ref)}, ${chain.links.length} links on: followed no further.`, tone: 'muted', mark: null };
+      return { parts: ['Waits on ', item(end.ref), `, ${chain.links.length} links on: followed no further.`], tone: 'muted' };
+    default:
+      // An end a newer bridge knows and this console does not: still a line, not a sheet that fails.
+      return { parts: ['Waits on ', item((end as { ref: string }).ref), '.'], tone: 'muted' };
   }
+}
+
+/**
+ * Where a card's wait ends, in the board's words, for every end: what a
+ * card's line says (`chainLine`) and what the last line of an item's
+ * "Why it isn't moving" says where no person can act.
+ */
+export function endWords(card: Pick<BoardCard, 'repo'>, chain: WaitChain): { text: string; tone: StatusTone } {
+  const { parts, tone } = endParts(card, chain);
+  return { text: partsText(parts), tone };
+}
+
+/** How one card waits on the next, as a sentence: `from` is A, `to` is B. */
+function linkParts(kind: string, from: WaitPart, to: WaitPart): WaitPart[] {
+  switch (kind) {
+    case 'dependency':
+      return [from, ' waits for ', to, ' to ship first.'];
+    case 'concurrency':
+      return [from, ' waits for a build slot in its repository, which ', to, ' holds.'];
+    case 'seat':
+      return [from, ' waits for a free seat, which ', to, ' is using.'];
+    case 'turn':
+      return [from, ' waits its turn, after ', to, '.'];
+    case 'lease':
+      return [from, ' waits for ', to, ' to let go of files they both change.'];
+    case 'plan_change':
+      return [from, "'s approved plan change waits for ", to, ' to let go of its paths.'];
+    case 'stack':
+      return [from, ' is stacked on ', to, ' and waits for it to merge.'];
+    default:
+      // A kind a newer bridge follows and this console does not know: still a sentence.
+      return [from, ' waits on ', to, '.'];
+  }
+}
+
+/**
+ * An item's wait, one step a line, for its sheet's "Why it isn't moving":
+ * each link of the chain in order, then its end. The end where a person acts
+ * names the card and the action ("#213 waits on you: approve #213."); every
+ * other end says what the board's line says (`endWords`). The card's own line
+ * says only the end, and four cards on 2026-11-11 left a person to guess the
+ * steps between.
+ */
+export function waitSteps(card: Pick<BoardCard, 'repo'>, chain: WaitChain): WaitStep[] {
+  const item = (ref: string): WaitPart => ({ ref, label: refInWords(ref, card.repo) });
+  const steps: WaitStep[] = chain.links.map((link) => ({ parts: linkParts(link.kind, item(link.from), item(link.to)), tone: 'muted' }));
+  const { end } = chain;
+  const last =
+    end.kind === 'person' && !end.outside
+      ? { parts: [item(end.ref), ` waits on you: ${rootActionWords(end, card)}.`], tone: 'attention' as const }
+      : endParts(card, chain);
+  return [...steps, { ...last, end: true }];
 }
 
 /** Where a card's button to its wait's root goes: the Needs you card on the page, else GitHub. */

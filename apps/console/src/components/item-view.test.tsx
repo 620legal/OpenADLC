@@ -1,9 +1,10 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
-import type { ItemView as ItemData } from '@/lib/api';
+import type { ItemView as ItemData, WaitChain, WaitEnd } from '@/lib/api';
+import { endWords, rootButton } from '@/lib/card-status';
 import { addressedRole, itemComposer, itemEntries, roleTabs, speakerLabel, writeToRoles } from '@/lib/item';
 import { RoleProvider } from './app-header';
-import { ItemView } from './item-view';
+import { ItemView, WaitBlock } from './item-view';
 
 vi.mock('@/app/actions', () => ({ linkToItem: vi.fn(), unlinkFromItem: vi.fn(), mergeItem: vi.fn(), sendItemMessage: vi.fn(), answerGate: vi.fn(), retryTask: vi.fn(), sendMessage: vi.fn(), stopTask: vi.fn(), killSession: vi.fn(), restartBot: vi.fn() }));
 
@@ -227,5 +228,94 @@ describe('where the item’s box sends a message', () => {
       gateId: null,
       helper: 'Nobody has worked on this item yet, so there is no one to send it to; pick a role to write to.',
     });
+  });
+});
+
+/**
+ * Why it isn't moving: a waiting item's sheet says its whole wait, one step a
+ * line, ending in what a person can do and the board card's own button to do it.
+ */
+describe('why an item isn’t moving', () => {
+  const approval: WaitEnd = { kind: 'person', ref: 'api#22', action: 'approve', number: 30, attentionId: 'approval:api#30@jane', url: 'https://github.com/acme/api/pull/30' };
+  const chain = (end: WaitEnd, behind = 4): WaitChain => ({
+    links: [
+      { from: 'api#12', to: 'api#20', kind: 'dependency' },
+      { from: 'api#20', to: 'api#21', kind: 'lease' },
+      { from: 'api#21', to: 'api#22', kind: 'stack' },
+    ],
+    end,
+    behind,
+  });
+  const urlOf = (ref: string) => (ref === 'api#40' ? 'https://github.com/acme/api/issues/40' : null);
+  const block = (waitChain: WaitChain | null | undefined, root?: Parameters<typeof WaitBlock>[0]['root']) =>
+    renderToStaticMarkup(<WaitBlock view={{ repo: 'api', ...(waitChain === undefined ? {} : { waitChain }) }} root={root} />).replace(/<!-- -->/g, '');
+  const lines = (html: string) => [...html.matchAll(/<li[^>]*>(.*?)<\/li>/g)].map((match) => match[1]!);
+  const words = (html: string) => html.replace(/<[^>]+>/g, '').replace(/&#x27;/g, "'");
+
+  it('draws each link and the person’s end, one line each, in order, every card a link to its sheet', () => {
+    const html = block(chain(approval), (card, wait) => rootButton(card, wait, new Set(), urlOf));
+    expect(words(html)).toContain("Why it isn't moving");
+    const drawn = lines(html);
+    expect(drawn.map(words)).toEqual([
+      '#12 waits for #20 to ship first.',
+      '#20 waits for #21 to let go of files they both change.',
+      '#21 is stacked on #22 and waits for it to merge.',
+      // The end, with its button.
+      '#22 waits on you: approve #30.Open #30',
+    ]);
+    const hrefs = (one: string) => [...one.matchAll(/href="(\/items\/[^"]+)"/g)].map((match) => match[1]);
+    expect(drawn.map(hrefs)).toEqual([
+      ['/items/api%2312', '/items/api%2320'],
+      ['/items/api%2320', '/items/api%2321'],
+      ['/items/api%2321', '/items/api%2322'],
+      ['/items/api%2322'],
+    ]);
+  });
+
+  it('carries the board’s root button at the end: the same label, going to the same place', () => {
+    const shown = new Set(['approval:api#30@jane']);
+    const inStrip = rootButton({ repo: 'api' }, chain(approval), shown, urlOf)!;
+    expect(inStrip).toEqual({ label: 'Show in Needs you', scrollTo: 'approval:api#30@jane' });
+    const there = lines(block(chain(approval), (card, wait) => rootButton(card, wait, shown, urlOf))).at(-1)!;
+    expect(there).toContain(`data-root="${inStrip.scrollTo}"`);
+    expect(words(there)).toMatch(new RegExp(`${inStrip.label}$`));
+
+    const onGitHub = rootButton({ repo: 'api' }, chain(approval), new Set(), urlOf)!;
+    expect(onGitHub).toEqual({ label: 'Open #30', url: 'https://github.com/acme/api/pull/30' });
+    const away = lines(block(chain(approval), (card, wait) => rootButton(card, wait, new Set(), urlOf))).at(-1)!;
+    expect(away).toContain(`href="${onGitHub.url}"`);
+    expect(words(away)).toMatch(/Open #30$/);
+    // With no board to ask (the item's own page), the end's own address.
+    expect(block(chain(approval))).toContain('href="https://github.com/acme/api/pull/30"');
+  });
+
+  it('says how many items wait behind the one action', () => {
+    expect(words(block(chain(approval, 1)))).toContain('1 item waits behind this one action.');
+    expect(words(block(chain(approval, 4)))).toContain('4 items wait behind this one action.');
+  });
+
+  it.each<[string, WaitEnd]>([
+    ['a closed dependency', { kind: 'dead', ref: 'api#40', why: 'closed' }],
+    ['a loop', { kind: 'dead', ref: 'api#21', why: 'loop', loop: ['api#21', 'api#22'] }],
+    ['a wait followed no further', { kind: 'deep', ref: 'api#40' }],
+    ['a wait that clears by itself', { kind: 'self', ref: 'api#22', words: 'which is running now' }],
+  ])('ends %s in the board’s words, with no button', (_name, end) => {
+    const html = block(chain(end), (card, wait) => rootButton(card, wait, new Set(['approval:api#30@jane']), urlOf));
+    expect(words(lines(html).at(-1)!)).toBe(endWords({ repo: 'api' }, chain(end)).text);
+    expect(html).not.toContain('data-root');
+    expect(html).not.toContain('behind this one action');
+  });
+
+  it('draws nothing for an item that does not wait', () => {
+    expect(block(null)).toBe('');
+    expect(block(undefined)).toBe('');
+    expect(render('admin', { ...ITEM, waitChain: null })).not.toContain('Why it isn');
+    expect(render('admin', ITEM)).not.toContain('Why it isn');
+  });
+
+  it('is drawn on the sheet above the conversation while the item waits', () => {
+    const html = render('admin', { ...ITEM, waitChain: chain(approval) });
+    expect(html).toContain('data-wait-block');
+    expect(html.indexOf('data-wait-block')).toBeLessThan(html.indexOf('Filed it as #12.'));
   });
 });
