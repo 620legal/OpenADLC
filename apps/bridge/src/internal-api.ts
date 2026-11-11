@@ -1032,8 +1032,10 @@ export function registerInternalApi(
       exitCode: typeof input.exitCode === 'number' ? input.exitCode : null,
       durationMs: typeof input.durationMs === 'number' ? Math.round(input.durationMs) : null,
       // Redacted after the cut, so the cut cannot split a token past the pattern;
-      // CI output can print one (`redactSecrets`).
-      logTail: typeof input.logTail === 'string' ? redactSecrets(input.logTail.slice(-16_000)) : null,
+      // CI output can print one (`redactSecrets`). NUL goes before redaction:
+      // a NUL inside a token kept the pattern from matching it, and the
+      // store's own strip would then have joined the token back, unredacted.
+      logTail: typeof input.logTail === 'string' ? redactSecrets(localCiRuns.withoutNul(input.logTail.slice(-16_000))) : null,
     });
     await audit({
       actor: 'hostd',

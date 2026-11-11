@@ -125,6 +125,38 @@ describe('openadlc-ci', () => {
   });
 
   /**
+   * A NUL in make ci's output had the bridge refuse hostd's report. The call
+   * waited RECORD_WAIT_MS for a record that was never coming, then said only
+   * that there was none.
+   */
+  it('exits 2 at once, with hostd’s reason, when the bridge did not record a pass', async () => {
+    const { code, lines, waited } = await cli_([{ run: run('passed', { exitCode: 0, recordError: 'the bridge answered 500: boom' }), recorded: false }]);
+    expect(code).toBe(2);
+    expect(waited).toBe(0);
+    expect(lines.at(-1)).toContain('did not record it');
+    expect(lines.at(-1)).toContain('the bridge answered 500: boom');
+    expect(lines.at(-1)).toContain('run openadlc-ci again');
+  });
+
+  it('still answers 0 for a recorded pass, whatever error hostd held on to', async () => {
+    const { code } = await cli_([{ run: run('passed', { exitCode: 0, recordError: 'the bridge answered 500: boom' }), recorded: true }]);
+    expect(code).toBe(0);
+  });
+
+  it('still waits for the record when hostd gives no reason, as an older hostd does', async () => {
+    const { code, lines, waited } = await cli_([{ run: run('passed', { exitCode: 0 }), recorded: false }]);
+    expect(code).toBe(2);
+    expect(waited).toBeGreaterThanOrEqual(30_000);
+    expect(lines.at(-1)).toMatch(/the bridge has no record of it/);
+  });
+
+  it('says a failure went unrecorded too, and still exits 1', async () => {
+    const { code, lines } = await cli_([{ run: run('failed', { exitCode: 2, recordError: 'the bridge answered 500: boom' }), recorded: false }]);
+    expect(code).toBe(1);
+    expect(lines.at(-1)).toBe('openadlc-ci: the bridge did not record this failure either: the bridge answered 500: boom');
+  });
+
+  /**
    * One call waited for the whole run, up to 65 minutes. A shell tool holds a
    * command for about ten, so on #22 the call went to the background, the
    * builder ended its turn to wait for it, and the task's container was torn

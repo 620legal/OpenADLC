@@ -53,6 +53,8 @@ export interface LocalCiView {
   durationMs: number | null;
   logTail: string;
   reason: string | null;
+  /** Why hostd's report of it to the bridge failed, or null; absent from an older hostd. */
+  recordError?: string | null;
   startedAt: string;
   finishedAt: string | null;
 }

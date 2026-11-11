@@ -11,8 +11,9 @@
 // `gh pr create`, `gh pr ready` and `git push` go ahead for this commit; a
 // session cannot write one, which is the point.
 //
-// Exit 0: passed and recorded. 1: `make ci` failed. 2: refused, or the run
-// could not be asked for or read; what to do is printed. 3: still running
+// Exit 0: passed and recorded. 1: `make ci` failed. 2: refused, the run could
+// not be asked for or read, or it passed but the bridge did not record it
+// (with hostd's reason, at once); what to do is printed. 3: still running
 // when this call's wait ran out (8 minutes, or OPENADLC_CI_WAIT_SECONDS), or
 // the bridge, or hostd behind it, did not answer about it in time; run
 // openadlc-ci again, in the foreground, and it joins the same run.
@@ -220,11 +221,20 @@ export async function runLocalCi({ env = process.env, fetchImpl = globalThis.fet
         // hostd stopped it at its limit, and says what to look for.
         if (run.reason) log(`openadlc-ci: ${run.reason}`);
         else log(`openadlc-ci: make ci failed (exit ${run.exitCode}) on ${String(run.headSha).slice(0, 7)}; fix it, commit, and run openadlc-ci again`);
+        if (run.recordError && !status.recorded) log(`openadlc-ci: the bridge did not record this failure either: ${run.recordError}`);
         return 1;
       }
       // Passed. hostd tells the bridge, and that write can come a moment after
       // the run reads as finished here.
       if (status.recorded) break;
+      // hostd's report failed, so no record is coming: say why now. Waiting
+      // out RECORD_WAIT_MS ended only in "no record", with no reason, and a
+      // NUL in make ci's output had the bridge refuse every report the same way.
+      // With no recordError (hostd still reporting, or an older hostd), wait.
+      if (run.recordError) {
+        log(`openadlc-ci: make ci passed on ${String(run.headSha).slice(0, 7)}, but the bridge did not record it: ${run.recordError}. Check the bridge's log, then run openadlc-ci again.`);
+        return 2;
+      }
       recordedBy ??= now() + RECORD_WAIT_MS;
       if (now() > recordedBy) {
         log(`openadlc-ci: make ci passed on ${String(run.headSha).slice(0, 7)}, but the bridge has no record of it; run openadlc-ci again`);
