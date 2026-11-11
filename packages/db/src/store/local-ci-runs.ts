@@ -66,9 +66,28 @@ export async function record(input: {
      values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
      on conflict (run_id) do nothing
      returning *`,
-    [input.runId, input.taskId, input.repoId, input.branch, input.headSha, input.ok, input.exitCode, input.durationMs, input.logTail],
+    [
+      input.runId,
+      input.taskId,
+      input.repoId,
+      input.branch,
+      input.headSha,
+      input.ok,
+      input.exitCode,
+      input.durationMs,
+      // Postgres refuses NUL (\u0000) in `text`, and a test runner can print
+      // one: the insert threw, the bridge answered 500, and a pass went
+      // unrecorded, so the builder could not push. Only the NUL goes; the text
+      // either side of it stays as printed.
+      input.logTail === null ? null : withoutNul(input.logTail),
+    ],
   );
   return row ? toRun(row) : null;
+}
+
+/** `text` without its NUL characters, which Postgres refuses in a `text` value. */
+export function withoutNul(text: string): string {
+  return text.replaceAll('\u0000', '');
 }
 
 /**
