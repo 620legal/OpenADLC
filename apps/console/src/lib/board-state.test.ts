@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AttentionItem, BoardCard, CardTask } from './api';
-import { liveLine, saveView, spendLine, STALE_AFTER_MS, stateColumns, stateOf, storedView, VIEW_KEY, type StateContext } from './board-state';
+import { liveLine, onViewChange, saveView, spendLine, STALE_AFTER_MS, stateColumns, stateOf, storedView, VIEW_EVENT, VIEW_KEY, type StateContext, type ViewName } from './board-state';
 import type { HeldApproval } from './card-status';
 
 const NOW = '2026-09-24T12:00:00.000Z';
@@ -194,6 +194,56 @@ describe('the view this browser chose', () => {
     vi.stubGlobal('localStorage', refusing);
     expect(storedView()).toBe('stage');
     expect(() => saveView('state')).not.toThrow();
+  });
+
+  /** This page's window, as an event target the tests can dispatch on. */
+  function page(): EventTarget {
+    const target = new EventTarget();
+    vi.stubGlobal('addEventListener', target.addEventListener.bind(target));
+    vi.stubGlobal('removeEventListener', target.removeEventListener.bind(target));
+    vi.stubGlobal('dispatchEvent', target.dispatchEvent.bind(target));
+    return target;
+  }
+
+  /** A `storage` event as another tab's write fires it. */
+  function storageEvent(key: string, newValue: string | null): Event {
+    return Object.assign(new Event('storage'), { key, newValue });
+  }
+
+  it('tells the page what was saved, even where storage throws', () => {
+    const target = page();
+    const heard: unknown[] = [];
+    target.addEventListener(VIEW_EVENT, (event) => heard.push((event as CustomEvent).detail));
+    vi.stubGlobal('localStorage', storage({}));
+    saveView('state');
+    vi.stubGlobal('localStorage', {
+      getItem: () => null,
+      setItem: () => {
+        throw new Error('SecurityError');
+      },
+    });
+    saveView('stage');
+    expect(heard).toEqual(['state', 'stage']);
+  });
+
+  it('hears a view chosen in this page and in another tab, not another key, and nothing once unsubscribed', () => {
+    const target = page();
+    vi.stubGlobal('localStorage', storage({}));
+    const heard: ViewName[] = [];
+    const stop = onViewChange((view) => heard.push(view));
+
+    saveView('state');
+    target.dispatchEvent(storageEvent(VIEW_KEY, 'stage'));
+    target.dispatchEvent(storageEvent('openadlc.theme', 'state'));
+    // Another tab's value it does not know, or a cleared key, is By stage as storage reads it.
+    target.dispatchEvent(storageEvent(VIEW_KEY, 'columns'));
+    target.dispatchEvent(storageEvent(VIEW_KEY, null));
+    expect(heard).toEqual(['state', 'stage', 'stage', 'stage']);
+
+    stop();
+    saveView('state');
+    target.dispatchEvent(storageEvent(VIEW_KEY, 'state'));
+    expect(heard).toHaveLength(4);
   });
 });
 

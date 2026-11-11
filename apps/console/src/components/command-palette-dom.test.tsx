@@ -264,6 +264,52 @@ describe('jumping to an item', () => {
   });
 });
 
+describe('grouping the board', () => {
+  beforeEach(() => localStorage.clear());
+
+  it('offers a user By stage while the board is By state, and running it saves By stage and goes to the board', async () => {
+    localStorage.setItem('openadlc.board.view', 'state');
+    await mount('user');
+    await open();
+    expect(optionNamed('Group the board by state')).toBeUndefined();
+    await type('group');
+    expect(options().map((one) => one.textContent)).toEqual(['Group the board by stage']);
+    await key({ key: 'Enter' }, search());
+    expect(localStorage.getItem('openadlc.board.view')).toBe('stage');
+    expect(router.push).toHaveBeenCalledWith('/?board=1');
+    expect(palette()).toBeNull();
+  });
+
+  it('offers an admin By state while the board is By stage, goes to the repository’s board, and tells a board already open', async () => {
+    const { VIEW_EVENT } = await import('@/lib/board-state');
+    const heard: unknown[] = [];
+    const hear = (event: Event) => heard.push((event as CustomEvent).detail);
+    window.addEventListener(VIEW_EVENT, hear);
+    try {
+      await act(async () =>
+        root.render(
+          <RoleProvider role="admin">
+            <CommandPalette data={DATA} repo="api" />
+          </RoleProvider>,
+        ),
+      );
+      await open();
+      expect(optionNamed('Group the board by stage')).toBeUndefined();
+      await act(async () => optionNamed('Group the board by state')!.click());
+      expect(localStorage.getItem('openadlc.board.view')).toBe('state');
+      expect(heard).toEqual(['state']);
+      expect(router.push).toHaveBeenCalledWith('/?board=1&repo=api');
+
+      // Opened again, it offers the way back.
+      await open();
+      expect(optionNamed('Group the board by stage')).toBeDefined();
+      expect(optionNamed('Group the board by state')).toBeUndefined();
+    } finally {
+      window.removeEventListener(VIEW_EVENT, hear);
+    }
+  });
+});
+
 describe('what it offers', () => {
   it('lists Settings and Pause work for an admin, and not for a user', async () => {
     await mount('user');

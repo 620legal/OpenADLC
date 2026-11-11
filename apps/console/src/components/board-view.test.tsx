@@ -496,15 +496,18 @@ describe('the board on a phone', () => {
   });
 });
 
-describe('the switch between By stage and By state, drawn on the server', () => {
-  it('draws By stage whatever this browser chose, with the switch on it, and no Live dot until the browser counts it', () => {
+describe('By stage and By state, drawn on the server', () => {
+  it('draws By stage whatever this browser chose, with no switch on the board, and no Live dot until the browser counts it', () => {
     // A server with storage that says By state: the first drawing still is By stage, as the browser's is.
     vi.stubGlobal('localStorage', { getItem: () => 'state', setItem: () => undefined });
     try {
       const html = render();
       expect(html).toContain('aria-label="Board"');
       expect(html).not.toContain('aria-label="Board by state"');
-      expect(html).toMatch(/aria-label="Group the board"[^]*aria-pressed="true"[^>]*>By stage<\/button>[^]*aria-pressed="false"[^>]*>By state<\/button>/);
+      // The choice is made in Settings → Appearance and ⌘K, not on the board (ADR 0055).
+      expect(html).not.toContain('aria-label="Group the board"');
+      expect(html).not.toMatch(/>By (stage|state)<\/button>/);
+      expect(html).not.toContain('Grouped by state');
       expect(html).not.toContain('data-live-dot');
     } finally {
       vi.unstubAllGlobals();

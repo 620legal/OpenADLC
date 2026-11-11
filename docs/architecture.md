@@ -69,9 +69,15 @@ avatar, too faint for a dot; the avatar is beside the line.) A card waiting on
 a person keeps a still dot and says "Waiting for your answer", a queued task
 says "Queued", and nothing moves on a card nothing runs on.
 
-The board has a switch, By stage and By state, kept in the browser
+The board groups By stage or By state, kept in the browser
 (`openadlc.board.view`; By stage on a first visit, for a value it does not know,
-or where storage throws, and always on the server's drawing). By state groups
+or where storage throws, and always on the server's drawing). The choice is not
+made on the board: an admin makes it in Settings → Appearance's Board row, and
+anyone with ⌘K's "Group the board by state" (or "… by stage"). `saveView`
+announces it in the page (`VIEW_EVENT`), and the board follows it, and another
+tab's, without a reload (`onViewChange`). While By state, the board says so in
+one line with a "Group by stage" button
+([ADR 0055](adr/0055-the-boards-grouping-is-chosen-in-appearance-and-the-palette.md)). By state groups
 the cards By stage draws, after the repository and text filters, into four
 columns, worked out in the console from the board and Needs-you reads it
 already has, with nothing stored (`lib/board-state.ts`,
