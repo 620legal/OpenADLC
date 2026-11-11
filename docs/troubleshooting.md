@@ -1369,6 +1369,30 @@ for its shape:
 - **A chain.** Grok runs `a && b` only when every part is allowed, and refuses
   `$(…)`, subshells, loops and `bash -c` whole.
 
+## `openadlc-ci` says make ci passed but the bridge did not record it
+
+**What it means.** hostd ran `make ci` on the task's head and it passed, but
+the bridge refused hostd's report of it, so there is no pass for `gh` and `git`
+to read. `openadlc-ci` prints the bridge's answer
+(`the bridge answered 500: …`) and exits 2 at once. A builder cannot push or
+open its pull request on that commit until a pass is recorded.
+
+**Where to look.** hostd's log has a warning naming the run, the task and the
+commit (`[hostd] local CI run <run> for task <task> on <sha> passed but the
+bridge did not record it: …`). The bridge's log has the failed
+`POST /internal/local-ci` and why it failed.
+
+**What it used to be.** A NUL byte in `make ci`'s output: Postgres refuses NUL
+in a `text` column, so the insert threw and every report of that run was
+refused the same way. The bridge now drops NUL from the log before it stores
+it, so that no longer happens.
+
+**What to do.** Fix what the bridge's log names, then run `openadlc-ci` again.
+It runs `make ci` again, and the pass is recorded once the bridge accepts it.
+An `openadlc-ci` that says only that the bridge has no record of it, after
+waiting 30 seconds, is talking to an older hostd that gives no reason: look in
+the same two logs.
+
 ## `openadlc-ci` times out in a stand-in's test, or aborts with exit 134
 
 **What it was.** A builder of OpenADLC itself could not pass `openadlc-ci` in

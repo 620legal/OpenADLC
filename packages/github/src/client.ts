@@ -1198,6 +1198,39 @@ export class GitHubClient {
     }
   }
 
+  /** A commit and its tree, by SHA or by branch name. */
+  async commitOf(repo: string, ref: string): Promise<{ sha: string; tree: string }> {
+    const commit = await this.request<{ sha: string; commit: { tree: { sha: string } } }>('GET', `/repos/${repo}/commits/${encodeURIComponent(ref)}`);
+    return { sha: commit.sha, tree: commit.commit.tree.sha };
+  }
+
+  /**
+   * The newest commit `a` and `b` share, by GitHub's three-dot comparison, or
+   * null when they share none. A stacked update after a squash merge reads
+   * from it how much of the dependency the stacked branch holds.
+   */
+  async mergeBase(repo: string, a: string, b: string): Promise<string | null> {
+    const comparison = await this.request<{ merge_base_commit?: { sha?: string } | null }>(
+      'GET',
+      `/repos/${repo}/compare/${encodeURIComponent(a)}...${encodeURIComponent(b)}?per_page=1`,
+    );
+    return comparison.merge_base_commit?.sha ?? null;
+  }
+
+  /**
+   * Writes a commit object, which no branch points to until something merges
+   * it: the line's bridge commit, whose second parent tells a merge which
+   * squashed work the base branch already holds (`MergeLine.stackedUpdate`).
+   */
+  async createCommit(repo: string, input: { message: string; tree: string; parents: string[] }): Promise<string> {
+    const made = await this.request<{ sha: string }>('POST', `/repos/${repo}/git/commits`, {
+      message: input.message,
+      tree: input.tree,
+      parents: input.parents,
+    });
+    return made.sha;
+  }
+
   /**
    * The check runs and commit statuses on this exact commit, as
    * name/status/conclusion. A failed lookup reads as no checks, which the merge

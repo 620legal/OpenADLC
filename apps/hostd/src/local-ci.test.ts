@@ -356,3 +356,53 @@ describe('reporting a run before the bridge has written the install’s secret',
     );
   });
 });
+
+/**
+ * A report the bridge refused (a NUL in the output made Postgres throw) was a
+ * warning that named no commit, and the run read passed and unrecorded:
+ * `openadlc-ci` waited for a record that never came.
+ */
+describe('a run the bridge did not record', () => {
+  const sha = 'abc123'.padEnd(40, '0');
+  afterEach(() => vi.restoreAllMocks());
+
+  it('says which run, task and commit, and what to do, and carries why on the run', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const ci = new LocalCi(driver({ heads: [sha, sha] }), () => TARGET, async () => {
+      throw new Error('the bridge answered 500: boom');
+    });
+    const started = ci.start('task-1');
+    await ci.settled(started.id);
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    const line = String(warn.mock.calls[0]![0]);
+    for (const part of [started.id, 'task-1', sha, 'passed', 'the bridge answered 500: boom', "bridge's log", 'openadlc-ci again']) expect(line).toContain(part);
+    expect(ci.get('task-1', started.id)).toMatchObject({ state: 'passed', recordError: 'the bridge answered 500: boom' });
+  });
+
+  it('does the same for a run stopped at its limit', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const exec = vi.fn(async (_target: unknown, command: string[]) => {
+      const proved = proof(command);
+      if (proved) return proved;
+      if (command.includes('rev-parse')) return { code: 0, stdout: `${sha}\n`, stderr: '' };
+      if (command.includes('status')) return { code: 0, stdout: '', stderr: '' };
+      return { code: 124, stdout: '', stderr: '', timedOut: true };
+    });
+    const ci = new LocalCi({ exec }, () => TARGET, async () => {
+      throw new Error('the bridge answered 500: boom');
+    });
+    const started = ci.start('task-1');
+    await ci.settled(started.id);
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    const line = String(warn.mock.calls[0]![0]);
+    for (const part of [started.id, 'task-1', sha, 'failed', 'the bridge answered 500: boom', "bridge's log", 'openadlc-ci again']) expect(line).toContain(part);
+    expect(ci.get('task-1', started.id)?.recordError).toBe('the bridge answered 500: boom');
+  });
+
+  it('has no record error when the report went through', async () => {
+    const { ci, started } = await run(driver({ heads: [sha, sha] }));
+    expect(ci.get('task-1', started.id)?.recordError).toBeNull();
+  });
+});

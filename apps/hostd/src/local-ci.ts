@@ -90,6 +90,11 @@ export interface LocalCiRun {
   logTail: string;
   /** Why it was refused, in words that say what to do. */
   reason: string | null;
+  /**
+   * Why the bridge did not record it, when hostd's report failed: `openadlc-ci`
+   * says so at once rather than waiting for a record that will not come.
+   */
+  recordError: string | null;
   startedAt: string;
   finishedAt: string | null;
 }
@@ -163,6 +168,7 @@ export class LocalCi {
       durationMs: null,
       logTail: '',
       reason: null,
+      recordError: null,
       startedAt: new Date(this.now()).toISOString(),
       finishedAt: null,
     };
@@ -245,9 +251,7 @@ export class LocalCi {
         logTail,
         reason: `make ci did not finish within ${minutes} minute${minutes === 1 ? '' : 's'}, so it was stopped: find what keeps it running (an open handle, a watcher, a test waiting on a port), fix it, commit, and run openadlc-ci again`,
       });
-      await this.report(view(run)).catch((error: unknown) =>
-        console.warn(`[hostd] local CI ${run.id} for ${run.taskId} timed out but the bridge was not told: ${error instanceof Error ? error.message : error}`),
-      );
+      await this.reportTo(run);
       return;
     }
 
@@ -272,9 +276,27 @@ export class LocalCi {
     }
 
     this.finish(run, result.code === 0 ? 'passed' : 'failed', { exitCode: result.code, durationMs, logTail });
-    await this.report(view(run)).catch((error: unknown) =>
-      console.warn(`[hostd] local CI ${run.id} for ${run.taskId} finished but the bridge was not told: ${error instanceof Error ? error.message : error}`),
-    );
+    await this.reportTo(run);
+  }
+
+  /**
+   * Tells the bridge a finished run's result. A report that failed was only a
+   * warning here before: the run read passed and unrecorded, `openadlc-ci`
+   * waited for a record that never came and said only that there was none,
+   * and running it again ran `make ci` again to the same end. So the run
+   * carries why, and the warning says which run and what to do.
+   */
+  private async reportTo(run: HeldRun): Promise<void> {
+    try {
+      await this.report(view(run));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      run.recordError = message;
+      console.warn(
+        `[hostd] local CI run ${run.id} for task ${run.taskId} on ${run.headSha} ${run.state} but the bridge did not record it: ${message}. ` +
+          `Check the bridge's log for POST /internal/local-ci, then run openadlc-ci again.`,
+      );
+    }
   }
 
   /** Git in the task's computer, with what could change its answers turned off. */

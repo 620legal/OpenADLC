@@ -794,6 +794,29 @@ none yet, says its kind of work instead ("writing the change").
      to date before its first round instead, and that round opens on the
      merged head. The line still updates a stacked branch before it lands it
      if the base has moved since.
+   - Its lead is not asked while the dependency's pull request holds a place
+     in the merge line (`baseInLine`; `waiting`, `updating`, `testing` or
+     `merging`, which already means approved and not red): that merge is
+     minutes off and changes this head, and a lead started on the head it
+     replaced was a review thrown away. A stack or line row that cannot be
+     read waits too. The advisory seats still run. The gate sweep asks again
+     every pass, so the lead starts on this head once the dependency leaves
+     the line, or on the updated head once it merges (ADR 0052).
+   - After a squash merge of the dependency, merging the base plainly counts
+     the dependency's changes on both sides, so files both added conflict
+     even where the stacked commits alone apply cleanly. The update then
+     replays only the branch's own commits: `Stacking.updating` finds
+     `replayFrom`, the merge base of the dependency's head and the stacked
+     head, when the dependency's head is not in the base branch's history;
+     the line writes a bridge commit with the base's tree and parents
+     `[base tip, replayFrom]` and merges that, so the merge base is
+     `replayFrom` and the result is the tree a rebase onto the base would
+     give. It is a merge, not a rebase, because the `agent/**` ruleset
+     refuses a force-push and the approvals carry by first parent: the
+     result is still a merge commit whose first parent is the head the line
+     read. Own commits that really conflict with the base still open the
+     resolution round, and a `replayFrom` that cannot be read, or a bridge
+     that cannot be written, falls back to the plain merge.
    - Across the update made at the dependency's merge, or the line's, the
      approvals stand only for a push to that exact SHA, whose first parent is
      the head the line read, and only once (`stack.updated`). Across one made
@@ -820,8 +843,9 @@ none yet, says its kind of work instead ("writing the change").
      (`stack_held`) whose Resume lets it go; a hold a person put on is theirs.
    - It is one level only, and on unless the repository sets
      `stacking: false`. It records `stack.started`, `stack.updating` (the
-     head about to be updated, and `carry`, whether the approvals stand
-     across it; absent reads true), `stack.made` `{repo, pr, from, to, at}` (the
+     head about to be updated, `carry`, whether the approvals stand
+     across it, absent reads true, and `replayFrom`, null or absent when the
+     update is a plain merge), `stack.made` `{repo, pr, from, to, at}` (the
      commit the update made, `to: null` when it conflicted, failed or landed
      on a head that had moved), `stack.updated`, `stack.paused` and
      `stack.let_go` `{repo, issue, on, onHead, merged, redo, at}`.
