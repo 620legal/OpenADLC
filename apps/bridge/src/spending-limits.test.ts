@@ -81,7 +81,7 @@ vi.mock('@openadlc/db', () => ({
   },
 }));
 
-import { spendingLimits } from '@openadlc/db';
+import { costs as costStore, spendingLimits } from '@openadlc/db';
 import type { CostsConfig } from '@openadlc/shared';
 import { SpendingLimitRejected, applySpendingLimits, spendingView } from './spending-limits.js';
 
@@ -210,5 +210,28 @@ describe('saving a spending limit', () => {
     }
     expect(store.audits).toEqual([]);
     expect(store.limits).toContainEqual({ scope: 'global', kind: 'month_total', amountUsd: 100 });
+  });
+});
+
+describe('billed spend and the subscription estimate on Settings → Spending', () => {
+  it('returns each month figure billed, with the estimate apart, and the per-task cap with neither', async () => {
+    // $10 billed and $140 estimated on subscriptions, everywhere a month is summed.
+    const pick = (args: unknown[]) => (args.includes('estimate') ? 140 : 10);
+    vi.mocked(costStore.monthSpend).mockImplementation(async (...args: unknown[]) => pick(args));
+    vi.mocked(costStore.spendForBot).mockImplementation(async (...args: unknown[]) => pick(args));
+    vi.mocked(costStore.spendForRepo).mockImplementation(async (...args: unknown[]) => pick(args));
+    vi.mocked(costStore.spendByProvider).mockImplementation((async (...args: unknown[]) => [{ provider: 'openai', costUsd: pick(args) }]) as never);
+    vi.mocked(costStore.spendByBotInRepo).mockImplementation((async (...args: unknown[]) => [{ botId: 'bot-1', costUsd: pick(args) }]) as never);
+    vi.mocked(costStore.spendByProviderInRepo).mockImplementation((async (...args: unknown[]) => [{ provider: 'openai', costUsd: pick(args) }]) as never);
+
+    const view = await spendingView(costs);
+
+    expect(view.global.monthTotal).toMatchObject({ spentUsd: 10, estimateUsd: 140 });
+    expect(view.global.task).toMatchObject({ spentUsd: null, estimateUsd: null });
+    expect(view.global.bots[0]).toMatchObject({ botId: 'bot-1', spentUsd: 10, estimateUsd: 140 });
+    expect(view.global.providers.find((row) => row.provider === 'openai')).toMatchObject({ spentUsd: 10, estimateUsd: 140 });
+    expect(view.repos[0]?.monthTotal).toMatchObject({ spentUsd: 10, estimateUsd: 140 });
+    expect(view.repos[0]?.bots[0]).toMatchObject({ spentUsd: 10, estimateUsd: 140 });
+    expect(view.repos[0]?.providers.find((row) => row.provider === 'openai')).toMatchObject({ spentUsd: 10, estimateUsd: 140 });
   });
 });

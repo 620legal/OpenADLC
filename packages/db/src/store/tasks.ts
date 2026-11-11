@@ -19,6 +19,8 @@ interface TaskRow {
   host_id: string | null;
   cost_cap_usd: string;
   cost_usd: string;
+  billed?: boolean | null;
+  unbilled_usd?: string | null;
   round: number;
   started_at: Date | null;
   ended_at: Date | null;
@@ -33,6 +35,10 @@ interface TaskRow {
 export interface TaskRecord extends Task {
   skill: string | null;
   costCapUsd: number;
+  /** Whether its runs are billed: false on a subscription seat, as hostd set it at its last session start. */
+  billed: boolean;
+  /** The part of `costUsd` that was an estimate on a subscription, not billed. */
+  unbilledUsd: number;
   /** When the task was opened, which is the order "was it tried again since" is asked in. */
   createdAt: string;
   /** When OpenADLC ran it again by itself, or was itself such a retry; see `claimAutoRetry`. */
@@ -58,7 +64,7 @@ export interface TaskRecord extends Task {
 }
 
 const COLUMNS = `id, bot_id, repo_id, kind, subject_type, subject_ref, lease_id, state, skill,
-         worktree, branch, tmux_session, container, cost_cap_usd, cost_usd, round,
+         worktree, branch, tmux_session, container, cost_cap_usd, cost_usd, billed, unbilled_usd, round,
          started_at, ended_at, exit_reason, created_at, auto_retried_at, base_ref, base_context, host_id, takes_messages`;
 
 const SELECT = `
@@ -84,6 +90,8 @@ function toTask(row: TaskRow): TaskRecord {
     hostId: row.host_id ?? null,
     costCapUsd: Number(row.cost_cap_usd),
     costUsd: Number(row.cost_usd),
+    billed: row.billed ?? true,
+    unbilledUsd: Number(row.unbilled_usd ?? 0),
     round: row.round,
     startedAt: row.started_at?.toISOString() ?? null,
     endedAt: row.ended_at?.toISOString() ?? null,
@@ -598,14 +606,27 @@ export async function failIfRunning(id: string, exitReason: string): Promise<Tas
   return row ? toTask(row) : null;
 }
 
-export async function addTaskCost(id: string, costUsd: number): Promise<number> {
+export async function addTaskCost(id: string, costUsd: number, billed = true): Promise<number> {
   // As the ledger's row: a task's cost only grows, and NaN would stick.
   if (!Number.isFinite(costUsd) || costUsd < 0) throw new Error(`a task's cost grows by 0 or more; refusing ${costUsd}`);
   const row = await queryOne<{ cost_usd: string }>(
-    'update tasks set cost_usd = cost_usd + $2, updated_at = now() where id = $1 returning cost_usd',
-    [id, costUsd],
+    `update tasks set cost_usd = cost_usd + $2,
+       unbilled_usd = unbilled_usd + case when $3::boolean then 0 else $2 end,
+       updated_at = now()
+     where id = $1 returning cost_usd`,
+    [id, costUsd, billed],
   );
   return Number(row?.cost_usd ?? 0);
+}
+
+/**
+ * Whether the task's runs are billed, as hostd read the bot's model account
+ * when it started a session: false only on a subscription seat. Set by hostd,
+ * never by the session, which could otherwise turn its own cap off
+ * (docs/adr/0050-a-subscription-run-is-estimated-not-billed.md).
+ */
+export async function setBilled(id: string, billed: boolean): Promise<void> {
+  await query('update tasks set billed = $2, updated_at = now() where id = $1', [id, billed]);
 }
 
 /**

@@ -59,6 +59,8 @@ let failingAfter: Record<string, number>;
 let failingStatus: number;
 /** What each `inbox/take` hands over in turn, as the messages' texts; nothing once these run out. */
 let inbox: string[][];
+/** Fields the ledger's `/usage` and `/headroom` answers carry over the defaults: a subscription's guard, say. */
+let ledgerAnswer: Record<string, unknown>;
 /** The statuses a route answers in turn, by its last segment, ahead of `failing`; 200 answers as the bridge does. */
 let statuses: Record<string, number[]>;
 
@@ -75,6 +77,7 @@ beforeEach(async () => {
   failingStatus = 500;
   inbox = [];
   statuses = {};
+  ledgerAnswer = {};
   // The task's total, as the ledger answers it: earlier sessions' and this one's.
   const spentSoFar = () =>
     spentBefore + calls.filter((call) => call.path.endsWith('/usage')).reduce((sum, call) => sum + Number(call.body.costUsd), 0);
@@ -119,6 +122,7 @@ beforeEach(async () => {
               // The install's per-task cap, which "continue" adds: not the task's
               // own cap, so the two differ here to show which is offered.
               stepUsd: 5,
+              ...ledgerAnswer,
             }
           : {};
       response.writeHead(200, { 'content-type': 'application/json' });
@@ -795,6 +799,52 @@ describe('a task that reaches its cost cap', () => {
     expect(to('state').at(-1)?.body).toEqual({ state: 'paused', reason: 'waiting on a person' });
   }, 60_000);
 
+  it('on a subscription, asks at the runaway guard the bridge names, and offers its step', async () => {
+    ledgerAnswer = { cap: 150, stepUsd: 15, billed: false };
+    capAfterUsage = 1;
+    const prompt = join(dir, 'prompt.txt');
+    const bin = fakeClaude([assistant('msg-1', 'Reading.', 1000, 40), assistant('msg-2', 'More.', 1000, 40), result(0.25)], prompt);
+
+    expect(await runTriage(bin)).toBe(0);
+
+    const gates = to('gate').map((call) => call.body);
+    expect(gates).toHaveLength(1);
+    expect(String(gates[0]?.question)).toMatch(/^Stopped at the \$150 cap on request:a4b02784 after \$/);
+    expect(gates[0]?.options).toEqual(['continue for another $15', 'hand to a person', 'abandon this task']);
+    const told = readFileSync(prompt, 'utf8');
+    expect(told).toContain('this task runs on a subscription: its cost is an estimate, not billed, and it is stopped at a runaway guard of $150 estimated');
+    expect(told).not.toContain('your spend cap for this task is');
+  }, 30_000);
+
+  it('on a subscription, runs on past the per-task cap it was started with while the bridge says not to stop', async () => {
+    ledgerAnswer = { cap: 150, stepUsd: 15, billed: false };
+    const turns = Array.from({ length: 300 }, (_, index) => ({
+      type: 'assistant',
+      message: {
+        id: `msg-${index}`,
+        content: [{ type: 'text', text: 'Next step.' }],
+        usage: { input_tokens: 3, cache_creation_input_tokens: 2048, cache_read_input_tokens: 140_000, output_tokens: 2 },
+      },
+    }));
+    const bin = fakeClaude([...turns, result(25)]);
+
+    expect(await runTriage(bin, { OPENADLC_TASK_COST_CAP_USD: '15' })).toBe(0);
+
+    expect(to('usage').reduce((sum, call) => sum + Number(call.body.costUsd), 0)).toBeGreaterThan(15);
+    expect(to('gate')).toEqual([]);
+    expect(to('state').at(-1)?.body).toEqual({ state: 'done', reason: 'complete' });
+  }, 60_000);
+
+  it('tells a billed task its spend cap, as before', async () => {
+    ledgerAnswer = { billed: true };
+    const prompt = join(dir, 'prompt.txt');
+    const bin = fakeClaude([assistant('msg-1', 'Filed it.', 1000, 40), result(0.1)], prompt);
+
+    expect(await runTriage(bin)).toBe(0);
+
+    expect(readFileSync(prompt, 'utf8')).toContain('your spend cap for this task is $15');
+  }, 30_000);
+
   it('ends a run as done when only its final totals cross the cap', async () => {
     capDollars = 15;
     const bin = fakeClaude([assistant('msg-1', 'Filed it.', 1000, 40), result(20)]);
@@ -828,6 +878,8 @@ describe('a task that reaches its cost cap', () => {
     // its own sum, when the task had spent twice that.
     spentBefore = 15;
     capDollars = 30;
+    // The bridge names where the task stops, its raised cap.
+    ledgerAnswer = { cap: 30 };
     const turns = Array.from({ length: 600 }, (_, index) => ({
       type: 'assistant',
       message: {

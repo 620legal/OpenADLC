@@ -9,14 +9,19 @@ import { query, queryOne } from '../client.js';
 import {
   LedgerAliasError,
   ensureBudget,
+  getBudget,
   listLedger,
   monthSpend,
   recordUsage,
   refreshBudget,
   spendByBotInRepo,
+  spendByBot,
   spendByDay,
   spendByProvider,
   spendByProviderInRepo,
+  spendByRepo,
+  spendForBot,
+  spendForRepo,
 } from './costs.js';
 
 beforeEach(() => {
@@ -49,7 +54,7 @@ describe('a usage row', () => {
 
     const [sql, params] = vi.mocked(query).mock.calls[0] ?? [];
     expect(String(sql)).toContain('model_alias');
-    expect(params).toEqual(['task-1', 'bot-1', 'claude', 'claude-opus-5', 'newest:opus', null, 10, 4, 0.02]);
+    expect(params).toEqual(['task-1', 'bot-1', 'claude', 'claude-opus-5', 'newest:opus', null, 10, 4, 0.02, true]);
     expect(String(params?.[3])).not.toMatch(/^newest:/);
   });
 
@@ -151,7 +156,7 @@ describe('month-to-date spend the limits are checked against', () => {
     expect(text).toContain('(select cap_usd from budgets where period < $1 order by period desc limit 1)');
     expect(text).toContain('on conflict (period) do nothing');
     expect(params).toEqual(['2026-10']);
-    expect(budget).toEqual({ period: '2026-10', capUsd: 40, spentUsd: 0, state: 'ok' });
+    expect(budget).toEqual({ period: '2026-10', capUsd: 40, spentUsd: 0, estimateUsd: 0, state: 'ok' });
   });
 
   it('sums a bot inside one repository by the bot row, not by a shared login', async () => {
@@ -189,6 +194,79 @@ describe('month-to-date spend the limits are checked against', () => {
     const [, params] = vi.mocked(query).mock.calls[0] ?? [];
     expect(params).toEqual(['2026-09', 40]);
     expect(budget.capUsd).toBe(40);
+  });
+});
+
+describe('billed spend and the subscription estimate', () => {
+  const sql = (call = 0) => String(vi.mocked(queryOne).mock.calls[call]?.[0] ?? vi.mocked(query).mock.calls[call]?.[0]).replace(/\s+/g, ' ');
+
+  it('writes a subscription run as not billed, and a row with no flag as billed', async () => {
+    vi.mocked(query).mockResolvedValue([]);
+    const row = { taskId: 'task-1', botId: 'bot-1', engine: 'claude' as const, model: 'claude-opus-5', tokensIn: 1, tokensOut: 1, costUsd: 3 };
+
+    await recordUsage({ ...row, billed: false });
+    await recordUsage(row);
+
+    expect(String(vi.mocked(query).mock.calls[0]?.[0])).toContain('billed');
+    expect((vi.mocked(query).mock.calls[0]?.[1] as unknown[])[9]).toBe(false);
+    expect((vi.mocked(query).mock.calls[1]?.[1] as unknown[])[9]).toBe(true);
+  });
+
+  it('reads the flag back with the ledger row', async () => {
+    vi.mocked(query).mockResolvedValueOnce([
+      { id: '1', task_id: 't', bot_id: 'b', engine: 'claude', model: 'm', model_alias: null, tokens_in: 1, tokens_out: 1, cost_usd: '2', billed: false, at: new Date() },
+    ]);
+    expect((await listLedger())[0]?.billed).toBe(false);
+  });
+
+  it('counts only billed rows in every month sum a cap reads, and only unbilled ones when asked for the estimate', async () => {
+    const sums: [string, () => Promise<unknown>, () => Promise<unknown>, 'one' | 'many'][] = [
+      ['monthSpend', () => monthSpend('2026-11'), () => monthSpend('2026-11', 'estimate'), 'one'],
+      ['spendForBot', () => spendForBot('2026-11', 'bot-1'), () => spendForBot('2026-11', 'bot-1', 'estimate'), 'one'],
+      ['spendForRepo', () => spendForRepo('2026-11', 'repo-1'), () => spendForRepo('2026-11', 'repo-1', 'estimate'), 'one'],
+      ['spendByProvider', () => spendByProvider('2026-11'), () => spendByProvider('2026-11', 'estimate'), 'many'],
+      ['spendByBotInRepo', () => spendByBotInRepo('2026-11', 'r'), () => spendByBotInRepo('2026-11', 'r', 'estimate'), 'many'],
+      ['spendByProviderInRepo', () => spendByProviderInRepo('2026-11', 'r'), () => spendByProviderInRepo('2026-11', 'r', 'estimate'), 'many'],
+    ];
+    for (const [name, billed, estimate, shape] of sums) {
+      vi.mocked(query).mockReset().mockResolvedValue([]);
+      vi.mocked(queryOne).mockReset().mockResolvedValue({ total: '0' });
+      await billed();
+      await estimate();
+      const calls = shape === 'one' ? vi.mocked(queryOne).mock.calls : vi.mocked(query).mock.calls;
+      const [first, second] = calls.map(([text]) => String(text).replace(/\s+/g, ' '));
+      expect(first, name).toMatch(/and (l\.)?billed\b/);
+      expect(first, name).not.toMatch(/not (l\.)?billed/);
+      expect(second, name).toMatch(/and not (l\.)?billed\b/);
+    }
+  });
+
+  it('keeps the Costs page breakdowns of what work cost counting every row', async () => {
+    vi.mocked(query).mockResolvedValue([]);
+    await spendByBot('2026-11');
+    await spendByRepo('2026-11');
+    await spendByDay('2026-11');
+    for (const [text] of vi.mocked(query).mock.calls) expect(String(text)).not.toContain('billed');
+  });
+
+  it('sets the leasing budget from billed spend alone, and carries the estimate beside it', async () => {
+    vi.mocked(query).mockResolvedValueOnce([]);
+    vi.mocked(queryOne).mockResolvedValueOnce({ total: '10', estimate: '140' });
+    vi.mocked(queryOne).mockResolvedValueOnce({ period: '2026-11', cap_usd: '100', spent_usd: '10', state: 'ok' });
+
+    const budget = await refreshBudget('2026-11', 0.8);
+
+    expect(sql(0)).toContain('sum(cost_usd) filter (where billed)');
+    expect(sql(0)).toContain('sum(cost_usd) filter (where not billed)');
+    // What the state is computed from: the billed sum, not the $150 total.
+    expect(vi.mocked(queryOne).mock.calls[1]?.[1]).toEqual(['2026-11', 10, 0.8]);
+    expect(budget).toMatchObject({ spentUsd: 10, estimateUsd: 140, state: 'ok' });
+  });
+
+  it('reads the estimate with a stored budget', async () => {
+    vi.mocked(queryOne).mockResolvedValueOnce({ period: '2026-11', cap_usd: '100', spent_usd: '10', estimate_usd: '7.5', state: 'ok' });
+    expect(await getBudget('2026-11')).toEqual({ period: '2026-11', capUsd: 100, spentUsd: 10, estimateUsd: 7.5, state: 'ok' });
+    expect(sql(0)).toContain('not billed');
   });
 });
 

@@ -494,3 +494,33 @@ describe('authorising a revert past a cap', () => {
     expect(rows.map((row) => row.action)).not.toContain(REVERT_HELD);
   });
 });
+
+describe('a lease when the only spend over a cap is a subscription estimate', () => {
+  it('reads billed spend for every cap, and passes a month whose estimate alone is over them', async () => {
+    // Each sum answers $10 billed and $500 as an estimate; every cap is $100.
+    const pick = (args: unknown[]) => (args.includes('estimate') ? 500 : 10);
+    vi.mocked(monthSpend).mockImplementation(async (...args) => pick(args));
+    vi.mocked(spendForRepo).mockImplementation(async (...args) => pick(args));
+    vi.mocked(spendForBot).mockImplementation(async (...args) => pick(args));
+    vi.mocked(spendByBotInRepo).mockImplementation(async (...args) => [{ botId: 'bot-1', costUsd: pick(args) }]);
+    vi.mocked(spendByProvider).mockImplementation(async (...args) => [{ provider: 'anthropic', costUsd: pick(args) }]);
+    vi.mocked(spendByProviderInRepo).mockImplementation(async (...args) => [{ provider: 'anthropic', costUsd: pick(args) }]);
+    vi.mocked(queryOne).mockResolvedValue({ amount_usd: '100' });
+
+    const reason = await refusal({
+      monthlyCapUsd: 100,
+      onCap: { stopLeasing: true },
+      period: '2026-11',
+      repoId: 'repo-1',
+      repoLabel: 'exampleco/api',
+      botId: 'bot-1',
+      botName: 'builder',
+      engine: 'claude',
+    });
+
+    expect(reason).toBeNull();
+    for (const sum of [monthSpend, spendForRepo, spendForBot, spendByBotInRepo, spendByProvider, spendByProviderInRepo]) {
+      expect(vi.mocked(sum).mock.calls.flat()).not.toContain('estimate');
+    }
+  });
+});

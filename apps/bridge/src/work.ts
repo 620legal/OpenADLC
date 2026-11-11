@@ -133,6 +133,8 @@ export interface TaskFacts {
   state: TaskState;
   round: number;
   costUsd: number;
+  /** The part of `costUsd` run on a subscription: an estimate, not billed. Absent reads as none. */
+  unbilledUsd?: number;
   startedAt: string | null;
   endedAt: string | null;
   exitReason: string | null;
@@ -366,6 +368,8 @@ export interface CardWork {
   prNumber: number | null;
   /** Everything spent on the issue so far: its own tasks, its pull request's, and the request it came from. */
   costUsd: number;
+  /** The part of `costUsd` that ran on a subscription: an estimate, not billed. */
+  estimateUsd: number;
   /** Queued, running or paused, newest first. */
   active: CardTask[];
   /** The newest task that ended, whatever is active. */
@@ -403,6 +407,15 @@ export function asCardTask(task: TaskFacts, botName: (botId: string) => string):
     endedAt: task.endedAt,
     exitReason: task.exitReason,
   };
+}
+
+/**
+ * The part of these tasks' cost that ran on a subscription: an estimate, not
+ * billed. Rounded as a card's cost is, so the two can be told apart on it
+ * (docs/adr/0050-a-subscription-run-is-estimated-not-billed.md).
+ */
+export function estimateOf(tasks: readonly Pick<TaskFacts, 'unbilledUsd'>[]): number {
+  return Math.round(tasks.reduce((total, task) => total + (task.unbilledUsd ?? 0), 0) * 10_000) / 10_000;
 }
 
 const newestFirst = (a: TaskFacts, b: TaskFacts): number => Date.parse(b.createdAt) - Date.parse(a.createdAt);
@@ -444,6 +457,7 @@ export function cardWork(
     number: issue.number,
     prNumber: issue.prNumber,
     costUsd: Math.round(mine.reduce((total, task) => total + task.costUsd, 0) * 10_000) / 10_000,
+    estimateUsd: estimateOf(mine),
     active: active.map((task) => asCardTask(task, input.botName)),
     last: ended[0] ? asCardTask(ended[0], input.botName) : null,
     reviewRound: prRef ? reviewRound(onPullRequest) : null,

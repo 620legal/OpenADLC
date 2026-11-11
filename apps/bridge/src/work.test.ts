@@ -115,6 +115,20 @@ describe('a review loop that stopped', () => {
 describe('what a card says about the work on it', () => {
   const building = issue({ number: 16, stage: 'build' });
 
+  it('carries the part of its cost run on subscriptions as an estimate, beside the total', () => {
+    const tasks = [
+      task({ kind: 'implement', subjectRef: 'openadlc#16', state: 'done', costUsd: 1, unbilledUsd: 0, endedAt: minutesAgo(30) }),
+      task({ kind: 'review', subjectRef: 'openadlc#16', state: 'done', costUsd: 0.74, unbilledUsd: 0.74, endedAt: minutesAgo(20) }),
+      // A task from before the change says nothing, and reads as billed.
+      task({ kind: 'patch', subjectRef: 'openadlc#16', state: 'done', costUsd: 0.2, endedAt: minutesAgo(10) }),
+    ];
+
+    const work = cardWork(building, { tasks, botName, stalls: new Map(), requestSubjects: [] });
+
+    expect(work.costUsd).toBe(1.94);
+    expect(work.estimateUsd).toBe(0.74);
+  });
+
   it('adds up what the issue, its pull request and its request cost, and names who is on it now', () => {
     const inReview = issue({ number: 12, stage: 'review', prNumber: 31 });
     const tasks = [

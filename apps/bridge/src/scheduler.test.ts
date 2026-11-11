@@ -1126,6 +1126,39 @@ describe('a testing deploy the sweep could not dispatch', () => {
   });
 });
 
+describe('the monthly budget job and its cap_warning', () => {
+  const budgetJob = async (budget: Record<string, unknown>) => {
+    const { costs } = await import('@openadlc/db');
+    Object.assign(costs, { ensureBudget: vi.fn(async () => budget) });
+    const send = vi.fn(async () => undefined);
+    const scheduler = new Scheduler(
+      { costs: { monthlyCapUsd: 100, perTaskCapUsd: 15, warningAt: 0.8 }, consoleUrl: 'http://console' } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      { send } as never,
+    );
+    const actions = await (scheduler as unknown as { refreshBudget(): Promise<string[]> }).refreshBudget();
+    return { send, actions };
+  };
+
+  it('warns when billed spend crosses the warning line', async () => {
+    const { send, actions } = await budgetJob({ period: '2026-09', capUsd: 100, spentUsd: 85, estimateUsd: 0, state: 'warning' });
+    expect(actions).toEqual(['billed spend is at 85% of the monthly cap']);
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({ event: 'cap_warning', text: 'billed spend is at 85% of the monthly cap ($85.00 of $100).' }));
+  });
+
+  it('raises no cap_warning when only the subscription estimate is past it', async () => {
+    // The budget's state is read from billed rows alone (costs.refreshBudget).
+    const { send, actions } = await budgetJob({ period: '2026-09', capUsd: 100, spentUsd: 10, estimateUsd: 500, state: 'ok' });
+    expect(send).not.toHaveBeenCalled();
+    expect(actions).toEqual(['spend is $10.00 of $100.00']);
+  });
+});
+
 describe('what a job run leaves in the event log', () => {
   it('records how many lines a job said, not the lines themselves', async () => {
     // Most jobs say the same few lines on every firing, reconcile every quarter

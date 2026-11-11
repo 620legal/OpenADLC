@@ -53,6 +53,50 @@ describe('reading the attachments into a backup with history', () => {
  * archived time. An exact match almost never held: restoring a backup into
  * its own install wrote every audit line and cost a second time.
  */
+describe('whether a cost was billed, across a backup and a restore', () => {
+  beforeEach(() => {
+    attachments.error = null;
+  });
+
+  it('reads the flag into the archive', async () => {
+    vi.mocked(query).mockImplementation((async (sql: string) =>
+      /from ledger l/.test(sql)
+        ? [
+            { seat: 'builder', engine: 'claude', model: 'claude-opus-5', model_alias: null, prompt_hash: null, tokens_in: 1, tokens_out: 1, cost_usd: '2', billed: false, at: new Date('2026-11-01T00:00:00Z') },
+            { seat: 'builder', engine: 'claude', model: 'claude-opus-5', model_alias: null, prompt_hash: null, tokens_in: 1, tokens_out: 1, cost_usd: '3', billed: true, at: new Date('2026-11-01T00:00:01Z') },
+          ]
+        : []) as never);
+    try {
+      const found = await readInstall({ ...EVERYTHING, history: true }, { store });
+      expect(String(vi.mocked(query).mock.calls.find(([text]) => /from ledger l/.test(String(text)))?.[0])).toContain('l.billed');
+      expect(found.history?.ledger.map((row) => row.billed)).toEqual([false, true]);
+    } finally {
+      vi.mocked(query).mockImplementation((async () => []) as never);
+    }
+  });
+
+  it('restores a subscription row as not billed, and a row from an older archive as billed', async () => {
+    const params: unknown[][] = [];
+    const sql = {
+      query: vi.fn(async (text: string, values: unknown[] = []) => {
+        if (/insert into ledger/.test(text)) params.push(values);
+        if (/select id, slot from bots/.test(text)) return { rows: [{ id: 'b0b0b0b0-0000-4000-8000-000000000001', slot: 'builder' }], rowCount: 1 };
+        return { rows: [], rowCount: 0 };
+      }),
+    };
+    const [row] = HISTORY.ledger;
+    const { billed: _none, ...old } = row!;
+    await restoreDb(sql).putHistory({
+      ...HISTORY,
+      threads: [],
+      messages: [],
+      requests: [],
+      ledger: [{ ...row!, billed: false }, old],
+    });
+    expect(params.map((values) => values[9])).toEqual([false, true]);
+  });
+});
+
 describe('recognising audit lines and costs already here', () => {
   beforeEach(() => {
     attachments.error = null;

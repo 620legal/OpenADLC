@@ -191,6 +191,8 @@ export interface BoardCard {
   prNumber?: number | null;
   /** Spent on it so far: its own tasks, its pull request's and the request it came from. */
   costUsd?: number;
+  /** The part of `costUsd` that ran on a subscription: an estimate, not billed. Absent from an older bridge. */
+  estimateUsd?: number;
   /** Queued, running or paused, newest first. */
   active?: CardTask[];
   /** The newest task that ended. */
@@ -1080,8 +1082,13 @@ export type WorktreeView =
 
 export interface SpendingFigure {
   amountUsd: number | null;
-  /** Null on a per-task cap, which is not a month's spend. */
+  /** Billed spend, runs on an API key: what the cap counts. Null on a per-task cap, which is not a month's spend. */
   spentUsd: number | null;
+  /**
+   * The month's estimated cost of runs on subscriptions: not billed, and not
+   * held to this cap. Null on a per-task cap; absent from an older bridge.
+   */
+  estimateUsd?: number | null;
   /** On a repository row, the global cap a blank field uses. */
   globalUsd?: number | null;
 }
@@ -1206,7 +1213,8 @@ export interface InsightsView {
 
 export interface CostsView {
   period: string;
-  budget: { period: string; capUsd: number; spentUsd: number; state: string };
+  /** `spentUsd` is billed spend; `estimateUsd` runs on subscriptions, not billed. */
+  budget: { period: string; capUsd: number; spentUsd: number; estimateUsd?: number; state: string };
   perTaskCapUsd: number;
   byBot: { bot: string; costUsd: number; tasks: number }[];
   byRepo: { repo: string; costUsd: number }[];
@@ -1220,6 +1228,8 @@ export interface CostsView {
     tokensIn: number;
     tokensOut: number;
     costUsd: number;
+    /** False for a run on a subscription: an estimate, not billed. */
+    billed?: boolean;
     at: string;
   }[];
   stoppedAtCap: { id: string; subjectRef: string; costUsd: number }[];

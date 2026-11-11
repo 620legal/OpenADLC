@@ -58,6 +58,13 @@ describe('the header', () => {
     }
   });
 
+  it('shows the subscription estimate beside billed spend, labelled as not billed, and nothing when there is none', () => {
+    const html = wide(header('crew', { budget: { spentUsd: 7.51, capUsd: 1500, estimateUsd: 36.2 } }));
+    expect(html).toContain('$7.51 of $1,500');
+    expect(html).toContain('<span title="estimated on subscriptions, not billed"> · $36.20 est.</span>');
+    expect(wide(header('crew'))).not.toContain('est.');
+  });
+
   it('says who is working, what the month has cost against its cap, and what needs you', () => {
     const html = wide(header('crew'));
     expect(html).toContain('1 working · 2 idle');

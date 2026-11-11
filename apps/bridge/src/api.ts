@@ -100,7 +100,7 @@ import { checkApp } from './app-checks.js';
 import { AppManifestStates } from './app-manifest-state.js';
 import type { InvitationService } from './invitation-service.js';
 import { authorizationOf, buildStatus } from './status.js';
-import type { TaskService } from './task-service.js';
+import { stopAtUsd, type TaskService } from './task-service.js';
 import type { BotNames } from './bot-names.js';
 import { defaultAssignmentDeps, registerAssignmentRoutes } from './assignment.js';
 import { configuredFirstOfRole, configuredFor, configuredSeats } from './configured-crew.js';
@@ -2053,7 +2053,9 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
       byDay,
       ledger,
       stoppedAtCap: all
-        .filter((task) => task.costUsd >= task.costCapUsd && !ignored.has(task.subjectRef))
+        // Where each task stops: a subscription task is held to its runaway
+        // guard, not its cap, so one at $40 estimated is not listed here.
+        .filter((task) => task.costUsd >= stopAtUsd(task, taskCap) && !ignored.has(task.subjectRef))
         .map((task) => ({ id: task.id, subjectRef: task.subjectRef, costUsd: task.costUsd })),
       ci: summarizeCi(ciRuns, { since: ciSince, cap: parseCap(ciCap) }),
     };

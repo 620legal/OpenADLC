@@ -123,6 +123,16 @@ function dollars(amount: number | null): string {
 }
 
 /**
+ * What runs on subscriptions would have cost this month, said beside billed
+ * spend and never added to it: a subscription bills no money per call, so no
+ * monthly cap counts it (docs/adr/0050-a-subscription-run-is-estimated-not-billed.md).
+ * Null when there is none.
+ */
+export function estimateLine(usd: number | null | undefined): string | null {
+  return usd != null && usd > 0 ? `${money(usd)} estimated on subscriptions — not billed, not capped` : null;
+}
+
+/**
  * How much of a cap is spent. A per-task cap is not a month's spend, so it
  * has no bar — only a figure that has both an amount and a spend does.
  */
@@ -151,13 +161,17 @@ function SummaryLine({
   label,
   amount,
   spent,
+  estimate,
   hint,
 }: {
   label: string;
   amount: number | null;
+  /** Billed spend: what the bar is drawn from. */
   spent?: number | null;
+  estimate?: number | null;
   hint?: string;
 }) {
+  const estimated = estimateLine(estimate);
   return (
     <div className="flex flex-col border-t border-well py-2.5">
       <span className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
@@ -165,6 +179,7 @@ function SummaryLine({
         <span className="text-[13px] text-body">{dollars(amount)}</span>
         {spent != null && <span className="text-[12px] text-muted">{money(spent, { whole: spent === 0 })} spent this month</span>}
       </span>
+      {estimated && <span className="text-[12px] text-muted">{estimated}</span>}
       {hint && <span className="text-[12px] text-muted">{hint}</span>}
       {amount != null && spent != null && <SpendBar spent={spent} cap={amount} />}
     </div>
@@ -187,7 +202,12 @@ export function SpendingSummary({ initial }: { initial: SpendingLimitsView | nul
   }
   return (
     <SettingsCard id="spending-limits" title="Spending limits" action={edit}>
-      <SummaryLine label="Each month" amount={initial.global.monthTotal.amountUsd} spent={initial.global.monthTotal.spentUsd} />
+      <SummaryLine
+        label="Each month"
+        amount={initial.global.monthTotal.amountUsd}
+        spent={initial.global.monthTotal.spentUsd}
+        estimate={initial.global.monthTotal.estimateUsd}
+      />
       <SummaryLine label="Each task" amount={initial.global.task.amountUsd} hint="A task stops when it has cost this much." />
     </SettingsCard>
   );
@@ -297,7 +317,9 @@ function ScopeFields({
   // A blank bot or provider on a repository uses the global cap when one is
   // set. "no cap" is only true when that global amount is blank too.
   const inherited = (global: number | null | undefined) => (globalScope ? (placeholder(global) ?? 'no cap') : 'no cap');
-  const spent = (amount: number | null) => `${money(amount ?? 0, { whole: (amount ?? 0) === 0 })} this month`;
+  const spent = (amount: number | null, estimate?: number | null) =>
+    `${money(amount ?? 0, { whole: (amount ?? 0) === 0 })} this month` +
+    (estimate != null && estimate > 0 ? ` · ${money(estimate)} est., not billed` : '');
   return (
     <div className="flex flex-col">
       <Field
@@ -308,7 +330,12 @@ function ScopeFields({
         hint={
           figures.monthTotal.spentUsd == null
             ? undefined
-            : `${money(figures.monthTotal.spentUsd, { whole: figures.monthTotal.spentUsd === 0 })} spent this month`
+            : [
+                `${money(figures.monthTotal.spentUsd, { whole: figures.monthTotal.spentUsd === 0 })} spent this month`,
+                estimateLine(figures.monthTotal.estimateUsd),
+              ]
+                .filter(Boolean)
+                .join(' · ')
         }
         onChange={(value) => onChange(limitKey(scope, 'month_total'), value)}
       />
@@ -328,7 +355,7 @@ function ScopeFields({
           label: bot.name,
           value: read(`month_bot:${bot.botId}`),
           placeholder: inherited(globalScope?.bots.find((one) => one.botId === bot.botId)?.amountUsd),
-          spent: spent(bot.spentUsd),
+          spent: spent(bot.spentUsd, bot.estimateUsd),
           invalid: invalid.has(limitKey(scope, `month_bot:${bot.botId}`)),
         }))}
       />
@@ -340,7 +367,7 @@ function ScopeFields({
           label: PROVIDER_LABEL[provider.provider] ?? provider.provider,
           value: read(`month_provider:${provider.provider}`),
           placeholder: inherited(globalScope?.providers.find((one) => one.provider === provider.provider)?.amountUsd),
-          spent: spent(provider.spentUsd),
+          spent: spent(provider.spentUsd, provider.estimateUsd),
           invalid: invalid.has(limitKey(scope, `month_provider:${provider.provider}`)),
         }))}
       />

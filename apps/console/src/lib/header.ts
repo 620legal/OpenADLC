@@ -15,8 +15,12 @@ export interface HeaderData {
   /** Each repository's colour by its name, for its dot wherever it is named. */
   repoColors: RepoColorMap;
   counts: CrewCounts;
-  /** Month to date against the cap, and the bridge's word on it. Null when the costs could not be read. */
-  spend: { spentUsd: number; capUsd: number; state?: string } | null;
+  /**
+   * Billed spend month to date against the cap, and the bridge's word on it;
+   * `estimateUsd` beside it when runs on subscriptions cost anything, which is
+   * not billed and not capped. Null when the costs could not be read.
+   */
+  spend: { spentUsd: number; capUsd: number; state?: string; estimateUsd?: number } | null;
   /** How many things are waiting on the person. Null when that could not be read. */
   needsYou: number | null;
   /** The same, as work and system, when the page read the items themselves. */
@@ -46,7 +50,7 @@ export function headerData(input: {
   repos: readonly string[];
   repoColors?: RepoColorMap;
   crew: readonly CrewMember[];
-  budget: { spentUsd: number; capUsd: number; state?: string } | null;
+  budget: { spentUsd: number; capUsd: number; state?: string; estimateUsd?: number } | null;
   needsYou: number | null;
   /** What waits, to say it as work and system; the count alone when absent. */
   attention?: readonly AttentionItem[] | null;
@@ -56,7 +60,12 @@ export function headerData(input: {
     repoColors: { ...(input.repoColors ?? {}) },
     counts: crewCounts(input.crew),
     spend: input.budget
-      ? { spentUsd: input.budget.spentUsd, capUsd: input.budget.capUsd, ...(input.budget.state ? { state: input.budget.state } : {}) }
+      ? {
+          spentUsd: input.budget.spentUsd,
+          capUsd: input.budget.capUsd,
+          ...(input.budget.state ? { state: input.budget.state } : {}),
+          ...((input.budget.estimateUsd ?? 0) > 0 ? { estimateUsd: input.budget.estimateUsd } : {}),
+        }
       : null,
     needsYou: input.needsYou,
     needsSplit: input.attention ? groupCounts(input.attention) : null,

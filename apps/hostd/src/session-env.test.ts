@@ -4,9 +4,18 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { internalSecretRef, modelAccountRef, engineKeyRef, taskTokenFor, type SecretStore } from '@openadlc/github';
+
+// The minter writes whether a task is billed onto its row; no database here.
+const setBilled = vi.hoisted(() => vi.fn(async (_taskId: string, _billed: boolean) => undefined));
+vi.mock('@openadlc/db', async (actual) => {
+  const real = await actual<typeof import('@openadlc/db')>();
+  return { ...real, tasks: { ...real.tasks, setBilled } };
+});
+
 import {
   SessionEnvMinter,
   hostSigningAgent,
+  isBilled,
   keyBelongsElsewhere,
   readEngineCredential,
   type AssignedModelAccount,
@@ -546,5 +555,60 @@ describe.runIf(hasSshAgent)('the signing agent a task on the host gets', () => {
     expect(await hostSigningAgent(bot, 'not a private key')).toBeNull();
 
     await vi.waitFor(() => expect(agentsOf(bot)).toBe(''), { timeout: 5_000 });
+  });
+});
+
+describe('whether a session is billed', () => {
+  it('writes not billed for a subscription account, before the env is returned', async () => {
+    const order: string[] = [];
+    const mark = vi.fn(async (taskId: string, billed: boolean) => void order.push(`${taskId}:${billed}`));
+    const store = memory({ [modelAccountRef(ACCOUNT)]: 'oauth-token' });
+
+    const minted = await new SessionEnvMinter(store, assigned('subscription', 'anthropic'), undefined, undefined, mark).mint(input('atlas'));
+    order.push('returned');
+
+    expect(minted.env.CLAUDE_CODE_OAUTH_TOKEN).toBe('oauth-token');
+    expect(order).toEqual(['task-atlas:false', 'returned']);
+  });
+
+  it('writes not billed for an OpenAI or xAI subscription sign-in', async () => {
+    const mark = vi.fn(async () => undefined);
+    await new SessionEnvMinter(memory(), assigned('subscription', 'openai'), () => '/logins/x', undefined, mark).mint(input('quill', 'codex'));
+    expect(mark).toHaveBeenCalledWith('task-quill', false);
+  });
+
+  it('writes billed for a key account, the per-bot key, and a bot with no account', async () => {
+    const mark = vi.fn(async () => undefined);
+    await new SessionEnvMinter(memory({ [modelAccountRef(ACCOUNT)]: SECRET }), assigned('key'), undefined, undefined, mark).mint(input('atlas'));
+    await new SessionEnvMinter(memory({ [engineKeyRef('lens')]: PER_BOT }), none, undefined, undefined, mark).mint(input('lens'));
+    await new SessionEnvMinter(memory(), none, undefined, undefined, mark).mint(input('vega'));
+    expect(mark.mock.calls).toEqual([
+      ['task-atlas', true],
+      ['task-lens', true],
+      ['task-vega', true],
+    ]);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('counts a scripted run as billed whatever its account', () => {
+    vi.stubEnv('OPENADLC_SCRIPTED_ENGINES', '1');
+    expect(isBilled({ source: 'account', kind: 'subscription' })).toBe(true);
+    vi.stubEnv('OPENADLC_SCRIPTED_ENGINES', '');
+    expect(isBilled({ source: 'account', kind: 'subscription' })).toBe(false);
+    expect(isBilled({ source: 'account', kind: 'key' })).toBe(true);
+    expect(isBilled({ source: 'fallback', kind: null })).toBe(true);
+  });
+
+  it('still mints the env when the write fails, and says so', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const mark = vi.fn(async () => {
+      throw new Error('database is down');
+    });
+    const minted = await new SessionEnvMinter(memory(), assigned('subscription'), undefined, undefined, mark).mint(input('atlas'));
+    expect(minted.env.OPENADLC_TASK_ID).toBe('task-atlas');
+    expect(warn.mock.calls.flat().join(' ')).toContain('could not record whether its runs are billed');
   });
 });

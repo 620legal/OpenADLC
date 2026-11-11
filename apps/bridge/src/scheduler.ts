@@ -2123,7 +2123,10 @@ export class Scheduler {
       return [`month-to-date spend reached the $${budget.capUsd} cap; leasing is stopped for ${crew.length} bot${crew.length === 1 ? '' : 's'}`];
     }
     if (budget.state === 'warning') {
-      const line = `spend is at ${Math.round((budget.spentUsd / budget.capUsd) * 100)}% of the monthly cap`;
+      // Billed spend alone: `ensureBudget` sums only runs on an API key, so a
+      // subscription run's estimate never raises this
+      // (docs/adr/0050-a-subscription-run-is-estimated-not-billed.md).
+      const line = `billed spend is at ${Math.round((budget.spentUsd / budget.capUsd) * 100)}% of the monthly cap`;
       // One of the notifiable events (`cap_warning`; see `NOTIFIABLE` in
       // notify.ts). The board shows the number all the time; this is for the
       // moment it becomes worth a decision.
