@@ -1,7 +1,7 @@
 import { leases } from '@openadlc/db';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { startBuild } from './build-start.js';
-import { STACK_LET_GO, STACK_MADE, STACK_PAUSED, STACK_STARTED, STACK_UPDATED, STACK_UPDATING, Stacking, heldStacks, stackWaitsOn } from './stacking.js';
+import { STACK_LET_GO, STACK_MADE, STACK_PAUSED, STACK_STARTED, STACK_UPDATED, STACK_UPDATING, Stacking, baseInLine, heldStacks, stackWaitsOn } from './stacking.js';
 
 const REPO = { id: 'repo-1', name: 'shop', fullName: 'janedoe/shop', defaultBranch: 'main', concurrency: 2 };
 const OTHER = { id: 'repo-2', name: 'mill', fullName: 'janedoe/mill', defaultBranch: 'main', concurrency: 2 };
@@ -32,6 +32,9 @@ const world = vi.hoisted(() => ({
   /** The tasks on each subject, as `listTasksOnSubjects` reads them. */
   tasks: [] as { subjectRef: string; kind: string; state: string }[],
   tasksReadFails: false,
+  /** Each pull request's merge-line row, by its state. */
+  line: new Map<number, string>(),
+  lineReadFails: false,
 }));
 
 vi.mock('@openadlc/db', () => ({
@@ -98,6 +101,14 @@ vi.mock('@openadlc/db', () => ({
       if (stack) Object.assign(stack, { pausedAt: null, onHeadSha: onHeadSha ?? stack.onHeadSha });
     }),
   },
+  mergeLines: {
+    OPEN_STATES: ['waiting', 'updating', 'testing', 'merging'],
+    entryFor: vi.fn(async (_repo: string, prNumber: number) => {
+      if (world.lineReadFails) throw new Error('the database went away');
+      const state = world.line.get(prNumber);
+      return state ? { id: `line-${prNumber}`, prNumber, state } : null;
+    }),
+  },
   recordEvent: vi.fn(async () => undefined),
   listEventsOfType: vi.fn(async () => []),
 }));
@@ -135,6 +146,7 @@ function stacking(
     addLabels: vi.fn(async () => undefined),
     removeLabel: vi.fn(async () => undefined),
     changedFilesBetween: vi.fn(async (_repo: string, _from: string, _head: string): Promise<string[] | null> => ['src/a.ts', 'src/b.ts']),
+    mergeBase: vi.fn(async (_repo: string, a: string, _b: string): Promise<string | null> => a),
   };
   const build = vi.fn(async () => ({ taskId: 'task-5', session: 's' }));
   /** What was said in the cards' timelines, by their subjects. */
@@ -361,7 +373,10 @@ describe('an issue that depends on one in review', () => {
     const stacked = stacking(options);
     await stacked.subject.sweep();
     world.issues.set(4, { ...world.issues.get(4)!, stage: 'merged' });
-    expect(await stacked.subject.updating({ repoName: 'shop', repoFullName: 'janedoe/shop', prNumber: 31, issue: 5, baseRef: 'main', headSha: before })).toBe(true);
+    expect(await stacked.subject.updating({ repoName: 'shop', repoFullName: 'janedoe/shop', prNumber: 31, issue: 5, baseRef: 'main', headSha: before })).toEqual({
+      on: 4,
+      replayFrom: null,
+    });
     return stacked;
   }
   const before = 'b'.repeat(40);
@@ -373,8 +388,59 @@ describe('an issue that depends on one in review', () => {
     world.issues.set(4, { ...world.issues.get(4)!, stage: 'merged' });
     client.changedFilesBetween.mockResolvedValueOnce(null);
 
-    expect(await subject.updating({ repoName: 'shop', repoFullName: 'janedoe/shop', prNumber: 31, issue: 5, baseRef: 'main', headSha: before })).toBe(false);
+    expect(await subject.updating({ repoName: 'shop', repoFullName: 'janedoe/shop', prNumber: 31, issue: 5, baseRef: 'main', headSha: before })).toBeNull();
     expect(events.some((event) => event.type === STACK_UPDATING)).toBe(false);
+  });
+
+  describe('where its own commits begin, after a squash merge (`replayFrom`)', () => {
+    const DEP_HEAD = 'd'.repeat(40);
+    const OWN_FROM = 'e'.repeat(40);
+
+    /** #4 merged as #30, or reopened and merged as `onPr`, with its head at DEP_HEAD; `inBase` says whether that head is in main's history. */
+    async function merged(options: { inBase: boolean; onPr?: number }) {
+      const stacked = stacking();
+      await stacked.subject.sweep();
+      world.issues.set(4, { ...world.issues.get(4)!, stage: 'merged', prNumber: options.onPr ?? 30 });
+      stacked.client.getPullRequest.mockImplementation(async (repo: string, number?: number) =>
+        number === (options.onPr ?? 30)
+          ? ({ state: 'closed', merged: true, headRef: A_BRANCH, headRepoFullName: repo, headSha: DEP_HEAD } as never)
+          : ({ state: 'open', merged: false, headRef: A_BRANCH, headRepoFullName: repo } as never),
+      );
+      stacked.client.mergeBase.mockImplementation(async (_repo: string, a: string, b: string) => (b === 'main' ? (options.inBase ? a : 'f'.repeat(40)) : OWN_FROM));
+      return stacked;
+    }
+    const update = (subject: Stacking) =>
+      subject.updating({ repoName: 'shop', repoFullName: 'janedoe/shop', prNumber: 31, issue: 5, baseRef: 'main', headSha: before });
+
+    it('is the merge base of the dependency’s head and this head when that head is in no history of the base', async () => {
+      const { subject, client, events } = await merged({ inBase: false });
+
+      expect(await update(subject)).toEqual({ on: 4, replayFrom: OWN_FROM });
+      expect(client.mergeBase).toHaveBeenCalledWith('janedoe/shop', DEP_HEAD, 'main');
+      expect(client.mergeBase).toHaveBeenCalledWith('janedoe/shop', DEP_HEAD, before);
+      expect(events.at(-1)).toMatchObject({ type: STACK_UPDATING, payload: { pr: 31, from: before, replayFrom: OWN_FROM } });
+    });
+
+    it('is none after a true merge or a rebase-merge, which left the dependency’s head in the base', async () => {
+      const { subject, client } = await merged({ inBase: true });
+
+      expect(await update(subject)).toEqual({ on: 4, replayFrom: null });
+      expect(client.mergeBase).toHaveBeenCalledTimes(1);
+    });
+
+    it('reads the dependency’s current pull request over the one it had when this was stacked', async () => {
+      const { subject, client } = await merged({ inBase: false, onPr: 44 });
+
+      expect(await update(subject)).toEqual({ on: 4, replayFrom: OWN_FROM });
+      expect(client.getPullRequest).toHaveBeenCalledWith('janedoe/shop', 44);
+    });
+
+    it('is none, and the update the plain merge it was, when it cannot be read', async () => {
+      const { subject, client } = await merged({ inBase: false });
+      client.mergeBase.mockRejectedValue(new Error('GitHub answered 502'));
+
+      expect(await update(subject)).toEqual({ on: 4, replayFrom: null });
+    });
   });
 
   it('keeps its approvals for the merge commit the line made once that one merged', async () => {
@@ -428,7 +494,7 @@ describe('an issue that depends on one in review', () => {
     world.stacks.set(5, { repoId: 'repo-1', issue: 5, onIssue: 4, onPr: 30, onBranch: A_BRANCH, onHeadSha: 'a1', startedAt: '', pausedAt: null });
     expect(
       await first.subject.updating({ repoName: 'shop', repoFullName: 'janedoe/shop', prNumber: 31, issue: 5, baseRef: 'main', headSha: before, carry: false }),
-    ).toBe(true);
+    ).toEqual({ on: 4, replayFrom: null });
     expect(first.events.at(-1)).toMatchObject({ type: STACK_UPDATING, payload: { pr: 31, from: before, carry: false } });
   });
 
@@ -1016,5 +1082,56 @@ describe('a stacked build', () => {
       }),
     );
     expect(automation.comment).toHaveBeenCalledWith('janedoe/shop', 5, expect.stringContaining(`started from #4's branch \`${A_BRANCH}\``));
+  });
+});
+
+describe('whether what a stacked pull request was built on is in the merge line (`baseInLine`)', () => {
+  beforeEach(() => {
+    world.issues = new Map([
+      [4, { number: 4, stage: 'review', labels: [], prNumber: 30, body: '', declaredPaths: ['src/a.ts'] }],
+      [5, { number: 5, stage: 'review', labels: [], prNumber: 31, body: dependsOn4, declaredPaths: ['src/b.ts'] }],
+    ]);
+    world.stacks = new Map([[5, { repoId: 'repo-1', issue: 5, onIssue: 4, onPr: 30, onBranch: A_BRANCH, onHeadSha: 'a1', startedAt: '', pausedAt: null }]]);
+    world.stackReadFails = false;
+    world.line = new Map();
+    world.lineReadFails = false;
+  });
+
+  it('names it while it holds a place in the line, in each open state', async () => {
+    for (const state of ['waiting', 'updating', 'testing', 'merging']) {
+      world.line.set(30, state);
+      expect(await baseInLine('shop', 5), state).toEqual({ on: 4, onPr: 30 });
+    }
+  });
+
+  it('is none once it failed or merged, with no row, or with no stack', async () => {
+    for (const state of ['failed', 'merged']) {
+      world.line.set(30, state);
+      expect(await baseInLine('shop', 5), state).toBeNull();
+    }
+    world.line.delete(30);
+    expect(await baseInLine('shop', 5)).toBeNull();
+
+    world.line.set(30, 'merging');
+    world.stacks.delete(5);
+    expect(await baseInLine('shop', 5)).toBeNull();
+  });
+
+  it('reads the dependency’s current pull request over the one it had when this was stacked', async () => {
+    // Reopened with a new pull request: that one is what will merge.
+    world.issues.set(4, { ...world.issues.get(4)!, prNumber: 44 });
+    world.line.set(30, 'failed');
+    world.line.set(44, 'testing');
+
+    expect(await baseInLine('shop', 5)).toEqual({ on: 4, onPr: 44 });
+  });
+
+  it('throws when the stack or the line cannot be read, so the caller waits', async () => {
+    world.stackReadFails = true;
+    await expect(baseInLine('shop', 5)).rejects.toThrow('the database went away');
+
+    world.stackReadFails = false;
+    world.lineReadFails = true;
+    await expect(baseInLine('shop', 5)).rejects.toThrow('the database went away');
   });
 });
