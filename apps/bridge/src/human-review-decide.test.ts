@@ -1,6 +1,7 @@
+import { GitHubApiError } from '@openadlc/github';
 import { parseMarkers } from '@openadlc/shared';
 import { describe, expect, it, vi } from 'vitest';
-import { HumanReviewDecisions, LINK_ACCOUNT_URL, type HumanReviewDeps } from './human-review-decide.js';
+import { HumanReviewDecisions, LINK_ACCOUNT_URL, REQUEST_READ_MS, reviewRequestOf, type HumanReviewDeps } from './human-review-decide.js';
 import type { GitHubViewer } from './person-github.js';
 import { HttpFailure } from './router.js';
 
@@ -13,7 +14,7 @@ const JANE = 4242;
 function world(over: Partial<HumanReviewDeps> = {}) {
   const posted: { token: string; number: number; review: { commitId: string; body: string } }[] = [];
   const comments: { number: number; body: string }[] = [];
-  const audits: { action: string; payload: Record<string, unknown> }[] = [];
+  const audits: { action: string; payload: Record<string, unknown>; target?: string; actor?: string; at?: string }[] = [];
   const sentBack: { by: string; reason: string }[] = [];
   let use: ((viewer: GitHubViewer, token: string) => Promise<unknown>) | null = null;
   let state: 'waiting' | 'done' | 'failed' = 'waiting';
@@ -42,12 +43,21 @@ function world(over: Partial<HumanReviewDeps> = {}) {
     }),
     rejected: vi.fn(async (_repo: string, _pr: number, head: string) => audits.some((one) => one.action === 'pull.human_review_rejected' && one.payload.head === head && one.payload.sentBack === true)),
     audit: vi.fn(async (entry: { action: string; payload: Record<string, unknown> }) => {
-      audits.push(entry);
+      // Stamped as the audit table stamps a row; only the Remind tests read it.
+      audits.push(entry.action === 'pull.human_review_reminded' ? { ...entry, at: new Date((deps.now ?? Date.now)()).toISOString() } : entry);
     }),
     sendBack: vi.fn(async (input: { by: string; reason: string }) => {
       sentBack.push({ by: input.by, reason: input.reason });
       return null;
     }),
+    history: vi.fn(async () => []),
+    requestReviewers: vi.fn(async () => undefined),
+    removeReviewRequest: vi.fn(async () => undefined),
+    lastReminded: vi.fn(async (_repo: string, _pr: number, login: string) => {
+      const row = audits.filter((one) => one.action === 'pull.human_review_reminded' && String(one.payload.login).toLowerCase() === login.toLowerCase()).at(-1);
+      return row?.at ? { at: row.at, byName: String(row.payload.byName) } : null;
+    }),
+    nameOf: vi.fn(async (identity: string) => (identity === 'ana@acme.test' ? 'Ana' : null)),
     ...over,
   };
   const decisions = new HumanReviewDecisions(deps);
@@ -314,5 +324,170 @@ describe('Reject', () => {
       commentUrl: 'https://github.com/acme/openadlc/pull/40#issuecomment-1',
       why: 'Your reason is on the pull request, but it did not go back to the builder: its review rounds have not converged, and the loop stopped for a person. Reject it again once that is fixed, or request changes on GitHub.',
     });
+  });
+});
+
+const T0 = Date.parse('2026-11-11T04:00:00.000Z');
+const MIN = 60_000;
+
+/** A world with a clock that a test moves on, and Ana (ana@acme.test) pressing Remind for @janedoe. */
+function clocked(over: Partial<HumanReviewDeps> = {}) {
+  let clock = T0;
+  const made = world({ now: () => clock, ...over });
+  return { ...made, later: (ms: number) => void (clock += ms) };
+}
+
+const reminding = { repo: REPO, number: 40, login: 'janedoe', identity: 'ana@acme.test' };
+
+describe('whether GitHub has a review request out to the person', () => {
+  const at = '2026-11-11T01:00:00Z';
+  const requested = { event: 'review_requested', actor: 'openadlc-atlas', viaApp: false, sha: null, subject: 'JaneDoe', at };
+
+  it('is requested since the newest request of them, in any case', () => {
+    expect(reviewRequestOf([requested], 'janedoe')).toEqual({ state: 'requested', since: at });
+    const again = { ...requested, at: '2026-11-11T03:00:00Z' };
+    expect(reviewRequestOf([requested, { ...requested, event: 'review_request_removed' }, again], 'janedoe')).toEqual({ state: 'requested', since: '2026-11-11T03:00:00Z' });
+  });
+
+  it('is none once the request was taken away, or once they reviewed, or when no one asked them', () => {
+    expect(reviewRequestOf([requested, { ...requested, event: 'review_request_removed', at: '2026-11-11T02:00:00Z' }], 'janedoe')).toEqual({ state: 'none' });
+    expect(reviewRequestOf([requested, { event: 'reviewed', actor: 'janedoe', viaApp: false, sha: null, subject: null }], 'janedoe')).toEqual({ state: 'none' });
+    expect(reviewRequestOf([{ ...requested, subject: 'sam' }], 'janedoe')).toEqual({ state: 'none' });
+    expect(reviewRequestOf([], 'janedoe')).toEqual({ state: 'none' });
+  });
+
+  it('is unknown when the timeline was too long to read', () => {
+    expect(reviewRequestOf(null, 'janedoe')).toMatchObject({ state: 'unknown', why: expect.stringContaining('too long') });
+  });
+
+  it('is read from the pull request at most once a minute per person, and the last Remind is said with it', async () => {
+    const history = vi.fn(async () => [requested]);
+    const { decisions, later } = clocked({ history });
+    const view = await decisions.requestStatus(reminding);
+    expect(view).toEqual({ login: 'janedoe', request: { state: 'requested', since: at }, reminded: null, remindAfter: null });
+    await decisions.requestStatus(reminding);
+    expect(history).toHaveBeenCalledTimes(1);
+    later(REQUEST_READ_MS);
+    await decisions.requestStatus(reminding);
+    expect(history).toHaveBeenCalledTimes(2);
+  });
+
+  it('says unknown when GitHub does not answer, and asks again next time', async () => {
+    const history = vi.fn(async (): Promise<never> => {
+      throw new Error('502 Bad Gateway');
+    });
+    const { decisions } = clocked({ history });
+    expect((await decisions.requestStatus(reminding)).request).toMatchObject({ state: 'unknown', why: expect.stringContaining('502') });
+    await decisions.requestStatus(reminding);
+    expect(history).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('Remind', () => {
+  const pending = [{ event: 'review_requested', actor: 'openadlc-atlas', viaApp: false, sha: null, subject: 'janedoe', at: '2026-11-11T01:00:00Z' }];
+
+  it('takes a pending request away and asks GitHub again, so GitHub notifies the person, and audits who pressed it', async () => {
+    const calls: string[] = [];
+    const { decisions, audits, deps } = clocked({
+      history: async () => pending,
+      removeReviewRequest: vi.fn(async (_full: string, _n: number, logins: string[]) => void calls.push(`remove ${logins.join(',')}`)),
+      requestReviewers: vi.fn(async (_full: string, _n: number, logins: string[]) => void calls.push(`request ${logins.join(',')}`)),
+    });
+    const answer = await decisions.remind(reminding);
+    expect(calls).toEqual(['remove janedoe', 'request janedoe']);
+    expect(deps.requestReviewers).toHaveBeenCalledWith('acme/openadlc', 40, ['janedoe']);
+    expect(answer).toEqual({ reminded: { at: new Date(T0).toISOString(), by: 'Ana' }, remindAfter: new Date(T0 + 60 * MIN).toISOString() });
+    expect(audits).toEqual([
+      {
+        actor: 'ana@acme.test',
+        action: 'pull.human_review_reminded',
+        target: 'openadlc#40@janedoe',
+        payload: { repo: 'openadlc', pr: 40, login: 'janedoe', head: HEAD, by: 'ana@acme.test', byName: 'Ana', removedFirst: true },
+        at: new Date(T0).toISOString(),
+      },
+    ]);
+  });
+
+  it('only asks when no request is out, and names a presser not in People by their address', async () => {
+    const { decisions, deps, audits } = clocked();
+    const answer = await decisions.remind({ ...reminding, identity: 'sam@acme.test' });
+    expect(deps.removeReviewRequest).not.toHaveBeenCalled();
+    expect(deps.requestReviewers).toHaveBeenCalledWith('acme/openadlc', 40, ['janedoe']);
+    expect(answer.reminded.by).toBe('sam@acme.test');
+    expect(audits[0]?.payload.removedFirst).toBe(false);
+  });
+
+  it('says the last Remind on the card, until the hour is up', async () => {
+    const { decisions, later } = clocked();
+    await decisions.remind(reminding);
+    later(5 * MIN);
+    expect(await decisions.requestStatus(reminding)).toMatchObject({ reminded: { at: new Date(T0).toISOString(), by: 'Ana' }, remindAfter: new Date(T0 + 60 * MIN).toISOString() });
+    later(56 * MIN);
+    expect((await decisions.requestStatus(reminding)).remindAfter).toBeNull();
+  });
+
+  it('refuses a second Remind within the hour, from anyone, saying when it can be sent, and asks GitHub nothing', async () => {
+    const { decisions, deps, later, audits } = clocked();
+    await decisions.remind(reminding);
+    vi.mocked(deps.requestReviewers).mockClear();
+    later(20 * MIN);
+    const refused = await refusal(decisions.remind({ ...reminding, identity: 'sam@acme.test' }));
+    expect(refused.status).toBe(429);
+    expect(refused.message).toBe('@janedoe was reminded 20 min ago by Ana. You can remind them again in 40 min.');
+    expect(refused.details).toEqual({ remindAfter: new Date(T0 + 60 * MIN).toISOString() });
+    expect(deps.requestReviewers).not.toHaveBeenCalled();
+    expect(audits).toHaveLength(1);
+
+    later(41 * MIN);
+    await decisions.remind(reminding);
+    expect(deps.requestReviewers).toHaveBeenCalledTimes(1);
+    expect(audits).toHaveLength(2);
+  });
+
+  it('writes nothing when GitHub refuses to ask the person, and says what to do', async () => {
+    const words = JSON.stringify({ message: 'Reviews may only be requested from collaborators. One or more of the users or teams you specified is not a collaborator of the acme/openadlc repository.' });
+    const { decisions, audits } = clocked({
+      requestReviewers: async () => {
+        throw new GitHubApiError(422, '/repos/acme/openadlc/pulls/40/requested_reviewers', words);
+      },
+    });
+    const refused = await refusal(decisions.remind(reminding));
+    expect(refused.status).toBe(409);
+    expect(refused.message).toContain('GitHub would not ask @janedoe: Reviews may only be requested from collaborators.');
+    expect(refused.message).toContain('They need write access to acme/openadlc; see Troubleshooting.');
+    expect(audits).toEqual([]);
+  });
+
+  it('answers 502 and writes nothing on any other failure', async () => {
+    const { decisions, audits } = clocked({
+      requestReviewers: async () => {
+        throw new Error('socket hang up');
+      },
+    });
+    expect((await refusal(decisions.remind(reminding))).status).toBe(502);
+    expect(audits).toEqual([]);
+  });
+
+  it('refuses a wait that no longer stands, and a closed pull request, sending nothing', async () => {
+    const gone = clocked();
+    const refused = await refusal(gone.decisions.remind({ ...reminding, login: 'sam' }));
+    expect(refused.status).toBe(409);
+    expect(refused.message).toBe("Pull request #40 no longer waits on @sam's approval; reload. Nothing was sent.");
+    expect(gone.deps.requestReviewers).not.toHaveBeenCalled();
+
+    const closed = clocked({ pull: async () => ({ open: false, head: HEAD, url: 'https://github.com/acme/openadlc/pull/40' }) });
+    expect((await refusal(closed.decisions.remind(reminding))).status).toBe(409);
+    expect(closed.deps.requestReviewers).not.toHaveBeenCalled();
+  });
+
+  it('refuses a second press while the first is still asking GitHub', async () => {
+    let release: () => void = () => undefined;
+    const { decisions, deps } = clocked({ requestReviewers: vi.fn(() => new Promise<void>((resolve) => (release = resolve))) });
+    const first = decisions.remind(reminding);
+    expect((await refusal(decisions.remind(reminding))).status).toBe(409);
+    await vi.waitFor(() => expect(deps.requestReviewers).toHaveBeenCalled());
+    release();
+    await first;
+    expect(deps.requestReviewers).toHaveBeenCalledTimes(1);
   });
 });

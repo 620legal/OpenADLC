@@ -1,6 +1,7 @@
 import { FORMATTED_LIMIT } from '@/components/markdown';
-import type { AttentionAction, AttentionItem } from './api';
+import type { AttentionAction, AttentionItem, ReviewRequestView } from './api';
 import { withoutComments } from './comments';
+import { duration, untilIn } from './when';
 
 /**
  * What a Needs-you card shows on its face, and what waits in its sheet.
@@ -168,6 +169,50 @@ export function noMergeReason(held: NonNullable<AttentionItem['heldMerge']>): st
   return null;
 }
 
+/** Where an admin adds a person the card says is not in People. */
+export const PEOPLE_SETTINGS_URL = '/settings#people';
+
+/** "3 h ago", "5 min ago", "just now". */
+function sinceShort(at: string, now: number): string {
+  const took = duration(at, now);
+  if (!took) return '';
+  return took === 'under a minute' ? 'just now' : `${took} ago`;
+}
+
+/**
+ * Whether GitHub has a review request out to the awaited person, as read from
+ * the pull request: what tells whoever sees the card whether GitHub has
+ * already told them.
+ */
+export function requestLine(view: Pick<ReviewRequestView, 'login' | 'request'>, now: number): string {
+  const request = view.request;
+  if (request.state === 'requested') return request.since ? `GitHub asked @${view.login} to review ${sinceShort(request.since, now)}.` : `GitHub has asked @${view.login} to review.`;
+  if (request.state === 'none') return `GitHub has no review request out to @${view.login}.`;
+  return `OpenADLC could not read whether GitHub asked @${view.login}: ${request.why}.`;
+}
+
+/** "Reminded 5 min ago by Ana.", or null when no one has. */
+export function remindedLine(view: Pick<ReviewRequestView, 'reminded'>, now: number): string | null {
+  return view.reminded ? `Reminded ${sinceShort(view.reminded.at, now)} by ${view.reminded.by}.` : null;
+}
+
+export function remindLabel(login: string): string {
+  return `Remind @${login}`;
+}
+
+/** Why Remind is off: "You can remind them again at 05:00, in 40 min.", or null once it may be pressed. */
+export function remindAgainLine(remindAfter: string | null, now: number): string | null {
+  if (!remindAfter) return null;
+  const at = Date.parse(remindAfter);
+  if (!Number.isFinite(at) || at <= now) return null;
+  return `You can remind them again at ${clockTime(at)}, ${untilIn(remindAfter, now)}.`;
+}
+
+/** A time of day as the viewer's clock says it: "05:00". */
+export function clockTime(at: number): string {
+  return new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
 /** Whether a Reject can be sent: its reason is the builder's finding, and never empty. */
 export function rejectReady(reason: string): boolean {
   return reason.trim().length > 0;
@@ -224,6 +269,10 @@ export function unblocksLine(item: Pick<AttentionItem, 'unblocks' | 'subject'>):
 export function audienceLine(item: Pick<AttentionItem, 'audience'>): string | null {
   const audience = item.audience;
   if (!audience) return null;
+  // A held approval for someone People does not have: only they can decide it,
+  // so whoever it came to is told why, and can add them or remind them (#307).
+  if (audience.notInPeople && audience.for === 'approvers') return `@${audience.notInPeople} is not in People, so this came to the approvers.`;
+  if (audience.notInPeople && audience.for === 'everyone') return `@${audience.notInPeople} is not in People and no one approves yet, so this is for everyone.`;
   switch (audience.for) {
     case 'everyone':
       return audience.why ? `For everyone: ${audience.why}` : null;

@@ -13,6 +13,8 @@ import {
   mergeHeld,
   mergeItem,
   pauseWork,
+  readReviewRequest,
+  remindHumanReview,
   unlinkFromItem,
   releasePromote,
   removeRepository,
@@ -398,6 +400,38 @@ describe('a held merge and a held promote decided from the card', () => {
     const said = '@sam cannot merge in 620legal/www (GitHub says read); someone who can merges it.';
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: said }), { status: 403 })));
     expect(await mergeHeld('www#46', { head: HEAD })).toEqual({ ok: false, error: said });
+  });
+});
+
+describe('Remind on a held approval', () => {
+  it('reads the review request for the login, and reminds them, through their routes', async () => {
+    const calls: { url: string; method: string; body: unknown }[] = [];
+    const view = { login: 'Dana', request: { state: 'requested', since: '2026-11-11T01:00:00Z' }, reminded: null, remindAfter: null };
+    const reminded = { reminded: { at: '2026-11-11T04:00:00.000Z', by: 'Ana' }, remindAfter: '2026-11-11T05:00:00.000Z' };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init: RequestInit) => {
+        calls.push({ url: String(url), method: init.method ?? 'GET', body: init.body ? JSON.parse(String(init.body)) : null });
+        return new Response(JSON.stringify(String(url).endsWith('/remind') ? reminded : view), { status: 200 });
+      }),
+    );
+    expect(await readReviewRequest('www#46', 'Dana')).toEqual({ ok: true, view });
+    expect(await remindHumanReview('www#46', { login: 'Dana' })).toEqual({ ok: true, ...reminded });
+    expect(calls).toEqual([
+      { url: expect.stringMatching(/\/v1\/items\/www%2346\/pull\/human-review\/request\?login=Dana$/), method: 'GET', body: null },
+      { url: expect.stringMatching(/\/v1\/items\/www%2346\/pull\/human-review\/remind$/), method: 'POST', body: { login: 'Dana' } },
+    ]);
+  });
+
+  it('passes on a refusal within the hour in the bridge’s words, with when it can be sent', async () => {
+    const said = '@Dana was reminded 20 min ago by Ana. You can remind them again in 40 min.';
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: said, remindAfter: '2026-11-11T05:00:00.000Z' }), { status: 429 })));
+    expect(await remindHumanReview('www#46', { login: 'Dana' })).toEqual({ ok: false, error: said });
+  });
+
+  it('says a bridge from before Remind answered 404, so the card offers no Remind', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: 'not found' }), { status: 404 })));
+    expect(await readReviewRequest('www#46', 'Dana')).toEqual({ ok: false, error: 'not found', status: 404 });
   });
 });
 

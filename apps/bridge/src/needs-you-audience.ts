@@ -33,6 +33,13 @@ export interface Audience {
    * sends no routed notification and mentions nobody (`mayNotify`).
    */
   unread?: true;
+  /**
+   * On a held approval that fell back to the approvers, or to everyone: the
+   * login it waits on, as the item has it, which no one in People has. Without
+   * it the card said "For approvers" and never why, and sat six hours with no
+   * one able to act on it (#307).
+   */
+  notInPeople?: string;
 }
 
 /** How each kind finds its audience. */
@@ -186,10 +193,14 @@ function kindAudience(item: Pick<AttentionItem, 'kind' | 'question' | 'awaiting'
     case 'merge': {
       // A pull request waiting on one person's approval is theirs; one
       // waiting for a person to merge it is the crew's work, Engineering's.
-      const login = item.awaiting?.login.toLowerCase();
-      if (!login) return roleAudience(ENGINEERING, 'Engineering', facts);
+      const awaited = item.awaiting?.login;
+      if (!awaited) return roleAudience(ENGINEERING, 'Engineering', facts);
+      const login = awaited.toLowerCase();
       const person = facts.people.find((one) => one.githubLogin?.toLowerCase() === login);
-      return person ? { for: 'person', name: personRoleLabel(person), people: [person.id] } : approvers(facts);
+      if (person) return { for: 'person', name: personRoleLabel(person), people: [person.id] };
+      // Only the awaited person can decide it, and OpenADLC cannot find them,
+      // so whoever it comes to is told why: they can add the person, or remind them.
+      return { ...approvers(facts), notInPeople: awaited };
     }
     case 'approvers':
       return approvers(facts);

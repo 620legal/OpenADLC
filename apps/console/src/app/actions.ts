@@ -10,6 +10,7 @@ import {
   type PushTestAll,
   type PushSubscriptionInput,
   type PersonRolesView,
+  type ReviewRequestView,
   type RemovalChoices,
   type RemovalPreview,
   type RemovalReport,
@@ -469,6 +470,36 @@ export async function rejectHumanReview(
     return { ok: true, sentBack: result.state === 'sent_back', commentUrl: result.commentUrl, ...(result.why ? { why: result.why } : {}) };
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : 'could not send it back' };
+  }
+}
+
+/**
+ * Whether GitHub has asked the person a held approval waits on, and the last
+ * Remind of them. A bridge from before Remind answers 404: then it is said as
+ * not known, and the card draws no Remind it would refuse.
+ */
+export async function readReviewRequest(subject: string, login: string): Promise<{ ok: true; view: ReviewRequestView } | { ok: false; error: string; status?: number }> {
+  try {
+    const view = await call<ReviewRequestView>(`/v1/items/${encodeURIComponent(subject)}/pull/human-review/request?login=${encodeURIComponent(login)}`, 'GET');
+    return { ok: true, view };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : 'could not read the review request', ...(error instanceof BridgeRefusal ? { status: error.status } : {}) };
+  }
+}
+
+/**
+ * Remind on a held approval: asks GitHub to request the person's review
+ * again, once an hour per pull request and person, from anyone. A refusal
+ * within the hour comes back in the bridge's words, with when it can be sent.
+ */
+export async function remindHumanReview(subject: string, input: { login: string }): Promise<{ ok: boolean; error?: string; reminded?: { at: string; by: string }; remindAfter?: string }> {
+  try {
+    const result = await call<{ reminded: { at: string; by: string }; remindAfter: string }>(`/v1/items/${encodeURIComponent(subject)}/pull/human-review/remind`, 'POST', { login: input.login });
+    revalidatePath('/');
+    revalidatePath('/needs-you');
+    return { ok: true, reminded: result.reminded, remindAfter: result.remindAfter };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : 'could not remind them' };
   }
 }
 

@@ -96,14 +96,61 @@ describe('deciding a held Human-review approval', () => {
     server = createServer((request, response) => void router.handle(request, response));
     await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve));
     const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-    const post = (what: 'approve' | 'reject', body: unknown, identity = 'jane@example.com') =>
+    const post = (what: 'approve' | 'reject' | 'remind', body: unknown, identity = 'jane@example.com') =>
       fetch(`${url}/v1/items/${encodeURIComponent('www#46')}/pull/human-review/${what}`, {
         method: 'POST',
         headers: { 'x-openadlc-identity': identity, 'content-type': 'application/json' },
         body: JSON.stringify(body),
       });
-    return { post };
+    const read = (login: string) =>
+      fetch(`${url}/v1/items/${encodeURIComponent('www#46')}/pull/human-review/request?login=${encodeURIComponent(login)}`, { headers: { 'x-openadlc-identity': 'bob@example.com' } });
+    return { post, read };
   }
+
+  it('hands the request read and Remind the pull request, the login and the person asking, and refuses a malformed login', async () => {
+    const view = { login: 'janedoe', request: { state: 'none' }, reminded: null, remindAfter: null };
+    const requestStatus = vi.fn(async () => view);
+    const remind = vi.fn(async () => ({ reminded: { at: '2026-11-11T04:00:00.000Z', by: 'Bob' }, remindAfter: '2026-11-11T05:00:00.000Z' }));
+    const { post, read } = await serveDecisions({ requestStatus, remind } as never);
+
+    expect(await (await read('janedoe')).json()).toEqual(view);
+    expect(requestStatus).toHaveBeenCalledWith({ repo: REPO, number: 46, login: 'janedoe' });
+    expect(await (await post('remind', { login: 'janedoe' }, 'bob@example.com')).json()).toEqual({ reminded: { at: '2026-11-11T04:00:00.000Z', by: 'Bob' }, remindAfter: '2026-11-11T05:00:00.000Z' });
+    expect(remind).toHaveBeenCalledWith({ repo: REPO, number: 46, login: 'janedoe', identity: 'bob@example.com' });
+
+    expect((await read('not a login')).status).toBe(400);
+    expect((await post('remind', { login: '-x' })).status).toBe(400);
+    expect(requestStatus).toHaveBeenCalledTimes(1);
+    expect(remind).toHaveBeenCalledTimes(1);
+  });
+
+  it('answers a Remind within the hour with 429, the time it can be sent, and asks GitHub nothing', async () => {
+    const requestReviewers = vi.fn(async () => undefined);
+    const decisions = new HumanReviewDecisions({
+      linkOf: async () => null,
+      userIdOf: async () => 1,
+      standing: async () => ({ head: HEAD }),
+      pull: async () => ({ open: true, head: HEAD, url: 'https://github.com/620legal/www/pull/46' }),
+      flows: { start: vi.fn(), state: vi.fn() } as never,
+      isCrew: async () => false,
+      postReviewAsPerson: vi.fn(),
+      commentAsApp: vi.fn(),
+      rejected: async () => false,
+      audit: vi.fn(),
+      sendBack: vi.fn(),
+      history: async () => [],
+      requestReviewers,
+      removeReviewRequest: vi.fn(),
+      lastReminded: async () => ({ at: '2026-11-11T04:00:00.000Z', byName: 'Ana' }),
+      nameOf: async () => null,
+      now: () => Date.parse('2026-11-11T04:20:00.000Z'),
+    });
+    const { post } = await serveDecisions(decisions);
+    const refused = await post('remind', { login: 'janedoe' }, 'bob@example.com');
+    expect(refused.status).toBe(429);
+    expect(await refused.json()).toMatchObject({ error: '@janedoe was reminded 20 min ago by Ana. You can remind them again in 40 min.', remindAfter: '2026-11-11T05:00:00.000Z' });
+    expect(requestReviewers).not.toHaveBeenCalled();
+  });
 
   it('hands Approve and Reject the pull request, the head, the login and the person asking', async () => {
     const approve = vi.fn(async () => ({ flow: { flowId: 'f', userCode: 'C', verificationUri: 'u', expiresInSeconds: 900 } }));
@@ -137,6 +184,11 @@ describe('deciding a held Human-review approval', () => {
       rejected: async () => false,
       audit: vi.fn(),
       sendBack: vi.fn(),
+      history: async () => [],
+      requestReviewers: vi.fn(),
+      removeReviewRequest: vi.fn(),
+      lastReminded: async () => null,
+      nameOf: async () => null,
     });
     const { post } = await serveDecisions(decisions);
 
