@@ -7,10 +7,12 @@ import {
   designChoiceLabel,
   hashSection,
   modeOf,
+  navOmit,
   repoSettingsPath,
   repoStagesPath,
   sectionBeingRead,
   SETTINGS_SECTIONS,
+  settingsNav,
   stageChoices,
   stageLine,
   stagesSectionId,
@@ -115,6 +117,8 @@ describe('the sections of settings', () => {
       'models',
       'crew',
       'system',
+      'hosts',
+      'notifications',
       'egress',
       'spending-limits',
       'backup',
@@ -127,6 +131,51 @@ describe('the sections of settings', () => {
     expect(hashSection('engine-updates')).toBe('system');
     expect(hashSection('keep-awake')).toBe('system');
     expect(hashSection('system')).toBe('system');
+  });
+});
+
+describe('Settings’ navigation (ADR 0053)', () => {
+  it('lists Hosts right after System and Notifications right after Hosts, each a page of its own', () => {
+    const nav = settingsNav({ admin: true, on: 'sections' });
+    const ids = nav.map((entry) => entry.id);
+    expect(ids.indexOf('hosts')).toBe(ids.indexOf('system') + 1);
+    expect(ids.indexOf('notifications')).toBe(ids.indexOf('hosts') + 1);
+    expect(nav.find((entry) => entry.id === 'hosts')).toMatchObject({ label: 'Hosts', href: '/settings/hosts', section: false });
+    expect(nav.find((entry) => entry.id === 'notifications')).toMatchObject({ label: 'Notifications', href: '/settings/notifications', section: false });
+    expect(nav.find((entry) => entry.id === 'system')).toMatchObject({ href: '#system', section: true });
+    // On /settings scrolling marks the section being read; no entry is the page.
+    expect(nav.filter((entry) => entry.current)).toEqual([]);
+  });
+
+  it('marks the page open, and sends a section’s link to /settings from a page of its own', () => {
+    for (const on of ['hosts', 'notifications'] as const) {
+      const nav = settingsNav({ admin: true, on });
+      expect(nav.filter((entry) => entry.current).map((entry) => entry.id), on).toEqual([on]);
+      for (const entry of nav.filter((one) => one.section)) expect(entry.href, on).toBe(`/settings#${entry.id}`);
+    }
+  });
+
+  it('leaves out what the install does not have', () => {
+    const ids = settingsNav({ admin: true, omit: ['egress', 'roles'], on: 'hosts' }).map((entry) => entry.id);
+    expect(ids).not.toContain('egress');
+    expect(ids).not.toContain('roles');
+    expect(ids).toContain('hosts');
+  });
+
+  it('is Notifications alone for someone who is not an admin, whatever the page and whatever is left out', () => {
+    for (const on of ['sections', 'hosts', 'notifications'] as const) {
+      for (const omit of [[], ['egress'], ['notifications']]) {
+        expect(settingsNav({ admin: false, omit, on }).map((entry) => [entry.id, entry.href]), `${on} ${omit.join()}`).toEqual([['notifications', '/settings/notifications']]);
+      }
+    }
+  });
+
+  it('leaves out Egress where tasks leave through no proxy, and Roles the bridge could not answer, one rule for every page', () => {
+    expect(navOmit({ egress: { proxied: false }, personRoles: null })).toEqual(['egress', 'roles']);
+    expect(navOmit({ egress: null, personRoles: { roles: [] } })).toEqual(['egress']);
+    // hostd could not be asked: the section stays, with why.
+    expect(navOmit({ egress: { proxied: null }, personRoles: { roles: [] } })).toEqual([]);
+    expect(navOmit({ egress: { proxied: true }, personRoles: null })).toEqual(['roles']);
   });
 });
 

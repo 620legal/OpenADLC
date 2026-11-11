@@ -128,6 +128,37 @@ describe('this device: push to each device a person turned notifications on in',
     for (const secret of [sub.endpoint, new URL(sub.endpoint).pathname, sub.keys.p256dh, sub.keys.auth]) expect(seen).not.toContain(secret);
   });
 
+  it('tests every device of the caller at once and no one else’s, and answers how each went (ADR 0053)', async () => {
+    const { call, push, pushed } = await withPush();
+    const phone = browser();
+    const gone = { ...browser(), endpoint: `https://fcm.googleapis.com/fcm/send/gone-${randomBytes(6).toString('base64url')}` };
+    const theirs = browser();
+    const a1 = await call('POST', '/v1/me/push/devices', 'a@example.com', { subscription: phone, name: 'iPhone · Safari' });
+    const a2 = await call('POST', '/v1/me/push/devices', 'a@example.com', { subscription: gone, name: 'Old laptop' });
+    await call('POST', '/v1/me/push/devices', 'b@example.com', { subscription: theirs, name: 'Bob’s phone' });
+
+    const tested = await call('POST', '/v1/me/push/test', 'a@example.com');
+    expect(tested.status).toBe(200);
+    expect(pushed.sort()).toEqual([phone.endpoint, gone.endpoint].sort());
+    expect(pushed).not.toContain(theirs.endpoint);
+    const devices = tested.body.devices as Record<string, unknown>[];
+    expect(devices.sort((x, y) => String(x.name).localeCompare(String(y.name)))).toEqual([
+      { id: a1.body.id, name: 'iPhone · Safari', ok: true, status: 201, error: null },
+      { id: a2.body.id, name: 'Old laptop', ok: false, status: 410, error: null },
+    ]);
+    // A push service that says the subscription is gone drops the device, as any send does.
+    expect(push.rows.map((row) => row.name).sort()).toEqual(['Bob’s phone', 'iPhone · Safari']);
+    expect(JSON.stringify(tested.body)).not.toContain(phone.endpoint);
+  });
+
+  it('answers no devices, and calls no push service, for a caller who has none', async () => {
+    const { call, pushed } = await withPush();
+    await call('POST', '/v1/me/push/devices', 'b@example.com', { subscription: browser(), name: 'Bob’s phone' });
+    expect(await call('POST', '/v1/me/push/test', 'a@example.com')).toMatchObject({ status: 200, body: { devices: [] } });
+    expect(pushed).toEqual([]);
+    expect((await call('POST', '/v1/me/push/test', 'stranger@example.com')).status).toBe(403);
+  });
+
   it('runs the notifications check again when a device is added or removed, so its card clears at once', async () => {
     const devicesChanged = vi.fn();
     const { call } = await withPush({ devicesChanged });

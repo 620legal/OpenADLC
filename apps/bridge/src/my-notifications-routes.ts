@@ -98,6 +98,13 @@ export function registerMyNotificationsRoutes(router: Router, deps: MyNotificati
     return { removed: removed.id };
   });
 
+  // Every one of the caller's devices at once, through the path a real
+  // notification takes; never anyone else's, since the person is the caller's.
+  router.post('/v1/me/push/test', async ({ identity }) => {
+    const { notifier, personId } = await myDevices(identity);
+    return notifier.testDevices(personId);
+  });
+
   router.post('/v1/me/push/devices/:id/test', async ({ params, identity }) => {
     const { notifier, personId } = await myDevices(identity);
     const result = await notifier.testDevice(personId, params.id ?? '');

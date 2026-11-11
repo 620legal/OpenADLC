@@ -238,13 +238,14 @@ describe('the alerts menu', () => {
       </RoleProvider>,
     );
 
-  it('is in both headers for every role, though Settings is an admin’s', () => {
+  it('is in both headers for every role, as Settings is (ADR 0053)', () => {
     for (const role of ['admin', 'user'] as const) {
       const html = asRole(role);
       expect(html.match(/aria-label="Alerts"/g)).toHaveLength(2);
       expect(html).toContain('Count in the tab title');
       expect(html).toContain('Desktop notifications');
-      expect(wide(html).includes('>Settings</a>')).toBe(role === 'admin');
+      // A user's Settings is Notifications alone; it is in their header too.
+      expect(wide(html)).toMatch(/<a [^>]*href="\/settings"[^>]*>Settings<\/a>/);
     }
   });
 

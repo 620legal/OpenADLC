@@ -39,6 +39,7 @@ export const ROUTE_ROLES: Readonly<Record<string, Role>> = {
   'POST /v1/me/push/devices': 'user',
   'DELETE /v1/me/push/devices/:id': 'user',
   'POST /v1/me/push/devices/:id/test': 'user',
+  'POST /v1/me/push/test': 'user',
 
   // The board, the crew, the threads and the costs, to read.
   'GET /v1/board': 'user',
