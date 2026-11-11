@@ -18,8 +18,10 @@ import {
   dismissTasks,
   leaveAttention,
   mergeHeld,
+  readReviewRequest,
   recheckHealth,
   rejectHumanReview,
+  remindHumanReview,
   releasePromote,
   resumeItem,
   retryTask,
@@ -35,7 +37,7 @@ import {
 import { Copyable } from '@/components/copyable';
 import { DeviceCode } from '@/components/device-code';
 import { CheckIcon, ExternalIcon, QuestionIcon, ShipIcon, WarningIcon } from '@/components/icons';
-import type { AttentionAction, AttentionItem, AttentionMember } from '@/lib/api';
+import type { AttentionAction, AttentionItem, AttentionMember, ReviewRequestView } from '@/lib/api';
 import { cn } from '@/lib/cn';
 import { Markdown } from '@/components/markdown';
 import { RepoBadge } from '@/components/repo-badge';
@@ -52,8 +54,13 @@ import {
   hasMore,
   heldMergeButtons,
   noMergeReason,
+  PEOPLE_SETTINGS_URL,
   plainDetail,
   rejectReady,
+  remindAgainLine,
+  remindedLine,
+  remindLabel,
+  requestLine,
   reviewVerdict,
   reviewerName,
   stripItems,
@@ -392,6 +399,7 @@ function NeedsCard({
   onCards?: OnCards;
 }) {
   const [error, setError] = useState<string | null>(null);
+  const admin = useRole() === 'admin';
   /** The choice being sent, while it is. */
   const [chosen, setChosen] = useState<string | null>(null);
   // Set at once, and cleared by the action's answer. A transition's pending
@@ -506,9 +514,20 @@ function NeedsCard({
     ) : null;
   // Whom it is for, on a cloud install: "For Legal", or "For everyone: no one holds Legal yet".
   const audience = audienceLine(item);
+  // A held approval for a login People does not have says so; an admin, who
+  // can add them, is taken to where it is done.
+  const missing = item.audience?.notInPeople;
   const audienceNote = audience && (
     <p data-audience className="text-[11.5px] text-dim">
       {audience}
+      {missing && admin && (
+        <>
+          {' '}
+          <Link data-add-person href={PEOPLE_SETTINGS_URL} className="text-link hover:underline">
+            Add @{missing} in Settings → People
+          </Link>
+        </>
+      )}
     </p>
   );
   // Cut to a line on the card; whole in the sheet, which has the room.
@@ -523,7 +542,7 @@ function NeedsCard({
   const panel = usePanelState();
   const decisionPanel = (full: boolean) => (
     <>
-      {item.decision && <HumanReviewDecisionPanel item={item} state={panel} full={full} />}
+      {item.decision && <HumanReviewDecisionPanel item={item} now={now} state={panel} full={full} />}
       {item.heldMerge && <HeldMergePanel item={item} state={panel} full={full} />}
       {item.heldPromote && <HeldPromotePanel item={item} state={panel} full={full} />}
     </>
@@ -1622,6 +1641,9 @@ export function HeldPromotePanel({ item, initialStep, state }: PanelProps<HeldSt
   );
 }
 
+/** The card's read of whether GitHub has asked the awaited person: still going, read, or failed (`older` when the bridge has no such route). */
+export type RequestRead = { kind: 'reading' } | { kind: 'read'; view: ReviewRequestView } | { kind: 'failed'; why: string; older: boolean };
+
 /** How often an Approve's sign-in is read while it waits for the person to approve its code. */
 const DECISION_FLOW_READ_MS = 3_000;
 
@@ -1641,12 +1663,66 @@ export type DecisionStep =
  * keeps off a button it would refuse. See
  * docs/adr/0036-a-person-decides-a-held-human-review-approval-from-the-console.md.
  */
-export function HumanReviewDecisionPanel({ item, initialStep, state, full = false }: PanelProps<DecisionStep>) {
+export function HumanReviewDecisionPanel({
+  item,
+  now,
+  initialStep,
+  initialRequest,
+  state,
+  full = false,
+}: PanelProps<DecisionStep> & {
+  /** The page's moment, which the request's and the Remind's times are said from until the card reads its own. */
+  now?: string;
+  /** What the card's read of GitHub's request said, given in a test, where no effect runs. */
+  initialRequest?: RequestRead;
+}) {
   const decision = item.decision!;
   const buttons = decisionButtons(item);
   const subject = `${decision.repo}#${decision.pr}`;
   const { step, setStep, busy, setBusy, error, setError, done, setDone } = usePanel(state, initialStep);
   const short = decision.head.slice(0, 7);
+  // Whether GitHub has asked the person, and the last Remind: read by the card
+  // on its own route, so the Needs-you read makes no GitHub call (ADR 0057).
+  const [request, setRequest] = useState<RequestRead>(initialRequest ?? { kind: 'reading' });
+  const [clock, setClock] = useState(() => (now ? Date.parse(now) : Date.now()));
+  const [reminding, setReminding] = useState(false);
+  const [remindError, setRemindError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (initialRequest) return;
+    let live = true;
+    void safeAction(() => readReviewRequest(subject, decision.login)).then((result) => {
+      if (!live) return;
+      setClock(Date.now());
+      if (result.ok) return setRequest({ kind: 'read', view: result.view });
+      setRequest({ kind: 'failed', why: result.error, older: result.status === 404 });
+    });
+    return () => {
+      live = false;
+    };
+  }, [subject, decision.login, initialRequest]);
+
+  const remind = () => {
+    if (reminding) return;
+    setReminding(true);
+    setRemindError(null);
+    void safeAction(() => remindHumanReview(subject, { login: decision.login })).then((result) => {
+      setReminding(false);
+      setClock(Date.now());
+      if (!result.ok || !result.reminded) return setRemindError(result.error ?? 'They were not reminded.');
+      const reminded = result.reminded;
+      setRequest((was) =>
+        was.kind === 'read'
+          ? { kind: 'read', view: { ...was.view, request: { state: 'requested', since: reminded.at }, reminded, remindAfter: result.remindAfter ?? null } }
+          : { kind: 'read', view: { login: decision.login, request: { state: 'requested', since: reminded.at }, reminded, remindAfter: result.remindAfter ?? null } },
+      );
+    });
+  };
+  const view = request.kind === 'read' ? request.view : null;
+  const remindedSaid = view ? remindedLine(view, clock) : null;
+  const notYet = view ? remindAgainLine(view.remindAfter, clock) : null;
+  // Reminding yourself is meaningless, and a bridge from before Remind has no route for it.
+  const mayRemind = decision.yours !== true && !(request.kind === 'failed' && request.older);
 
   // An Approve's sign-in, read until the person approves its code or it ends.
   useEffect(() => {
@@ -1745,6 +1821,16 @@ export function HumanReviewDecisionPanel({ item, initialStep, state, full = fals
           See the diff <ExternalIcon size={11} />
         </a>
       </div>
+      {request.kind !== 'reading' && (
+        <div data-review-request className="flex flex-col gap-0.5 text-soft">
+          <p data-request-line>
+            {view
+              ? requestLine(view, clock)
+              : request.kind === 'failed' && requestLine({ login: decision.login, request: { state: 'unknown', why: request.why.replace(/\.$/, '') } }, clock)}
+          </p>
+          {remindedSaid && <p data-reminded>{remindedSaid}</p>}
+        </div>
+      )}
       {decision.yours !== true && decision.notYours && (
         <p data-not-yours className="text-muted">
           {decision.notYours}{' '}
@@ -1774,6 +1860,32 @@ export function HumanReviewDecisionPanel({ item, initialStep, state, full = fals
               </span>
             </button>
           ))}
+        </div>
+      )}
+      {step.kind === 'idle' && mayRemind && (
+        // Asks GitHub to request their review again, so GitHub notifies them.
+        // Off while the hour since the last one runs; the bridge refuses it
+        // then too, from anyone, so this only keeps off a press it would refuse.
+        <div data-remind className="flex flex-col gap-1">
+          <button
+            type="button"
+            data-remind-button
+            disabled={reminding || notYet !== null}
+            onClick={remind}
+            className="inline-flex min-h-11 w-fit items-center rounded-md border border-edge-strong bg-panel px-3 py-2 text-left text-[12.5px] leading-snug text-body transition-colors hover:border-attention/60 hover:bg-attention/10 focus-visible:outline-2 focus-visible:outline-link disabled:opacity-60 md:min-h-7 md:px-2.5 md:py-1"
+          >
+            {reminding ? 'Reminding…' : remindLabel(decision.login)}
+          </button>
+          {notYet && (
+            <p data-remind-again className="text-[11.5px] text-muted">
+              {notYet}
+            </p>
+          )}
+          {remindError && (
+            <p role="status" data-remind-error className="text-[12px] text-alarm">
+              {remindError}
+            </p>
+          )}
         </div>
       )}
       {step.kind === 'signing' && (

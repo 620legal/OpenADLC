@@ -1,12 +1,12 @@
-import { bots, issues, lastAudit, listEventsOfTypeWith, mergeLines, audit as writeAudit, personAccounts, repos } from '@openadlc/db';
+import { bots, issues, lastAudit, listEventsOfTypeWith, mergeLines, audit as writeAudit, people as peopleStore, personAccounts, repos } from '@openadlc/db';
 import { GitHubClient } from '@openadlc/github';
 import { mergeBlockers, mergeDecision, type Automation } from './automation.js';
 import { HeldMergeDecisions } from './held-merge-decide.js';
-import { decisionTarget, HumanReviewDecisions, type HumanReviewDeps } from './human-review-decide.js';
+import { decisionTarget, HumanReviewDecisions, remindTarget, type HumanReviewDeps } from './human-review-decide.js';
 import { heldForPerson } from './merge-line.js';
 import { resolveItem, type Item } from './items.js';
 import { theApp } from './people.js';
-import { PersonFlows, type FlowView, type PersonGitHubDeps } from './person-github.js';
+import { PersonFlows, personKey, type FlowView, type PersonGitHubDeps } from './person-github.js';
 import { PullCommands, PullRules, useDeclaredCommands, type PullCommandDeps, type PullReader, type PullRepo } from './pull-commands.js';
 import { HttpFailure, STREAMING, type Router } from './router.js';
 import type { SendBack } from './send-back.js';
@@ -174,6 +174,22 @@ export function liveHumanReviewDecisions(input: {
     audit: async (entry) => {
       await writeAudit(entry);
     },
+    // Remind (ADR 0057) asks as the automation account, as the dismissed-review
+    // path in `webhooks.ts` re-requests a reviewer.
+    history: async (repo, number) => (await reader()).listPullHistory(repo.fullName, number),
+    requestReviewers: async (fullName, number, logins) => (await reader()).requestReviewers(fullName, number, logins),
+    removeReviewRequest: async (fullName, number, logins) => (await reader()).removeReviewRequest(fullName, number, logins),
+    lastReminded: async (repo, pr, login) => {
+      const row = await lastAudit('pull.human_review_reminded', remindTarget(repo, pr, login));
+      if (!row) return null;
+      const said = (row.payload ?? {}) as Record<string, unknown>;
+      return { at: row.at, byName: typeof said.byName === 'string' && said.byName ? said.byName : row.actor };
+    },
+    nameOf: async (identity) => {
+      const key = personKey(identity);
+      const found = (await peopleStore.listPeople()).find((person) => person.email !== null && personKey(person.email) === key);
+      return found?.name?.trim() || null;
+    },
     sendBack: async ({ repo, number, by, reason }) => {
       if (!input.sendBack) return 'nothing on this bridge sends work back to Build';
       const [found, crew, client] = await Promise.all([repos.getRepoByName(repo.name), bots.listBots(), reader()]);
@@ -317,6 +333,26 @@ export function registerPullRoutes(
     const { repo, number } = await pullFor(params.subject);
     const input = await body<{ head?: unknown; login?: unknown; reason?: unknown }>();
     return decisions.reject({ repo, number, login: loginOf(input.login), head: headOf(input.head), identity, reason: typeof input.reason === 'string' ? input.reason : '' });
+  });
+
+  /**
+   * What a held approval's card says beside its buttons, read by the card
+   * itself so `GET /v1/attention` makes no GitHub call: whether GitHub has a
+   * review request out to the person, and the last Remind. Remind asks GitHub
+   * to request their review again, once an hour per pull request and person,
+   * from anyone the card reaches; it decides nothing (ADR 0057).
+   */
+  router.get('/v1/items/:subject/pull/human-review/request', async ({ params, query }) => {
+    if (!decisions) throw new HttpFailure(503, 'This bridge does not read Human-review requests; look at the pull request on GitHub.');
+    const { repo, number } = await pullFor(params.subject);
+    return decisions.requestStatus({ repo, number, login: loginOf(query.get('login')) });
+  });
+
+  router.post('/v1/items/:subject/pull/human-review/remind', async ({ params, body, identity }) => {
+    if (!decisions) throw new HttpFailure(503, 'This bridge does not remind people of Human-review approvals; request their review on GitHub.');
+    const { repo, number } = await pullFor(params.subject);
+    const input = await body<{ login?: unknown }>();
+    return decisions.remind({ repo, number, login: loginOf(input.login), identity });
   });
 
   /**

@@ -21,6 +21,11 @@ vi.mock('@/app/actions', () => ({
     decided.push({ what: 'reject', subject, input });
     return { ok: true, sentBack: true };
   }),
+  readReviewRequest: vi.fn(async () => ({ ok: false, error: 'not read in a test' })),
+  remindHumanReview: vi.fn(async (subject: string, input: Record<string, unknown>) => {
+    decided.push({ what: 'remind', subject, input });
+    return { ok: true, reminded: { at: '2026-09-24T12:00:00.000Z', by: 'Ana' }, remindAfter: '2026-09-24T13:00:00.000Z' };
+  }),
   sendItemMessage: vi.fn(async (subject: string, input: Record<string, unknown>) => {
     decided.push({ what: 'discuss', subject, input });
     return { ok: true };
@@ -81,6 +86,13 @@ vi.mock('@/app/actions', () => ({
     pressed.revoked.push(`${login}:${keyId}`);
     return { ok: true };
   }),
+}));
+
+/** Who the console says the viewer is: an admin, unless a test says otherwise. */
+const role = vi.hoisted(() => ({ value: 'admin' as 'admin' | 'user' }));
+vi.mock('@/components/app-header', async (original) => ({
+  ...(await original<typeof import('./app-header')>()),
+  useRole: () => role.value,
 }));
 
 /**
@@ -891,6 +903,62 @@ describe('a held Human-review approval', () => {
     const html = needs([HELD({ yours: true })]);
     expect(html.match(/Review it on GitHub/g)).toHaveLength(1);
     expect(html).not.toContain('data-clamp="detail"');
+  });
+
+  describe('for a login People does not have (#307)', () => {
+    const MISSING = (): AttentionItem => ({ ...HELD({ yours: false }), audience: { for: 'approvers', name: 'approvers', people: ['p-ada'], notInPeople: 'janedoe' } });
+    const NOW = '2026-09-24T12:00:00.000Z';
+    const at = (minutesAgo: number) => new Date(Date.parse(NOW) - minutesAgo * 60_000).toISOString();
+
+    it('says why it came to the approvers, and takes an admin to Settings → People', () => {
+      const html = needs([MISSING()]);
+      expect(words(html)).toContain('@janedoe is not in People, so this came to the approvers.');
+      expect(html).toContain('href="/settings#people"');
+      expect(words(html)).toContain('Add @janedoe in Settings → People');
+    });
+
+    it('gives anyone who is not an admin the sentence alone', () => {
+      role.value = 'user';
+      try {
+        const html = needs([MISSING()]);
+        expect(words(html)).toContain('@janedoe is not in People, so this came to the approvers.');
+        expect(html).not.toContain('href="/settings#people"');
+      } finally {
+        role.value = 'admin';
+      }
+    });
+
+    it('says whether GitHub has asked the person, and since when, as the card read it', () => {
+      const view = { login: 'janedoe', request: { state: 'requested' as const, since: at(180) }, reminded: null, remindAfter: null };
+      const html = words(renderToStaticMarkup(<HumanReviewDecisionPanel item={MISSING()} now={NOW} initialRequest={{ kind: 'read', view }} />));
+      expect(html).toContain('GitHub asked @janedoe to review 3 h ago.');
+      const none = words(renderToStaticMarkup(<HumanReviewDecisionPanel item={MISSING()} now={NOW} initialRequest={{ kind: 'read', view: { ...view, request: { state: 'none' } } }} />));
+      expect(none).toContain('GitHub has no review request out to @janedoe.');
+    });
+
+    it('offers Remind to anyone but the person, and asks the bridge to remind the login', () => {
+      press(buttonsIn(<HumanReviewDecisionPanel item={MISSING()} now={NOW} />), 'Remind @janedoe');
+      expect(decided).toEqual([{ what: 'remind', subject: 'openadlc#40', input: { login: 'janedoe' } }]);
+      const theirs = renderToStaticMarkup(<HumanReviewDecisionPanel item={HELD({ yours: true })} now={NOW} />);
+      expect(theirs).not.toContain('data-remind-button');
+    });
+
+    it('says who reminded them and when, and holds Remind off until the hour is up', () => {
+      const view = { login: 'janedoe', request: { state: 'requested' as const, since: at(5) }, reminded: { at: at(5), by: 'Ana' }, remindAfter: at(-55) };
+      const html = renderToStaticMarkup(<HumanReviewDecisionPanel item={MISSING()} now={NOW} initialRequest={{ kind: 'read', view }} />);
+      expect(words(html)).toContain('Reminded 5 min ago by Ana.');
+      expect(html).toMatch(/<button type="button" data-remind-button="true" disabled=""[^>]*>Remind @janedoe<\/button>/);
+      expect(words(html)).toContain('You can remind them again at');
+      expect(words(html)).toContain('in 55 min.');
+      const open = renderToStaticMarkup(<HumanReviewDecisionPanel item={MISSING()} now={NOW} initialRequest={{ kind: 'read', view: { ...view, reminded: { at: at(70), by: 'Ana' }, remindAfter: null } }} />);
+      expect(open).not.toMatch(/data-remind-button="true" disabled=""/);
+    });
+
+    it('draws no Remind on a bridge from before it, which has no route for it', () => {
+      const html = renderToStaticMarkup(<HumanReviewDecisionPanel item={MISSING()} now={NOW} initialRequest={{ kind: 'failed', why: 'not found', older: true }} />);
+      expect(html).not.toContain('data-remind-button');
+      expect(words(html)).toContain('OpenADLC could not read whether GitHub asked @janedoe: not found.');
+    });
   });
 });
 

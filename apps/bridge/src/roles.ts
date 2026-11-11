@@ -103,6 +103,11 @@ export const ROUTE_ROLES: Readonly<Record<string, Role>> = {
   // (`human-review-decide.ts`), so any console user may ask.
   'POST /v1/items/:subject/pull/human-review/approve': 'user',
   'POST /v1/items/:subject/pull/human-review/reject': 'user',
+  // Whether GitHub has asked the awaited person, and Remind: anyone the card
+  // reaches. Remind decides nothing, and the bridge sends it at most once an
+  // hour per pull request and person, from anyone (ADR 0057).
+  'GET /v1/items/:subject/pull/human-review/request': 'user',
+  'POST /v1/items/:subject/pull/human-review/remind': 'user',
   // A held merge merged from the console: refused by the bridge unless the
   // caller's linked account may write to the repository and every rule still
   // unmet is one a person may merge over (`held-merge-decide.ts`).
