@@ -250,6 +250,9 @@ describe('a run\'s usage', () => {
 
     expect(recorded(events).costUsd).toBeCloseTo(costOf('grok-4', 4000, 1000), 4);
     expect(recorded(events).costUsd).toBeGreaterThan(0);
+    // The result ends Grok's run as it ends Claude's: its usage is final, so
+    // the runner asks no cap question of a run that has finished.
+    expect(events.filter((event) => event.type === 'usage').at(-1)).toMatchObject({ final: true });
   });
 
   it('never records a negative difference', () => {

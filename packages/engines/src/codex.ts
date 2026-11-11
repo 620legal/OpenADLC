@@ -352,7 +352,11 @@ export class CodexEngine implements Engine {
       }
     }
 
+    const endsTurn = kind === 'task_complete' || kind === 'turn_complete' || kind === 'turn.completed';
     if (event.usage?.input_tokens || event.usage?.output_tokens) {
+      // Codex reports a turn's usage only once the turn has ended, so there is
+      // nothing left to stop when it reaches the cap. Unmarked, the runner
+      // paused that finished turn at the cap, and "continue" ran it again.
       const tokensIn = event.usage.input_tokens ?? 0;
       const tokensOut = event.usage.output_tokens ?? 0;
       const cachedTokensIn = event.usage.cached_input_tokens ?? 0;
@@ -362,9 +366,16 @@ export class CodexEngine implements Engine {
         tokensOut: this.totals.tokensOut + tokensOut,
         costUsd: Math.round((this.totals.costUsd + costUsd) * 10_000) / 10_000,
       };
-      events.push({ type: 'usage', tokensIn, tokensOut, costUsd, ...(cachedTokensIn > 0 ? { cachedTokensIn } : {}) });
+      events.push({
+        type: 'usage',
+        tokensIn,
+        tokensOut,
+        costUsd,
+        ...(cachedTokensIn > 0 ? { cachedTokensIn } : {}),
+        ...(endsTurn ? { final: true } : {}),
+      });
     }
-    if (kind === 'task_complete' || kind === 'turn_complete' || kind === 'turn.completed') {
+    if (endsTurn) {
       events.push({ type: 'done', reason: 'complete' });
     }
 
