@@ -336,6 +336,13 @@ export interface HumanReviewDecision {
    * approval out of their count (ADR 0058).
    */
   waitsOnOther?: true;
+  /**
+   * For the viewer only: set for an admin when the named person is not in
+   * People (`audience.notInPeople`). Adding them is the admin's to do, so the
+   * card is theirs, counted, and leads with that, and `waitsOnOther` is never
+   * set beside it (ADR 0059).
+   */
+  addToPeople?: true;
 }
 
 export interface HeldPromote {
@@ -3113,8 +3120,18 @@ export type MayDecideOn = (identity: string, login: string) => Promise<{ yours: 
  * Says on each held Human-review decision whether it is the viewer's own: an
  * annotation on the items they already get, never a filter. A lookup that
  * fails says it is not, with why.
+ *
+ * `role` is the console role the router gives, the one the console's
+ * `useRole()` reads, so an admin's count and the card's Add to People button
+ * agree on whose a held approval for someone not in People is.
  */
-export async function forViewer(items: AttentionItem[], identity: string, mayDecide: MayDecideOn, mayMerge?: MayMergeIn): Promise<AttentionItem[]> {
+export async function forViewer(
+  items: AttentionItem[],
+  identity: string,
+  mayDecide: MayDecideOn,
+  mayMerge?: MayMergeIn,
+  role: ConsoleRole = null,
+): Promise<AttentionItem[]> {
   const asked = new Map<string, ReturnType<MayDecideOn>>();
   const merging = new Map<string, Promise<MayMerge>>();
   return Promise.all(
@@ -3140,6 +3157,10 @@ export async function forViewer(items: AttentionItem[], identity: string, mayDec
         asked.set(login, may);
       }
       const said = await may;
+      // The person is not in People and the viewer is an admin: adding them
+      // is the admin's to do, so it is theirs and counted, not waiting on
+      // someone else (ADR 0059).
+      const addToPeople = !said.yours && role === 'admin' && Boolean(item.audience?.notInPeople);
       const decision: HumanReviewDecision = said.yours
         ? { ...item.decision, yours: true }
         : {
@@ -3149,7 +3170,7 @@ export async function forViewer(items: AttentionItem[], identity: string, mayDec
             ...(said.settingsUrl ? { settingsUrl: said.settingsUrl } : {}),
             // Only a 403 says the viewer is someone else: unlinked (409) or
             // unknown (503, or a throw) may still be the named person.
-            ...(said.status === 403 ? { waitsOnOther: true as const } : {}),
+            ...(addToPeople ? { addToPeople: true as const } : said.status === 403 ? { waitsOnOther: true as const } : {}),
           };
       return { ...item, decision };
     }),
@@ -3164,7 +3185,7 @@ export function registerAttentionRoutes(router: Router, deps: AttentionDeps = {}
     // The audience filter first, so a held approval still reaches only the
     // people it is for; whether it is the viewer's own is said after.
     const items = await attentionFor(identity, attentionItems(await readAttention(new Date(), deps)), deps, role);
-    return { items: mayDecide ? await forViewer(items, identity, mayDecide, mayMerge) : items };
+    return { items: mayDecide ? await forViewer(items, identity, mayDecide, mayMerge, role) : items };
   });
 
   /**

@@ -728,6 +728,33 @@ describe('what needs a person', () => {
       expect(yours[0]?.decision).not.toHaveProperty('waitsOnOther');
     });
 
+    it('makes a held approval for someone not in People an admin’s to act on, and leaves it waiting on others for an approver (ADR 0059)', async () => {
+      const { attentionItems, attentionFor, forViewer } = await load();
+      const person = (id: string, email: string, consoleRole: 'admin' | 'user', approves: boolean) => ({ id, name: id, email, githubLogin: id, consoleRole, approves });
+      const facts = { people: [person('p-admin', 'admin@acme.test', 'admin', false), person('p-approver', 'approver@acme.test', 'user', true)], roles: [] };
+      const deps = { audience: { local: false, facts: async () => facts } };
+      const items = attentionItems({ ...base, personAwaits: [awaited(minutesAgo(10))] });
+      const someoneElse = async () => ({ yours: false as const, status: 403, why: "This is @janedoe's to decide; you can Discuss it." });
+
+      const admin = await forViewer(await attentionFor('admin@acme.test', items, deps, 'admin'), 'admin@acme.test', someoneElse, undefined, 'admin');
+      expect(admin).toHaveLength(1);
+      expect(admin[0]?.audience).toMatchObject({ notInPeople: 'janedoe', admins: ['p-admin'] });
+      expect(admin[0]?.decision).toMatchObject({ yours: false, addToPeople: true });
+      expect(admin[0]?.decision).not.toHaveProperty('waitsOnOther');
+
+      const approver = await forViewer(await attentionFor('approver@acme.test', items, deps, 'user'), 'approver@acme.test', someoneElse, undefined, 'user');
+      expect(approver).toHaveLength(1);
+      expect(approver[0]?.decision).toMatchObject({ yours: false, waitsOnOther: true });
+      expect(approver[0]?.decision).not.toHaveProperty('addToPeople');
+
+      // An admin on an approval whose person is in People: ADR 0058, unchanged.
+      const routed = { people: [...facts.people, person('p-jane', 'jane@acme.test', 'user', false)].map((one) => (one.id === 'p-jane' ? { ...one, githubLogin: 'janedoe' } : one)), roles: [] };
+      const { withAudiences } = await import('./needs-you-audience.js');
+      const theirs = await forViewer(withAudiences(items, routed, false), 'admin@acme.test', someoneElse, undefined, 'admin');
+      expect(theirs[0]?.decision).toMatchObject({ yours: false, waitsOnOther: true });
+      expect(theirs[0]?.decision).not.toHaveProperty('addToPeople');
+    });
+
     it('writes why it waits without naming the person, for both kinds of held approval', async () => {
       const { attentionItems } = await load();
       const ask = (payload: Record<string, unknown>) => ({

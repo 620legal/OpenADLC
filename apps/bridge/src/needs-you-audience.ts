@@ -40,6 +40,13 @@ export interface Audience {
    * one able to act on it (#307).
    */
   notInPeople?: string;
+  /**
+   * Set only beside `notInPeople`: the admins among `people`, by person id.
+   * Adding the person to People is theirs to do, so the push about it goes
+   * to them alone, and their copy is counted; the approvers who are not
+   * admins keep it under Waiting on others (ADR 0059).
+   */
+  admins?: string[];
 }
 
 /** How each kind finds its audience. */
@@ -137,6 +144,18 @@ function admins(facts: AudienceFacts): Audience {
   return people.length > 0 ? { for: 'admins', name: 'admins', people } : everyone('no one is an admin yet');
 }
 
+/**
+ * A held approval whose person is not in People: the admins, who can add
+ * them, and the approvers, who can remind them. Left at the approvers alone,
+ * an admin who did not approve never saw it, and nobody was told (#313).
+ */
+function adminsAndApprovers(facts: AudienceFacts, awaited: string): Audience {
+  const adminIds = facts.people.filter((person) => person.consoleRole === 'admin').map((person) => person.id);
+  const people = [...new Set([...adminIds, ...facts.people.filter((person) => person.approves).map((person) => person.id)])];
+  if (people.length === 0) return { ...everyone('no one approves or is an admin yet'), notInPeople: awaited };
+  return { for: 'approvers', name: 'admins and approvers', people, notInPeople: awaited, admins: adminIds };
+}
+
 /** Whether a gate is the one a task at its cost cap asks (`costCapGate`), told by its choices. */
 export function isCostCapGate(options: readonly string[]): boolean {
   return costCapAnswer(options[1] ?? '', options) !== null;
@@ -199,8 +218,9 @@ function kindAudience(item: Pick<AttentionItem, 'kind' | 'question' | 'awaiting'
       const person = facts.people.find((one) => one.githubLogin?.toLowerCase() === login);
       if (person) return { for: 'person', name: personRoleLabel(person), people: [person.id] };
       // Only the awaited person can decide it, and OpenADLC cannot find them,
-      // so whoever it comes to is told why: they can add the person, or remind them.
-      return { ...approvers(facts), notInPeople: awaited };
+      // so whoever it comes to is told why: the admins can add the person,
+      // and anyone can remind them.
+      return adminsAndApprovers(facts, awaited);
     }
     case 'approvers':
       return approvers(facts);

@@ -81,15 +81,42 @@ describe('who a Needs-you item is for', () => {
     expect(audienceOf(item('merge_waiting'), FACTS)).toEqual({ for: 'role', name: 'Engineering', people: ['p-bob'] });
   });
 
-  it('says which login People has no one by when a held approval falls back to the approvers, or to everyone', () => {
+  it('says which login People has no one by when a held approval falls back to the admins and approvers, or to everyone', () => {
     const held = item('merge_waiting', { awaiting: { login: 'Dana', again: false, paths: ['config/'] } });
-    expect(audienceOf(held, FACTS)).toEqual({ for: 'approvers', name: 'approvers', people: ['p-ada'], notInPeople: 'Dana' });
-    expect(audienceOf(held, { ...FACTS, people: [A, B] })).toEqual({ for: 'everyone', name: 'everyone', people: [], why: 'no one approves yet', notInPeople: 'Dana' });
+    expect(audienceOf(held, FACTS)).toEqual({ for: 'approvers', name: 'admins and approvers', people: ['p-ada'], notInPeople: 'Dana', admins: ['p-ada'] });
+    expect(audienceOf(held, { ...FACTS, people: [A, B] })).toEqual({
+      for: 'everyone',
+      name: 'everyone',
+      people: [],
+      why: 'no one approves or is an admin yet',
+      notInPeople: 'Dana',
+    });
     // Someone with that login, in any case, is who it is for, and nothing is missing.
     const dana = { ...B, id: 'p-dana', name: 'Dana', githubLogin: 'dana' };
     const theirs = audienceOf(held, { ...FACTS, people: [...FACTS.people, dana] });
     expect(theirs).toEqual({ for: 'person', name: 'Dana', people: ['p-dana'] });
     expect(theirs).not.toHaveProperty('notInPeople');
+  });
+
+  it('gives a held approval for someone not in People to an admin who does not approve too, so someone who can add them sees it (ADR 0059)', () => {
+    const admin = { ...A, id: 'p-admin', email: 'admin@example.com', githubLogin: 'admin', consoleRole: 'admin' as const, approves: false };
+    const approver = { ...B, id: 'p-approver', email: 'approver@example.com', githubLogin: 'approver', approves: true };
+    const both = { ...ADMIN, id: 'p-both', email: 'both@example.com' };
+    const facts: AudienceFacts = { ...FACTS, people: [admin, approver, both] };
+    const held = item('merge_waiting', { awaiting: { login: 'ghost', again: false, paths: [] } });
+    const audience = audienceOf(held, facts);
+    expect(audience).toMatchObject({ for: 'approvers', name: 'admins and approvers', notInPeople: 'ghost' });
+    expect([...audience.people].sort()).toEqual(['p-admin', 'p-approver', 'p-both']);
+    expect([...(audience.admins ?? [])].sort()).toEqual(['p-admin', 'p-both']);
+    expect(visibleTo(admin, { audience })).toBe(true);
+    expect(visibleTo(approver, { audience })).toBe(true);
+    expect(visibleTo(A, { audience })).toBe(false);
+
+    // Once People has the login, it is the person's, and no admin's.
+    const ghost = { ...A, id: 'p-ghost', email: 'ghost@example.com', githubLogin: 'Ghost' };
+    const theirs = audienceOf(held, { ...facts, people: [...facts.people, ghost] });
+    expect(theirs).toEqual({ for: 'person', name: 'Alice', people: ['p-ghost'] });
+    expect(visibleTo(admin, { audience: theirs })).toBe(false);
   });
 
   it('says no one is missing when People could not be read at all, and keeps the reason from the last read that worked', () => {

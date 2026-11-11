@@ -915,7 +915,7 @@ role changes what they see on their next load, and no item is rewritten.
 | A bot's question | the role its question marker names (`"role": "Legal"`), by name, without regard to case |
 | A plan change | the approvers (people with Approves on), whatever role it names |
 | The cost-cap question | the admins |
-| A pull request waiting on one person's approval | that person, matched by GitHub login; the approvers when no one in People has the login |
+| A pull request waiting on one person's approval | that person, matched by GitHub login; the admins and the approvers when no one in People has the login |
 | A production promote held for a person, an approved plan change waiting on paths | the approvers |
 | A pull request a person merges, a stopped review, a send-back held, a failed task or triage, unowned issues, an abandoned dependency, answered work waiting on GitHub, a held stacked change | Engineering |
 | A health check failing or fixed, a failed engine or OpenADLC update, a design memory supersede, work stuck | the admins |
@@ -932,12 +932,18 @@ A routed card says "For Legal", "For approvers", "For admins" or "For you".
 
 A pull request held for a person's approval goes to that person when someone
 in People has their GitHub login. When no one does, only that person can
-still decide it, so the card says why it reached you:
-"@dana is not in People, so this came to the approvers." If no one approves
-either, it says "@dana is not in People and no one approves yet, so this is
-for everyone." An admin also sees **Add @dana in Settings → People**, which
-opens [People](#people). Adding them with that GitHub login routes the card
-to them on the next load. Whoever sees the card can also **Remind** them, which
+still decide it. The card goes to the admins, who can add them, and to the
+approvers, and says why it reached you: "@dana is not in People, so this came
+to the admins and approvers." If no one approves or is an admin either, it
+says "@dana is not in People and no one approves or is an admin yet, so this
+is for everyone." For an admin the card is theirs to act on: it counts in Work
+and the header's badge, its first button is **Add @dana to People so this
+goes to them**, which opens [People](#people), and the admins get one push
+about it ("@dana is not in People, so pull request #N waits with no one to
+approve it. Add them in Settings → People."). An approver who is not an admin
+has it under Waiting on others, not counted and not pushed (ADR 0059).
+Adding them with that GitHub login, or their linking that GitHub account,
+routes the card to them on the next load, and it is pushed to them. Whoever sees the card can also **Remind** them, which
 asks GitHub to request their review again
 ([troubleshooting](troubleshooting.md#reminding-the-person)). None of this
 changes who decides: Approve and Reject stay the named person's.
