@@ -11,7 +11,9 @@ import { RepoBadge } from '@/components/repo-badge';
 import { ComputerTab, TerminalTab, useSessions } from '@/components/task-computer';
 import { OpenQuestions } from '@/components/thread-panel';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import type { DesignMemoryEntry, ItemAttachment, ItemTask, ItemView as ItemData, SettledPlanChange } from '@/lib/api';
+import { RootLink } from '@/components/root-link';
+import type { DesignMemoryEntry, ItemAttachment, ItemTask, ItemView as ItemData, SettledPlanChange, WaitChain } from '@/lib/api';
+import { rootButton, waitSteps, type RootButton, type StatusTone, type WaitPart } from '@/lib/card-status';
 import { KIND_WORDS } from '@/components/design-memory';
 import { megabytes, WHERE_FILES_GO } from '@/lib/attachments';
 import { botLabel } from '@/lib/bot-label';
@@ -69,6 +71,8 @@ export function ItemView({
   variant = 'page',
   onClose,
   initialRole = null,
+  root,
+  onOpenItem,
 }: {
   /** Any member's subject: `request:<id8>`, `repo#12`, or its pull request. */
   subject: string;
@@ -79,6 +83,10 @@ export function ItemView({
   onClose?: () => void;
   /** A role's tab to open on, from `?role=`: a question in Needs you opens the role that asked it. */
   initialRole?: string | null;
+  /** Where the button at the end of its wait goes: the board passes its own cards' (`rootButton`), so the two go to one place. */
+  root?: (card: { repo: string }, chain: WaitChain) => RootButton | null;
+  /** Opens a card the wait names in place, as the board opens a card; without it, each is a link to its page. */
+  onOpenItem?: (ref: string) => void;
 }) {
   const [view, setView] = useState<ItemData | null>(initial);
   const [error, setError] = useState<string | null>(null);
@@ -207,6 +215,7 @@ export function ItemView({
   const body = (
     <>
       <ItemHeader view={view} subject={subject} variant={variant} onClose={onClose} admin={admin} onChanged={() => void load()} />
+      {view && <WaitBlock view={view} root={root} onOpenItem={onOpenItem} onClose={onClose} />}
       <Tabs value={tab} onValueChange={setTab} className="flex min-h-0 flex-1 flex-col">
         <div className="overflow-x-auto border-b border-edge px-5">
           <TabsList aria-label="What to see">
@@ -370,6 +379,92 @@ export function ItemView({
     );
   }
   return <section className="mx-auto flex h-full w-full max-w-[860px] flex-col border-x border-edge bg-panel">{body}</section>;
+}
+
+const STEP_TONE: Record<StatusTone, string> = {
+  signal: 'text-signal',
+  attention: 'text-attention',
+  alarm: 'text-alarm',
+  muted: 'text-body',
+};
+
+/**
+ * Where a root with no card on the page goes, as the board says it for one
+ * not on its own: GitHub for `owner/name#n`, else nowhere. The `/items` page
+ * has no board, so a root's own end address (`url`) carries the rest.
+ */
+function urlOutside(ref: string): string | null {
+  const outside = /^([^/#\s]+\/[^/#\s]+)#(\d+)$/.exec(ref);
+  return outside ? `https://github.com/${outside[1]}/issues/${outside[2]}` : null;
+}
+
+/**
+ * Why it isn't moving: an item's wait, as the board read it (`waitChain`),
+ * one step a line, ending in what a person can do and the board card's own
+ * button to do it. The card says only the end; with four cards between an
+ * item and the person who could free it, nobody could see why from it.
+ *
+ * A button only where a person acts: a loop, a closed dependency, a wait
+ * followed no further and one that clears by itself say so and offer nothing.
+ * Nothing at all for an item that does not wait.
+ */
+export function WaitBlock({
+  view,
+  root,
+  onOpenItem,
+  onClose,
+}: {
+  view: Pick<ItemData, 'repo' | 'waitChain'>;
+  root?: (card: { repo: string }, chain: WaitChain) => RootButton | null;
+  onOpenItem?: (ref: string) => void;
+  onClose?: () => void;
+}) {
+  const chain = view.waitChain;
+  if (!chain) return null;
+  const card = { repo: view.repo ?? '' };
+  const steps = waitSteps(card, chain);
+  const { end } = chain;
+  const person = end.kind === 'person';
+  const button = person ? (root ?? ((one, wait) => rootButton(one, wait, new Set(), urlOutside)))(card, chain) : null;
+  const part = (one: WaitPart, index: number) =>
+    typeof one === 'string' ? (
+      one
+    ) : (
+      <Link
+        key={index}
+        href={itemHref(one.ref)}
+        data-wait-ref={one.ref}
+        onClick={
+          onOpenItem
+            ? (event) => {
+                event.preventDefault();
+                onOpenItem(one.ref);
+              }
+            : undefined
+        }
+        className="font-medium text-link hover:underline"
+      >
+        {one.label}
+      </Link>
+    );
+  return (
+    <section data-wait-block aria-label="Why it isn't moving" className="shrink-0 border-b border-edge px-5 py-3">
+      <h3 className="text-[12px] font-semibold text-body">{"Why it isn't moving"}</h3>
+      <ol className="mt-1.5 flex flex-col gap-1">
+        {steps.map((step, index) => (
+          <li key={index} data-wait-step={step.end ? 'end' : 'link'} className={cn('flex flex-wrap items-baseline gap-x-2 text-[12.5px] leading-snug', STEP_TONE[step.tone])}>
+            <span>{step.parts.map(part)}</span>
+            {step.end && button && <RootLink button={button} before={onClose} />}
+          </li>
+        ))}
+      </ol>
+      {person && !end.outside && (
+        <p data-wait-behind className="mt-1.5 text-[11.5px] text-dim">
+          {chain.behind === 1 ? '1 item waits' : `${chain.behind} items wait`} behind this one action.
+        </p>
+      )}
+    </section>
+  );
 }
 
 /** The request, its issue and its pull request, the stage it is in, and what it has cost. */

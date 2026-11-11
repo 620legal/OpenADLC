@@ -1035,6 +1035,8 @@ export interface ItemView {
   settledPlanChanges?: SettledPlanChange[];
   /** Approve all on its issue, while it is on. Absent from an older bridge. */
   standingApproval?: { issueNumber: number; setBy: string; setAt: string } | null;
+  /** Why it isn't moving: its card's wait followed to its root, as the board reads it; null when it does not wait. Absent from an older bridge. */
+  waitChain?: WaitChain | null;
 }
 
 /** One issue, pull request or request on a work item. */

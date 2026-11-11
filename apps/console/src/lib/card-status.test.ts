@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { BoardCard, CardTask, CardWaiting, SendBackFacts, WaitChain, WaitEnd, WaitingReason, WaitLink } from './api';
-import { awaitedApprovalsOf, cardBot, cardCost, cardStatus, chainLine, heldApprovalsOf, nextUp, rootButton, runningStatus, sendBackLine, type CardContext } from './card-status';
+import { awaitedApprovalsOf, cardBot, cardCost, cardStatus, chainLine, endWords, heldApprovalsOf, nextUp, rootButton, runningStatus, sendBackLine, waitSteps, type CardContext, type WaitStep } from './card-status';
 import { ago, duration, money, ordinal, untilIn } from './when';
 
 const NOW = '2026-09-24T12:00:00.000Z';
@@ -869,6 +869,65 @@ describe('a card’s wait followed to its root', () => {
   it('leaves a failed review its own line', () => {
     const stacked = card({ stage: 'review', reviewFailed: true, waitChain: chain(approval, [link(207, 206, 'stack')]) });
     expect(cardStatus(stacked, CONTEXT).text).toBe('Review failed · needs you');
+  });
+});
+
+/**
+ * An item's sheet says its whole wait, one step a line: each link of the
+ * chain as a sentence that names both cards, then its end.
+ */
+describe('a wait, one step a line', () => {
+  const said = (step: WaitStep) => step.parts.map((part) => (typeof part === 'string' ? part : part.label)).join('');
+  const refs = (step: WaitStep) => step.parts.flatMap((part) => (typeof part === 'string' ? [] : [part.ref]));
+  const approval: WaitEnd = { kind: 'person', ref: 'openadlc#206', action: 'approve', number: 213, attentionId: null, url: null };
+  const one = (kind: string): WaitChain => ({ links: [{ from: 'openadlc#216', to: 'openadlc#217', kind: kind as WaitLink['kind'] }], end: approval, behind: 1 });
+
+  it.each([
+    ['dependency', '#216 waits for #217 to ship first.'],
+    ['concurrency', '#216 waits for a build slot in its repository, which #217 holds.'],
+    ['seat', '#216 waits for a free seat, which #217 is using.'],
+    ['turn', '#216 waits its turn, after #217.'],
+    ['lease', '#216 waits for #217 to let go of files they both change.'],
+    ['plan_change', "#216's approved plan change waits for #217 to let go of its paths."],
+    ['stack', '#216 is stacked on #217 and waits for it to merge.'],
+    ['unknown_kind', '#216 waits on #217.'],
+  ])('says a %s link as a sentence naming both cards', (kind, sentence) => {
+    const [step] = waitSteps(card(), one(kind));
+    expect(said(step!)).toBe(sentence);
+    expect(said(step!)).toMatch(/\.$/);
+    expect(refs(step!)).toEqual(['openadlc#216', 'openadlc#217']);
+  });
+
+  it('ends in the person’s action, naming the card it is on', () => {
+    const steps = waitSteps(card(), { links: [{ from: 'openadlc#216', to: 'openadlc#206', kind: 'dependency' }], end: approval, behind: 3 });
+    expect(steps.map(said)).toEqual(['#216 waits for #206 to ship first.', '#206 waits on you: approve #213.']);
+    expect(steps[1]).toMatchObject({ end: true, tone: 'attention' });
+    expect(refs(steps[1]!)).toEqual(['openadlc#206']);
+    expect(steps[0]!.end).toBeUndefined();
+  });
+
+  it('ends in the board’s own words where no person can act, each card it names one to open', () => {
+    const ends: WaitEnd[] = [
+      { kind: 'dead', ref: 'openadlc#1', why: 'loop', loop: ['openadlc#1', 'openadlc#2'] },
+      { kind: 'dead', ref: 'openadlc#4', why: 'abandoned' },
+      { kind: 'deep', ref: 'openadlc#113' },
+      { kind: 'self', ref: 'openadlc#12', words: 'which is running now' },
+      { kind: 'person', ref: 'openadlc#18', action: 'other', number: 18, attentionId: null, url: null, outside: true },
+    ];
+    for (const end of ends) {
+      const chain: WaitChain = { links: [{ from: 'openadlc#10', to: end.ref, kind: 'dependency' }], end, behind: 1 };
+      const last = waitSteps(card(), chain).at(-1)!;
+      expect(said(last)).toBe(endWords(card(), chain).text);
+      expect(last.end).toBe(true);
+      expect(refs(last)).toContain(end.ref);
+    }
+    const loop: WaitChain = { links: [], end: ends[0]!, behind: 1 };
+    expect(refs(waitSteps(card(), loop)[0]!)).toEqual(['openadlc#1', 'openadlc#2', 'openadlc#1']);
+  });
+
+  it('says an end this console does not know without failing', () => {
+    const chain = { links: [], end: { kind: 'later', ref: 'openadlc#9' }, behind: 1 } as unknown as WaitChain;
+    expect(said(waitSteps(card(), chain)[0]!)).toBe('Waits on #9.');
   });
 });
 
