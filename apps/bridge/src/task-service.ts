@@ -215,49 +215,90 @@ export class SubjectClosedError extends Error {
 /**
  * A review asked for on a pull request whose builder is working on it: a
  * patch round on the pull request, or the build that opened it, queued or
- * running. On #257 a builder round a person's message started ran while the
- * lead reviewed the head it was about to replace, and that review was paid
- * for and thrown away. Nothing is recorded; the seats are asked on the head
- * the builder leaves when its task ends (`StageHandoff.builderEnded`).
+ * running, or paused on a question less than `PAUSED_BUILDER_HOLD_MS` ago.
+ * On #257 a builder round a person's message started ran while the lead
+ * reviewed the head it was about to replace, and that review was paid for and
+ * thrown away. Nothing is recorded; the seats are asked on the head the
+ * builder leaves when its task ends (`StageHandoff.builderEnded`), or when a
+ * pause's hold lapses with the round still waiting (`PauseHolds`).
  */
 export class BuilderWorkingError extends Error {
   readonly status = 409;
 
   constructor(
     readonly subjectRef: string,
-    readonly builder: { id: string; kind: string; state: string },
+    readonly builder: { id: string; kind: string; state: string; pausedAt?: string | null },
   ) {
     super(builderWorkingWords(subjectRef, builder));
     this.name = 'BuilderWorkingError';
   }
 }
 
+/**
+ * How long a builder round paused on a question holds its pull request's
+ * review seats, counted from when it paused (`tasks.paused_at`), for any
+ * question. On 2026-11-10 a CI send-back's round paused two minutes in to ask
+ * for one more path, was answered within a minute, and in that gap the lead
+ * started a fourth review of the head the round replaced eight minutes later.
+ * Not held for good: a question can wait on a person for days, and the head
+ * it left is reviewed meanwhile. One constant, with no config key, as the
+ * issue's person chose (#287, ADR 0051).
+ */
+export const PAUSED_BUILDER_HOLD_MS = 15 * 60_000;
+
+/**
+ * When a paused builder's hold on the review seats ends, as epoch ms, or null
+ * for a task that is not paused or does not say when it paused (a row read
+ * before `pausedAt` was, or a fixture), which holds nothing.
+ */
+export function pauseHoldEndsAt(task: { state: string; pausedAt?: string | null }): number | null {
+  if (task.state !== 'paused' || !task.pausedAt) return null;
+  const at = Date.parse(task.pausedAt);
+  return Number.isFinite(at) ? at + PAUSED_BUILDER_HOLD_MS : null;
+}
+
 /** What is said while a builder holds a pull request's reviews back, here and in a message's answer. */
-export function builderWorkingWords(subjectRef: string, builder: { kind: string; state: string }): string {
+export function builderWorkingWords(subjectRef: string, builder: { kind: string; state: string; pausedAt?: string | null }): string {
   const what = builder.kind === 'patch' ? 'patch round' : 'build';
+  const until = pauseHoldEndsAt(builder);
+  if (until !== null) {
+    return `the builder's ${what} on ${subjectRef} is paused on a question; the review seats are asked on the head it leaves when it ends, or at ${new Date(until).toISOString().slice(11, 16)} UTC if it is still waiting`;
+  }
   return `the builder's ${what} on ${subjectRef} is ${builder.state}; the review seats are asked on the head it leaves when it ends`;
 }
 
 /**
  * The builder task working on a pull request, if one is: a `patch` task on
  * the pull request, or an `implement` task on the issue it closes whose
- * branch is the pull request's head, queued or running. A paused one does
- * not count: it may wait on a person for days, and the head it left can be
- * reviewed meanwhile. A read that fails holds nothing, as a hold's does
- * (`heldWords`): a review started on a head that then moves is asked again,
- * where one never started waits for good.
+ * branch is the pull request's head, queued or running, or paused on a
+ * question less than `PAUSED_BUILDER_HOLD_MS` ago. A round paused longer
+ * holds nothing: it may wait on a person for days, and the head it left can
+ * be reviewed meanwhile. A queued or running one is named before a paused
+ * one, so the words say what is working. A read that fails holds nothing, as
+ * a hold's does (`heldWords`): a review started on a head that then moves is
+ * asked again, where one never started waits for good.
  */
-export async function builderOn(subjectRef: string, branch: string | null | undefined, issueNumber: number | null | undefined): Promise<Task | null> {
+export async function builderOn(
+  subjectRef: string,
+  branch: string | null | undefined,
+  issueNumber: number | null | undefined,
+  now: number = Date.now(),
+): Promise<(Task & { pausedAt?: string | null }) | null> {
   const repo = subjectRef.slice(0, subjectRef.lastIndexOf('#'));
   const issueRef = issueNumber ? `${repo}#${issueNumber}` : null;
   const on = await (async () => tasks.listTasksOnSubjects(issueRef ? [subjectRef, issueRef] : [subjectRef]))().catch(() => null);
+  const builders = (on ?? []).filter(
+    (task) =>
+      (task.kind === 'patch' && task.subjectRef === subjectRef) ||
+      (task.kind === 'implement' && issueRef !== null && task.subjectRef === issueRef && Boolean(branch) && task.branch === branch),
+  );
   return (
-    on?.find(
-      (task) =>
-        (task.state === 'queued' || task.state === 'running') &&
-        ((task.kind === 'patch' && task.subjectRef === subjectRef) ||
-          (task.kind === 'implement' && issueRef !== null && task.subjectRef === issueRef && Boolean(branch) && task.branch === branch)),
-    ) ?? null
+    builders.find((task) => task.state === 'queued' || task.state === 'running') ??
+    builders.find((task) => {
+      const until = pauseHoldEndsAt(task);
+      return until !== null && now < until;
+    }) ??
+    null
   );
 }
 

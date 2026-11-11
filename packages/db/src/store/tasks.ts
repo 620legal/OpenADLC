@@ -27,6 +27,7 @@ interface TaskRow {
   exit_reason: string | null;
   created_at: Date;
   auto_retried_at: Date | null;
+  paused_at?: Date | null;
   base_ref?: string | null;
   base_context?: ContextDocument[] | null;
   takes_messages?: boolean | null;
@@ -61,11 +62,18 @@ export interface TaskRecord extends Task {
    * left running. See `task-inbox.ts`.
    */
   takesMessages: boolean | null;
+  /**
+   * When it last moved into `paused`, kept after it resumes. Optional so a
+   * fixture typed as a task need not name it; absent reads as never paused.
+   * What a paused builder's hold on its pull request's reviews is counted
+   * from (`builderOn`, `PAUSED_BUILDER_HOLD_MS`).
+   */
+  pausedAt?: string | null;
 }
 
 const COLUMNS = `id, bot_id, repo_id, kind, subject_type, subject_ref, lease_id, state, skill,
          worktree, branch, tmux_session, container, cost_cap_usd, cost_usd, billed, unbilled_usd, round,
-         started_at, ended_at, exit_reason, created_at, auto_retried_at, base_ref, base_context, host_id, takes_messages`;
+         started_at, ended_at, exit_reason, created_at, auto_retried_at, base_ref, base_context, host_id, takes_messages, paused_at`;
 
 const SELECT = `
   select ${COLUMNS}
@@ -101,6 +109,7 @@ function toTask(row: TaskRow): TaskRecord {
     baseRef: row.base_ref ?? null,
     baseContext: row.base_context ?? [],
     takesMessages: row.takes_messages ?? null,
+    pausedAt: row.paused_at?.toISOString() ?? null,
   };
 }
 

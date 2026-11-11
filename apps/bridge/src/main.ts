@@ -34,6 +34,7 @@ import { Notifier, retireOldChannels } from './notify.js';
 import { identityFromConfig } from './identity.js';
 import { HostdClient } from './hostd-client.js';
 import { NO_CLIENT_ID, registerInternalApi } from './internal-api.js';
+import { PauseHolds } from './pause-holds.js';
 import { MergeLine } from './merge-line.js';
 import { Onboarding } from './onboarding.js';
 import { effectiveConfig, moveWebhookSecretToStore } from './effective-config.js';
@@ -962,7 +963,10 @@ async function main(): Promise<void> {
   // A restore's undo holds every credential; a day old, it is removed even if
   // nobody opens Settings again.
   if (backupDeps.into) sweepExpiredUndo(backupDeps.into);
-  registerInternalApi(router, { ...deps, webhooks, scheduler, stages, internalSecret, alertsSecret, dispatchRuns, requestFiling, taskInbox });
+  // A builder round paused on a question holds its review seats for 15
+  // minutes, and asks them here once if it is still waiting then (#287).
+  const pauseHolds = new PauseHolds({ stages });
+  registerInternalApi(router, { ...deps, webhooks, scheduler, stages, internalSecret, alertsSecret, dispatchRuns, requestFiling, taskInbox, pauseHolds });
 
   const server = createServer((request, response) => {
     // A rejection here used to be unhandled, which under Node's default
@@ -1053,6 +1057,14 @@ async function main(): Promise<void> {
         if (count > 0) console.log(`[bridge] ${count} conflict resolution round(s) wait on a busy builder; each starts when its seat has room`);
       })
       .catch((error: unknown) => console.warn(`[bridge] could not read which resolution rounds wait on a builder: ${error instanceof Error ? error.message : error}`));
+    // The holds paused builder rounds put on their review seats: one still
+    // open is set for what is left of it, one a restart let lapse asks now.
+    void pauseHolds
+      .load()
+      .then((count) => {
+        if (count > 0) console.log(`[bridge] ${count} paused builder round(s) hold or released their review seats`);
+      })
+      .catch((error: unknown) => console.warn(`[bridge] could not read which paused builder rounds hold review seats: ${error instanceof Error ? error.message : error}`));
     // The patch rounds a busy builder or a full host had turned away.
     void sendBack
       .loadWaits()
@@ -1089,6 +1101,7 @@ async function main(): Promise<void> {
     await keepAwake.stop();
     dispatchRuns?.stop();
     stageRuns.stop();
+    pauseHolds.stop();
     mergeabilityWait.stop();
     names.stop();
     health.stop();

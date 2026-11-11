@@ -1751,6 +1751,27 @@ The bridge log says each step:
 grep -E 'patch round' "$(openadlc logs bridge)" | tail -n 20
 ```
 
+## No review starts while the builder's round waits on a question
+
+When the builder's round on a pull request pauses on a question, no review starts on that pull request for **15 minutes after it paused**. This applies to any question: a path request, a cost cap, or anything else. The round is usually answered within minutes and then pushes. A review started in that gap would review a head that is about to be replaced. On 2026-11-10 that happened: the lead reviewed a head that a fix replaced eight minutes later (ADR 0051).
+
+The bridge log says it once for the round:
+
+```
+[bridge] <repo>#<pr>: the gate waits on <seat>, not asked yet: the builder's patch round on <repo>#<pr> is paused on a question; the review seats are asked on the head it leaves when it ends, or at HH:MM UTC if it is still waiting
+```
+
+The seats are asked in one of two ways:
+
+- **The round ends** (done, failed or stopped). The seats are asked on the head it left, as when any builder round ends.
+- **It is still waiting at HH:MM UTC.** The 15 minutes are up, so the seats are asked once on the head it left. The bridge log says `still paused on a question after 15 minutes; its review seats are asked`. A question left for days does not hold the reviews for days.
+
+The window is one constant in code (`PAUSED_BUILDER_HOLD_MS`) and has no setting. A queued or running round holds the reviews for as long as it works, as before. A bridge restart keeps the hold: the pause is recorded as `review.pause_held` and its lapse as `review.pause_hold_lapsed`. A lapse that came due while the bridge was down asks the seats at start.
+
+```bash
+grep -E 'paused on a question' "$(openadlc logs bridge)" | tail -n 20
+```
+
 ## An approved plan change waits on another issue
 
 A builder that asks to add paths to its lease (`plan_change`) and is approved

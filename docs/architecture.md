@@ -996,15 +996,23 @@ The lease keeps holding the open pull request throughout
 ([ADR 0046](adr/0046-a-sent-back-card-is-read-from-its-newest-move-and-its-patch-wait.md)).
 No review seat starts on a pull request while its builder is queued or
 running on it — a patch round on the pull request, of any kind, or the build
-that opened it, on its head branch. A push, a seat finishing, the gate sweep
-and a person's message start none (`BuilderWorkingError`, from
-`TaskService.openNow`); the push still records its round and sets the gate. A
-review already running finishes. When the builder's task ends — done,
-failed, stopped, or paused on a person — the seats are asked on the head it
-left (`StageHandoff.builderEnded`): the new head's round if it pushed, the
-lead deciding again if it did not, the lead's re-check on a lead-only
-conflict resolution
-([ADR 0043](adr/0043-no-review-seat-starts-while-its-builder-works.md)).
+that opened it, on its head branch — or for 15 minutes after that round
+paused, for any question (`PAUSED_BUILDER_HOLD_MS`). A push, a seat
+finishing, the gate sweep and a person's message start none
+(`BuilderWorkingError`, from `TaskService.openNow`); the push still records
+its round and sets the gate. A review already running finishes. When the
+builder's task ends — done, failed or stopped — the seats are asked on the
+head it left (`StageHandoff.builderEnded`): the new head's round if it
+pushed, the lead deciding again if it did not, the lead's re-check on a
+lead-only conflict resolution
+([ADR 0043](adr/0043-no-review-seat-starts-while-its-builder-works.md)). A
+pause asks nothing: most questions are answered in minutes, and the round
+then pushes. If the round is still on the same pause when its 15 minutes
+end, the seats are asked then, once (`PauseHolds`), so a question left for
+days does not hold the reviews. The hold is recorded as `review.pause_held`
+and its lapse as `review.pause_hold_lapsed`, which is how a restart knows a
+lapse it missed
+([ADR 0051](adr/0051-a-paused-builder-holds-the-review-seats-for-fifteen-minutes.md)).
 Closing a crew pull request unmerged releases its lease and stops its
 reviews; reopening it takes the lease again for the same builder and paths
 (`lease.reacquired`), moves the issue to Review and asks the reviewers again,

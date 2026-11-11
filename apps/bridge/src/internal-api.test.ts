@@ -112,6 +112,8 @@ const fromBridge = vi.fn(async (_input: unknown): Promise<unknown> => ({ sent: t
 const sendToTriage = vi.fn(async (_repo: string, _number: number, _reason: string) => undefined);
 const onTaskDone = vi.fn(async (_input: unknown) => undefined);
 const builderEnded = vi.fn(async (_input: unknown) => undefined);
+const pauseHeld = vi.fn(async (_task: unknown) => undefined);
+const pauseForget = vi.fn((_taskId: string) => undefined);
 const seatFreed = vi.fn((_seat: string, _reason: string) => undefined);
 const afterIntake = vi.fn(async (_input: unknown) => 'build');
 const startLocalCi = vi.fn(async (taskId: string) => ({ run: { id: 'run-1', taskId, state: 'running', headSha: null } }));
@@ -166,6 +168,7 @@ beforeEach(async () => {
     requestQueue: { drain } as never,
     planChanges: { verdict, missingVerdict, designerEnded } as never,
     taskInbox: { take: inboxTake, release: inboxRelease, settle: inboxSettle },
+    pauseHolds: { paused: pauseHeld, forget: pauseForget },
   });
   bridge = createServer((request, response) => void router.handle(request, response));
   await new Promise<void>((resolve) => bridge.listen(0, '127.0.0.1', resolve));
@@ -288,9 +291,10 @@ describe('a task ending, which may let go of paths a plan change was waiting for
 });
 
 describe('a builder’s task ending, which lets the review seats it held back be asked (#265)', () => {
-  async function endAs(kind: string, state: string) {
+  async function endAs(kind: string, state: string, more: Record<string, unknown> = {}) {
     const { tasks } = await import('@openadlc/db');
     vi.mocked(tasks.updateTaskState).mockImplementationOnce((async (id: string, to: string) => ({
+      ...more,
       id,
       botId: 'bot-builder',
       repoId: 'repo-1',
@@ -307,14 +311,45 @@ describe('a builder’s task ending, which lets the review seats it held back be
   }
 
   it.each(
-    ['patch', 'implement'].flatMap((kind) => ['done', 'failed', 'stopped', 'paused'].map((state) => [kind, state] as const)),
-  )('asks them when a %s task is %s, after its issue is handed on', async (kind, state) => {
+    ['patch', 'implement'].flatMap((kind) => ['done', 'failed', 'stopped'].map((state) => [kind, state] as const)),
+  )('asks them when a %s task is %s, after its issue is handed on, and lets go of its pause hold', async (kind, state) => {
     const response = await endAs(kind, state);
 
     expect(response.status).toBe(200);
     expect(builderEnded).toHaveBeenCalledTimes(1);
     expect(builderEnded).toHaveBeenCalledWith({ kind, subjectRef: 'openadlc#31', branch: 'agent/builder/78-issue-78' });
     if (state === 'done') expect(onTaskDone.mock.invocationCallOrder[0]!).toBeLessThan(builderEnded.mock.invocationCallOrder[0]!);
+    expect(pauseForget).toHaveBeenCalledWith('task-1');
+    expect(pauseHeld).not.toHaveBeenCalled();
+  });
+
+  it.each(['patch', 'implement'])('asks nothing when a %s task pauses on a question: the pause holds them (#287)', async (kind) => {
+    const response = await endAs(kind, 'paused', { pausedAt: '2026-11-10T22:05:00.000Z' });
+
+    expect(response.status).toBe(200);
+    expect(builderEnded).not.toHaveBeenCalled();
+    expect(pauseHeld).toHaveBeenCalledTimes(1);
+    expect(pauseHeld).toHaveBeenCalledWith(expect.objectContaining({ id: 'task-1', kind, state: 'paused', pausedAt: '2026-11-10T22:05:00.000Z' }));
+    expect(pauseForget).not.toHaveBeenCalled();
+  });
+
+  it('asks them on the head a CI send-back’s round pushes, not at its pause on the unchanged head (#287)', async () => {
+    // 2026-11-10: CI sent a pull request back on the same head, its patch
+    // round paused to ask for one more path, and the pause asked the lead,
+    // which reviewed the head the round replaced eight minutes later.
+    await endAs('patch', 'running');
+    await endAs('patch', 'paused', { pausedAt: '2026-11-10T22:05:00.000Z' });
+    expect(builderEnded).not.toHaveBeenCalled();
+    expect(pauseHeld).toHaveBeenCalledTimes(1);
+
+    // Answered, resumed, and done after pushing its fix.
+    await endAs('patch', 'running', { pausedAt: '2026-11-10T22:05:00.000Z' });
+    await endAs('patch', 'done', { pausedAt: '2026-11-10T22:05:00.000Z' });
+
+    expect(builderEnded).toHaveBeenCalledTimes(1);
+    expect(builderEnded).toHaveBeenCalledWith({ kind: 'patch', subjectRef: 'openadlc#31', branch: 'agent/builder/78-issue-78' });
+    expect(pauseForget).toHaveBeenCalledTimes(1);
+    expect(pauseForget).toHaveBeenCalledWith('task-1');
   });
 
   it('asks nothing while the builder runs, or when the task is no builder', async () => {
