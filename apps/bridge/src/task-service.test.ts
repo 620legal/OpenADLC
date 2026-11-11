@@ -17,6 +17,11 @@ const store = vi.hoisted(() => ({
   awaited: [] as { at: string; payload: Record<string, unknown> }[],
   /** Set, recording one fails. */
   recordFails: false,
+  /** The issues stacked on another, by issue (`stacks.stackOf`). */
+  stacks: new Map<number, { issue: number; onIssue: number; onPr: number }>(),
+  stackReadFails: false,
+  /** Each pull request's merge-line row, by its state (`mergeLines.entryFor`). */
+  line: new Map<number, string>(),
 }));
 
 vi.mock('@openadlc/db', () => ({
@@ -64,7 +69,23 @@ vi.mock('@openadlc/db', () => ({
     }),
   },
   leases: { settlePausedLeases: vi.fn(async () => ({ released: [], held: [] })) },
-  issues: { listIssues: vi.fn(async (repo: string) => store.issues.filter((issue) => issue.repoName === repo)) },
+  issues: {
+    listIssues: vi.fn(async (repo: string) => store.issues.filter((issue) => issue.repoName === repo)),
+    getIssue: vi.fn(async () => null),
+  },
+  stacks: {
+    stackOf: vi.fn(async (_repo: string, issue: number) => {
+      if (store.stackReadFails) throw new Error('the database went away');
+      return store.stacks.get(issue) ?? null;
+    }),
+  },
+  mergeLines: {
+    OPEN_STATES: ['waiting', 'updating', 'testing', 'merging'],
+    entryFor: vi.fn(async (_repo: string, prNumber: number) => {
+      const state = store.line.get(prNumber);
+      return state ? { id: `line-${prNumber}`, prNumber, state } : null;
+    }),
+  },
   settings: { getSetting: vi.fn(async () => JSON.stringify({ 'api#1': { by: 'janedoe', at: '2026-10-02T10:00:00Z', why: 'waiting on design' } })) },
   repos: { listRepos: vi.fn(async () => []), getRepoByName: vi.fn(async () => null) },
   tasks: {
@@ -1945,6 +1966,95 @@ describe('a bot that must be able to work before a task starts', () => {
       }
       expect(open).toHaveBeenCalledTimes(2);
       expect(open).toHaveBeenCalledWith(expect.objectContaining({ bot: LEAD.name, kind: 'review', subjectRef: 'openadlc#2', checkoutExistingBranch: true }));
+    });
+
+    describe('on a pull request stacked on one in the merge line', () => {
+      // #1 was built on #9, whose pull request #30 is approved and green in
+      // the line: its merge, minutes off, changes this head. A lead started
+      // at 21:57:55 on a head #30's merge at 21:58 replaced was thrown away.
+      beforeEach(() => {
+        store.stacks = new Map([[1, { issue: 1, onIssue: 9, onPr: 30 }]]);
+        store.stackReadFails = false;
+        store.line = new Map();
+        store.reviewTasks = [];
+      });
+      afterEach(() => {
+        store.stacks = new Map();
+        store.line = new Map();
+      });
+
+      it('starts no lead while the base holds a place in the line, said once, and starts it once the base leaves', async () => {
+        const { tasksService } = readyService();
+        const open = vi.spyOn(tasksService, 'open').mockResolvedValue({ taskId: 'task-2', session: 's' });
+        const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+        try {
+          for (const state of ['waiting', 'merging']) {
+            store.line.set(30, state);
+            expect(await tasksService.openLeadReview(input), state).toBeNull();
+          }
+          expect(open).not.toHaveBeenCalled();
+          expect(log.mock.calls.map(([line]) => String(line))).toEqual([
+            `[bridge] openadlc#2: the gate waits on ${LEAD.name}, not asked yet: #9, which this was built on, is in the merge line (#30); its merge changes this head`,
+          ]);
+
+          // Out of the line on red checks: the lead is asked on this head.
+          store.line.set(30, 'failed');
+          expect(await tasksService.openLeadReview(input)).toMatch(/the lead’s, last/);
+          expect(open).toHaveBeenCalledTimes(1);
+        } finally {
+          log.mockRestore();
+        }
+      });
+
+      it('starts the lead once the base merged and left the line', async () => {
+        const { tasksService } = readyService();
+        const open = vi.spyOn(tasksService, 'open').mockResolvedValue({ taskId: 'task-2', session: 's' });
+        const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+        try {
+          store.line.set(30, 'merged');
+          expect(await tasksService.openLeadReview(input)).toMatch(/the lead’s, last/);
+          store.reviewTasks = [];
+          store.line.delete(30);
+          expect(await tasksService.openLeadReview(input)).toMatch(/the lead’s, last/);
+          expect(open).toHaveBeenCalledTimes(2);
+        } finally {
+          log.mockRestore();
+        }
+      });
+
+      it('waits when whether it was stacked cannot be read', async () => {
+        store.stackReadFails = true;
+        const { tasksService } = readyService();
+        const open = vi.spyOn(tasksService, 'open').mockResolvedValue({ taskId: 'task-2', session: 's' });
+        const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+        try {
+          expect(await tasksService.openLeadReview(input)).toBeNull();
+          expect(await tasksService.openLeadReview(input)).toBeNull();
+          expect(open).not.toHaveBeenCalled();
+          expect(log).toHaveBeenCalledTimes(1);
+          expect(String(log.mock.calls[0]?.[0])).toContain('could not be read (the database went away)');
+        } finally {
+          log.mockRestore();
+        }
+      });
+
+      it('still starts the advisory seats while the base is in the line', async () => {
+        store.line.set(30, 'testing');
+        const { tasksService } = readyService();
+        const open = vi.spyOn(tasksService, 'open').mockResolvedValue({ taskId: 'task-2', session: 's' });
+        const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+        try {
+          const missing = { repo: { name: 'openadlc' }, prNumber: 2, branch: 'agent/x/1-issue-1', issueNumber: 1, waitingOn: [SECURITY.name] };
+          expect(await tasksService.openMissingReviews(missing)).toHaveLength(1);
+          expect(open).toHaveBeenCalledWith(expect.objectContaining({ bot: SECURITY.name, kind: 'review', subjectRef: 'openadlc#2' }));
+        } finally {
+          log.mockRestore();
+        }
+      });
     });
 
     it('with no cut-off, counts only a lead task under way, never any earlier one', async () => {

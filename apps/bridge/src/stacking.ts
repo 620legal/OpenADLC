@@ -1,4 +1,4 @@
-import { bots, issues, leases, listEventsOfType, recordEvent, repos, stacks, tasks, type Stack } from '@openadlc/db';
+import { bots, issues, leases, listEventsOfType, mergeLines, recordEvent, repos, stacks, tasks, type Stack } from '@openadlc/db';
 import { blockingOverlaps } from '@openadlc/dispatcher';
 import type { GitHubClient } from '@openadlc/github';
 import {
@@ -117,6 +117,13 @@ interface UpdatingPayload {
    * always the line's update, and reads as true.
    */
   carry?: boolean;
+  /**
+   * Where the stacked branch's own commits begin, when what it was built on
+   * was squashed into the base: the line merges through a commit that marks
+   * this as in the base (`MergeLine.stackedUpdate`). Absent in a note written
+   * before it was, and null when there was nothing to replay.
+   */
+  replayFrom?: string | null;
   at: string;
 }
 
@@ -138,7 +145,7 @@ interface UpdatedPayload {
   at: string;
 }
 
-type Client = Pick<GitHubClient, 'getPullRequest' | 'readFileIfPresent' | 'comment' | 'addLabels' | 'removeLabel' | 'changedFilesBetween'>;
+type Client = Pick<GitHubClient, 'getPullRequest' | 'readFileIfPresent' | 'comment' | 'addLabels' | 'removeLabel' | 'changedFilesBetween' | 'mergeBase'>;
 
 /** Whether a hold is one `holdWhatWasSentBack` put on and still waits on what it was built on, not on a person. */
 function waitsOnBase(hold: ItemHold | undefined): boolean {
@@ -634,10 +641,18 @@ export class Stacking {
 
   /**
    * The merge line is about to bring a pull request's branch up to date.
-   * True when it is a stacked one whose dependency has merged: this update
+   * Non-null when it is a stacked one whose dependency has merged: this update
    * takes out what the dependency landed, and the line makes it with
    * `mergeIntoBranch` so it knows the commit it made (`made`). Noted first,
    * so a push that arrives before the line has GitHub's answer waits for it.
+   *
+   * `replayFrom` is where the branch's own commits begin when the dependency
+   * was squashed into the base: its head is then in no history of the base,
+   * and a plain merge of the base counted the dependency's changes on both
+   * sides, so files both added conflicted (#271, in nine files) where the
+   * stacked commits alone applied cleanly. Null after a true merge or a
+   * rebase-merge, which left the dependency's head in the base, and when it
+   * could not be read: the update is then the plain merge it always was.
    */
   async updating(input: {
     repoName: string;
@@ -648,13 +663,14 @@ export class Stacking {
     headSha: string;
     /** Whether the approvals stand across it (`UpdatingPayload.carry`); true unless said. */
     carry?: boolean;
-  }): Promise<boolean> {
-    if (!input.issue) return false;
+  }): Promise<{ on: number; replayFrom: string | null } | null> {
+    if (!input.issue) return null;
     const on = await this.stackedOn(input.repoName, input.issue);
-    if (!on || (await this.waitingOn(input.repoName, input.issue))) return false;
+    if (!on || (await this.waitingOn(input.repoName, input.issue))) return null;
     const client = await this.deps.client().catch(() => null);
     const files = client ? await client.changedFilesBetween(input.repoFullName, input.baseRef, input.headSha).catch(() => null) : null;
-    if (!files) return false;
+    if (!client || !files) return null;
+    const replayFrom = await this.replayFrom(client, { ...input, issue: input.issue }).catch(() => null);
     await this.record(STACK_UPDATING, {
       repo: input.repoName,
       pr: input.prNumber,
@@ -663,9 +679,27 @@ export class Stacking {
       from: input.headSha,
       files,
       carry: input.carry ?? true,
+      replayFrom,
       at: this.at(),
     } satisfies UpdatingPayload);
-    return true;
+    return { on, replayFrom };
+  }
+
+  /**
+   * The newest commit of the merged dependency the stacked head holds, when
+   * the dependency's head is in no history of the base branch (a squash);
+   * null when it is. Throws when it cannot be read.
+   */
+  private async replayFrom(client: Client, input: { repoName: string; issue: number; repoFullName: string; baseRef: string; headSha: string }): Promise<string | null> {
+    const repo = await repos.getRepoByName(input.repoName);
+    const stack = repo ? await stacks.stackOf(repo.id, input.issue) : null;
+    if (!repo || !stack) return null;
+    // A dependency opened again with a new pull request merged by that one.
+    const dependency = await issues.getIssue(repo.id, stack.onIssue);
+    const base = await client.getPullRequest(input.repoFullName, dependency?.prNumber ?? stack.onPr);
+    if (!base.merged || !base.headSha) return null;
+    if ((await client.mergeBase(input.repoFullName, base.headSha, input.baseRef)) === base.headSha) return null;
+    return client.mergeBase(input.repoFullName, base.headSha, input.headSha);
   }
 
   /**
@@ -836,6 +870,29 @@ export interface StackLink {
 export async function stackLinks(repoIds: readonly string[]): Promise<StackLink[]> {
   const read = await Promise.all([...new Set(repoIds)].map((repoId) => stacks.listStacks(repoId)));
   return read.flat().map((stack) => ({ repoId: stack.repoId, issue: stack.issue, onIssue: stack.onIssue, onPr: stack.onPr }));
+}
+
+/**
+ * The pull request a stacked issue was built on, while it holds a place in
+ * the merge line: its merge is minutes off and changes this one's head, so
+ * the lead's review waits (`TaskService.openLeadReview`). A lead was started
+ * at 21:57:55 on a stacked pull request whose base merged at 21:58; the
+ * squash left it conflicting, and that review was thrown away. An open state
+ * already means approved and not red: the line takes in only what the gate
+ * passed, and keeps a red head out (`MergeLine.enter`, `stillRed`). The
+ * dependency's current pull request is read over the stack's, since one
+ * opened again is the one that will merge. Null with no stack, or with the
+ * base out of the line; throws when either cannot be read.
+ */
+export async function baseInLine(repoName: string, issue: number): Promise<{ on: number; onPr: number } | null> {
+  const repo = await repos.getRepoByName(repoName);
+  if (!repo) return null;
+  const stack = await stacks.stackOf(repo.id, issue);
+  if (!stack) return null;
+  const dependency = await issues.getIssue(repo.id, stack.onIssue);
+  const onPr = dependency?.prNumber ?? stack.onPr;
+  const entry = await mergeLines.entryFor(repo.id, onPr);
+  return entry && mergeLines.OPEN_STATES.includes(entry.state) ? { on: stack.onIssue, onPr } : null;
 }
 
 /** A stacked change OpenADLC holds, as Needs you reads it (`heldStacks`). */

@@ -537,6 +537,51 @@ describe('mergeIntoBranch: merging the base into a pull request’s branch', () 
   });
 });
 
+describe('the commits a stacked update after a squash is made from', () => {
+  function github(status: number, answer: Record<string, unknown>) {
+    const sent: { method: string; path: string; body: unknown }[] = [];
+    const fetchImpl = (async (input: string | URL, init?: RequestInit) => {
+      const address = new URL(String(input));
+      sent.push({ method: init?.method ?? 'GET', path: `${address.pathname}${address.search}`, body: init?.body ? JSON.parse(String(init.body)) : null });
+      return new Response(JSON.stringify(answer), { status });
+    }) as typeof fetch;
+    return { sent, client: new GitHubClient({ token: 't', actingAs: 'openadlc-atlas', fetchImpl }) };
+  }
+
+  it('reads a branch’s tip and its tree (`commitOf`)', async () => {
+    const { sent, client } = github(200, { sha: 'main0000', commit: { tree: { sha: 'tree0000' } } });
+
+    expect(await client.commitOf('exampleco/shop', 'main')).toEqual({ sha: 'main0000', tree: 'tree0000' });
+    expect(sent).toEqual([{ method: 'GET', path: '/repos/exampleco/shop/commits/main', body: null }]);
+  });
+
+  it('reads the merge base of two commits from the comparison (`mergeBase`)', async () => {
+    const { sent, client } = github(200, { merge_base_commit: { sha: 'base0000' }, behind_by: 2 });
+
+    expect(await client.mergeBase('exampleco/shop', 'dep00000', 'head0000')).toBe('base0000');
+    expect(sent).toEqual([{ method: 'GET', path: '/repos/exampleco/shop/compare/dep00000...head0000?per_page=1', body: null }]);
+
+    expect(await github(200, {}).client.mergeBase('exampleco/shop', 'a', 'b')).toBeNull();
+  });
+
+  it('fails a merge base GitHub would not compare, rather than answering none', async () => {
+    await expect(github(404, { message: 'Not Found' }).client.mergeBase('exampleco/shop', 'a', 'b')).rejects.toThrow();
+  });
+
+  it('writes a commit with its tree and parents (`createCommit`)', async () => {
+    const { sent, client } = github(201, { sha: 'bridge00' });
+
+    expect(await client.createCommit('exampleco/shop', { message: 'Mark #4 as in main', tree: 'tree0000', parents: ['main0000', 'dep00000'] })).toBe('bridge00');
+    expect(sent).toEqual([
+      {
+        method: 'POST',
+        path: '/repos/exampleco/shop/git/commits',
+        body: { message: 'Mark #4 as in main', tree: 'tree0000', parents: ['main0000', 'dep00000'] },
+      },
+    ]);
+  });
+});
+
 describe('what the merge decides on, read to its end', () => {
   /** A GitHub that answers each path with a list of `total` things, a page at a time. */
   function paged(total: number, make: (i: number) => unknown, extra: Record<string, unknown> = {}) {
