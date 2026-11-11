@@ -1,3 +1,7 @@
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CI_REQUEST_WAIT_MS, MergeLine, REQUIRED_CHECKS, UNKNOWN_WAIT_MS, UPDATE_WAIT_MS, askedForCi, heldForPerson, verdictFor } from './merge-line.js';
 import { REQUIRED_CHECK, REVIEW_GATE_CHECK } from '@openadlc/shared';
@@ -5,6 +9,9 @@ import { REQUIRED_CHECK, REVIEW_GATE_CHECK } from '@openadlc/shared';
 const green = (name: string) => ({ name, status: 'completed', conclusion: 'success' });
 const red = (name: string) => ({ name, status: 'completed', conclusion: 'failure' });
 const running = (name: string) => ({ name, status: 'in_progress', conclusion: null });
+
+/** A stacked update whose dependency, #30, merged so that its head is in the base: a plain merge of the base (`Stacking.updating`). */
+const PLAIN: { on: number; replayFrom: string | null } | null = { on: 30, replayFrom: null };
 
 describe('whether a head may land', () => {
   it('lands only when every required check has passed on this commit', () => {
@@ -159,6 +166,8 @@ describe('the front of the line, green and up to date', () => {
       updateBranch: vi.fn(async () => ({ updated: true, conflict: false, message: 'updated' })),
       mergeIntoBranch: vi.fn(async (): Promise<{ merged: boolean; conflict: boolean; sha: string | null; parents: string[]; message: string }> => ({ merged: true, conflict: false, sha: MADE, parents: [HEAD, 'main0000'], message: 'merged' })),
       behindBy: vi.fn(async () => 0),
+      commitOf: vi.fn(async () => ({ sha: 'main0000', tree: 'tree0000' })),
+      createCommit: vi.fn(async (): Promise<string> => 'bridge00'),
       checksFor: vi.fn(async () => REQUIRED_CHECKS.map(green)),
       comment: vi.fn(async () => null),
       mergePullRequest: vi.fn(async () => ({ sha: 'never' })),
@@ -373,7 +382,7 @@ describe('the front of the line, green and up to date', () => {
     const order: string[] = [];
     const updating = vi.fn(async () => {
       order.push('noted');
-      return true;
+      return PLAIN;
     });
     github.mergeIntoBranch.mockImplementation(async () => {
       order.push('merged');
@@ -399,7 +408,7 @@ describe('the front of the line, green and up to date', () => {
     const start = vi.fn(async () => 'resolving' as const);
     merge.useSendBack(vi.fn(async () => undefined));
     merge.useConflictRounds({ start, unstarted: vi.fn(async () => null) });
-    merge.useStacking({ waitingOn: vi.fn(async () => null), updating: vi.fn(async () => true), made });
+    merge.useStacking({ waitingOn: vi.fn(async () => null), updating: vi.fn(async () => PLAIN), made });
 
     expect(await merge.advance('openadlc')).toMatchObject({ state: 'failed' });
 
@@ -412,7 +421,7 @@ describe('the front of the line, green and up to date', () => {
     github.behindBy.mockResolvedValue(1);
     github.mergeIntoBranch.mockResolvedValue({ merged: true, conflict: false, sha: MADE, parents: ['0ther000', 'main0000'], message: 'merged' });
     const made = vi.fn(async () => undefined);
-    merge.useStacking({ waitingOn: vi.fn(async () => null), updating: vi.fn(async () => true), made });
+    merge.useStacking({ waitingOn: vi.fn(async () => null), updating: vi.fn(async () => PLAIN), made });
 
     await merge.advance('openadlc');
 
@@ -423,7 +432,7 @@ describe('the front of the line, green and up to date', () => {
     const { line: merge, github } = line();
     github.behindBy.mockResolvedValue(1);
     const made = vi.fn(async () => undefined);
-    merge.useStacking({ waitingOn: vi.fn(async () => null), updating: vi.fn(async () => false), made });
+    merge.useStacking({ waitingOn: vi.fn(async () => null), updating: vi.fn(async () => null), made });
 
     expect(await merge.advance('openadlc')).toMatchObject({ state: 'updating' });
 
@@ -434,7 +443,7 @@ describe('the front of the line, green and up to date', () => {
 
   describe('a stacked pull request brought up to date once what it was built on merged (`updateStacked`)', () => {
     /** A branch one commit behind its base until a merge lands on it. */
-    function stackedLine(options: { updating?: () => Promise<boolean>; pull?: Record<string, unknown> } = {}) {
+    function stackedLine(options: { updating?: () => Promise<{ on: number; replayFrom: string | null } | null>; pull?: Record<string, unknown> } = {}) {
       const built = line(options.pull ? { pull: options.pull } : {});
       let mergedIn = false;
       built.github.behindBy.mockImplementation(async () => (mergedIn ? 0 : 1));
@@ -442,7 +451,7 @@ describe('the front of the line, green and up to date', () => {
         mergedIn = true;
         return { merged: true, conflict: false, sha: MADE, parents: [HEAD, 'main0000'], message: 'merged' };
       });
-      const stacks = { waitingOn: vi.fn(async () => null), updating: vi.fn(options.updating ?? (async () => true)), made: vi.fn(async () => undefined) };
+      const stacks = { waitingOn: vi.fn(async () => null), updating: vi.fn(options.updating ?? (async () => PLAIN)), made: vi.fn(async () => undefined) };
       built.line.useStacking(stacks);
       const start = vi.fn(async () => 'resolving' as const);
       built.line.useConflictRounds({ start, unstarted: vi.fn(async () => null) });
@@ -493,6 +502,70 @@ describe('the front of the line, green and up to date', () => {
       expect(clean.backToBuild).not.toHaveBeenCalled();
     });
 
+    describe('after what it was built on was squashed into the base (`replayFrom`)', () => {
+      const DEP = 'dep00000dep00000dep00000dep00000dep00000';
+      const replay = () => stackedLine({ updating: async () => ({ on: 30, replayFrom: DEP }) });
+
+      it('merges a commit that marks the squashed work as in the base, so only the branch’s own changes apply', async () => {
+        quiet();
+        const { line: merge, github, stacks, start, backToBuild } = replay();
+
+        expect(await merge.updateStacked({ repoName: 'openadlc', prNumber: 31, carry: true, why: '#30 merged' })).toBe('updated');
+
+        expect(github.commitOf).toHaveBeenCalledWith('janedoe/openadlc', 'main');
+        // The base's content exactly, recording that the base holds the dependency's head.
+        expect(github.createCommit).toHaveBeenCalledWith('janedoe/openadlc', {
+          message: "Mark #30's squashed work (dep0000) as in main, for #31's update (OpenADLC)",
+          tree: 'tree0000',
+          parents: ['main0000', DEP],
+        });
+        expect(github.mergeIntoBranch).toHaveBeenCalledWith('janedoe/openadlc', 'agent/openadlc-atlas-janedoe/11-issue-11', 'bridge00');
+        // A merge whose first parent is the head read: the approvals carry as before.
+        expect(stacks.made).toHaveBeenCalledWith({ repoName: 'openadlc', prNumber: 31, from: HEAD, to: MADE });
+        expect(store.events).toEqual([{ source: 'platform', type: 'merge_line.branch_updated', payload: { subjectRef: 'openadlc#31', from: HEAD, to: MADE } }]);
+        expect(start).not.toHaveBeenCalled();
+        expect(backToBuild).not.toHaveBeenCalled();
+      });
+
+      it('still opens the resolution round when its own changes conflict with the base', async () => {
+        quiet();
+        const { line: merge, github, stacks, start } = replay();
+        github.mergeIntoBranch.mockResolvedValue({ merged: false, conflict: true, sha: null, parents: [], message: 'Merge conflict' });
+
+        expect(await merge.updateStacked({ repoName: 'openadlc', prNumber: 31, carry: true, why: '#30 merged' })).toBe('conflict');
+
+        expect(github.mergeIntoBranch).toHaveBeenCalledWith('janedoe/openadlc', 'agent/openadlc-atlas-janedoe/11-issue-11', 'bridge00');
+        expect(start).toHaveBeenCalledTimes(1);
+        expect(start).toHaveBeenCalledWith({ repoName: 'openadlc', prNumber: 31, baseRef: 'main' });
+        expect(stacks.made).toHaveBeenCalledWith({ repoName: 'openadlc', prNumber: 31, from: HEAD, to: null });
+      });
+
+      it('merges the base plainly, as before, with nothing to replay or a bridge it could not make', async () => {
+        quiet();
+        const plain = stackedLine();
+        await plain.line.updateStacked({ repoName: 'openadlc', prNumber: 31, carry: true, why: '#30 merged' });
+        expect(plain.github.createCommit).not.toHaveBeenCalled();
+        expect(plain.github.mergeIntoBranch).toHaveBeenCalledWith('janedoe/openadlc', 'agent/openadlc-atlas-janedoe/11-issue-11', 'main');
+
+        vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+        const refused = replay();
+        refused.github.createCommit.mockRejectedValue(new Error('GitHub answered 403'));
+        expect(await refused.line.updateStacked({ repoName: 'openadlc', prNumber: 31, carry: true, why: '#30 merged' })).toBe('updated');
+        expect(refused.github.mergeIntoBranch).toHaveBeenCalledWith('janedoe/openadlc', 'agent/openadlc-atlas-janedoe/11-issue-11', 'main');
+      });
+
+      it('replays the same way when the line brings it up to date at the front', async () => {
+        const { line: merge, github } = line();
+        github.behindBy.mockResolvedValue(1);
+        merge.useStacking({ waitingOn: vi.fn(async () => null), updating: vi.fn(async () => ({ on: 30, replayFrom: DEP })), made: vi.fn(async () => undefined) });
+
+        expect(await merge.advance('openadlc')).toMatchObject({ state: 'updating' });
+
+        expect(github.createCommit).toHaveBeenCalledWith('janedoe/openadlc', expect.objectContaining({ parents: ['main0000', DEP] }));
+        expect(github.mergeIntoBranch).toHaveBeenCalledWith('janedoe/openadlc', 'agent/openadlc-atlas-janedoe/11-issue-11', 'bridge00');
+      });
+    });
+
     it('merges nothing into a branch already up to date', async () => {
       const { line: merge, github, stacks } = stackedLine();
       github.behindBy.mockResolvedValue(0);
@@ -506,7 +579,7 @@ describe('the front of the line, green and up to date', () => {
 
     it('leaves alone one that is not stacked, and says it cannot tell when the stack cannot be read', async () => {
       quiet();
-      const plain = stackedLine({ updating: async () => false });
+      const plain = stackedLine({ updating: async () => null });
       expect(await plain.line.updateStacked({ repoName: 'openadlc', prNumber: 31, carry: true, why: '#30 merged' })).toBe('not_stacked');
       expect(plain.github.mergeIntoBranch).not.toHaveBeenCalled();
       expect(plain.github.updateBranch).not.toHaveBeenCalled();
@@ -597,7 +670,7 @@ describe('the front of the line, green and up to date', () => {
     it('records a stacked update by the commit it made, on the head it was made on', async () => {
       const { line: merge, github } = line();
       github.behindBy.mockResolvedValue(1);
-      merge.useStacking({ waitingOn: vi.fn(async () => null), updating: vi.fn(async () => true), made: vi.fn(async () => undefined) });
+      merge.useStacking({ waitingOn: vi.fn(async () => null), updating: vi.fn(async () => PLAIN), made: vi.fn(async () => undefined) });
 
       await merge.advance('openadlc');
       // Onto a head that had moved since it was read: that head is the push's `before`.
@@ -933,7 +1006,7 @@ describe('a stacked pull request joining the line', () => {
     const { mergeLines } = await import('@openadlc/db');
     vi.mocked(mergeLines.enter).mockClear();
     const merge = new MergeLine({ automationBot: null } as never, {} as never, {} as never, {} as never);
-    merge.useStacking({ waitingOn: vi.fn(waitingOn), updating: vi.fn(async () => false), made: vi.fn(async () => undefined) });
+    merge.useStacking({ waitingOn: vi.fn(waitingOn), updating: vi.fn(async () => null), made: vi.fn(async () => undefined) });
     await merge.enter({ repoName: 'openadlc', prNumber: 31, headSha: 'c0ffee0' });
     return vi.mocked(mergeLines.enter);
   }
@@ -1124,5 +1197,100 @@ describe('a head the line found red', () => {
     expect(store.states).toEqual([{ state: 'failed', detail: 'checks failed on the updated head' }]);
     expect(vi.mocked(mergeLines.setState)).toHaveBeenLastCalledWith('line-7', 'failed', { headSha: HEAD, detail: 'checks failed on the updated head' });
     expect(mergeLines.leave).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The commit shape `stackedUpdate` asks GitHub to merge, checked with real
+ * git: after a squash merge of what a branch was built on, merging the base
+ * plainly conflicts on the files both added, while merging a commit with the
+ * base's tree and the dependency's head as second parent applies only the
+ * branch's own commits, as a rebase onto the base would, and is still a
+ * merge whose first parent is the branch's head.
+ */
+describe('a stacked update after a squash merge, in a real repository', () => {
+  function repository() {
+    const dir = mkdtempSync(join(tmpdir(), 'openadlc-replay-'));
+    const env = {
+      ...process.env,
+      GIT_CONFIG_GLOBAL: '/dev/null',
+      GIT_CONFIG_NOSYSTEM: '1',
+      GIT_AUTHOR_NAME: 'Jane Doe',
+      GIT_AUTHOR_EMAIL: 'jane@example.com',
+      GIT_COMMITTER_NAME: 'Jane Doe',
+      GIT_COMMITTER_EMAIL: 'jane@example.com',
+    };
+    const git = (...args: string[]) => execFileSync('git', args, { cwd: dir, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+    const clean = (...args: string[]) => {
+      try {
+        git(...args);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    const write = (file: string, text: string) => writeFileSync(join(dir, file), text);
+    const commit = (message: string) => {
+      git('add', '-A');
+      git('commit', '-q', '-m', message);
+      return git('rev-parse', 'HEAD');
+    };
+    return { dir, git, clean, write, commit };
+  }
+
+  /** main, then A squashed into it and one unrelated commit after; B built on A, editing A's file and adding its own. */
+  function squashed(options: { bEditsReadme: boolean }) {
+    const repo = repository();
+    repo.git('init', '-q', '-b', 'main');
+    repo.write('README', 'one\ntwo\nthree\n');
+    repo.commit('initial');
+    repo.git('checkout', '-q', '-b', 'a');
+    repo.write('a.txt', 'a1\na2\na3\n');
+    const aTip = repo.commit('A adds a.txt');
+    repo.git('checkout', '-q', '-b', 'b');
+    repo.write('a.txt', 'a1\nB\na3\n');
+    repo.write('b.txt', 'b\n');
+    if (options.bEditsReadme) repo.write('README', 'b-one\ntwo\nthree\n');
+    const bTip = repo.commit('B, on A');
+    repo.git('checkout', '-q', 'main');
+    repo.git('merge', '-q', '--squash', 'a');
+    repo.commit('A, squashed');
+    repo.write('README', 'ONE\ntwo\nthree\n');
+    repo.commit('unrelated');
+    return { ...repo, aTip, bTip };
+  }
+
+  it('conflicts merged plainly, and is clean through the bridge commit, with a rebase’s tree', () => {
+    const repo = squashed({ bEditsReadme: false });
+    try {
+      repo.git('checkout', '-q', '-b', 'plain', repo.bTip);
+      expect(repo.clean('merge', '--no-edit', 'main')).toBe(false);
+      repo.git('merge', '--abort');
+
+      repo.git('checkout', '-q', '-b', 'rebased', repo.bTip);
+      repo.git('rebase', '-q', '--onto', 'main', repo.aTip);
+      const rebased = repo.git('rev-parse', 'HEAD^{tree}');
+
+      repo.git('checkout', '-q', 'b');
+      const bridge = repo.git('commit-tree', 'main^{tree}', '-p', 'main', '-p', repo.aTip, '-m', 'bridge');
+      expect(repo.clean('merge', '--no-edit', bridge)).toBe(true);
+      expect(repo.git('rev-parse', 'HEAD^{tree}')).toBe(rebased);
+      // The first parent is the head the line read, as `stack.made` and the carry need.
+      expect(repo.git('rev-parse', 'HEAD^1')).toBe(repo.bTip);
+    } finally {
+      rmSync(repo.dir, { recursive: true, force: true });
+    }
+  });
+
+  it('still conflicts where the branch’s own changes really conflict with the base', () => {
+    const repo = squashed({ bEditsReadme: true });
+    try {
+      repo.git('checkout', '-q', 'b');
+      const bridge = repo.git('commit-tree', 'main^{tree}', '-p', 'main', '-p', repo.aTip, '-m', 'bridge');
+      expect(repo.clean('merge', '--no-edit', bridge)).toBe(false);
+      expect(repo.git('diff', '--name-only', '--diff-filter=U')).toBe('README');
+    } finally {
+      rmSync(repo.dir, { recursive: true, force: true });
+    }
   });
 });

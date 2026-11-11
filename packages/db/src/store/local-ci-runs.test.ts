@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('../client.js', () => ({ query: vi.fn(), queryOne: vi.fn() }));
 
 import { queryOne } from '../client.js';
-import { passFor, record } from './local-ci-runs.js';
+import { passFor, record, withoutNul } from './local-ci-runs.js';
 
 const row = {
   id: 'r1',
@@ -31,6 +31,17 @@ describe('local CI runs', () => {
     expect(await record(input)).toMatchObject({ runId: 'run-1', ok: true, createdAt: '2026-09-30T10:00:00.000Z' });
     expect(await record(input)).toBeNull();
     expect(String(vi.mocked(queryOne).mock.calls[0]![0])).toContain('on conflict (run_id) do nothing');
+  });
+
+  it('stores a log tail without the NUL Postgres refuses in text, keeping the text around it', async () => {
+    vi.mocked(queryOne).mockResolvedValue(row);
+    const input = { runId: 'run-1', taskId: 't1', repoId: 'repo-1', branch: row.branch, headSha: row.head_sha, ok: true, exitCode: 0, durationMs: 1200 };
+
+    await record({ ...input, logTail: 'before\u0000after' });
+    expect(vi.mocked(queryOne).mock.calls[0]![1]![8]).toBe('beforeafter');
+    await record({ ...input, logTail: null });
+    expect(vi.mocked(queryOne).mock.calls[1]![1]![8]).toBeNull();
+    expect(withoutNul('a\u0000\u0000b')).toBe('ab');
   });
 
   it('finds a pass on a commit in a repository, and only a pass', async () => {

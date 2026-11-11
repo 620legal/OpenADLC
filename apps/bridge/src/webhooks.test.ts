@@ -250,6 +250,9 @@ vi.mock('@openadlc/db', () => ({
   // history is not numbered yet: a review's start asks GitHub.
   workItems: { itemOf: vi.fn(async () => null), linksOf: vi.fn(async () => []) },
   stageMoves: { listForIssue: vi.fn(async () => store.moves) },
+  // No pull request here is stacked: the lead's start asks whether its base
+  // is in the merge line, and a stack that cannot be read holds it.
+  stacks: { stackOf: vi.fn(async () => null) },
   mergeLines: {
     head: vi.fn(async () => (store.lineEntry ? { ...store.lineEntry } : null)),
     setState: vi.fn(async (_id: string, state: string, patch: { headSha?: string | null; detail?: string | null } = {}) => {

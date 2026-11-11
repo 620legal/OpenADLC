@@ -144,6 +144,9 @@ vi.mock('@openadlc/db', async () => ({
     getSetting: vi.fn(async (key: string) => (key === 'testingDeploy' ? store.testingDeploy : key === 'humanIds' ? store.humanIds : null)),
     allSettings: vi.fn(async () => ({})),
   },
+  // No pull request here is stacked: the lead's start asks whether its base
+  // is in the merge line, and a stack that cannot be read holds it.
+  stacks: { stackOf: vi.fn(async () => null) },
   mergeLines: {
     entryFor: vi.fn(async (_repoId: string, prNumber: number) => store.mergeRows.find((row) => row.prNumber === prNumber) ?? null),
   },

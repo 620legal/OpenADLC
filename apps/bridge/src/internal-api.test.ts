@@ -59,6 +59,7 @@ vi.mock('@openadlc/db', async (importOriginal) => {
     settings: { allSettings: vi.fn(async () => ({})) },
     localCiRuns: {
       record: vi.fn(async (input: Record<string, unknown>) => ({ id: 'row-1', ...input })),
+      withoutNul: (text: string) => text.replaceAll('\u0000', ''),
       latestFor: vi.fn(async () => ({ runId: 'run-1', ok: true, createdAt: '2026-09-30T10:00:00.000Z' })),
       passFor: vi.fn(async (_repo: string, sha: string) => (sha === 'a'.repeat(40) ? { runId: 'run-1', ok: true, createdAt: '2026-09-30T10:00:00.000Z' } : null)),
     },
@@ -989,6 +990,25 @@ describe('the repository’s checks on a task’s head', () => {
     const stored = vi.mocked(localCiRuns.record).mock.calls.at(-1)?.[0] as { logTail: string };
     expect(stored.logTail).not.toContain('ghs_0123456789');
     expect(stored.logTail).toBe('fetching https://x-access-token:***@github.com/exampleco/app.git\nci: red');
+  });
+
+  it('are recorded when the output holds a NUL, and a token a NUL split is still masked', async () => {
+    const { localCiRuns, audit } = await import('@openadlc/db');
+    vi.mocked(audit).mockClear();
+    const answer = await post('/internal/local-ci', { runId: 'run-3', taskId: 'task-1', headSha: 'a'.repeat(40), ok: true, exitCode: 0, logTail: 'ci: before\u0000after\nci: green' });
+    expect(answer.status).toBe(200);
+    expect(await answer.json()).toEqual({ recorded: true });
+    const stored = vi.mocked(localCiRuns.record).mock.calls.at(-1)?.[0] as { logTail: string };
+    expect(stored.logTail).toBe('ci: beforeafter\nci: green');
+    // Nothing else carries the log: the audit payload is the run's names only.
+    const payload = (vi.mocked(audit).mock.calls.at(-1)?.[0] as { payload: Record<string, unknown> }).payload;
+    expect(payload).toEqual({ task: 'task-1', sha: 'a'.repeat(40), run: 'run-3', exitCode: 0 });
+
+    // Stripped after redaction, this token would be stored whole.
+    const token = `ghp_0123456789\u0000abcdefghijABCDEFGHIJ012345`;
+    await post('/internal/local-ci', { runId: 'run-4', taskId: 'task-1', headSha: 'a'.repeat(40), ok: false, logTail: `token ${token}\nci: red` });
+    const split = vi.mocked(localCiRuns.record).mock.calls.at(-1)?.[0] as { logTail: string };
+    expect(split.logTail).toBe('token ghp_***\nci: red');
   });
 });
 

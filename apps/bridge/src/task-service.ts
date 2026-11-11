@@ -14,6 +14,7 @@ import { reviewRulesOf, seatsWaitedOn, type LateAsk, type NotCounted, type Perso
 import { requestPrefixOf } from './request-context.js';
 import { readSeatPauses, seatPausedWords, type SeatPause } from './seat-pause.js';
 import { heldWords } from './item-hold.js';
+import { baseInLine } from './stacking.js';
 import { PERSON_ASKED_AGAIN, PERSON_AWAITED, RESUME_WAITS_ON_GITHUB, REVIEW_ASKED_AGAIN, REVIEW_ROUND_OPENED, parseRef } from './work.js';
 
 /**
@@ -756,6 +757,39 @@ export class TaskService {
     return true;
   }
 
+  /** The stacked pull requests whose lead waits on their base in the merge line, with what was said: said once a base, not every sweep. */
+  private readonly baseSaid = new Map<string, string>();
+
+  /**
+   * Whether the pull request a stacked one was built on is in the merge line
+   * (`baseInLine`), so its lead is not asked yet: that merge is minutes off
+   * and changes this head, and a lead started at 21:57:55 on a head the
+   * base's merge at 21:58 replaced was a review thrown away. A stack that
+   * cannot be read waits too, as the line keeps such a pull request out. The
+   * advisory seats are not held. Nothing resumes it but the gate sweep, which
+   * asks every pass: once the base leaves the line it is asked on this head,
+   * and once it merges, on the head the stacked update makes.
+   */
+  private async baseMerging(repoName: string, subjectRef: string, issueNumber: number | null, lead: string): Promise<boolean> {
+    if (!issueNumber) return false;
+    let words: string | null;
+    try {
+      const base = await baseInLine(repoName, issueNumber);
+      words = base ? `#${base.on}, which this was built on, is in the merge line (#${base.onPr}); its merge changes this head` : null;
+    } catch (error) {
+      words = `whether what this was built on is in the merge line could not be read (${error instanceof Error ? error.message : String(error)}); the gate sweep asks again`;
+    }
+    if (!words) {
+      this.baseSaid.delete(subjectRef);
+      return false;
+    }
+    if (this.baseSaid.get(subjectRef) !== words) {
+      this.baseSaid.set(subjectRef, words);
+      console.log(`[bridge] ${subjectRef}: the gate waits on ${lead}, not asked yet: ${words}`);
+    }
+    return true;
+  }
+
   /** Throws `PrerequisiteNotReadyError` when this bot cannot do a task in the repository yet. */
   async assertReady(bot: { id: string; name: string }, repoName: string | null): Promise<void> {
     const blockers = (await this.blocked([bot], repoName)).get(bot.name);
@@ -906,6 +940,7 @@ export class TaskService {
     if (already) return null;
     if (await this.reviewsHeld(subjectRef, [lead.name])) return null;
     if (await this.builderHolds(subjectRef, input.branch, input.issueNumber, [lead.name])) return null;
+    if (await this.baseMerging(input.repo.name, subjectRef, input.issueNumber, lead.name)) return null;
     try {
       const opened = await this.open({
         bot: lead.name,

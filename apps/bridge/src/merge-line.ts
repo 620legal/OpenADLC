@@ -474,7 +474,7 @@ export class MergeLine {
     }
     if (behind === 0) return 'current';
 
-    let stacked: boolean;
+    let stacked: { on: number; replayFrom: string | null } | null;
     try {
       stacked = await this.stacks.updating({
         repoName: repo.name,
@@ -491,7 +491,7 @@ export class MergeLine {
     if (!stacked) return 'not_stacked';
 
     const client = (await this.actors.asBot(await this.updaterFor(repo.name))) ?? automation;
-    const result = await this.stackedUpdate(client, repo, input.prNumber, pull);
+    const result = await this.stackedUpdate(client, repo, input.prNumber, pull, stacked);
     if (result.conflict) {
       if (this.conflicts) {
         await this.conflicts.start({ repoName: repo.name, prNumber: input.prNumber, baseRef: pull.baseRef }).catch((error: unknown) =>
@@ -525,14 +525,42 @@ export class MergeLine {
    * made: the commit's SHA when its first parent is the head the line read,
    * otherwise none, so no push is taken for this update. Answers as
    * `updateBranch` does.
+   *
+   * After a squash merge of what it was built on (`replayFrom`), the base
+   * merged plainly brought the dependency's changes back as new commits, and
+   * files both sides added conflicted where the stacked commits alone would
+   * replay cleanly (#271). A rebase cannot be pushed: the `agent/**` ruleset
+   * refuses a force-push, and the approvals carry by the first parent. So the
+   * line writes a bridge commit, with the base's tree and the base and
+   * `replayFrom` as parents, and merges that: the merge base becomes
+   * `replayFrom`, and only the branch's own changes are applied to the base.
+   * The result is still a merge whose first parent is the head read here. A
+   * bridge that cannot be written falls back to the plain merge.
    */
   private async stackedUpdate(
     client: GitHubClient,
     repo: { name: string; fullName: string },
     prNumber: number,
     pull: { headRef: string; headSha: string; baseRef: string },
+    stacked: { on: number; replayFrom: string | null },
   ): Promise<{ updated: boolean; conflict: boolean; message: string }> {
-    const made = await client.mergeIntoBranch(repo.fullName, pull.headRef, pull.baseRef);
+    let head = pull.baseRef;
+    if (stacked.replayFrom) {
+      const from = stacked.replayFrom;
+      try {
+        const base = await client.commitOf(repo.fullName, pull.baseRef);
+        head = await client.createCommit(repo.fullName, {
+          message: `Mark #${stacked.on}'s squashed work (${from.slice(0, 7)}) as in ${pull.baseRef}, for #${prNumber}'s update (OpenADLC)`,
+          tree: base.tree,
+          parents: [base.sha, from],
+        });
+      } catch (error) {
+        console.warn(
+          `[bridge] ${repo.name}#${prNumber}: merging ${pull.baseRef} in plainly, since the commit that replays only its own changes could not be made: ${error instanceof Error ? error.message : error}`,
+        );
+      }
+    }
+    const made = await client.mergeIntoBranch(repo.fullName, pull.headRef, head);
     const ours = made.merged && made.sha !== null && made.parents[0] === pull.headSha;
     if (made.merged && made.sha && made.parents[0]) await this.updated(repo.name, prNumber, made.parents[0], made.sha);
     await this.stacks?.made({ repoName: repo.name, prNumber, from: pull.headSha, to: ours ? made.sha : null }).catch(() => undefined);
@@ -644,9 +672,9 @@ export class MergeLine {
             headSha: pull.headSha,
             carry: true,
           })
-          .catch(() => false)) ?? false;
+          .catch(() => null)) ?? null;
       const result = stacked
-        ? await this.stackedUpdate(client, repo, entry.prNumber, pull)
+        ? await this.stackedUpdate(client, repo, entry.prNumber, pull, stacked)
         : await client.updateBranch(repo.fullName, entry.prNumber, pull.headSha);
       // First, since the push it makes may be delivered at once. GitHub makes
       // it on exactly this head (`expected_head_sha`); a stacked one records

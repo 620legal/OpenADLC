@@ -15,6 +15,7 @@ import {
   getPool,
   issues,
   leases,
+  localCiRuns,
   people,
   query,
   repos,
@@ -1529,6 +1530,36 @@ async function main() {
   // The whole point of the marker: a comment without one is not reinterpreted.
   const narration = eventMessages.find((message) => !message.payload?.event && message.kind === 'bot');
   check('a comment with no marker is still narration', Boolean(narration), narration?.kind ?? 'none found');
+
+  // ------------------------------------------- a local CI log holding a NUL
+  // Postgres refuses NUL in `text`: a `make ci` that printed one had its
+  // result refused with a 500, and the builder's pass was never recorded.
+  // Only a real Postgres says so, which is why this is here and not a unit test.
+  section('a local CI result whose output holds a NUL is recorded');
+  await resetPipelineState(repo.id);
+  const ciTask = await tasks.createTask({
+    botId: builder.id,
+    repoId: repo.id,
+    kind: 'implement',
+    subjectType: 'issue',
+    subjectRef: `${repo.name}#908`,
+    skill: 'implement',
+  });
+  await tasks.updateTaskState(ciTask.id, 'running');
+  const ciSha = randomBytes(20).toString('hex');
+  const ciReport = await post('/internal/local-ci', {
+    runId: randomUUID(),
+    taskId: ciTask.id,
+    headSha: ciSha,
+    ok: true,
+    exitCode: 0,
+    durationMs: 1000,
+    logTail: 'ci: before\u0000after\nci: green',
+  });
+  check('the bridge records it', ciReport.status === 200 && ciReport.body.recorded === true, `${ciReport.status} ${JSON.stringify(ciReport.body)}`);
+  const ciPass = await localCiRuns.passFor(repo.id, ciSha);
+  check('the stored tail has no NUL and keeps the text around it', ciPass?.logTail === 'ci: beforeafter\nci: green', JSON.stringify(ciPass?.logTail));
+  await query('delete from local_ci_runs where head_sha = $1', [ciSha]);
 
   // ------------------------------------------------- the internal API is shut
   // `/internal` used to be held by the private network alone, so an
