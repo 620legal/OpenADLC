@@ -41,14 +41,32 @@ export function waitingText(item: AttentionItem): string {
 
 /**
  * Whether an item is a held approval routed to people other than its named
- * person: the approvers, or everyone, when the login is not in People. Each of
- * them is someone else, for whom it is under Waiting on others, not counted,
- * and so not pushed either (ADR 0058). Left unrecorded, it is sent once it
- * routes to the person, as when they are added to People. A local install
- * routes nothing, and is sent as before.
+ * person: the admins and approvers, or everyone, when the login is not in
+ * People. For the approvers it is under Waiting on others, not counted, and so
+ * not pushed either (ADR 0058); the admins, who can add the person, are told
+ * once on their own (`notInPeopleNotice`, ADR 0059). Left unrecorded under its
+ * own key, it is sent once it routes to the person, as when they are added to
+ * People. A local install routes nothing, and is sent as before.
  */
 export function waitsOnOthers(item: Pick<AttentionItem, 'decision' | 'audience'>): boolean {
   return Boolean(item.decision && item.audience && item.audience.for !== 'person');
+}
+
+/** The record of the admins' push about an occurrence, apart from the person's own, which goes out once they are in People. */
+export function notInPeopleKey(item: AttentionItem): string {
+  return `${occurrenceOf(item)}#not-in-people`;
+}
+
+/** "@dana is not in People, so pull request #12 waits with no one to approve it. Add them in Settings → People." */
+export function notInPeopleText(login: string, pr: number): string {
+  return `@${login} is not in People, so pull request #${pr} waits with no one to approve it. Add them in Settings → People.`;
+}
+
+/** The admins a held approval for someone not in People is pushed to; null when it is not one, or there are none. */
+function notInPeopleAdmins(item: AttentionItem): { login: string; pr: number; admins: string[] } | null {
+  const audience = item.audience;
+  if (!item.decision || !audience?.notInPeople || !audience.admins?.length) return null;
+  return { login: audience.notInPeople, pr: item.decision.pr, admins: [...audience.admins] };
 }
 
 /**
@@ -134,8 +152,19 @@ export class WaitingNotices {
         // so the next pass that reads them sends it, rather than sent to the
         // wrong people now or to no one for good.
         if (!mayNotify(item.audience)) continue;
-        if (waitsOnOthers(item)) continue;
         const subject = item.subject.item ?? item.subject.ref;
+        const link = subject ? itemLink(this.deps.consoleUrl, subject) : this.deps.consoleUrl;
+        const missing = notInPeopleAdmins(item);
+        if (missing) {
+          // Under a key of its own: recorded under the occurrence's, the
+          // person would never be pushed once an admin adds them.
+          const adminsKey = notInPeopleKey(item);
+          if (await store.recorded(type, { item: adminsKey })) continue;
+          await this.deps.notifier.send({ event: kind, to: null, item: adminsKey, people: missing.admins, text: notInPeopleText(missing.login, missing.pr), link });
+          sent += 1;
+          continue;
+        }
+        if (waitsOnOthers(item)) continue;
         // To the item's people when it is routed to some, each on their own
         // channel; one record per occurrence either way, so none is sent twice.
         const people = routedPeople(item);
@@ -145,7 +174,7 @@ export class WaitingNotices {
           item: key,
           ...(people ? { people } : {}),
           text: waitingText(item),
-          link: subject ? itemLink(this.deps.consoleUrl, subject) : this.deps.consoleUrl,
+          link,
         });
         sent += 1;
       }

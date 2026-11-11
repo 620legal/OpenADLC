@@ -90,7 +90,9 @@ only that (`apps/bridge/src/attention.ts`):
   you", and it is not pushed to your devices. OpenADLC puts an item there only
   when the account you linked is known not to be the named one. If you have not
   linked an account, or GitHub could not be asked who the person is, it may be
-  yours: it stays in your list and is counted, with a line saying why (ADR 0058).
+  yours: it stays in your list and is counted, with a line saying why (ADR 0058). An
+  admin's copy of one whose person is not in People is not waiting on others:
+  adding them is the admin's to do, so it is counted (ADR 0059).
 
 `<bot>` below is how OpenADLC names a bot everywhere a person reads: its role and
 the GitHub account it acts as, "the second reviewer (janedoe-reviews)", or its
@@ -2026,14 +2028,25 @@ new head. Each decision writes an audit row: `pull.human_review_approved`,
 ### Reminding the person
 
 On a cloud install the card goes to the person it waits on when People has
-someone with their GitHub login. Otherwise it goes to the approvers, and the
-card says "@<login> is not in People, so this came to the approvers.", with a
-link to Settings → People for an admin
-([configuration](configuration.md#needs-you-routing)). The person is not in
-People, so OpenADLC has no device to notify. GitHub's review request is how it
-reaches them. The approvers are not pushed about it either: it is under their
-Waiting on others, not counted. It is pushed once it routes to the person, for
-example when they are added to People (ADR 0058).
+someone with their GitHub login. Otherwise it goes to the admins and the
+approvers, and the card says "@<login> is not in People, so this came to the
+admins and approvers." ([configuration](configuration.md#needs-you-routing)).
+The person is not in People, so OpenADLC has no device to notify. GitHub's
+review request is how it reaches them.
+
+The admins are told, because adding the person is theirs to do. Each admin
+has the card counted in Work and the header's badge, with **Add @<login> to
+People so this goes to them** as its first button, ahead of Remind and
+Discuss. The admins get one push: "@<login> is not in People, so pull request
+#N waits with no one to approve it. Add them in Settings → People." It is
+recorded as `notify.merge_waiting` with an `item` ending `#not-in-people`, and
+not sent again. An approver who is not an admin has it under Waiting on
+others, not counted and not pushed (ADR 0058, ADR 0059). With no admin and no
+approver, the card is for everyone and no one is pushed.
+
+Once the person is in People, through a person added with their login or
+their own GitHub link, the card is theirs: it leaves the admins' count and is
+pushed to them once, under its own record.
 
 The card reads, from the pull request's timeline, whether GitHub has a review
 request out to them:

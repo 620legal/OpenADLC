@@ -965,13 +965,13 @@ describe('a held Human-review approval', () => {
   });
 
   describe('for a login People does not have (#307)', () => {
-    const MISSING = (): AttentionItem => ({ ...HELD({ yours: false }), audience: { for: 'approvers', name: 'approvers', people: ['p-ada'], notInPeople: 'janedoe' } });
+    const MISSING = (): AttentionItem => ({ ...HELD({ yours: false }), audience: { for: 'approvers', name: 'admins and approvers', people: ['p-ada'], notInPeople: 'janedoe', admins: ['p-ada'] } });
     const NOW = '2026-09-24T12:00:00.000Z';
     const at = (minutesAgo: number) => new Date(Date.parse(NOW) - minutesAgo * 60_000).toISOString();
 
-    it('says why it came to the approvers, and takes an admin to Settings → People', () => {
+    it('says why it came to the admins and approvers, and takes an admin to Settings → People', () => {
       const html = needs([MISSING()]);
-      expect(words(html)).toContain('@janedoe is not in People, so this came to the approvers.');
+      expect(words(html)).toContain('@janedoe is not in People, so this came to the admins and approvers.');
       expect(html).toContain('href="/settings#people"');
       expect(words(html)).toContain('Add @janedoe in Settings → People');
     });
@@ -980,7 +980,7 @@ describe('a held Human-review approval', () => {
       role.value = 'user';
       try {
         const html = needs([MISSING()]);
-        expect(words(html)).toContain('@janedoe is not in People, so this came to the approvers.');
+        expect(words(html)).toContain('@janedoe is not in People, so this came to the admins and approvers.');
         expect(html).not.toContain('href="/settings#people"');
       } finally {
         role.value = 'admin';
@@ -1011,6 +1011,49 @@ describe('a held Human-review approval', () => {
       expect(words(html)).toContain('in 55 min.');
       const open = renderToStaticMarkup(<HumanReviewDecisionPanel item={MISSING()} now={NOW} initialRequest={{ kind: 'read', view: { ...view, reminded: { at: at(70), by: 'Ana' }, remindAfter: null } }} />);
       expect(open).not.toMatch(/data-remind-button="true" disabled=""/);
+    });
+
+    describe('an admin’s, who can add the person (ADR 0059)', () => {
+      const AUDIENCE = { for: 'approvers' as const, name: 'admins and approvers', people: ['p-ada', 'p-bo'], notInPeople: 'janedoe', admins: ['p-ada'] };
+      const ADMINS = (): AttentionItem => ({
+        ...HELD({ yours: false, addToPeople: true, whyWaits: 'The lead approved 692cd1f. It changes `infra/`, so OpenADLC does not merge it until they approve it.' } as never),
+        audience: AUDIENCE,
+      });
+      const APPROVERS = (): AttentionItem => ({
+        ...HELD({ yours: false, waitsOnOther: true, notYours: "This is @janedoe's to decide; you can Discuss it." } as never),
+        audience: AUDIENCE,
+      });
+
+      it('leads with a link to Settings → People, ahead of Remind and Discuss, and says it once', () => {
+        const html = needs([ADMINS()]);
+        const first = /<a [^>]*data-add-person-button="true"[^>]*>([^<]*)<\/a>/.exec(html);
+        expect(first?.[0]).toContain('href="/settings#people"');
+        expect(first?.[1]).toBe('Add @janedoe to People so this goes to them');
+        const at = (mark: string) => html.indexOf(mark);
+        expect(at('data-add-person-button')).toBeLessThan(at('data-remind-button'));
+        expect(at('data-remind-button')).toBeLessThan(at('data-decide="discuss"'));
+        // The audience line's own link would say it a second time.
+        expect(html).not.toContain('data-add-person="true"');
+        expect(words(html)).toContain('@janedoe is not in People, so this came to the admins and approvers.');
+        expect(words(html)).toContain('Why it waits: The lead approved 692cd1f.');
+        expect(html).not.toContain('data-not-yours');
+      });
+
+      it('is under Work and counted for the admin, and under Waiting on others, not counted, for an approver', async () => {
+        const { waitingCount } = await import('@/lib/api');
+        expect(needs([ADMINS()])).toContain('data-add-person-button');
+        expect(others([ADMINS()])).toBe('');
+        expect(waitingCount([ADMINS()])).toBe(1);
+
+        expect(words(others([APPROVERS()]))).toContain("Waiting on others Decisions that are someone else's.");
+        expect(others([APPROVERS()])).not.toContain('data-add-person-button');
+        expect(waitingCount([APPROVERS()])).toBe(0);
+      });
+
+      it('keeps the button in the sheet, which draws the same panel', () => {
+        const html = renderToStaticMarkup(<HumanReviewDecisionPanel item={ADMINS()} now={NOW} full />);
+        expect(html).toContain('data-add-person-button');
+      });
     });
 
     it('draws no Remind on a bridge from before it, which has no route for it', () => {

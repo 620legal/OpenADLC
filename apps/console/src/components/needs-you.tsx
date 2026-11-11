@@ -560,12 +560,14 @@ function NeedsCard({
   // Whom it is for, on a cloud install: "For Legal", or "For everyone: no one holds Legal yet".
   const audience = audienceLine(item);
   // A held approval for a login People does not have says so; an admin, who
-  // can add them, is taken to where it is done.
+  // can add them, is taken to where it is done: by the decision panel's own
+  // first button when the bridge says so (ADR 0059), else, from an older
+  // bridge, by a link here.
   const missing = item.audience?.notInPeople;
   const audienceNote = audience && (
     <p data-audience className="text-[11.5px] text-dim">
       {audience}
-      {missing && admin && (
+      {missing && admin && !item.decision?.addToPeople && (
         <>
           {' '}
           <Link data-add-person href={PEOPLE_SETTINGS_URL} className="text-link hover:underline">
@@ -1805,8 +1807,10 @@ export function HumanReviewDecisionPanel({
   const notYet = view ? remindAgainLine(view.remindAfter, clock) : null;
   // Reminding yourself is meaningless, and a bridge from before Remind has no route for it.
   const mayRemind = decision.yours !== true && !(request.kind === 'failed' && request.older);
-  // Someone else's card names the person once, in its status line (#308).
-  const theirs = waitsOnOthers(item);
+  // Someone else's card names the person once, in its status line (#308). An
+  // admin asked to add the person to People is someone else too, for its
+  // wording, though the card is theirs to act on (ADR 0059).
+  const theirs = waitsOnOthers(item) || decision.addToPeople === true;
   const who = theirs ? 'them' : undefined;
   const why = decisionWhy(item)!;
   const hint = useId();
@@ -1868,9 +1872,9 @@ export function HumanReviewDecisionPanel({
     });
   };
 
-  const LABEL: Record<Exclude<DecisionButton, 'remind'>, string> = { approve: 'Approve', reject: 'Reject', discuss: 'Discuss' };
-  // Remind stays after a message is sent; the others go once one is done.
-  const shown = buttons.filter((button) => (button === 'remind' ? mayRemind : !done));
+  const LABEL: Record<Exclude<DecisionButton, 'remind' | 'add_person'>, string> = { approve: 'Approve', reject: 'Reject', discuss: 'Discuss' };
+  // Remind and Add to People stay after a message is sent; the others go once one is done.
+  const shown = buttons.filter((button) => (button === 'remind' ? mayRemind : button === 'add_person' || !done));
 
   return (
     <div data-decision-panel className="flex flex-col gap-2 rounded-md border border-edge bg-surface px-2.5 py-2 text-[12px] leading-snug">
@@ -1942,6 +1946,15 @@ export function HumanReviewDecisionPanel({
         <div className="flex flex-col gap-1">
           <div role="group" aria-label="Decision" className="flex flex-wrap items-start gap-1.5">
             {shown.map((button) => {
+              if (button === 'add_person') {
+                // The admin's own way to move it: once the person is in
+                // People, it goes to them, and leaves this count.
+                return (
+                  <Link key={button} data-add-person-button href={PEOPLE_SETTINGS_URL} className={cn(PRIMARY, 'w-fit')}>
+                    Add @{decision.login} to People so this goes to them
+                  </Link>
+                );
+              }
               if (button === 'remind') {
                 // Asks GitHub to request their review again, so GitHub
                 // notifies them. Off while the hour since the last one runs;
