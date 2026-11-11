@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { defaultInstallName, hasHeader, headerFor, HEADER_TAG, seatOf, seatTagOf, STAGE_LABEL, withHeader, withSeat } from './stamp.js';
+import { defaultInstallName, hasHeader, headerFor, HEADER_TAG, seatOf, seatTagOf, STAGE_LABEL, withHeader, withoutHeader, withSeat } from './stamp.js';
 import type { BotRole } from './types.js';
 
 describe('the header on what OpenADLC posts', () => {
@@ -38,6 +38,15 @@ describe('the header on what OpenADLC posts', () => {
     const person = '**Heads up**\n\nThis is mine.';
     expect(hasHeader(person)).toBe(false);
     expect(withHeader(person, headerFor('OpenADLC_example', 'intake'))).not.toBe(person);
+  });
+
+  it('comes off the front of a headed body, and leaves a body without one as it is', () => {
+    const header = headerFor('OpenADLC_example', 'review_second');
+    expect(withoutHeader(withHeader('Approve. My earlier major is fixed.', header))).toBe('Approve. My earlier major is fixed.');
+    expect(withoutHeader('**Major:** the cap is read twice.')).toBe('**Major:** the cap is read twice.');
+    // Only at the very start: a header quoted further down is the reviewer's text.
+    const quoted = `I saw this:\n\n${header}`;
+    expect(withoutHeader(quoted)).toBe(quoted);
   });
 });
 

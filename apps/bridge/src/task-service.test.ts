@@ -193,6 +193,12 @@ describe("the crew's reviews a held approval's card shows", () => {
     expect(long).not.toContain('<!--');
   });
 
+  it('starts with what the reviewer said, not the bot’s header', () => {
+    expect(reviewSummary('**OpenADLC_x · second review agent**<!-- openadlc-header -->\n\nApprove. My earlier major is fixed.\n\n<!-- openadlc-seat:second-reviewer -->\n')).toBe('Approve. My earlier major is fixed.');
+    // A bold first line with no header tag is the reviewer's own.
+    expect(reviewSummary('**Major:** the cap is read twice.')).toBe('**Major:** the cap is read twice.');
+  });
+
   it('takes the newest of each seat on the head, from the crew only, oldest first', () => {
     const listed = [
       review(1, { body: 'First pass.\n<!-- openadlc-seat:lead-reviewer -->', state: 'CHANGES_REQUESTED' }),

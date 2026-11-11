@@ -170,7 +170,7 @@ function renderInline(text: string, key = 'i'): ReactNode[] {
     const id = `${key}-${n++}`;
     if (code !== undefined) {
       out.push(
-        <code key={id} className="rounded bg-well px-1 py-px font-mono text-[0.92em] text-body">
+        <code key={id} className={INLINE_CODE}>
           {code.slice(1, -1)}
         </code>,
       );
@@ -206,6 +206,52 @@ function splitAtLimit(text: string): { formatted: string; rest: string } {
   const lineBreak = text.lastIndexOf('\n', FORMATTED_LIMIT);
   const at = lineBreak > 0 ? lineBreak : FORMATTED_LIMIT;
   return { formatted: text.slice(0, at), rest: withoutComments(text.slice(at)).trim() };
+}
+
+/** The class `renderInline` gives a code span, which a fenced block flattened inline takes too. */
+const INLINE_CODE = 'rounded bg-well px-1 py-px font-mono text-[0.92em] text-body';
+
+/**
+ * The same markdown as one run of inline text, for a card that clamps it to a
+ * few lines: a heading in bold, a list's items joined by ` · ` with no marker,
+ * fenced code as one code span, and a space between blocks. Drawn as blocks
+ * inside `line-clamp-3`, a review's `## Verdict` and each `- item` took a line
+ * of the three, and the clamp cut unreliably across several block children.
+ * The sheet draws the same text with `Markdown`.
+ */
+export function MarkdownInline({ text, className }: { text: string; className?: string }) {
+  const { formatted, rest } = splitAtLimit(text);
+  const parts: ReactNode[] = [];
+  parseMarkdown(formatted).forEach((block, index) => {
+    const key = `b${index}`;
+    if (parts.length > 0) parts.push(' ');
+    switch (block.kind) {
+      case 'heading':
+        parts.push(
+          <strong key={key} className="font-semibold">
+            {renderInline(block.text, key)}
+          </strong>,
+        );
+        break;
+      case 'code':
+        parts.push(
+          <code key={key} className={INLINE_CODE}>
+            {block.text}
+          </code>,
+        );
+        break;
+      case 'list':
+        block.items.forEach((item, itemIndex) => {
+          if (itemIndex > 0) parts.push(' · ');
+          parts.push(...renderInline(item, `${key}-${itemIndex}`));
+        });
+        break;
+      default:
+        parts.push(...renderInline(block.lines.join(' '), key));
+    }
+  });
+  if (rest) parts.push(parts.length > 0 ? ` ${rest}` : rest);
+  return <span className={cn('break-words', className)}>{parts}</span>;
 }
 
 export function Markdown({ text, className }: { text: string; className?: string }) {

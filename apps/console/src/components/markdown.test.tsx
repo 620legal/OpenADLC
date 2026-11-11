@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { FORMATTED_LIMIT, Markdown, parseMarkdown } from './markdown';
+import { FORMATTED_LIMIT, Markdown, MarkdownInline, parseMarkdown } from './markdown';
 
 /**
  * The intake bot's questions arrived as a wall of asterisks and backticks:
@@ -163,5 +163,35 @@ describe('a very long message', () => {
     expect(page).toContain('<p class="whitespace-pre-wrap">**bold**');
     expect(page).toContain('**not bold past the limit**</p></div>');
     expect(page).not.toContain('openadlc:');
+  });
+});
+
+/**
+ * A card clamps a review to three lines; drawn as blocks, its `## Verdict`
+ * and each list item took a line of the three (#306).
+ */
+describe('a bot’s markdown in one line of flowing text', () => {
+  const inline = (text: string) => renderToStaticMarkup(<MarkdownInline text={text} />);
+
+  it('draws a heading in bold, list items without markers, and code as code, with no block element', () => {
+    const page = inline('## Verdict\n**Approve.** The fix in `cap.ts` holds.\n\n- one\n- two\n\n```\nmake ci\n```\n<!-- openadlc-seat:lead-reviewer -->');
+    expect(page).toContain('<strong class="font-semibold">Verdict</strong>');
+    expect(page).toContain('<strong class="font-semibold">Approve.</strong> The fix in <code class="rounded bg-well');
+    expect(page).toContain('>cap.ts</code> holds.');
+    expect(page).toContain('one · two');
+    expect(page).toContain('>make ci</code>');
+    expect(page).not.toMatch(/<(?:p|div|ul|ol|li|h\d|pre|br)\b/);
+    expect(page.replace(/<[^>]+>/g, '')).toBe('Verdict Approve. The fix in cap.ts holds. one · two make ci');
+    expect(page).not.toContain('openadlc');
+  });
+
+  it('keeps what a bot writes as text, never markup', () => {
+    const page = inline('<script>alert(1)</script> **hi**');
+    expect(page).not.toContain('<script>');
+    expect(page).toContain('&lt;script&gt;');
+  });
+
+  it('drops the header, as the block form does', () => {
+    expect(inline('**OpenADLC_x · lead review agent**<!-- openadlc-header -->\n\nLooks right.').replace(/<[^>]+>/g, '')).toBe('Looks right.');
   });
 });

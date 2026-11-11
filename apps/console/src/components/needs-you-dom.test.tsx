@@ -1239,7 +1239,8 @@ describe('a held decision’s sheet', () => {
     const panel = opened.querySelector('[data-decision-panel]')!;
     expect(panel).not.toBeNull();
     expect(panel.textContent).toContain('What it does: Limit each client to 60 requests a minute.');
-    expect(panel.textContent).toContain('Why you are asked: It changes `infra/`');
+    expect(panel.textContent).toContain('Why you are asked: It changes infra/');
+    expect(panel.querySelector('[data-why] code')?.textContent).toBe('infra/');
     const summary = panel.querySelector('[data-summary]')!;
     expect(summary.textContent).toBe(SUMMARY);
     expect(clippedWithin(summary, opened)).toBe(false);

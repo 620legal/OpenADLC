@@ -55,6 +55,15 @@ export function hasHeader(body: string): boolean {
 }
 
 /**
+ * The body with its leading OpenADLC header taken off, or as it was when it has
+ * none. Only a header with its tag counts, so call this before comments are
+ * removed: after, the header is a bold line like any a reviewer writes first.
+ */
+export function withoutHeader(body: string): string {
+  return body.replace(LEADING_HEADER, '');
+}
+
+/**
  * The body with `header` first. A body that already has an OpenADLC header keeps
  * its own — a comment posted again, or a status issue rewritten every run, is
  * not headed twice.
