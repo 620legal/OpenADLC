@@ -710,6 +710,21 @@ export interface AttentionAudience {
   why?: string;
   /** Worked out while People could not be read: from the last read, or the admins' alone with none. */
   unread?: true;
+  /** On a held approval that came to the approvers, or everyone: the login it waits on, which no one in People has. Absent from an older bridge. */
+  notInPeople?: string;
+}
+
+/**
+ * Whether GitHub has a review request out to the person a held approval waits
+ * on, as read from the pull request, and the last Remind of them
+ * (`GET /v1/items/:subject/pull/human-review/request`, ADR 0057).
+ */
+export interface ReviewRequestView {
+  login: string;
+  request: { state: 'requested'; since: string | null } | { state: 'none' } | { state: 'unknown'; why: string };
+  reminded: { at: string; by: string } | null;
+  /** When Remind may be pressed again; null when it may now. */
+  remindAfter: string | null;
 }
 
 /** A pull request's declared command, as the bridge's `pull-commands.ts` says it for the person asking. */

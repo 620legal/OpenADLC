@@ -160,14 +160,19 @@ export interface PullHistoryEntry {
    */
   reviewId?: number;
   /**
-   * On a change of base (`base_ref_changed`, `automatic_base_change_succeeded`):
-   * when GitHub made it. A `ci` run made before it ran against the old base.
+   * When GitHub made it, on a change of base (`base_ref_changed`,
+   * `automatic_base_change_succeeded`): a `ci` run made before it ran against
+   * the old base. And on a review request made or taken away (`REVIEW_REQUESTS`):
+   * a held approval's card says since when GitHub has asked the person.
    */
   at?: string | null;
 }
 
 /** Timeline events that change a pull request's base. */
 export const BASE_CHANGES: ReadonlySet<string> = new Set(['base_ref_changed', 'automatic_base_change_succeeded']);
+
+/** Timeline events that ask a reviewer, or stop asking them. */
+export const REVIEW_REQUESTS: ReadonlySet<string> = new Set(['review_requested', 'review_request_removed']);
 
 /** The Actions workflow run behind a check suite, as `workflowRunOfSuite` reads it. */
 export interface SuiteWorkflowRun {
@@ -1062,7 +1067,7 @@ export class GitHubClient {
             : {}),
           ...(entry.event === 'labeled' || entry.event === 'unlabeled' ? { label: entry.label?.name ?? null } : {}),
           ...(entry.event === 'reviewed' && typeof entry.id === 'number' ? { reviewId: entry.id } : {}),
-          ...(BASE_CHANGES.has(entry.event) ? { at: entry.created_at ?? null } : {}),
+          ...(BASE_CHANGES.has(entry.event) || REVIEW_REQUESTS.has(entry.event) ? { at: entry.created_at ?? null } : {}),
         });
       }
       if (events.length < PAGE) return history;

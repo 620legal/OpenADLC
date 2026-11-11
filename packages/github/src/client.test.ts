@@ -1070,8 +1070,8 @@ describe('what a merge reads about a pull request’s files and history', () => 
     }));
 
     expect(await client.listPullHistory('janedoe/openadlc-testbed', 7)).toEqual([
-      { event: 'review_request_removed', actor: 'openadlc-atlas-janedoe', viaApp: false, sha: null, subject: 'janedoe' },
-      { event: 'review_requested', actor: 'owner-janedoe', viaApp: false, sha: null, subject: 'team maintainers' },
+      { event: 'review_request_removed', actor: 'openadlc-atlas-janedoe', viaApp: false, sha: null, subject: 'janedoe', at: null },
+      { event: 'review_requested', actor: 'owner-janedoe', viaApp: false, sha: null, subject: 'team maintainers', at: null },
       { event: 'reviewed', actor: 'janedoe', viaApp: false, sha: null, subject: null },
     ]);
   });
@@ -1105,6 +1105,23 @@ describe('what a merge reads about a pull request’s files and history', () => 
     const history = await client.listPullHistory('janedoe/openadlc-testbed', 7);
     expect(history?.[0]).toMatchObject({ event: 'base_ref_changed', actor: 'janedoe', at: '2026-10-16T16:34:01Z' });
     expect(history?.[1]).toMatchObject({ event: 'automatic_base_change_succeeded', at: '2026-10-17T09:00:00Z' });
+    expect(history?.[2]).not.toHaveProperty('at');
+  });
+
+  it('says when a review was asked of someone, or no longer asked of them', async () => {
+    // A held approval's card says since when GitHub has asked the person (#307).
+    const client = answering(() => ({
+      status: 200,
+      body: [
+        { event: 'review_requested', actor: { login: 'openadlc-atlas-janedoe' }, requested_reviewer: { login: 'janedoe' }, created_at: '2026-11-10T21:00:00Z' },
+        { event: 'review_request_removed', actor: { login: 'openadlc-atlas-janedoe' }, requested_reviewer: { login: 'janedoe' }, created_at: '2026-11-11T01:00:00Z' },
+        { event: 'reviewed', user: { login: 'janedoe' }, created_at: '2026-11-11T02:00:00Z' },
+      ],
+    }));
+
+    const history = await client.listPullHistory('janedoe/openadlc-testbed', 7);
+    expect(history?.[0]).toMatchObject({ event: 'review_requested', subject: 'janedoe', at: '2026-11-10T21:00:00Z' });
+    expect(history?.[1]).toMatchObject({ event: 'review_request_removed', subject: 'janedoe', at: '2026-11-11T01:00:00Z' });
     expect(history?.[2]).not.toHaveProperty('at');
   });
 

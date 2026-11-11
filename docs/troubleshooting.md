@@ -1998,6 +1998,46 @@ Reject are refused with "reload". Nothing is posted; reload and decide on the
 new head. Each decision writes an audit row: `pull.human_review_approved`,
 `pull.human_review_rejected` or `pull.human_review_discussed`.
 
+### Reminding the person
+
+On a cloud install the card goes to the person it waits on when People has
+someone with their GitHub login. Otherwise it goes to the approvers, and the
+card says "@<login> is not in People, so this came to the approvers.", with a
+link to Settings → People for an admin
+([configuration](configuration.md#needs-you-routing)). The person is not in
+People, so OpenADLC has no device to notify. GitHub's review request is how it
+reaches them.
+
+The card reads, from the pull request's timeline, whether GitHub has a review
+request out to them:
+- "GitHub asked @<login> to review 3 h ago."
+- "GitHub has no review request out to @<login>."
+
+It reads this on its own route, at most once a minute per pull request and
+person. Loading Needs you still makes no GitHub call. "OpenADLC could not read
+whether GitHub asked @<login>: …" means the timeline could not be read. Reload
+in a moment.
+
+**Remind @<login>** is on the card for everyone who sees it except the person
+themselves. It asks GitHub, as the automation account, to request their review
+again (`requestReviewers`). GitHub notifies a reviewer only when it requests
+them, so a request still pending is taken away first and made again. Remind
+decides nothing.
+
+A Remind writes `pull.human_review_reminded`, recording who pressed it and
+when. The card then says "Reminded 5 min ago by Ana."
+
+Remind can be sent once an hour per pull request and person, whoever presses
+it. A second press within the hour is refused, for example "@dana was reminded
+20 min ago by Ana. You can remind them again in 40 min." Until then the
+button is off, with the time it can be sent again.
+
+If GitHub will not ask them, the card says "GitHub would not ask @<login>: …"
+in GitHub's own words. The usual cause is that the account has no write access
+to the repository. Nothing is recorded, so once access is fixed you can press
+Remind again straight away. Any other failure answers "GitHub did not take the
+request", and nothing is recorded either.
+
 ## A pull request waits on "GitHub Actions minutes this month reached the cap"
 
 The card in Review reads "Checks running before it merges" though no CI run

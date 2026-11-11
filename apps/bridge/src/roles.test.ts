@@ -88,6 +88,11 @@ describe('every console route says who may call it', () => {
     }
   });
 
+  it('lets any console user read whether GitHub asked the awaited person, and remind them, which decides nothing', () => {
+    expect(ROUTE_ROLES['GET /v1/items/:subject/pull/human-review/request']).toBe('user');
+    expect(ROUTE_ROLES['POST /v1/items/:subject/pull/human-review/remind']).toBe('user');
+  });
+
   it('lets any console user ask to merge a held pull request or leave a held item, which the bridge checks', () => {
     expect(ROUTE_ROLES['POST /v1/items/:subject/pull/held-merge/merge']).toBe('user');
     expect(ROUTE_ROLES['POST /v1/attention/leave']).toBe('user');

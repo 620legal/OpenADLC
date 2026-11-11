@@ -81,6 +81,23 @@ describe('who a Needs-you item is for', () => {
     expect(audienceOf(item('merge_waiting'), FACTS)).toEqual({ for: 'role', name: 'Engineering', people: ['p-bob'] });
   });
 
+  it('says which login People has no one by when a held approval falls back to the approvers, or to everyone', () => {
+    const held = item('merge_waiting', { awaiting: { login: 'Dana', again: false, paths: ['config/'] } });
+    expect(audienceOf(held, FACTS)).toEqual({ for: 'approvers', name: 'approvers', people: ['p-ada'], notInPeople: 'Dana' });
+    expect(audienceOf(held, { ...FACTS, people: [A, B] })).toEqual({ for: 'everyone', name: 'everyone', people: [], why: 'no one approves yet', notInPeople: 'Dana' });
+    // Someone with that login, in any case, is who it is for, and nothing is missing.
+    const dana = { ...B, id: 'p-dana', name: 'Dana', githubLogin: 'dana' };
+    const theirs = audienceOf(held, { ...FACTS, people: [...FACTS.people, dana] });
+    expect(theirs).toEqual({ for: 'person', name: 'Dana', people: ['p-dana'] });
+    expect(theirs).not.toHaveProperty('notInPeople');
+  });
+
+  it('says no one is missing when People could not be read at all, and keeps the reason from the last read that worked', () => {
+    const held = item('merge_waiting', { awaiting: { login: 'Dana', again: false, paths: [] } });
+    expect(audienceOf(held, { people: [], roles: [], unread: 'none' })).toEqual({ for: 'admins', name: 'admins', people: [], unread: true });
+    expect(audienceOf(held, { ...FACTS, unread: 'last' })).toMatchObject({ for: 'approvers', notInPeople: 'Dana', unread: true });
+  });
+
   it('gives every kind a rule', () => {
     expect(Object.keys(AUDIENCE).sort()).toContain('question');
     for (const rule of Object.values(AUDIENCE)) expect(['question', 'merge', 'approvers', 'admins', 'engineering']).toContain(rule);

@@ -1,6 +1,27 @@
 import { describe, expect, it } from 'vitest';
 import type { AttentionItem } from './api';
-import { alarming, audienceLine, decisionButtons, faceActions, groupCounts, groupOf, hasMore, heldMergeButtons, noMergeReason, plainDetail, rejectReady, reviewerName, reviewVerdict, unblockedOf, unblocksLine } from './attention-card';
+import {
+  alarming,
+  audienceLine,
+  clockTime,
+  decisionButtons,
+  faceActions,
+  groupCounts,
+  groupOf,
+  hasMore,
+  heldMergeButtons,
+  noMergeReason,
+  plainDetail,
+  rejectReady,
+  remindAgainLine,
+  remindedLine,
+  remindLabel,
+  requestLine,
+  reviewerName,
+  reviewVerdict,
+  unblockedOf,
+  unblocksLine,
+} from './attention-card';
 
 const ITEM: AttentionItem = {
   id: 'task:t-1',
@@ -23,6 +44,38 @@ describe('whom a Needs-you card says it is for', () => {
       'For everyone: the question names no role',
     );
     expect(audienceLine({})).toBeNull();
+  });
+
+  it('says why a held approval came to the approvers, or to everyone, when People has no one by its login', () => {
+    expect(audienceLine({ audience: { for: 'approvers', name: 'approvers', people: ['p-a'], notInPeople: 'Dana' } })).toBe('@Dana is not in People, so this came to the approvers.');
+    expect(audienceLine({ audience: { for: 'everyone', name: 'everyone', people: [], why: 'no one approves yet', notInPeople: 'Dana' } })).toBe(
+      '@Dana is not in People and no one approves yet, so this is for everyone.',
+    );
+  });
+});
+
+describe('what a held approval’s card says about GitHub’s request and Remind', () => {
+  const NOW = Date.parse('2026-11-11T04:00:00.000Z');
+  const HOUR = 60 * 60_000;
+
+  it('says whether GitHub asked the person, and since when', () => {
+    expect(requestLine({ login: 'Dana', request: { state: 'requested', since: new Date(NOW - 3 * HOUR).toISOString() } }, NOW)).toBe('GitHub asked @Dana to review 3 h ago.');
+    expect(requestLine({ login: 'Dana', request: { state: 'requested', since: null } }, NOW)).toBe('GitHub has asked @Dana to review.');
+    expect(requestLine({ login: 'Dana', request: { state: 'none' } }, NOW)).toBe('GitHub has no review request out to @Dana.');
+    expect(requestLine({ login: 'Dana', request: { state: 'unknown', why: 'the pull request’s timeline is too long to read' } }, NOW)).toBe(
+      'OpenADLC could not read whether GitHub asked @Dana: the pull request’s timeline is too long to read.',
+    );
+  });
+
+  it('says who reminded them and when, and when Remind can be pressed again', () => {
+    expect(remindedLine({ reminded: { at: new Date(NOW - 5 * 60_000).toISOString(), by: 'Ana' } }, NOW)).toBe('Reminded 5 min ago by Ana.');
+    expect(remindedLine({ reminded: { at: new Date(NOW - 10_000).toISOString(), by: 'Ana' } }, NOW)).toBe('Reminded just now by Ana.');
+    expect(remindedLine({ reminded: null }, NOW)).toBeNull();
+    expect(remindLabel('Dana')).toBe('Remind @Dana');
+    const after = NOW + 40 * 60_000;
+    expect(remindAgainLine(new Date(after).toISOString(), NOW)).toBe(`You can remind them again at ${clockTime(after)}, in 40 min.`);
+    expect(remindAgainLine(new Date(NOW - 1).toISOString(), NOW)).toBeNull();
+    expect(remindAgainLine(null, NOW)).toBeNull();
   });
 });
 

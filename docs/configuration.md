@@ -930,6 +930,18 @@ under the headline:
 
 A routed card says "For Legal", "For approvers", "For admins" or "For you".
 
+A pull request held for a person's approval goes to that person when someone
+in People has their GitHub login. When no one does, only that person can
+still decide it, so the card says why it reached you:
+"@dana is not in People, so this came to the approvers." If no one approves
+either, it says "@dana is not in People and no one approves yet, so this is
+for everyone." An admin also sees **Add @dana in Settings → People**, which
+opens [People](#people). Adding them with that GitHub login routes the card
+to them on the next load. Whoever sees the card can also **Remind** them, which
+asks GitHub to request their review again
+([troubleshooting](troubleshooting.md#reminding-the-person)). None of this
+changes who decides: Approve and Reject stay the named person's.
+
 - **The role a question names** is resolved when its gate opens and kept on the
   gate by id (`gates.person_role`), with the name as asked
   (`gates.person_role_asked`). Renaming a custom role keeps routing it. A gate
