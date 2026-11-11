@@ -1189,3 +1189,152 @@ describe('the Needs-you page from the keyboard', () => {
     expect(current()).toEqual([]);
   });
 });
+
+/**
+ * A card's Show more sheet holds everything its card does, and more, never
+ * less (#305, ADR 0056): a held approval's, merge's or promote's decision is
+ * drawn there whole, and decided from there as from the card.
+ */
+describe('a held decision’s sheet', () => {
+  const HEAD = '692cd1f88f3e45093ad9ba4e68e84d590af3b595';
+  // Longer than three lines anywhere the card is drawn, so the card cuts it and the sheet must not.
+  const SUMMARY = 'The limit is per client, keyed on the token rather than the address. '.repeat(6) + 'Nothing else changes.';
+  const LONG_TITLE = 'Rate-limit every route the webhook receiver exposes, per client, with a burst allowance and a clear 429 that says when to try again';
+  const APPROVAL: AttentionItem = {
+    id: 'approval:openadlc#40@janedoe',
+    kind: 'merge_waiting',
+    group: 'work',
+    headline: "Pull request #40 waits for @janedoe's approval",
+    subject: { repo: 'openadlc', number: 39, title: LONG_TITLE, ref: 'openadlc#39', url: null },
+    bot: null,
+    since: '2026-09-24T11:00:00.000Z',
+    detail: 'The lead approved 692cd1f.',
+    actions: [
+      { kind: 'human_review_approve', label: 'Approve', subject: 'openadlc#40', login: 'janedoe', head: HEAD },
+      { kind: 'human_review_reject', label: 'Reject', subject: 'openadlc#40', login: 'janedoe', head: HEAD },
+      { kind: 'human_review_discuss', label: 'Discuss', subject: 'openadlc#40', login: 'janedoe', head: HEAD },
+      { kind: 'open_url', label: 'Review it on GitHub', url: 'https://github.com/janedoe/openadlc/pull/40/files' },
+    ],
+    decision: {
+      repo: 'openadlc',
+      pr: 40,
+      head: HEAD,
+      login: 'janedoe',
+      yours: true,
+      change: 'Limit each client to 60 requests a minute.',
+      why: 'It changes `infra/`, which AGENTS.md names @janedoe for.',
+      reviews: [{ login: 'reviewer-bot', seat: 'lead-reviewer', state: 'approved', summary: SUMMARY, url: 'https://github.com/janedoe/openadlc/pull/40#pullrequestreview-5' }],
+      prUrl: 'https://github.com/janedoe/openadlc/pull/40',
+      diffUrl: 'https://github.com/janedoe/openadlc/pull/40/files',
+      next: { approve: 'Posts your approval.', reject: 'Sends it back.', discuss: 'Sends your message.' },
+    },
+  };
+  const decides = (within: ParentNode) => [...within.querySelectorAll('[data-decide]')].map((one) => one.getAttribute('data-decide'));
+
+  it('shows a held approval whole: what it does, the why, each review in full, the diff and the buttons', async () => {
+    await render([APPROVAL]);
+    const card = container.querySelector('article')!;
+    await click(button('Show more', card));
+    const opened = sheet()!;
+    const panel = opened.querySelector('[data-decision-panel]')!;
+    expect(panel).not.toBeNull();
+    expect(panel.textContent).toContain('What it does: Limit each client to 60 requests a minute.');
+    expect(panel.textContent).toContain('Why you are asked: It changes `infra/`');
+    const summary = panel.querySelector('[data-summary]')!;
+    expect(summary.textContent).toBe(SUMMARY);
+    expect(clippedWithin(summary, opened)).toBe(false);
+    expect(panel.querySelector('[data-diff]')).not.toBeNull();
+    expect(decides(panel)).toEqual(['approve', 'reject', 'discuss']);
+    // The card keeps its three lines.
+    expect(card.querySelector('[data-summary]')!.className).toContain('line-clamp-3');
+  });
+
+  it('opens the message box from the sheet’s Discuss, as one decision with the card', async () => {
+    await render([APPROVAL]);
+    const card = container.querySelector('article')!;
+    await click(button('Show more', card));
+    const opened = sheet()!;
+    await click(opened.querySelector('[data-decide="discuss"]') as HTMLElement);
+    expect(opened.querySelector('[data-discuss]')).not.toBeNull();
+    // The card's copy shares the step: it no longer offers the buttons either.
+    expect(decides(card)).toEqual([]);
+    expect(card.querySelector('[data-discuss]')).not.toBeNull();
+  });
+
+  it('wraps the title in the sheet, and cuts it to a line on the card', async () => {
+    await render([APPROVAL]);
+    const card = container.querySelector('article')!;
+    expect(card.querySelector('[data-subject]')!.className).toContain('truncate');
+    await click(button('Show more', card));
+    const title = sheet()!.querySelector('[data-subject]')!;
+    expect(title.textContent).toContain(LONG_TITLE);
+    expect(title.className).not.toContain('truncate');
+    expect(title.className).toContain('break-words');
+  });
+
+  it('shows a held merge’s panel in its sheet, and its why once', async () => {
+    const why = 'ci and review-gate passed, but OpenADLC did not merge it, because it is behind main. '.repeat(3).trim();
+    const merge: AttentionItem = {
+      id: 'merge:www#46',
+      kind: 'merge_waiting',
+      group: 'work',
+      headline: 'Pull request #46 is held for a person: merge it, leave it, or discuss it',
+      subject: { repo: 'www', number: 12, title: 'New pricing page', ref: 'www#12', url: null },
+      bot: null,
+      since: '2026-09-24T11:59:00.000Z',
+      detail: why,
+      actions: [
+        { kind: 'held_merge_merge', label: 'Merge', subject: 'www#46', head: HEAD },
+        { kind: 'held_merge_leave', label: 'Leave it', subject: 'www#46', head: HEAD },
+        { kind: 'held_merge_discuss', label: 'Discuss', subject: 'www#46', head: HEAD },
+        { kind: 'open_url', label: 'Open on GitHub', url: 'https://github.com/620legal/www/pull/46' },
+      ],
+      heldMerge: { repo: 'www', pr: 46, head: HEAD, why, merge: { merge: true }, yours: true, next: { merge: 'Merges it.', leave: 'Leaves it.', discuss: 'Discusses it.' }, prUrl: null },
+    };
+    await render([merge]);
+    await click(button('Show more', container.querySelector('article')!));
+    const opened = sheet()!;
+    const panel = opened.querySelector('[data-held-merge]')!;
+    expect(panel).not.toBeNull();
+    expect(panel.querySelector('[data-why]')!.textContent).toContain(why);
+    expect(decides(panel)).toEqual(['merge', 'leave', 'discuss']);
+    expect(opened.textContent!.split(why)).toHaveLength(2);
+  });
+
+  it('shows a held promote’s panel in its sheet, and its why once', async () => {
+    const SHA = 'abc1234def567890abc1234def567890abc12345';
+    const why = "testbed's delivery rules say a person approves each production deploy.";
+    const promote: AttentionItem = {
+      id: `promote:testbed@${SHA}`,
+      kind: 'promote_held',
+      group: 'work',
+      headline: 'Release testbed@abc1234 to production?',
+      subject: { repo: 'testbed', number: null, title: null, ref: null, url: null },
+      bot: null,
+      since: '2026-09-24T11:59:00.000Z',
+      detail: why,
+      raw: 'deploy-production: waiting',
+      actions: [
+        { kind: 'promote_release', label: 'Release', repo: 'testbed', sha: SHA },
+        { kind: 'promote_keep_holding', label: 'Keep holding', repo: 'testbed', sha: SHA },
+        { kind: 'promote_discuss', label: 'Discuss', repo: 'testbed', sha: SHA, subject: 'testbed#40' },
+      ],
+      heldPromote: {
+        repo: 'testbed',
+        sha: SHA,
+        pr: 40,
+        what: 'Releases abc1234 from testing to production.',
+        why,
+        next: { release: 'Starts the deploy.', keepHolding: 'Keeps it held.', discuss: 'Discusses it.', automatic: 'Switches.' },
+      },
+    };
+    await render([promote]);
+    await click(button('Show more', container.querySelector('article')!));
+    const opened = sheet()!;
+    const panel = opened.querySelector('[data-held-promote]')!;
+    expect(panel).not.toBeNull();
+    for (const part of ['[data-what]', '[data-why]', '[data-consequences]']) expect(panel.querySelector(part)).not.toBeNull();
+    expect(decides(panel)).toEqual(['keep', 'discuss']);
+    expect(opened.textContent!.split(why)).toHaveLength(2);
+  });
+});

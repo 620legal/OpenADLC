@@ -398,6 +398,14 @@ describe('a held Human-review approval’s card', () => {
     expect(hasMore(HELD)).toBe(false);
   });
 
+  it('has a Show more for its reviews, which only the sheet shows whole (#305)', () => {
+    const review = { login: 'reviewer-bot', seat: 'lead-reviewer', state: 'approved', summary: 'The limit is per client.', url: 'https://github.com/acme/api/pull/40#r-1' };
+    expect(hasMore({ ...HELD, decision: { ...HELD.decision!, reviews: [review] } })).toBe(true);
+    // A review with nothing to read in full adds no Show more.
+    expect(hasMore({ ...HELD, decision: { ...HELD.decision!, reviews: [{ ...review, summary: '' }] } })).toBe(false);
+    expect(hasMore({ ...HELD, decision: { ...HELD.decision!, reviews: [] } })).toBe(false);
+  });
+
   it('sends a Reject only with a reason', () => {
     expect(rejectReady('')).toBe(false);
     expect(rejectReady('  \n ')).toBe(false);
