@@ -53,13 +53,15 @@ one fixed window for any question, with no config key (#287).
   without the lapse nothing would ask its seats while a question waits for
   days.
 - **Restarts.** `PauseHolds.load` runs at bridge start:
-  - It sets a timer for the remainder of each window still open.
-  - It lapses at once a pause that has a `review.pause_held` and no
-    `review.pause_hold_lapsed` for that task and `pausedAt`.
-  - It leaves alone a pause with no `review.pause_held`. Such a pause is from
-    before this change and already asked the seats. Leaving it alone means an
-    upgrade does not make the lead decide again on every long-paused pull
-    request.
+  - It takes up only a pause that has a `review.pause_held` for that task and
+    `pausedAt`.
+  - It sets a timer for the remainder of each such window still open.
+  - It lapses at once one whose window is over and that has no
+    `review.pause_hold_lapsed`.
+  - It leaves alone a pause with no `review.pause_held`, whether its window is
+    open or over. Such a pause is from before this change and already asked
+    the seats; a lapse would ask them a second time. Leaving it alone means an
+    upgrade does not make the lead decide again on every paused pull request.
 - **Unchanged.** `builderEnded` itself, every review start path, and the
   callers' once-per-task logging are as 0043 has them. There is no migration
   (`tasks.paused_at` has existed since 0082) and no config key.

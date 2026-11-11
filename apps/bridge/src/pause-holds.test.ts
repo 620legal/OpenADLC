@@ -229,4 +229,15 @@ describe('the holds a restart finds', () => {
     await advance(PAUSED_BUILDER_HOLD_MS * 2);
     expect(builderEnded).not.toHaveBeenCalled();
   });
+
+  it('sets no lapse for one paused before holds were recorded with its window still open: its pause asked the seats', async () => {
+    store.tasks.set('task-patch', patchRound());
+    clock = T + 10 * 60_000;
+    vi.setSystemTime(clock);
+
+    expect(await holds().load()).toBe(0);
+    await advance(PAUSED_BUILDER_HOLD_MS * 2);
+    expect(builderEnded).not.toHaveBeenCalled();
+    expect(store.events).toEqual([]);
+  });
 });

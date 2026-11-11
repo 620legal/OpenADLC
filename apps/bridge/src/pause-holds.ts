@@ -96,10 +96,10 @@ export class PauseHolds {
   }
 
   /**
-   * At start-up: every paused builder task's hold, from the database. One
-   * still open is set for what is left of it; one that ended while the bridge
-   * was down, held and never lapsed, lapses now. Returns how many were set or
-   * lapsed.
+   * At start-up: every paused builder task's hold, from the database. Only a
+   * pause with a `review.pause_held` is taken up: one still open is set for
+   * what is left of it; one that ended while the bridge was down, and never
+   * lapsed, lapses now. Returns how many were set or lapsed.
    */
   async load(): Promise<number> {
     const paused = await tasks.listTasks({ states: ['paused'], limit: PAUSED_READ_LIMIT });
@@ -108,14 +108,17 @@ export class PauseHolds {
       if (!isBuilder(task) || !task.pausedAt) continue;
       const until = pauseHoldEndsAt(task);
       if (until === null) continue;
+      const key = { task: task.id, pausedAt: task.pausedAt };
+      // A pause with no hold recorded is from before this change, and its
+      // pause already asked the seats: a lapse set for it, even one with its
+      // window still open, would ask them a second time.
+      const held = await listEventsOfTypeWith(REVIEW_PAUSE_HELD, key);
+      if (held.length === 0) continue;
       if (this.now() < until) {
         this.schedule(task.id, task.pausedAt, until);
         count++;
         continue;
       }
-      const key = { task: task.id, pausedAt: task.pausedAt };
-      const held = await listEventsOfTypeWith(REVIEW_PAUSE_HELD, key);
-      if (held.length === 0) continue;
       const lapsed = await listEventsOfTypeWith(REVIEW_PAUSE_HOLD_LAPSED, key);
       if (lapsed.length > 0) continue;
       if (await this.lapse(task.id, task.pausedAt)) count++;
