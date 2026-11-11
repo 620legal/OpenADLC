@@ -3,7 +3,7 @@ import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SpendingLimitsView } from '@/lib/api';
-import { SpendingLimits, SpendingLimitsPanel } from './spending-limits';
+import { SpendingLimits, SpendingLimitsPanel, SpendingSummary } from './spending-limits';
 
 const VIEW: SpendingLimitsView = {
   period: '2026-09',
@@ -72,5 +72,51 @@ describe('saving the limits when the answer is not the bridge’s', () => {
     expect(host.textContent).toContain('Bad gateway');
     expect(host.textContent).not.toMatch(/not valid JSON|Unexpected token/);
     act(() => root.unmount());
+  });
+});
+
+describe('billed spend and the subscription estimate', () => {
+  const ESTIMATED: SpendingLimitsView = {
+    ...VIEW,
+    global: {
+      ...VIEW.global,
+      monthTotal: { amountUsd: 100, spentUsd: 10, estimateUsd: 140 },
+      bots: [{ botId: 'bot-1', name: 'builder', amountUsd: null, spentUsd: 2, estimateUsd: 36.2 }],
+    },
+  };
+
+  async function rendered(node: React.ReactNode): Promise<{ host: HTMLElement; done: () => void }> {
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    const host = document.createElement('div');
+    document.body.append(host);
+    const root = createRoot(host);
+    await act(async () => root.render(node));
+    return { host, done: () => act(() => root.unmount()) };
+  }
+
+  it('keeps them apart: billed spend against the cap, the estimate beside it as not billed, and the bar from billed alone', async () => {
+    const { host, done } = await rendered(<SpendingSummary initial={ESTIMATED} />);
+    const text = host.textContent ?? '';
+    expect(text).toContain('$10.00 spent this month');
+    expect(text).toContain('$140.00 estimated on subscriptions — not billed, not capped');
+    // $150 together would be over the $100 cap; the bar says 10 percent.
+    const meter = host.querySelector('[role="meter"]')!;
+    expect(meter.getAttribute('aria-valuenow')).toBe('10');
+    expect(meter.getAttribute('aria-valuemax')).toBe('100');
+    done();
+  });
+
+  it('says the estimate beside each month figure on the editing page', async () => {
+    const { host, done } = await rendered(<SpendingLimitsPanel view={ESTIMATED} busy={false} notice={null} error={null} onSave={() => undefined} />);
+    const text = host.textContent ?? '';
+    expect(text).toContain('$10.00 spent this month · $140.00 estimated on subscriptions — not billed, not capped');
+    expect(text).toContain('$2.00 this month · $36.20 est., not billed');
+    done();
+  });
+
+  it('says nothing about an estimate when no run was on a subscription', async () => {
+    const { host, done } = await rendered(<SpendingSummary initial={VIEW} />);
+    expect(host.textContent).not.toContain('estimated');
+    done();
   });
 });

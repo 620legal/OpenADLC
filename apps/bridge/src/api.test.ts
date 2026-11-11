@@ -2905,6 +2905,18 @@ describe('the month’s costs, as the console reads them', () => {
     }
     expect(ensureBudget).not.toHaveBeenCalled();
   });
+
+  it('lists a task as stopped at its cap only where it stops: a subscription task below its runaway guard is not', async () => {
+    vi.mocked(tasks.listTasks).mockResolvedValueOnce([
+      { id: 'key', subjectRef: 'api#1', costUsd: 15, costCapUsd: 15, billed: true },
+      { id: 'sub-running', subjectRef: 'api#2', costUsd: 40, costCapUsd: 15, billed: false },
+      { id: 'sub-guard', subjectRef: 'api#3', costUsd: 150, costCapUsd: 15, billed: false },
+    ] as never);
+
+    const body = (await (await fetch(`${url}/v1/costs`)).json()) as { stoppedAtCap: { id: string }[] };
+
+    expect(body.stoppedAtCap.map((task) => task.id)).toEqual(['key', 'sub-guard']);
+  });
 });
 
 describe('a bot’s sessions on the crew page', () => {

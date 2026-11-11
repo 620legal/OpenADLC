@@ -563,9 +563,9 @@ pullRequests:
 
 | Key | Default | Effect |
 |---|---|---|
-| `perTaskCapUsd` | 15 | Each task's cap; hitting it stops the task and asks |
-| `monthlyCapUsd` | 1500 | The month's budget |
-| `warningAt` | 0.9 | The share of the budget at which it warns |
+| `perTaskCapUsd` | 15 | Each task's cap; hitting it stops a billed task and asks. A task on a subscription is stopped at 10 times it instead (the runaway guard, below) |
+| `monthlyCapUsd` | 1500 | The month's budget, of billed spend |
+| `warningAt` | 0.9 | The share of the budget, of billed spend, at which it warns |
 | `onCap.stopLeasing` | true | Nothing new starts once the global month total is reached. `false` lets work start past that total; a repository, bot or provider cap still stops it |
 
 `onCap.pauseReviewsAt` and `onCap.notify` are read and not used.
@@ -579,8 +579,36 @@ per-task cap, with how much of the month is spent. **Edit limits** opens
 provider, and Repositories for a cap that is blank (the global one) or lower.
 `warningAt` and `onCap` stay in this file.
 
+**Only billed spend is capped.** A run on a subscription seat (an Anthropic,
+OpenAI or xAI subscription account) costs no money per call, so it is not
+spend:
+
+- **Billed** is a run on an API key: a key account, or the per-bot key from
+  before model accounts. The per-task cap, the monthly, repository, bot and
+  provider caps, the leasing budget and the `cap_warning` notification count
+  only these runs.
+- **Estimated** is a run on a subscription. Its cost is still worked out at
+  the API's prices and written to the ledger, marked not billed. Settings →
+  Spending, the board's header, a card's cost and the status issue show it
+  beside billed spend, labelled as an estimate (`$0.74 est.`), and no monthly
+  cap or warning counts it. The Costs page's breakdowns by bot, repository
+  and day show what all work cost, estimates included.
+- hostd decides which a task is when it starts each session, from the
+  credential it gives it, and writes it on the task; every ledger row the
+  task writes carries it. A task whose bot moves to another account takes
+  the new account's at its next session. Rows written before this existed
+  count as billed.
+
+**The runaway guard.** A task on a subscription is not stopped at its
+per-task cap. It is stopped, with the same cost-cap question, when its
+estimated cost reaches its cap plus nine more steps of the per-task cap: 10
+times the per-task cap when it starts, $150 at $15. A `continue` on the
+question raises the cap by one step, as it does for a billed task, so the
+guard moves by that same step. It never fires on normal work and still ends
+a loop. A subscription's own rate limit applies as well, unchanged.
+
 A monthly cap stops new work; a task already running finishes up to its own
-per-task cap. Going on past that per-task cap is new spend too: once a monthly
+per-task cap, or its runaway guard on a subscription. Going on past that per-task cap is new spend too: once a monthly
 cap is reached, a `continue` on the task's cost-cap question waits, with the
 question left open and the cap named on the issue and in the thread, unless
 an admin gives it from the console. An admin's continue is audited as

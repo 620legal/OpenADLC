@@ -594,6 +594,12 @@ describe('a card with work running', () => {
     expect(work.requests[0]?.active[0]?.activity).toBe('searching the code');
   });
 
+  it('carries a request’s subscription estimate on its card, beside its cost', () => {
+    const triaging = { ...triage('request:cccccccc', 'running'), id: 'task-triage', costUsd: 0.5, unbilledUsd: 0.5 } as TaskFacts;
+    const work = read([triaging], new Map(), [request('cccccccc', 'draft')]);
+    expect(work.requests[0]).toMatchObject({ costUsd: 0.5, estimateUsd: 0.5 });
+  });
+
   it('says no step for a task queued or paused, nor for one that has printed none yet', () => {
     const waiting = task('task-queued', 'api#7', 'queued');
     const asking = task('task-paused', 'api#31', 'paused');

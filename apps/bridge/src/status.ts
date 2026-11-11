@@ -45,7 +45,8 @@ export interface StatusReport {
     sessions: number;
   }[];
   board: Record<StageKey, number>;
-  budget: { period: string; capUsd: number; spentUsd: number; state: string };
+  /** `spentUsd` is billed spend; `estimateUsd` the month's subscription runs, not billed. */
+  budget: { period: string; capUsd: number; spentUsd: number; estimateUsd?: number; state: string };
   openGates: number;
   activeLeases: number;
   recentEvents: { source: string; type: string; at: string }[];
@@ -158,7 +159,9 @@ export function renderStatusMarkdown(status: StatusReport, target: { repo: strin
     `_Regenerated ${status.generatedAt}. GitHub is the system of record; this is a view._`,
     '',
     `**Board:** ${columns}`,
-    `**Spend:** $${status.budget.spentUsd.toFixed(2)} of $${status.budget.capUsd.toFixed(2)} (${status.budget.state}) · **gates open:** ${status.openGates} · **active leases:** ${status.activeLeases}`,
+    `**Spend:** $${status.budget.spentUsd.toFixed(2)} billed of $${status.budget.capUsd.toFixed(2)} (${status.budget.state})` +
+      ((status.budget.estimateUsd ?? 0) > 0 ? ` · $${(status.budget.estimateUsd ?? 0).toFixed(2)} estimated on subscriptions, not billed` : '') +
+      ` · **gates open:** ${status.openGates} · **active leases:** ${status.activeLeases}`,
     '',
     '| bot | role | engine | now | github |',
     '|---|---|---|---|---|',

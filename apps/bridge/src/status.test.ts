@@ -76,7 +76,14 @@ describe('the status issue’s body', () => {
     expect(body).not.toMatch(/api#/);
     expect(body).not.toContain('build-box-7');
     expect(body).not.toContain('**Host:**');
-    expect(body).toContain('$12.50 of $100.00');
+    expect(body).toContain('$12.50 billed of $100.00');
+    // No subscription runs this month: nothing about an estimate.
+    expect(body).not.toContain('estimated');
+  });
+
+  it('names billed spend, and beside it the subscription estimate as not billed', () => {
+    const body = renderStatusMarkdown({ ...status, budget: { ...status.budget, estimateUsd: 140 } }, { repo: 'org/web' });
+    expect(body).toContain('**Spend:** $12.50 billed of $100.00 (ok) · $140.00 estimated on subscriptions, not billed · **gates open:** 2');
   });
 });
 

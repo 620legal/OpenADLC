@@ -51,7 +51,7 @@ vi.mock('@openadlc/db', () => ({
     }),
     listBots: vi.fn(async () => store.crew),
   },
-  costs: { currentPeriod: vi.fn(() => '2026-09'), recordUsage: vi.fn(async () => undefined), ensureBudget: vi.fn(async () => undefined) },
+  costs: { currentPeriod: vi.fn(() => '2026-09'), recordUsage: vi.fn(async () => undefined), ensureBudget: vi.fn(async () => undefined), taskSpend: vi.fn(async () => 0) },
   spendingLimits: {
     seedGlobal: vi.fn(async () => false),
     effectiveTaskCap: vi.fn(async (_repoId: string | null, fallback: number) => fallback),
@@ -122,6 +122,8 @@ import {
   isRevert,
   leaseHoldUntil,
   settleLeaseAfter,
+  stopAtUsd,
+  RUNAWAY_GUARD_MULTIPLE,
   type BotQueue,
 } from './task-service.js';
 
@@ -2193,9 +2195,9 @@ describe('usage a task’s session reports', () => {
   });
 
   it('is recorded for a running or paused task, and says when the cap is reached', async () => {
-    expect(await reporting().recordUsage(usage())).toEqual({ stop: false, spent: 14.5, cap: 15, stepUsd: 15 });
+    expect(await reporting().recordUsage(usage())).toEqual({ stop: false, spent: 14.5, cap: 15, stepUsd: 15, billed: true });
     task('paused');
-    expect(await reporting().recordUsage(usage({ costUsd: 1 }))).toEqual({ stop: true, spent: 15, cap: 15, stepUsd: 15 });
+    expect(await reporting().recordUsage(usage({ costUsd: 1 }))).toEqual({ stop: true, spent: 15, cap: 15, stepUsd: 15, billed: true });
     expect(costs.recordUsage).toHaveBeenCalledWith(expect.objectContaining({ taskId: 'task-1', botId: 'bot-1', engine: 'claude', costUsd: 1 }));
   });
 
@@ -2231,6 +2233,64 @@ describe('usage a task’s session reports', () => {
     // The ceiling itself is a cost one call could still reach.
     await reporting().recordUsage(usage({ costUsd: 30 }));
     expect(costs.recordUsage).toHaveBeenCalledTimes(1);
+  });
+
+  describe('on a key seat and on a subscription seat', () => {
+    const on = (billed: boolean, costCapUsd = 15) =>
+      vi.mocked(tasks.getTask).mockResolvedValue({ id: 'task-1', botId: 'bot-1', repoId: null, state: 'running', costCapUsd, billed, kind: 'implement', subjectRef: 'openadlc#285' } as never);
+    const spentAfter = (total: number) => vi.mocked(tasks.addTaskCost).mockImplementationOnce(async () => total);
+
+    afterEach(() => {
+      vi.mocked(tasks.addTaskCost).mockImplementation(async (_id: string, costUsd: number) => 14 + costUsd);
+    });
+
+    it('stops a key task at its per-task cap, as before', async () => {
+      on(true);
+      spentAfter(15);
+      expect(await reporting().recordUsage(usage())).toEqual({ stop: true, spent: 15, cap: 15, stepUsd: 15, billed: true });
+      expect(costs.recordUsage).toHaveBeenCalledWith(expect.objectContaining({ billed: true }));
+      expect(tasks.addTaskCost).toHaveBeenCalledWith('task-1', 0.5, true);
+    });
+
+    it('lets a subscription task past the cap, and stops it at the runaway guard of 10× the per-task cap', async () => {
+      on(false);
+      for (const total of [15, 40, 149.99]) {
+        spentAfter(total);
+        expect(await reporting().recordUsage(usage()), String(total)).toEqual({ stop: false, spent: total, cap: 150, stepUsd: 15, billed: false });
+      }
+      spentAfter(150);
+      expect(await reporting().recordUsage(usage())).toEqual({ stop: true, spent: 150, cap: 150, stepUsd: 15, billed: false });
+      expect(costs.recordUsage).toHaveBeenCalledWith(expect.objectContaining({ billed: false, costUsd: 0.5 }));
+      expect(tasks.addTaskCost).toHaveBeenCalledWith('task-1', 0.5, false);
+    });
+
+    it('moves the guard by one step when a continue raised the cap', async () => {
+      on(false, 30);
+      spentAfter(150);
+      expect(await reporting().recordUsage(usage())).toMatchObject({ stop: false, cap: 165 });
+    });
+
+    it('holds one report to the guard and one step on a subscription', async () => {
+      on(false);
+      await expect(reporting().recordUsage(usage({ costUsd: 165.01 }))).rejects.toThrow(/at most 165/);
+      await reporting().recordUsage(usage({ costUsd: 165 }));
+      expect(costs.recordUsage).toHaveBeenCalledTimes(1);
+    });
+
+    it('answers headroom against the same limit on both sides of the line', async () => {
+      on(false);
+      vi.mocked(costs.taskSpend).mockResolvedValueOnce(149).mockResolvedValueOnce(149);
+      expect(await reporting().headroom('task-1', 0.5)).toEqual({ stop: false, spent: 149, cap: 150, stepUsd: 15, billed: false });
+      expect(await reporting().headroom('task-1', 1.5)).toMatchObject({ stop: true, cap: 150 });
+      on(true);
+      vi.mocked(costs.taskSpend).mockResolvedValueOnce(14.9);
+      expect(await reporting().headroom('task-1', 0.5)).toEqual({ stop: true, spent: 14.9, cap: 15, stepUsd: 15, billed: true });
+    });
+
+    it('counts a task row that does not say as billed', () => {
+      expect(stopAtUsd({ costCapUsd: 15 }, 15)).toBe(15);
+      expect(stopAtUsd({ costCapUsd: 15, billed: false }, 15)).toBe(15 * RUNAWAY_GUARD_MULTIPLE);
+    });
   });
 });
 

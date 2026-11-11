@@ -12,8 +12,13 @@ const PROVIDERS = spendingLimits.SPENDING_PROVIDERS;
 
 export interface LimitFigure {
   amountUsd: number | null;
-  /** Null on a per-task cap: that cap is not a month's spend. */
+  /** Billed spend: runs on an API key, what the cap counts. Null on a per-task cap: that cap is not a month's spend. */
   spentUsd: number | null;
+  /**
+   * The month's estimated cost of runs on subscriptions, beside the billed
+   * spend: not billed, and not held to this cap. Null on a per-task cap.
+   */
+  estimateUsd: number | null;
   /** On a repository figure, the global cap a blank field uses. */
   globalUsd?: number | null;
 }
@@ -73,19 +78,23 @@ function aboveGlobal(globalUsd: number): string {
   return `can't be more than the global ${spendingLimits.dollars(globalUsd)}`;
 }
 
-function figure(amountUsd: number | null, spentUsd: number | null, globalUsd?: number | null): LimitFigure {
-  return globalUsd === undefined ? { amountUsd, spentUsd } : { amountUsd, spentUsd, globalUsd };
+function figure(amountUsd: number | null, spentUsd: number | null, estimateUsd: number | null, globalUsd?: number | null): LimitFigure {
+  return globalUsd === undefined ? { amountUsd, spentUsd, estimateUsd } : { amountUsd, spentUsd, estimateUsd, globalUsd };
 }
 
 export async function spendingView(costsConfig: CostsConfig): Promise<SpendingView> {
   await spendingLimits.seedGlobal(costsConfig.monthlyCapUsd, costsConfig.perTaskCapUsd);
   const period = costs.currentPeriod();
-  const [saved, crew, repoList, monthSpent, byProvider] = await Promise.all([
+  // Each month sum twice: billed, which the caps count, and the estimate of
+  // runs on subscriptions, which is shown beside it and capped by nothing.
+  const [saved, crew, repoList, monthSpent, monthEstimate, byProvider, byProviderEstimate] = await Promise.all([
     spendingLimits.listLimits(),
     bots.listBots(),
     repos.listRepos(),
     costs.monthSpend(period),
+    costs.monthSpend(period, 'estimate'),
     costs.spendByProvider(period),
+    costs.spendByProvider(period, 'estimate'),
   ]);
   const amounts = new Map(saved.map((row) => [key(row.scope, row.kind), row.amountUsd]));
   const read = (scope: string, kind: string): number | null => {
@@ -94,56 +103,76 @@ export async function spendingView(costsConfig: CostsConfig): Promise<SpendingVi
   };
 
   const botSpend = new Map(
-    await Promise.all(crew.map(async (bot) => [bot.id, await costs.spendForBot(period, bot.id)] as const)),
+    await Promise.all(
+      crew.map(async (bot) => [bot.id, await Promise.all([costs.spendForBot(period, bot.id), costs.spendForBot(period, bot.id, 'estimate')])] as const),
+    ),
   );
-  const providerSpend = new Map(byProvider.map((row) => [row.provider, row.costUsd]));
+  const byProviderOf = (rows: { provider: string; costUsd: number }[]) => new Map(rows.map((row) => [row.provider, row.costUsd]));
+  const providerSpend = byProviderOf(byProvider);
+  const providerEstimate = byProviderOf(byProviderEstimate);
 
-  const botsOf = (scope: string, spendOf: (botId: string) => number, global: boolean): BotFigure[] =>
+  /** A figure's billed spend and its estimate, in that order. */
+  type Spend = readonly [number, number];
+
+  const botsOf = (scope: string, spendOf: (botId: string) => Spend, global: boolean): BotFigure[] =>
     crew.map((bot) => ({
       botId: bot.id,
       name: bot.name,
       ...figure(
         read(scope, spendingLimits.botKind(bot.id)),
-        spendOf(bot.id),
+        ...spendOf(bot.id),
         global ? undefined : read(spendingLimits.GLOBAL_SCOPE, spendingLimits.botKind(bot.id)),
       ),
     }));
 
-  const providersOf = (scope: string, spendOf: (provider: string) => number, global: boolean): ProviderFigure[] =>
+  const providersOf = (scope: string, spendOf: (provider: string) => Spend, global: boolean): ProviderFigure[] =>
     PROVIDERS.map((provider) => ({
       provider,
       ...figure(
         read(scope, spendingLimits.providerKind(provider)),
-        spendOf(provider),
+        ...spendOf(provider),
         global ? undefined : read(spendingLimits.GLOBAL_SCOPE, spendingLimits.providerKind(provider)),
       ),
     }));
 
   const global: ScopeFigures = {
-    monthTotal: figure(read(spendingLimits.GLOBAL_SCOPE, 'month_total') ?? costsConfig.monthlyCapUsd, monthSpent),
-    task: figure(read(spendingLimits.GLOBAL_SCOPE, 'task') ?? costsConfig.perTaskCapUsd, null),
-    bots: botsOf(spendingLimits.GLOBAL_SCOPE, (id) => botSpend.get(id) ?? 0, true),
-    providers: providersOf(spendingLimits.GLOBAL_SCOPE, (provider) => providerSpend.get(provider) ?? 0, true),
+    monthTotal: figure(read(spendingLimits.GLOBAL_SCOPE, 'month_total') ?? costsConfig.monthlyCapUsd, monthSpent, monthEstimate),
+    task: figure(read(spendingLimits.GLOBAL_SCOPE, 'task') ?? costsConfig.perTaskCapUsd, null, null),
+    bots: botsOf(spendingLimits.GLOBAL_SCOPE, (id) => botSpend.get(id) ?? [0, 0], true),
+    providers: providersOf(
+      spendingLimits.GLOBAL_SCOPE,
+      (provider) => [providerSpend.get(provider) ?? 0, providerEstimate.get(provider) ?? 0],
+      true,
+    ),
   };
 
   const reposView = await Promise.all(
     repoList.map(async (repo) => {
       const scope = spendingLimits.repoScope(repo.id);
-      const [spent, byBot, byProviderInRepo] = await Promise.all([
+      const [spent, estimate, byBot, byBotEstimate, byProviderInRepo, byProviderInRepoEstimate] = await Promise.all([
         costs.spendForRepo(period, repo.id),
+        costs.spendForRepo(period, repo.id, 'estimate'),
         costs.spendByBotInRepo(period, repo.id),
+        costs.spendByBotInRepo(period, repo.id, 'estimate'),
         costs.spendByProviderInRepo(period, repo.id),
+        costs.spendByProviderInRepo(period, repo.id, 'estimate'),
       ]);
       const botInRepo = new Map(byBot.map((row) => [row.botId, row.costUsd]));
-      const providerInRepo = new Map(byProviderInRepo.map((row) => [row.provider, row.costUsd]));
+      const botInRepoEstimate = new Map(byBotEstimate.map((row) => [row.botId, row.costUsd]));
+      const providerInRepo = byProviderOf(byProviderInRepo);
+      const providerInRepoEstimate = byProviderOf(byProviderInRepoEstimate);
       return {
         repoId: repo.id,
         name: repo.name,
         fullName: repo.fullName,
-        monthTotal: figure(read(scope, 'month_total'), spent, global.monthTotal.amountUsd),
-        task: figure(read(scope, 'task'), null, global.task.amountUsd),
-        bots: botsOf(scope, (id) => botInRepo.get(id) ?? 0, false),
-        providers: providersOf(scope, (provider) => providerInRepo.get(provider) ?? 0, false),
+        monthTotal: figure(read(scope, 'month_total'), spent, estimate, global.monthTotal.amountUsd),
+        task: figure(read(scope, 'task'), null, null, global.task.amountUsd),
+        bots: botsOf(scope, (id) => [botInRepo.get(id) ?? 0, botInRepoEstimate.get(id) ?? 0], false),
+        providers: providersOf(
+          scope,
+          (provider) => [providerInRepo.get(provider) ?? 0, providerInRepoEstimate.get(provider) ?? 0],
+          false,
+        ),
       };
     }),
   );
