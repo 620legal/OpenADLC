@@ -665,11 +665,14 @@ jobs:
       # can read whether the release came out immutable. One that did not is
       # deleted (its tag stays), and the run fails saying what to turn on;
       # installs take only an immutable release in any case.
+      # The notes' opening line goes in at create, before GitHub's generated
+      # list: once published the release is immutable, and cannot be edited.
       - name: the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$TAG" --repo "$REPO" --verify-tag --title "$TAG" --generate-notes \
+            --notes "Each change below was requested by a person, then built, reviewed and merged by OpenADLC's crew, unless its line names a person; [how](https://github.com/$REPO#one-change-from-request-to-release)." \
             "out/openadlc-$TAG.tar.gz" "out/openadlc-$TAG.tar.gz.sigstore.json" out/SHA256SUMS out/images.json
           immutable=$(gh api "repos/$REPO/releases/tags/$TAG" --jq '.immutable')
           if [ "$immutable" != true ]; then
