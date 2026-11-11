@@ -1,6 +1,5 @@
 // @vitest-environment happy-dom
 import { act } from 'react';
-import { renderToStaticMarkup } from 'react-dom/server';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { NotificationSettingsView } from '@/lib/api';
@@ -73,18 +72,5 @@ describe('Settings → Notifications in a browser', () => {
     await draw();
     await act(async () => button('Save')!.click());
     expect(container.querySelector('[role="status"]')?.textContent).toBe('switches is an object of kinds, each true or false');
-  });
-});
-
-describe('the card Settings shows', () => {
-  it('says push, how many devices the signed-in person has, and how many kinds are off, and names no transport', async () => {
-    const { notificationsLine, NotificationsSummary } = await import('./notification-settings');
-    expect(notificationsLine(SAVED, 2)).toBe('Push to the console app · on your 2 devices');
-    expect(notificationsLine(SAVED, 1)).toBe('Push to the console app · on your device');
-    expect(notificationsLine(SAVED, 0)).toBe('Push to the console app · not on any of your devices yet');
-    expect(notificationsLine({ switches: { ...SWITCHES, cap_warning: false } }, null)).toBe('Push to the console app · 1 kind off');
-    expect(notificationsLine(null, null)).toBe('Push to the console app');
-    const html = renderToStaticMarkup(<NotificationsSummary view={SAVED} devices={1} />);
-    expect(html).not.toMatch(/ntfy|slack|webhook|OPENADLC_NOTIFY_WEBHOOK/i);
   });
 });

@@ -4,21 +4,45 @@
   <b>A crew of AI agents that takes a request to a reviewed, merged, deployed change — on your GitHub, on your machines.</b>
 </p>
 
-<p align="center">OpenADLC runs the agentic development life cycle (ADLC) for your repositories.</p>
+<p align="center">OpenADLC runs the agentic development life cycle (ADLC) for your repositories — and for this one.</p>
 
 <p align="center">
-  <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue"></a>
+  <a href="https://github.com/620legal/OpenADLC/pulls?q=is%3Apr+is%3Amerged+author%3Afleet-atlas-orzelig"><img alt="Built by its own crew" src="https://img.shields.io/badge/built%20by-its%20own%20crew-6f42c1?style=for-the-badge"></a>
+  <a href="https://github.com/620legal/OpenADLC/releases"><img alt="Latest release" src="https://img.shields.io/github/v/release/620legal/OpenADLC?style=for-the-badge&label=release&color=2ea44f"></a>
+</p>
+
+<p align="center">
   <a href="https://github.com/620legal/OpenADLC/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/620legal/OpenADLC/actions/workflows/ci.yml/badge.svg"></a>
-  <img alt="Node 22+" src="https://img.shields.io/badge/node-%E2%89%A522-339933">
+  <a href="https://github.com/620legal/OpenADLC/releases"><img alt="Released" src="https://img.shields.io/github/release-date/620legal/OpenADLC?label=released"></a>
+  <a href="https://github.com/620legal/OpenADLC/commits/main"><img alt="Commit activity" src="https://img.shields.io/github/commit-activity/m/620legal/OpenADLC"></a>
+  <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue"></a>
   <img alt="Self-hosted" src="https://img.shields.io/badge/self--hosted-laptop%20%7C%20cloud-555">
 </p>
 
 <p align="center">
   <a href="#quick-start">Quick start</a> ·
   <a href="#how-it-works">How it works</a> ·
+  <a href="#one-change-from-request-to-release">One change, end to end</a> ·
   <a href="#the-crew">The crew</a> ·
+  <a href="#safety">Safety</a> ·
+  <a href="docs/unverified.md">What isn't proven yet</a> ·
+  <a href="https://github.com/620legal/OpenADLC/releases">Releases</a> ·
   <a href="#documentation">Docs</a>
 </p>
+
+> [!NOTE]
+> **This repository is built by OpenADLC.** In its first two weeks of building
+> itself (26 October – 10 November 2026), its crew built 48 of the 63 pull
+> requests merged here: each one filed by intake, designed, built, reviewed on
+> two model providers, and merged by the GitHub App. A person answered the
+> crew's questions and approved the files only a person may change.
+> [Every pull request the crew built](https://github.com/620legal/OpenADLC/pulls?q=is%3Apr+is%3Amerged+author%3Afleet-atlas-orzelig)
+> · [Follow one from request to release](#one-change-from-request-to-release)
+
+> [!IMPORTANT]
+> **Early, and in daily use.** OpenADLC is at 0.1.x and releases several times
+> a week; each release's notes say what an upgrade needs. What hasn't been seen
+> working yet is listed, by name, in [the unverified log](docs/unverified.md).
 
 <p align="center">
   <img src="docs/images/board.png" alt="The OpenADLC board: one card in each stage, from intake through design, build, review and ship to done, with the status on each card" width="900">
@@ -56,6 +80,26 @@ flowchart LR
 
 Any stage can send work back one step, with a reason. When an agent needs a
 decision it asks you on the card, and the work waits for your answer.
+
+## One change, from request to release
+
+A real one from this repository: a pull request in a managed repository sat
+for 21 hours because its builder had been too busy for the round that would
+fix it, and nothing said so.
+
+| Step | Who | On GitHub |
+|---|---|---|
+| **Request** | A person, in plain words: start a builder round the builder was too busy for as soon as it has room, never drop it | [#273](https://github.com/620legal/OpenADLC/issues/273) |
+| **Intake** | intake asks one question (fix the comment only, or the card too?), then rewrites the issue for the person's OK | [#273](https://github.com/620legal/OpenADLC/issues/273) |
+| **Design** | system-engineer: where the round is turned away, and what records it | [design comment](https://github.com/620legal/OpenADLC/issues/273#issuecomment-6777162208) |
+| **Build** | builder: the change, its tests, `make ci` green, the pull request | [#278](https://github.com/620legal/OpenADLC/pull/278) |
+| **Review** | Second and security reviewers advise; the lead asks for one change | [second](https://github.com/620legal/OpenADLC/pull/278#pullrequestreview-5848303309) · [security](https://github.com/620legal/OpenADLC/pull/278#pullrequestreview-5848324164) · [lead: changes](https://github.com/620legal/OpenADLC/pull/278#pullrequestreview-5848441559) |
+| **Fix** | builder pushes the change; the lead approves | [lead: approve](https://github.com/620legal/OpenADLC/pull/278#pullrequestreview-5848600966) |
+| **Merge** | The GitHub App, once CI passed on the commit that lands | [b81e460](https://github.com/620legal/OpenADLC/commit/b81e460) |
+| **Release** | A person cuts it | [v0.1.29](https://github.com/620legal/OpenADLC/releases/tag/v0.1.29) |
+
+51 minutes from the issue to the merge, and $41.86 of model use at list
+prices. The person's part: the request, one answer, one OK, and the release.
 
 <table>
   <tr>
@@ -225,8 +269,8 @@ says so.
 [Extending](docs/extending.md)
 
 OpenADLC is early, and in use: 620 Legal builds its software with it, this
-repository included. Contributions are welcome — see
-[CONTRIBUTING](.github/CONTRIBUTING.md); report security issues privately via
+repository included. Contributions are welcome — file an issue and the crew
+picks it up; see [CONTRIBUTING](.github/CONTRIBUTING.md), and report security issues privately via
 [SECURITY](.github/SECURITY.md).
 
 Apache-2.0 — see [LICENSE](LICENSE), [NOTICE](NOTICE) and the

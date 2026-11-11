@@ -19,6 +19,7 @@ vi.mock('@/app/actions', () => ({
   addPushDevice: vi.fn(),
   removePushDevice: vi.fn(),
   testPushDevice: vi.fn(),
+  testAllPushDevices: vi.fn(),
 }));
 vi.mock('@/lib/api', async (original) => ({
   ...(await original<typeof import('@/lib/api')>()),
@@ -27,6 +28,8 @@ vi.mock('@/lib/api', async (original) => ({
     repos: async () => ({ repos: [], maxReviewRounds: 3 }),
     crew: async () => ({ bots: [] }),
     costs: async () => null,
+    egressHosts: async () => ({ hosts: [], proxied: false, settingsList: false, reason: null }),
+    peopleRoles: async () => ({ people: [], roles: [] }),
     notifications: async () => ({
       switches: { gate_opened: true, merge_waiting: true, review_stalled: true, cap_warning: false, promote_waiting: true, check_failing: true },
     }),
@@ -47,12 +50,19 @@ async function render(me: Me): Promise<string> {
   }
 }
 
+const navOf = (html: string) => html.slice(html.indexOf('<nav aria-label="Settings"'), html.indexOf('</nav>', html.indexOf('<nav aria-label="Settings"')));
+
 const RETIRED = [/ntfy/i, /slack/i, /webhook/i, /Your channel/, /name="notify-kind"/];
 
 describe('the notifications page', () => {
-  it('shows an admin their devices, then the switches and Save, and links back to Settings', async () => {
+  it('shows an admin their devices, then the switches and Save, beside Settings’ navigation with Notifications marked', async () => {
     const html = await render(ADMIN);
-    expect(html).toMatch(/<a [^>]*href="\/settings#notifications"[^>]*>/);
+    const nav = navOf(html);
+    expect(nav).toMatch(/<a (?=[^>]*href="\/settings\/notifications")(?=[^>]*aria-current="page")[^>]*>Notifications<\/a>/);
+    expect(nav).toMatch(/<a [^>]*href="\/settings\/hosts"[^>]*>Hosts<\/a>/);
+    expect(nav).toContain('>System<');
+    expect(html).not.toContain('href="/settings#notifications"');
+    expect(html).toContain('>Send a test notification<');
     expect(html).toContain('Notifications on your devices');
     expect(html).toContain('iPhone · Safari');
     expect(html).toContain('A bot asks you a question');
@@ -60,8 +70,12 @@ describe('the notifications page', () => {
     expect(html.indexOf('Notifications on your devices')).toBeLessThan(html.indexOf('A bot asks you a question'));
   });
 
-  it('shows a user their devices and not the install’s switches', async () => {
+  it('shows a user their devices and not the install’s switches, with Notifications the only part of Settings', async () => {
     const html = await render(USER);
+    const nav = navOf(html);
+    expect([...nav.matchAll(/<a [^>]*>([^<]*)<\/a>/g)].map((match) => match[1])).toEqual(['Notifications']);
+    expect(nav).not.toContain('Run the setup again');
+    expect(html).toContain('>Send a test notification<');
     expect(html).toContain('Notifications on your devices');
     expect(html).toContain('iPhone · Safari');
     expect(html).not.toContain('A bot asks you a question');

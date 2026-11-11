@@ -8,16 +8,16 @@ const pushMock = vi.hoisted(() => ({
   turnOn: vi.fn(),
   currentSubscription: vi.fn(async () => null),
 }));
-vi.mock('@/app/actions', () => ({ addPushDevice: vi.fn(), removePushDevice: vi.fn(), testPushDevice: vi.fn() }));
+vi.mock('@/app/actions', () => ({ addPushDevice: vi.fn(), removePushDevice: vi.fn(), testPushDevice: vi.fn(), testAllPushDevices: vi.fn() }));
 vi.mock('@/lib/push', async (original) => ({
   ...(await original<typeof import('@/lib/push')>()),
   turnOn: pushMock.turnOn,
   currentSubscription: pushMock.currentSubscription,
 }));
 
-import { addPushDevice, removePushDevice, testPushDevice } from '@/app/actions';
+import { addPushDevice, removePushDevice, testAllPushDevices, testPushDevice } from '@/app/actions';
 import type { PushDevicesView } from '@/lib/api';
-import { LOCAL_LINE, PushDevices, SUPPORT_WORDS } from './push-devices';
+import { LOCAL_LINE, NO_DEVICES_LINE, PushDevices, SUPPORT_WORDS } from './push-devices';
 
 /**
  * Turning notifications on for the device a person is on, and seeing their
@@ -145,5 +145,53 @@ describe('the buttons', () => {
     await act(async () => button(host, 'Remove', 0).click());
     expect(removePushDevice).toHaveBeenCalledWith('d1');
     expect(host.textContent).not.toContain('iPhone · Safari');
+  });
+});
+
+describe('Send a test notification, to every device at once (ADR 0053)', () => {
+  it('sits at the top of the card, above the devices, beside each device’s own Send a test', () => {
+    const html = render();
+    expect(html).toContain('>Send a test notification<');
+    expect(html.indexOf('Send a test notification')).toBeLessThan(html.indexOf('iPhone · Safari'));
+    expect(html.match(/>Send a test</g)).toHaveLength(2);
+  });
+
+  it('cannot be pressed with no devices, and says why', async () => {
+    const host = await mount({ initial: { ...VIEW, devices: [] } });
+    expect(button(host, 'Send a test notification').disabled).toBe(true);
+    expect(host.textContent).toContain(NO_DEVICES_LINE);
+  });
+
+  it('says there are no devices, not that it was sent, when the bridge answers none', async () => {
+    vi.mocked(testAllPushDevices).mockResolvedValue({ ok: true, result: { devices: [] } });
+    const host = await mount();
+    await act(async () => button(host, 'Send a test notification').click());
+    expect(testAllPushDevices).toHaveBeenCalledTimes(1);
+    expect(host.querySelector('[role="status"]')?.textContent).toBe(NO_DEVICES_LINE);
+    expect(host.textContent).not.toMatch(/Delivered/);
+  });
+
+  it('says for each device whether it was delivered or why not, and drops a gone one', async () => {
+    vi.mocked(testAllPushDevices).mockResolvedValue({
+      ok: true,
+      result: {
+        devices: [
+          { id: 'd1', name: 'iPhone · Safari', ok: false, status: 410, error: 'Gone' },
+          { id: 'd2', name: 'Mac · Chrome', ok: true, status: 201, error: null },
+        ],
+      },
+    });
+    const host = await mount();
+    await act(async () => button(host, 'Send a test notification').click());
+    const lines = [...host.querySelectorAll('[aria-label="Test results"] li')].map((li) => li.textContent);
+    expect(lines).toEqual(['iPhone · Safari: Not delivered: 410 Gone', 'Mac · Chrome: Delivered (201)']);
+    expect([...host.querySelectorAll('[aria-label="Your devices"] li')].map((li) => li.textContent)).toEqual([expect.stringContaining('Mac · Chrome')]);
+  });
+
+  it('passes on a refusal in the bridge’s words', async () => {
+    vi.mocked(testAllPushDevices).mockResolvedValue({ ok: false, error: 'You are not a person in People: ask an admin to add you under Settings → People' });
+    const host = await mount();
+    await act(async () => button(host, 'Send a test notification').click());
+    expect(host.querySelector('[role="status"]')?.textContent).toBe('You are not a person in People: ask an admin to add you under Settings → People');
   });
 });

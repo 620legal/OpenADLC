@@ -13,7 +13,7 @@ import { labelIn } from '@/lib/bot-label';
 import { cn } from '@/lib/cn';
 import { crewLine, needsYouLine } from '@/lib/crew';
 import type { Brand, Role } from '@/lib/api';
-import { boardHref, NAV, spendLevel, type HeaderData, type Page } from '@/lib/header';
+import { boardHref, NAV, navFor, spendLevel, type HeaderData, type Page } from '@/lib/header';
 import type { RepoColorMap } from '@/lib/repo-colors';
 import { consoleName } from '@/lib/needs-you-alerts';
 import { money } from '@/lib/when';
@@ -75,10 +75,9 @@ function BrandMark({ compact = false }: { compact?: boolean }) {
   );
 }
 
-/** The navigation this person has: Settings is an admin's. */
+/** The navigation this person has (`navFor`). */
 function useNav(): typeof NAV {
-  const role = useRole();
-  return role === 'admin' ? NAV : NAV.filter((item) => item.page !== 'settings');
+  return navFor(useRole());
 }
 
 /**

@@ -1,12 +1,12 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { addPushDevice, removePushDevice, testPushDevice } from '@/app/actions';
+import { addPushDevice, removePushDevice, testAllPushDevices, testPushDevice } from '@/app/actions';
 import { testOutcome } from '@/components/notification-settings';
 import { SettingsCard } from '@/components/settings-sections';
 import { Button } from '@/components/ui/button';
 // Types only: '@/lib/api' reads the server's environment on import.
-import type { PushDevicesView } from '@/lib/api';
+import type { PushDevicesView, PushTestAll } from '@/lib/api';
 import { cn } from '@/lib/cn';
 import {
   browserEnvironment,
@@ -39,6 +39,9 @@ export const SUPPORT_WORDS: Record<Exclude<PushSupport, 'ok'>, string> = {
   denied: 'Notifications are blocked for this site: allow them in the browser’s site settings, then reload',
 };
 
+/** What Send a test notification says when there is nothing to send to: never that it was sent. */
+export const NO_DEVICES_LINE = 'You have no devices yet: turn notifications on on this device first';
+
 export const LOCAL_LINE = 'A phone cannot reach this install at http://127.0.0.1, so notifications here are for this computer. A phone needs a cloud install.';
 
 function when(iso: string): string {
@@ -61,6 +64,7 @@ export function PushDevices({ initial, local, support: given }: { initial: PushD
   const [thisDevice, setThisDevice] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [said, setSaid] = useState<{ text: string; failed: boolean } | null>(null);
+  const [tested, setTested] = useState<PushTestAll['devices'] | null>(null);
 
   useEffect(() => {
     if (given === undefined) setSupport(pushSupport(browserEnvironment()));
@@ -86,6 +90,7 @@ export function PushDevices({ initial, local, support: given }: { initial: PushD
   async function turnOnHere() {
     setBusy('on');
     setSaid(null);
+    setTested(null);
     // Inside the tap: Safari and Firefox ask for the permission only from one.
     const subscribed = await turnOn(view.key);
     if (!subscribed.ok) {
@@ -111,6 +116,7 @@ export function PushDevices({ initial, local, support: given }: { initial: PushD
   async function test(id: string) {
     setBusy(`test:${id}`);
     setSaid(null);
+    setTested(null);
     const answer = await testPushDevice(id);
     setBusy(null);
     if (!answer.ok || !answer.result) {
@@ -120,9 +126,32 @@ export function PushDevices({ initial, local, support: given }: { initial: PushD
     setSaid({ text: testOutcome(answer.result), failed: !answer.result.ok });
   }
 
+  // Every device at once, through the bridge's own send: one answer, a line
+  // for each device, rather than one round trip per device from here.
+  async function testAll() {
+    setBusy('test-all');
+    setSaid(null);
+    setTested(null);
+    const answer = await testAllPushDevices();
+    setBusy(null);
+    if (!answer.ok || !answer.result) {
+      setSaid({ text: answer.error ?? 'The test was not sent', failed: true });
+      return;
+    }
+    if (answer.result.devices.length === 0) {
+      setSaid({ text: NO_DEVICES_LINE, failed: true });
+      return;
+    }
+    setTested(answer.result.devices);
+    // A gone device was dropped by the bridge, as any send drops it.
+    const gone = new Set(answer.result.devices.filter((device) => device.status === 404 || device.status === 410).map((device) => device.id));
+    setView((before) => ({ ...before, devices: before.devices.filter((device) => !gone.has(device.id)) }));
+  }
+
   async function remove(id: string) {
     setBusy(`remove:${id}`);
     setSaid(null);
+    setTested(null);
     const answer = await removePushDevice(id);
     setBusy(null);
     if (!answer.ok) {
@@ -142,6 +171,21 @@ export function PushDevices({ initial, local, support: given }: { initial: PushD
 
   return (
     <SettingsCard id="this-device" title="Notifications on your devices" line="Push to your phone and computer, whether or not the console is open.">
+      <div className="flex flex-wrap items-center gap-2 pb-2.5">
+        <Button size="sm" disabled={busy !== null || view.devices.length === 0} onClick={() => void testAll()}>
+          Send a test notification
+        </Button>
+        {view.devices.length === 0 && <p className="text-[12.5px] text-muted">{NO_DEVICES_LINE}</p>}
+      </div>
+      {tested && (
+        <ul aria-label="Test results" role="status" className="flex flex-col gap-0.5 pb-2.5">
+          {tested.map((device) => (
+            <li key={device.id} className={cn('text-[12.5px]', device.ok ? 'text-muted' : 'text-alarm')}>
+              {device.name}: {testOutcome(device)}
+            </li>
+          ))}
+        </ul>
+      )}
       <p className="text-[12.5px] text-muted">
         Turn notifications on in each browser, or in the console installed as an app, where you want them. What OpenADLC would tell you arrives there.
       </p>

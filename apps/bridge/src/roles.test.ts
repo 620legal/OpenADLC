@@ -128,6 +128,12 @@ describe('every console route says who may call it', () => {
     }
   });
 
+  it('lets a user test every device of theirs at once, which acts only on the caller’s devices (ADR 0053)', () => {
+    expect(ROUTE_ROLES['POST /v1/me/push/test']).toBe('user');
+    // Settings is in everyone's header now; the kinds' switches stay an admin's.
+    expect(ROUTE_ROLES['PUT /v1/settings/notifications']).toBe('admin');
+  });
+
   it('lets a user set their own notification channel, which acts only on the caller', () => {
     for (const key of ['GET /v1/me/notifications', 'PUT /v1/me/notifications', 'POST /v1/me/notifications/test']) {
       expect(ROUTE_ROLES[key], key).toBe('user');
@@ -230,6 +236,15 @@ describe('the bridge enforces the role on every route', () => {
       }
     }
     expect(ran.sort()).toEqual(Object.keys(ROUTE_ROLES).filter((key) => ROUTE_ROLES[key] === 'user').sort());
+  });
+
+  it('refuses a user’s change to the kinds of notification, and serves their test of every device (ADR 0053)', async () => {
+    const { url, ran } = await serve({ 'jane@example.com': 'user' });
+    const refused = await call(url, 'PUT /v1/settings/notifications', 'jane@example.com');
+    expect(refused.status).toBe(403);
+    expect(await refused.json()).toMatchObject({ code: 'needs-admin' });
+    expect((await call(url, 'POST /v1/me/push/test', 'jane@example.com')).status).toBe(200);
+    expect(ran).toEqual(['POST /v1/me/push/test']);
   });
 
   it('serves an admin every route', async () => {
