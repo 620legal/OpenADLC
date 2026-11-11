@@ -122,11 +122,20 @@ describe('the buttons', () => {
     expect(addPushDevice).toHaveBeenCalledWith(subscription, expect.any(String));
     // The endpoint's fingerprint is hashed with crypto.subtle, which settles
     // outside the microtasks act() waits for: under make ci's load the list
-    // was read before it had marked this device. Wait for it instead.
-    await act(() => vi.waitFor(() => expect(host.textContent).toContain('(this device)')));
+    // was read before it had marked this device (run 42942162066). Waiting
+    // for the text inside act() could never see it once the hash outlasted
+    // the click's act: React holds an update made in an act scope until the
+    // scope ends. So hold one act open until the hash is in local storage,
+    // which the component writes in the same tick as it marks the device,
+    // and read the list after the act has rendered it. vi.waitFor returns on
+    // its first pass, so an idle run is no slower; its 8 s is for a loaded
+    // runner, and the test's own timeout sits above it so a failure names
+    // the expectation, not just "timed out".
+    await act(() => vi.waitFor(() => expect(window.localStorage.getItem('openadlc-push-device')).toBeTruthy(), { timeout: 8_000 }));
+    expect(host.textContent).toContain('(this device)');
     expect(host.textContent).toContain('Notifications are on for this device');
     expect(window.localStorage.getItem('openadlc-push-device')).not.toContain('https://');
-  });
+  }, 15_000);
 
   it('says what went wrong when the browser would not', async () => {
     pushMock.turnOn.mockResolvedValue({ ok: false, error: 'Notifications were not allowed' });
