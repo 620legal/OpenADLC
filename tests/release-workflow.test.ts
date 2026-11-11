@@ -51,6 +51,14 @@ import { realTools, VERSION as CHECKED_TAG } from '../.github/scripts/release-ch
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const WORKFLOWS = join(ROOT, '.github', 'workflows');
 
+/**
+ * The line each release's notes open with, before GitHub's generated list
+ * (#292). GitHub's list says "by @…" on every line, so "unless its line names
+ * a person" holds for a person's pull request as written.
+ */
+const RELEASE_NOTES_LINE = (repo: string) =>
+  `Each change below was requested by a person, then built, reviewed and merged by OpenADLC's crew, unless its line names a person; [how](https://github.com/${repo}#one-change-from-request-to-release).`;
+
 type Permissions = Record<string, string> | string | null | undefined;
 
 interface Step {
@@ -144,20 +152,20 @@ function commandWords(piece: string): string[] {
  * left out. A command substitution inside double quotes runs all the same
  * (`"$(bash out/x)"`), so each `$(…)`, `<(…)` and backquote is read again
  * on its own, up to its first `)`: the commands of a pipe inside one count,
- * and a quote left open there ends it.
+ * and a quote left open there ends it. Quotes are read left to right, as a
+ * shell reads them: taking out every '…' first paired the apostrophe in the
+ * release notes' "OpenADLC's" with the quote of a later `--jq '…'`, and hid
+ * the commands between them.
  */
 function simpleCommandsOf(script: string): string[][] {
   const plain = script.replace(/(^|\s)#[^\n]*/g, '$1').replace(/\\\n/g, ' ');
-  const unquote = (text: string) => text.replace(/'[^']*'/g, "''").replace(/"(?:[^"\\]|\\.)*"/g, '""');
+  const unquote = (text: string) => text.replace(/"(?:[^"\\]|\\.)*"|'[^']*'/g, (quoted) => (quoted[0] === '"' ? '""' : "''"));
   const commands = unquote(plain)
     .split(/\n|;|&&|\|\||\||\$\(|<\(|\(|\)|`/)
     .map(commandWords)
     .filter((words) => words.length > 0);
   for (const [, inner] of plain.matchAll(/(?:\$\(|<\(|`)([^)`]*)/g)) {
-    const flat = inner!
-      .replace(/'[^']*'/g, ' Q ')
-      .replace(/"(?:[^"\\]|\\.)*"/g, ' Q ')
-      .replace(/['"][\s\S]*$/, '');
+    const flat = inner!.replace(/"(?:[^"\\]|\\.)*"|'[^']*'/g, ' Q ').replace(/['"][\s\S]*$/, '');
     for (const piece of flat.split(/\n|;|&&|\|\||\|/)) {
       const words = commandWords(piece);
       if (words.length > 0) commands.push(words);
@@ -696,6 +704,36 @@ describe('publish and build, run', () => {
     expect(mutable.asked).toContain('release delete v0.2.0 --repo acme/openadlc --yes');
   });
 
+  it('publish opens the notes with the line saying the crew built each change, before GitHub’s list', () => {
+    // The stand-in writes down --notes as the one argument gh was given, so
+    // a line the shell split, or one the step left out, does not match.
+    const gh = [
+      'if [ "$1 $2" = "release create" ]; then',
+      '  while [ $# -gt 0 ]; do',
+      '    case "$1" in',
+      '      --notes) printf "notes=%s\\n" "$2" >> "$GH_LOG"; shift ;;',
+      '      --generate-notes) echo "generated" >> "$GH_LOG" ;;',
+      '    esac',
+      '    shift',
+      '  done',
+      'fi',
+      'case "$1 $2" in',
+      '  "api repos/acme/openadlc/releases/tags/v0.2.0") echo "$IMMUTABLE" ;;',
+      'esac',
+    ].join('\n');
+    const asked = run(step('publish', 'the release'), { IMMUTABLE: 'true' }, { stubs: { gh } }).asked.split('\n');
+    expect(asked).toContain('generated');
+    const notes = asked.filter((line) => line.startsWith('notes='));
+    expect(notes).toEqual([`notes=${RELEASE_NOTES_LINE('acme/openadlc')}`]);
+    expect(notes[0]).toMatch(/^notes=Each change below was requested by a person/);
+    expect(notes[0]).toContain('(https://github.com/acme/openadlc#one-change-from-request-to-release)');
+  });
+
+  it('links the release notes’ line to a heading the README has', () => {
+    const readme = readFileSync(join(ROOT, 'README.md'), 'utf8');
+    expect(readme).toMatch(/^## One change, from request to release$/m);
+  });
+
   /**
    * The images, from `images` saving them to `publish` pushing, attesting and
    * checking them, under the names self-update takes them by
@@ -1106,7 +1144,7 @@ describe('a release, as release-build.yml makes it and self-update takes it', ()
     expect(made).toContain(`'{"format":1,"tag":"%s","commit":"%s","tree":"%s"}\\n' "$TAG" "$SHA" "$TREE" > ${RELEASE_MANIFEST}`);
     expect(made).toContain(`-czf "out/${names.archive}" ${RELEASE_MANIFEST} $roots`);
     expect(scripts('publish')).toContain(
-      `gh release create "$TAG" --repo "$REPO" --verify-tag --title "$TAG" --generate-notes \\\n  "out/${names.archive}" "out/${names.bundle}" out/${RELEASE_CHECKSUMS} out/${RELEASE_IMAGE_DIGESTS}`,
+      `gh release create "$TAG" --repo "$REPO" --verify-tag --title "$TAG" --generate-notes \\\n  --notes "${RELEASE_NOTES_LINE('$REPO')}" \\\n  "out/${names.archive}" "out/${names.bundle}" out/${RELEASE_CHECKSUMS} out/${RELEASE_IMAGE_DIGESTS}`,
     );
   });
 
