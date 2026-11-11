@@ -80,7 +80,8 @@ export function faceActions(item: AttentionItem): AttentionAction[] {
 /**
  * Whether a card has more than its face shows, and so a Show more: a detail
  * longer than two lines, the raw reason, members of a folded cause, a
- * question's other choices, or any button besides the first.
+ * question's other choices, a held approval's reviews in full, or any button
+ * besides the first.
  */
 export function hasMore(item: AttentionItem): boolean {
   if ((item.members?.length ?? 0) > 1) return true;
@@ -88,6 +89,9 @@ export function hasMore(item: AttentionItem): boolean {
   if (item.raw) return true;
   // A question's context is shown cut short on the card, and whole in the sheet.
   if (item.context) return true;
+  // A held approval's reviews are cut to three lines on the card, and whole
+  // only in the sheet: without this a short one had no way to read them.
+  if (item.decision?.reviews?.some((review) => review.summary)) return true;
   const detail = plainDetail(item.detail);
   if (detail.length > DETAIL_ON_CARD || /\n\s*\n/.test(item.detail.trim())) return true;
   if (item.kind === 'question') {

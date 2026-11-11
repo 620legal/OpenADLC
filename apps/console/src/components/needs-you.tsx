@@ -511,12 +511,25 @@ function NeedsCard({
       {audience}
     </p>
   );
-  const subjectLine = (number || subject.title) && (
-    <p className="truncate text-[12.5px] text-soft">
-      {number && <span className="text-dim">{number} </span>}
-      {subject.title}
-    </p>
+  // Cut to a line on the card; whole in the sheet, which has the room.
+  const subjectLine = (wrap: boolean) =>
+    (number || subject.title) && (
+      <p data-subject className={cn('text-[12.5px] text-soft', wrap ? 'break-words' : 'truncate')}>
+        {number && <span className="text-dim">{number} </span>}
+        {subject.title}
+      </p>
+    );
+  // One decision, drawn on the card and again, whole, in its sheet: see `PanelState`.
+  const panel = usePanelState();
+  const decisionPanel = (full: boolean) => (
+    <>
+      {item.decision && <HumanReviewDecisionPanel item={item} state={panel} full={full} />}
+      {item.heldMerge && <HeldMergePanel item={item} state={panel} full={full} />}
+      {item.heldPromote && <HeldPromotePanel item={item} state={panel} full={full} />}
+    </>
   );
+  // The panel says the why the detail would, so neither the card nor its sheet says it twice.
+  const showDetail = Boolean(item.detail) && !item.decision && !item.heldMerge && !item.heldPromote;
 
   // The card's face: its headline, two lines of what happened and the things
   // to press. Everything else is in its sheet. What is cut short is
@@ -548,7 +561,7 @@ function NeedsCard({
           <span className="ml-auto shrink-0 text-[11.5px] text-dim">{ago(item.since, now)}</span>
         </div>
         {audienceNote}
-        {subjectLine}
+        {subjectLine(false)}
         {item.context && (
           // What the question is about — intake's draft, before "Here's what I'll
           // file. OK?" — cut short here and whole behind Show more.
@@ -567,7 +580,7 @@ function NeedsCard({
             {decision}
           </p>
         )}
-        {item.detail && !item.decision && !item.heldMerge && !item.heldPromote && (
+        {showDetail && (
           <p
             data-clamp="detail"
             className={cn(
@@ -579,9 +592,7 @@ function NeedsCard({
             {plainDetail(item.detail)}
           </p>
         )}
-        {item.decision && <HumanReviewDecisionPanel item={item} />}
-        {item.heldMerge && <HeldMergePanel item={item} />}
-        {item.heldPromote && <HeldPromotePanel item={item} />}
+        {decisionPanel(false)}
         {unblocked && (
           // What doing this lets go on: each card behind it opens.
           <p data-unblocks className="text-[12px] leading-normal text-soft">
@@ -675,7 +686,7 @@ function NeedsCard({
               <span>{ago(item.since, now)}</span>
             </div>
             {audienceNote}
-            {subjectLine}
+            {subjectLine(true)}
             {item.context && (
               <div className="max-h-[50vh] overflow-auto rounded-md border border-edge px-3 py-2.5 text-[12.5px] leading-normal text-body">
                 <Markdown text={item.context} />
@@ -686,11 +697,13 @@ function NeedsCard({
                 {decision}
               </p>
             )}
-            {item.detail && (
+            {showDetail && (
               <div className={cn('text-[12.5px] leading-normal', item.kind === 'question' ? 'rounded-md bg-surface px-2.5 py-2 text-body' : 'text-muted')}>
                 <Markdown text={item.detail} className={cn(item.kind === 'question' && standsOut(item.detail) && 'font-semibold')} />
               </div>
             )}
+            {/* The card's decision, whole: a sheet never shows less than its card (ADR 0056). */}
+            {decisionPanel(true)}
             {item.raw && (
               // What arrived, word for word, for whoever wants it; the sentence
               // above is what to do about it.
@@ -1304,6 +1317,47 @@ function ActionButton({
 /** What a held merge's or a held promote's panel is doing: nothing, a message being written, or a Merge's sign-in waiting. */
 export type HeldStep = { kind: 'idle' } | { kind: 'discuss'; text: string; role: 'review_lead' | 'implement' } | { kind: 'signing'; flowId: string; userCode: string; verificationUri: string };
 
+/**
+ * A decision panel's state, held by its card so the card's copy and its
+ * sheet's copy are one decision. Each copy once kept its own: the sheet
+ * unmounts when it closes, so a sign-in started there lost its code and its
+ * polling, and the card underneath still offered Approve for the same head.
+ */
+export type PanelState = {
+  step: DecisionStep;
+  setStep: (step: DecisionStep) => void;
+  busy: boolean;
+  setBusy: (busy: boolean) => void;
+  error: string | null;
+  setError: (error: string | null) => void;
+  done: string | null;
+  setDone: (done: string | null) => void;
+};
+
+export function usePanelState(initialStep: DecisionStep = { kind: 'idle' }): PanelState {
+  const [step, setStep] = useState<DecisionStep>(initialStep);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [done, setDone] = useState<string | null>(null);
+  return { step, setStep, busy, setBusy, error, setError, done, setDone };
+}
+
+/** What a panel is given: its card's state, or none to keep its own; and whether it is the sheet's whole copy. */
+type PanelProps<Step> = {
+  item: AttentionItem;
+  /** Where it starts when it keeps its own state: idle, or, in a test, a step under way. */
+  initialStep?: Step;
+  state?: PanelState;
+  /** The sheet's copy: reviews whole, and no polling, which the card's copy, still mounted, does. */
+  full?: boolean;
+};
+
+/** The card's state when it gives one, else the panel's own. Hooks run either way, so their order never changes. */
+function usePanel(state: PanelState | undefined, initialStep: DecisionStep | undefined): PanelState {
+  const own = usePanelState(initialStep);
+  return state ?? own;
+}
+
 /** The message box a held decision's Discuss opens: to the lead reviewer or the builder, on the pull request. */
 function HeldDiscuss({
   step,
@@ -1384,20 +1438,19 @@ function NextButton({ id, label, next, busy, onPress }: { id: string; label: str
  * bridge refuses a Merge it would not offer, from anyone. See
  * docs/adr/0037-a-person-merges-a-held-pull-request-from-the-console.md.
  */
-export function HeldMergePanel({ item, initialStep = { kind: 'idle' } }: { item: AttentionItem; initialStep?: HeldStep }) {
+export function HeldMergePanel({ item, initialStep, state, full = false }: PanelProps<HeldStep>) {
   const held = item.heldMerge!;
   const buttons = heldMergeButtons(item);
   const noMerge = noMergeReason(held);
   const subject = `${held.repo}#${held.pr}`;
-  const [step, setStep] = useState<HeldStep>(initialStep);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [done, setDone] = useState<string | null>(null);
+  const { step: anyStep, setStep, busy, setBusy, error, setError, done, setDone } = usePanel(state, initialStep);
+  // A held merge never writes a reason; only the approval's panel does.
+  const step: HeldStep = anyStep.kind === 'reject' ? { kind: 'idle' } : anyStep;
   const short = held.head?.slice(0, 7) ?? '';
 
   // A Merge's sign-in, read until the person approves its code or it ends.
   useEffect(() => {
-    if (step.kind !== 'signing') return;
+    if (full || step.kind !== 'signing') return;
     const timer = setInterval(() => {
       void fetch(pullPath(subject, `/flows/${encodeURIComponent(step.flowId)}`), { cache: 'no-store' })
         .then((response) => response.json())
@@ -1412,7 +1465,7 @@ export function HeldMergePanel({ item, initialStep = { kind: 'idle' } }: { item:
         .catch(() => undefined);
     }, DECISION_FLOW_READ_MS);
     return () => clearInterval(timer);
-  }, [step, subject, short]);
+  }, [full, step, subject, short, setStep, setDone, setError]);
 
   const press = (button: HeldMergeButton) => {
     if (busy || done) return;
@@ -1497,15 +1550,13 @@ export function HeldMergePanel({ item, initialStep = { kind: 'idle' } }: { item:
  * Discuss and the switch to automatic each do next. Release and the switch
  * are the card's own buttons, as they were; Keep holding and Discuss are drawn here.
  */
-export function HeldPromotePanel({ item, initialStep = { kind: 'idle' } }: { item: AttentionItem; initialStep?: HeldStep }) {
+export function HeldPromotePanel({ item, initialStep, state }: PanelProps<HeldStep>) {
   const held = item.heldPromote!;
   const discuss = item.actions.find((action): action is Extract<AttentionAction, { kind: 'promote_discuss' }> => action.kind === 'promote_discuss');
   const keep = item.actions.some((action) => action.kind === 'promote_keep_holding');
   const automatic = item.actions.some((action) => action.kind === 'promote_automatic');
-  const [step, setStep] = useState<HeldStep>(initialStep);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [done, setDone] = useState<string | null>(null);
+  // A promote's panel has no sign-in to poll: Release is the card's own button.
+  const { step, setStep, busy, setBusy, error, setError, done, setDone } = usePanel(state, initialStep);
 
   const keepHolding = () => {
     if (busy || done) return;
@@ -1590,19 +1641,16 @@ export type DecisionStep =
  * keeps off a button it would refuse. See
  * docs/adr/0036-a-person-decides-a-held-human-review-approval-from-the-console.md.
  */
-export function HumanReviewDecisionPanel({ item, initialStep = { kind: 'idle' } }: { item: AttentionItem; /** Where it starts: idle, or, in a test, a reason being written. */ initialStep?: DecisionStep }) {
+export function HumanReviewDecisionPanel({ item, initialStep, state, full = false }: PanelProps<DecisionStep>) {
   const decision = item.decision!;
   const buttons = decisionButtons(item);
   const subject = `${decision.repo}#${decision.pr}`;
-  const [step, setStep] = useState<DecisionStep>(initialStep);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [done, setDone] = useState<string | null>(null);
+  const { step, setStep, busy, setBusy, error, setError, done, setDone } = usePanel(state, initialStep);
   const short = decision.head.slice(0, 7);
 
   // An Approve's sign-in, read until the person approves its code or it ends.
   useEffect(() => {
-    if (step.kind !== 'signing') return;
+    if (full || step.kind !== 'signing') return;
     const timer = setInterval(() => {
       void fetch(pullPath(subject, `/flows/${encodeURIComponent(step.flowId)}`), { cache: 'no-store' })
         .then((response) => response.json())
@@ -1616,7 +1664,7 @@ export function HumanReviewDecisionPanel({ item, initialStep = { kind: 'idle' } 
         .catch(() => undefined);
     }, DECISION_FLOW_READ_MS);
     return () => clearInterval(timer);
-  }, [step, subject, short, decision.login]);
+  }, [full, step, subject, short, decision.login, setStep, setDone, setError]);
 
   const press = (button: DecisionButton) => {
     if (busy || done) return;
@@ -1679,7 +1727,12 @@ export function HumanReviewDecisionPanel({ item, initialStep = { kind: 'idle' } 
                 <a href={review.url} target="_blank" rel="noreferrer" className="text-link hover:underline">
                   {reviewerName(review)} {reviewVerdict(review.state)}
                 </a>
-                {review.summary && <span className="line-clamp-3 text-muted">{review.summary}</span>}
+                {/* Three lines on the card; whole in its sheet, which has the room. */}
+                {review.summary && (
+                  <span data-summary className={cn('text-muted', full ? 'block whitespace-pre-wrap break-words' : 'line-clamp-3')}>
+                    {review.summary}
+                  </span>
+                )}
               </li>
             ))}
           </ul>

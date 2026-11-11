@@ -59,7 +59,10 @@ request whose triage failed), and **System**, what the install needs (the
 health checks below, and engine updates). The bridge sets each item's `group`.
 The board shows only the three most pressing, and the header's badge says both
 counts, "3 need you · 10 system". A card shows two lines; **Show more** opens
-the rest beside it.
+the rest beside it. The sheet holds everything the card does, never less: a
+held approval, merge or promote shows its whole decision there, with the
+title unclipped and each review in full, and is decided from there as from the
+card, one decision in both places (ADR 0056).
 
 **Needs you** holds only what waits on a person, and the count beside it counts
 only that (`apps/bridge/src/attention.ts`):
