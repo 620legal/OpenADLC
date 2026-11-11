@@ -1,7 +1,7 @@
 import { lastEventAt, recordEvent, settings } from '@openadlc/db';
 import { isRetiredNotifyTargetRef, RETIRED_NOTIFY_TARGET_REF, type SecretStore } from '@openadlc/github';
 import type { BridgeConfig } from './config.js';
-import { databasePushStore, DEVICE_TEST_TEXT, sendToDevice, sendToDevices, type PushStore } from './push-devices.js';
+import { databasePushStore, DEVICE_TEST_TEXT, sendToDevice, sendToDevices, type PushMessage, type PushStore } from './push-devices.js';
 
 /**
  * Tells a person that a bot is waiting on them.
@@ -152,6 +152,11 @@ export interface DeliveryResult {
   error: string | null;
 }
 
+/** What `POST /v1/me/push/test` answers: each of the caller's devices, and how its test went. */
+export interface DevicesTest {
+  devices: { id: string; name: string; ok: boolean; status: number | null; error: string | null }[];
+}
+
 /**
  * Where the notifier keeps and reads what it needs: the switches and the
  * event log. One seam, so the tests run on memory.
@@ -295,13 +300,31 @@ export class Notifier {
     if (!this.push) return null;
     const device = (await this.push.devices([personId])).find((one) => one.id === deviceId);
     if (!device) return null;
-    const { ok, status, error } = await sendToDevice(
-      this.push,
-      device,
-      { event: 'test', text: DEVICE_TEST_TEXT, link: `${this.config.consoleUrl.replace(/\/+$/, '')}/settings/notifications` },
-      { consoleUrl: this.config.consoleUrl },
-    );
+    const { ok, status, error } = await sendToDevice(this.push, device, this.testMessage(), { consoleUrl: this.config.consoleUrl });
     return { ok, status, error };
+  }
+
+  /**
+   * A person's Send a test notification: one to every device of theirs, and
+   * no one else's, whatever the switches say. It goes through `sendToDevices`,
+   * the path `send` pushes through, so a device that would not take a real
+   * notification fails here the same way, and a gone one is dropped. Empty
+   * when they have no device: the console says so rather than "sent".
+   */
+  async testDevices(personId: string): Promise<DevicesTest> {
+    if (!this.push) return { devices: [] };
+    const devices = await this.push.devices([personId]);
+    if (devices.length === 0) return { devices: [] };
+    const results = await sendToDevices(this.push, [personId], this.testMessage(), { consoleUrl: this.config.consoleUrl });
+    const names = new Map(devices.map((device) => [device.id, device.name]));
+    return {
+      devices: results.map((result) => ({ id: result.device, name: names.get(result.device) ?? result.device, ok: result.ok, status: result.status, error: result.error })),
+    };
+  }
+
+  /** What a test says, and where tapping it goes: the console's own Notifications, for either test. */
+  private testMessage(): PushMessage {
+    return { event: 'test', text: DEVICE_TEST_TEXT, link: `${this.config.consoleUrl.replace(/\/+$/, '')}/settings/notifications` };
   }
 
   /**

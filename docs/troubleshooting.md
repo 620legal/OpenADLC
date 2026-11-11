@@ -632,8 +632,13 @@ Until then intake's overlap check leaves them out, as it does any issue labelled
 
 ## Push notifications do not arrive
 
-Start in **Settings → Notifications**, under **Notifications on your
-devices**, on the device that should get them.
+Start in **Settings → Notifications** (Settings is in everyone's header), under
+**Notifications on your devices**, on the device that should get them, and
+press **Send a test notification**. It tests every one of your devices at
+once and says for each whether it was delivered, or the push service's status
+and why not. "You have no devices yet" means notifications were never turned
+on, or every device was removed: press **Turn on notifications on this
+device**.
 
 - **The page says to add OpenADLC to the Home Screen.** On an iPhone or iPad,
   Safari gives push only to a site opened from the Home Screen. Tap Share →
@@ -651,7 +656,7 @@ devices**, on the device that should get them.
   site's data was cleared, or notifications were turned off in the system
   settings. Turn notifications on there again.
 - **"None of your devices took the last notification".** Press **Send a
-  test** on one. A status 401 or 403 says the push service refused the
+  test notification**. A status 401 or 403 says the push service refused the
   install's key: the key was lost or replaced, which means turning
   notifications on again on each device. No status at all says the bridge
   could not reach the push service. The `push-egress` card names the host.

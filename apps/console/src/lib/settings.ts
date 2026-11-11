@@ -24,26 +24,74 @@ import { modesFor, STAGES, type StageKey } from './stages';
  */
 
 /**
- * Where the sections of settings are, in order: the page's own navigation.
+ * Where the parts of settings are, in order: Settings' own navigation. Most
+ * are sections of `/settings` (`page: null`); Hosts and Notifications are
+ * pages of their own, which draw the same navigation with themselves marked.
+ * They used to be a card each on `/settings` that only linked to their page,
+ * and their pages had a back link and no navigation (ADR 0053).
  * System used to be Engine updates; `/settings#engine-updates` still lands
  * on it, which is where a failed update's card links.
  */
-export const SETTINGS_SECTIONS = [
-  { id: 'repository', label: 'Repositories' },
-  { id: 'github', label: 'GitHub' },
-  { id: 'models', label: 'AI models' },
-  { id: 'crew', label: 'Crew' },
-  { id: 'system', label: 'System' },
+export const SETTINGS_SECTIONS: readonly { id: string; label: string; page: string | null }[] = [
+  { id: 'repository', label: 'Repositories', page: null },
+  { id: 'github', label: 'GitHub', page: null },
+  { id: 'models', label: 'AI models', page: null },
+  { id: 'crew', label: 'Crew', page: null },
+  { id: 'system', label: 'System', page: null },
+  { id: 'hosts', label: 'Hosts', page: '/settings/hosts' },
+  { id: 'notifications', label: 'Notifications', page: '/settings/notifications' },
   // Only on a cloud install, whose tasks leave through an egress proxy; the page leaves it out elsewhere.
-  { id: 'egress', label: 'Egress' },
-  { id: 'spending-limits', label: 'Spending limits' },
-  { id: 'backup', label: 'Backup' },
-  { id: 'pause', label: 'Pause work' },
-  { id: 'people', label: 'People' },
+  { id: 'egress', label: 'Egress', page: null },
+  { id: 'spending-limits', label: 'Spending limits', page: null },
+  { id: 'backup', label: 'Backup', page: null },
+  { id: 'pause', label: 'Pause work', page: null },
+  { id: 'people', label: 'People', page: null },
   // Left out when the bridge could not be asked for them.
-  { id: 'roles', label: 'Roles' },
-  { id: 'appearance', label: 'Appearance' },
-] as const;
+  { id: 'roles', label: 'Roles', page: null },
+  { id: 'appearance', label: 'Appearance', page: null },
+];
+
+/** Which part of Settings is open: `/settings` itself, or one of its own pages. */
+export type SettingsOn = 'sections' | 'hosts' | 'notifications';
+
+export interface SettingsNavEntry {
+  id: string;
+  label: string;
+  href: string;
+  /** The page open now. On `/settings` no entry is: scrolling decides which section is marked. */
+  current: boolean;
+  /** A section of `/settings`, which the page marks as it is scrolled to. */
+  section: boolean;
+}
+
+/**
+ * Settings' navigation for this person on this part of it. A non-admin's is
+ * Notifications alone: every other part is an admin's, and the bridge refuses
+ * them its routes (ADR 0053). On a page of its own a section's link goes to
+ * `/settings#id`, since `#id` would land nowhere there.
+ */
+export function settingsNav(input: { admin: boolean; omit?: readonly string[]; on: SettingsOn }): SettingsNavEntry[] {
+  const omit = input.omit ?? [];
+  const shown = input.admin ? SETTINGS_SECTIONS.filter((entry) => !omit.includes(entry.id)) : SETTINGS_SECTIONS.filter((entry) => entry.id === 'notifications');
+  return shown.map((entry) => ({
+    id: entry.id,
+    label: entry.label,
+    href: entry.page ?? (input.on === 'sections' ? `#${entry.id}` : `/settings#${entry.id}`),
+    current: entry.page !== null && entry.id === input.on,
+    section: entry.page === null,
+  }));
+}
+
+/**
+ * The sections this install leaves out of the navigation, one rule for the
+ * three pages that draw it: Egress where the bridge says tasks leave through
+ * no proxy (when hostd could not be asked, `proxied` null, it stays, with
+ * why), and Roles when the bridge could not be asked for them.
+ */
+export function navOmit(input: { egress: { proxied: boolean | null } | null; personRoles: unknown }): string[] {
+  const showEgress = input.egress !== null && input.egress.proxied !== false;
+  return [...(showEgress ? [] : ['egress']), ...(input.personRoles ? [] : ['roles'])];
+}
 
 /**
  * `#engine-updates` is System: a failed update's card was written before the

@@ -18,6 +18,8 @@ vi.mock('@/lib/api', () => ({
     }),
     crew: async () => ({ bots: [] }),
     costs: async () => null,
+    egressHosts: async () => ({ hosts: [], proxied: false, settingsList: false, reason: null }),
+    peopleRoles: async () => ({ people: [], roles: [] }),
     hosts: async () => {
       who.asked += 1;
       return {
@@ -47,12 +49,18 @@ vi.mock('@/lib/read-header', () => ({
 }));
 
 describe('the hosts page', () => {
-  it('lists the hosts the bridge reads, and links back to Settings', async () => {
+  it('lists the hosts the bridge reads, beside Settings’ navigation with Hosts marked', async () => {
     who.asked = 0;
     const { default: HostsSettingsPage } = await import('./page');
     const html = renderToStaticMarkup(await HostsSettingsPage()).replace(/<!-- -->/g, '');
     expect(who.asked).toBe(1);
-    expect(html).toMatch(/<a [^>]*href="\/settings#hosts"[^>]*>/);
+    const nav = html.slice(html.indexOf('<nav aria-label="Settings"'), html.indexOf('</nav>', html.indexOf('<nav aria-label="Settings"')));
+    expect(nav).toMatch(/<a (?=[^>]*href="\/settings\/hosts")(?=[^>]*aria-current="page")[^>]*>Hosts<\/a>/);
+    expect(nav).toMatch(/<a [^>]*href="\/settings\/notifications"[^>]*>Notifications<\/a>/);
+    // Egress is left out on a laptop, as /settings leaves it out.
+    expect(nav).not.toContain('>Egress<');
+    // The back link is gone: the navigation leads back.
+    expect(html).not.toContain('href="/settings#hosts"');
     expect(html).toContain('mac');
     expect(html).toContain('seen 8 s ago');
     expect(html).toContain('2 of 4 tasks');
