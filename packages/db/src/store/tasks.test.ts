@@ -104,6 +104,23 @@ describe('the host a task runs on', () => {
   });
 });
 
+describe('when a task last paused (#287)', () => {
+  it('is read with the task, which is what a paused builder holds its reviews from', async () => {
+    vi.mocked(queryOne).mockResolvedValue({ ...ROW, state: 'paused', paused_at: new Date('2026-11-10T22:05:00.000Z') });
+
+    expect(await getTask('task-1')).toMatchObject({ pausedAt: '2026-11-10T22:05:00.000Z' });
+    expect(String(vi.mocked(queryOne).mock.calls.at(-1)?.[0])).toMatch(/\bpaused_at\b/);
+  });
+
+  it('is none for a task that never paused', async () => {
+    vi.mocked(query).mockResolvedValue([{ ...ROW, paused_at: null }]);
+    expect((await listTasksOnSubjects(['openadlc#31']))[0]?.pausedAt).toBeNull();
+
+    vi.mocked(query).mockResolvedValue([ROW]);
+    expect((await listTasks({ states: ['queued'] }))[0]?.pausedAt).toBeNull();
+  });
+});
+
 describe('room for one more task', () => {
   const sql = () => String(vi.mocked(queryOne).mock.calls.at(-1)?.[0] ?? '').replace(/\s+/g, ' ');
 

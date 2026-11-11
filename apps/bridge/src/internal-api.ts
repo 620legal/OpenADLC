@@ -40,6 +40,7 @@ import { requestFor, requestPrefixOf } from './request-context.js';
 import { missingReview } from './review-left.js';
 import { carriesRequestLine, RequestFiling } from './request-lifecycle.js';
 import type { TaskInbox } from './task-inbox.js';
+import type { PauseHolds } from './pause-holds.js';
 import { NotOurRepository, worksIn } from './invitation-service.js';
 import { HttpFailure, readBytes, Router, WithStatus, type Handler, type RequestContext } from './router.js';
 import { Scheduler } from './scheduler.js';
@@ -174,6 +175,8 @@ export function registerInternalApi(
     requestFiling?: RequestFiling;
     /** Messages a person sent a live task, which its session takes and its end returns (`task-inbox.ts`). */
     taskInbox?: Pick<TaskInbox, 'take' | 'release' | 'settle'> | null;
+    /** What a paused builder's hold on its review seats does when it lapses (`pause-holds.ts`). Absent in tests that do not ask. */
+    pauseHolds?: Pick<PauseHolds, 'paused' | 'forget'> | null;
   },
 ): void {
   /**
@@ -610,17 +613,30 @@ export function registerInternalApi(
     }
 
     // A builder that worked on a pull request held its review seats back
-    // (`BuilderWorkingError`); they are asked on the head it left whenever
-    // it stops working, a pause on a person included. After the handoff
-    // above, so a patch round's card is back in Review first.
+    // (`BuilderWorkingError`); they are asked on the head it left when it
+    // stops working. After the handoff above, so a patch round's card is back
+    // in Review first. A pause asks nothing yet: it holds the seats for
+    // `PAUSED_BUILDER_HOLD_MS`, and they are asked when the round ends or
+    // when that hold lapses with it still waiting (`PauseHolds`). Asked at
+    // the pause, on 2026-11-10 the lead reviewed a head the round replaced
+    // once its question was answered a minute later (#287).
     if ((ended.kind === 'patch' || ended.kind === 'implement') && ['done', 'failed', 'stopped', 'paused'].includes(state)) {
       // In a `then`, so even a throw before its first await is said and the
       // task's state, already written, is still answered.
       await Promise.resolve()
-        .then(() => deps.stages.builderEnded({ kind: ended.kind, subjectRef: ended.subjectRef, branch: ended.branch }))
+        .then(() =>
+          state === 'paused'
+            ? deps.pauseHolds?.paused(ended)
+            : deps.stages.builderEnded({ kind: ended.kind, subjectRef: ended.subjectRef, branch: ended.branch }),
+        )
         .catch((error: unknown) =>
-          console.warn(`[bridge] the review seats on ${ended.subjectRef}'s pull request were not asked: ${error instanceof Error ? error.message : error}`),
+          console.warn(
+            state === 'paused'
+              ? `[bridge] the hold of ${ended.subjectRef}'s review seats was not recorded (its lapse is still set, but a restart inside the window loses it): ${error instanceof Error ? error.message : error}`
+              : `[bridge] the review seats on ${ended.subjectRef}'s pull request were not asked: ${error instanceof Error ? error.message : error}`,
+          ),
         );
+      if (state !== 'paused') deps.pauseHolds?.forget(ended.id);
     }
 
     // Its seat has room again, and what it turned away while it was full

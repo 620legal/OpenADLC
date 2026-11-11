@@ -7,7 +7,7 @@ const store = vi.hoisted(() => ({
   healthReadable: true,
   reviewTasks: [] as { botId: string; subjectRef: string; state: string }[],
   /** Every task on a subject, whatever its kind (`listTasksOnSubjects`): a builder working on a pull request. */
-  onSubjects: [] as { id: string; kind: string; subjectRef: string; state: string; branch?: string | null }[],
+  onSubjects: [] as { id: string; kind: string; subjectRef: string; state: string; branch?: string | null; pausedAt?: string | null }[],
   issues: [] as { repoName: string; number: number; prNumber: number | null; labels: string[] }[],
   /** When the current round of reviews began (`review.round_opened`), or null when none was recorded. */
   roundAt: null as string | null,
@@ -123,6 +123,9 @@ import { causeOfFailure } from './health/checks/crew.js';
 import {
   BotBusyError,
   BuilderWorkingError,
+  builderOn,
+  builderWorkingWords,
+  PAUSED_BUILDER_HOLD_MS,
   HostFullError,
   ItemHeldError,
   PrerequisiteNotReadyError,
@@ -2235,10 +2238,56 @@ describe('a bot that must be able to work before a task starts', () => {
       expect(startTask).not.toHaveBeenCalled();
     });
 
-    it.each<[string, ReturnType<typeof patch>]>([
-      ['a paused patch round: it may wait on a person for days', patch('paused')],
-      ...['done', 'failed', 'stopped'].map((state): [string, ReturnType<typeof patch>] => [`a patch round ${state}`, patch(state)]),
+    // #287: a CI send-back's round paused two minutes in to ask for a path,
+    // and the lead reviewed the head it replaced while the answer came.
+    const ago = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
+
+    it.each([
+      ['a patch round paused on a question a minute ago', { ...patch('paused'), pausedAt: ago(1) }],
+      ['the build that opened it, on its branch, paused on a question a minute ago', { ...build('paused'), pausedAt: ago(1) }],
+      ['a paused patch round beside a build that never paused', [build('paused'), { ...patch('paused'), pausedAt: ago(14) }]],
+    ] as const)('starts no review, and records nothing, with %s, and says when it lets go', async (_what, builder) => {
+      store.onSubjects = Array.isArray(builder) ? [...builder] : [builder];
+      const { tasksService, startTask } = readyService();
+
+      const refused = await tasksService.open({ ...REVIEW, bot: SECURITY.name, branch: BRANCH, issueNumber: 1 }).catch((error: unknown) => error);
+
+      expect(refused).toBeInstanceOf(BuilderWorkingError);
+      expect(refused).toMatchObject({ status: 409 });
+      expect((refused as Error).message).toMatch(
+        /^the builder's (patch round|build) on openadlc#2 is paused on a question; the review seats are asked on the head it leaves when it ends, or at \d\d:\d\d UTC if it is still waiting$/,
+      );
+      expect(tasks.createTask).not.toHaveBeenCalled();
+      expect(startTask).not.toHaveBeenCalled();
+    });
+
+    it('names the round that is working before one that is paused', async () => {
+      store.onSubjects = [{ ...patch('paused'), pausedAt: ago(1) }, build('running')];
+      const { tasksService } = readyService();
+
+      const refused = await tasksService.open({ ...REVIEW, bot: SECURITY.name, branch: BRANCH, issueNumber: 1 }).catch((error: unknown) => error);
+
+      expect((refused as Error).message).toBe("the builder's build on openadlc#2 is running; the review seats are asked on the head it leaves when it ends");
+    });
+
+    it('holds for fifteen minutes after the pause, one constant for any question', async () => {
+      expect(PAUSED_BUILDER_HOLD_MS).toBe(15 * 60_000);
+      const pausedAt = '2026-11-10T22:05:00.000Z';
+      store.onSubjects = [{ ...patch('paused'), pausedAt }];
+
+      expect(await builderOn('openadlc#2', BRANCH, 1, Date.parse(pausedAt) + PAUSED_BUILDER_HOLD_MS - 1)).toMatchObject({ id: 'task-patch' });
+      expect(await builderOn('openadlc#2', BRANCH, 1, Date.parse(pausedAt) + PAUSED_BUILDER_HOLD_MS)).toBeNull();
+      expect(builderWorkingWords('openadlc#2', { kind: 'patch', state: 'paused', pausedAt })).toMatch(/or at 22:20 UTC if it is still waiting$/);
+    });
+
+    type Builder = (typeof store.onSubjects)[number];
+    it.each<[string, Builder]>([
+      ['a patch round paused longer than the window: it may wait on a person for days', { ...patch('paused'), pausedAt: ago(16) }],
+      ['a build paused longer than the window', { ...build('paused'), pausedAt: ago(16) }],
+      ['a paused patch round that does not say when it paused', patch('paused')],
+      ...['done', 'failed', 'stopped'].map((state): [string, Builder] => [`a patch round ${state}`, { ...patch(state), pausedAt: ago(1) }]),
       ['a build on another branch', build('running', 'agent/x/1-issue-1-again')],
+      ['a build paused a minute ago on another branch', { ...build('paused', 'agent/x/1-issue-1-again'), pausedAt: ago(1) }],
     ])('starts the review with %s', async (_what, builder) => {
       store.onSubjects = [builder];
       const { tasksService } = readyService();
