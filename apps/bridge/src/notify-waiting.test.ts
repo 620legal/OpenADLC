@@ -242,4 +242,71 @@ describe('the merge-waiting and review-stopped notifications', () => {
       expect(send).toHaveBeenCalledWith(expect.objectContaining({ people: ['p-a', 'p-b'] }));
     });
   });
+
+  describe('a held approval whose person is not in People (ADR 0059)', () => {
+    const since = '2026-11-03T10:00:00.000Z';
+    const decision = { repo: 'openadlc', pr: 12, head: 'a'.repeat(40), login: 'ghost' } as never;
+    const APPROVAL = item({ id: 'approval:openadlc#12@ghost', kind: 'merge_waiting', headline: 'Pull request #12 waits for @ghost’s approval', since, decision });
+    const notInPeople = {
+      for: 'approvers' as const,
+      name: 'admins and approvers',
+      people: ['p-admin', 'p-approver'],
+      notInPeople: 'ghost',
+      admins: ['p-admin'],
+    };
+    const TEXT = '@ghost is not in People, so pull request #12 waits with no one to approve it. Add them in Settings → People.';
+
+    it('is sent once, to the admins only, under a key of its own, and not again on the next pass', async () => {
+      const { send, store, notices, ready, set } = setUp([]);
+      await ready;
+      set([{ ...APPROVAL, audience: notInPeople }]);
+      await notices.pass();
+      await notices.pass();
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(send).toHaveBeenCalledWith({
+        event: 'merge_waiting',
+        to: null,
+        item: `${APPROVAL.id}@${since}#not-in-people`,
+        people: ['p-admin'],
+        text: TEXT,
+        link: `${CONSOLE}/?item=openadlc%239`,
+      });
+      // The person's own record is left free.
+      expect(await store.recorded('notify.merge_waiting', { item: `${APPROVAL.id}@${since}` })).toBe(false);
+    });
+
+    it('goes to the person once they are in People, as today, and the admins are not told again', async () => {
+      const { send, notices, ready, set } = setUp([]);
+      await ready;
+      set([{ ...APPROVAL, audience: notInPeople }]);
+      await notices.pass();
+      send.mockClear();
+      set([{ ...APPROVAL, audience: { for: 'person', name: 'Ghost', people: ['p-ghost'] } }]);
+      await notices.pass();
+      await notices.pass();
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(send).toHaveBeenCalledWith(
+        expect.objectContaining({ item: `${APPROVAL.id}@${since}`, people: ['p-ghost'], text: 'Pull request #12 waits for @ghost’s approval. Merge it on GitHub.' }),
+      );
+    });
+
+    it('is not sent with no admins, nor on a pass that could not read People', async () => {
+      const { send, notices, ready, set } = setUp([]);
+      await ready;
+      set([
+        { ...APPROVAL, audience: { for: 'everyone', name: 'everyone', people: [], why: 'no one approves or is an admin yet', notInPeople: 'ghost' } },
+        { ...APPROVAL, id: 'approval:openadlc#13@ghost', audience: { ...notInPeople, admins: [] } },
+        { ...APPROVAL, id: 'approval:openadlc#14@ghost', audience: { ...notInPeople, unread: true } },
+      ]);
+      await notices.pass();
+      expect(send).not.toHaveBeenCalled();
+    });
+
+    it('was waiting before the install’s first look: is the baseline, and not sent', async () => {
+      const { send, notices, ready } = setUp([{ ...APPROVAL, audience: notInPeople }]);
+      await ready;
+      await notices.pass();
+      expect(send).not.toHaveBeenCalled();
+    });
+  });
 });

@@ -624,6 +624,12 @@ export interface HumanReviewDecision {
    * viewer or a lookup that failed, which stay counted.
    */
   waitsOnOther?: true;
+  /**
+   * Set for an admin when the named person is not in People: adding them is
+   * theirs to do, so it is counted, and the card leads with Add to People
+   * (ADR 0059). Never set beside `waitsOnOther`. Absent from an older bridge.
+   */
+  addToPeople?: true;
 }
 
 export type AttentionKind =
@@ -718,8 +724,10 @@ export interface AttentionAudience {
   why?: string;
   /** Worked out while People could not be read: from the last read, or the admins' alone with none. */
   unread?: true;
-  /** On a held approval that came to the approvers, or everyone: the login it waits on, which no one in People has. Absent from an older bridge. */
+  /** On a held approval that came to the admins and approvers, or everyone: the login it waits on, which no one in People has. Absent from an older bridge. */
   notInPeople?: string;
+  /** Beside `notInPeople`: the admins among `people`, who are pushed about it once (ADR 0059). Absent from an older bridge. */
+  admins?: string[];
 }
 
 /**

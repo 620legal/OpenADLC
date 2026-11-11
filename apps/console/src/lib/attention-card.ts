@@ -111,7 +111,7 @@ export function isDecisionAction(action: AttentionAction): action is Extract<Att
   return action.kind === 'human_review_approve' || action.kind === 'human_review_reject' || action.kind === 'human_review_discuss';
 }
 
-export type DecisionButton = 'approve' | 'reject' | 'discuss' | 'remind';
+export type DecisionButton = 'approve' | 'reject' | 'discuss' | 'remind' | 'add_person';
 
 /**
  * The buttons a viewer gets on a held Human-review approval: Approve, Reject
@@ -120,13 +120,16 @@ export type DecisionButton = 'approve' | 'reject' | 'discuss' | 'remind';
  * Remind first, the one thing they can do to move it (#307), then Discuss.
  * The bridge refuses Approve and Reject from anyone else too; this only keeps
  * a button off a card it would refuse. The panel leaves Remind off where the
- * bridge has no route for it.
+ * bridge has no route for it. An admin on one whose person is not in People
+ * (`decision.addToPeople`) gets Add to People ahead of those: adding them is
+ * what lets it reach the one person who can decide it (ADR 0059).
  */
 export function decisionButtons(item: Pick<AttentionItem, 'decision' | 'actions'>): DecisionButton[] {
   if (!item.decision) return [];
   const offered = item.actions.filter(isDecisionAction).map((action): DecisionButton => (action.kind === 'human_review_approve' ? 'approve' : action.kind === 'human_review_reject' ? 'reject' : 'discuss'));
   if (item.decision.yours === true) return offered;
-  return ['remind', ...offered.filter((button) => button === 'discuss')];
+  const others: DecisionButton[] = ['remind', ...offered.filter((button) => button === 'discuss')];
+  return item.decision.addToPeople ? ['add_person', ...others] : others;
 }
 
 /** Discuss's one line on a held approval's card; what it does in full is at the top of the box it opens. */
@@ -156,11 +159,15 @@ export function decisionStatus(item: Pick<AttentionItem, 'decision' | 'awaiting'
   return `Waits for @${decision.login}'s approval${again}`;
 }
 
-/** How a held approval's reason starts: to the person asked, or to someone it only waits on. */
+/**
+ * How a held approval's reason starts: to the person asked, or to someone it
+ * only waits on, as an admin asked to add its person is: they are not asked
+ * to approve it.
+ */
 export function decisionWhy(item: Pick<AttentionItem, 'decision'>): { lead: string; text: string } | null {
   const decision = item.decision;
   if (!decision) return null;
-  if (waitsOnOthers(item)) return { lead: 'Why it waits: ', text: decision.whyWaits ?? decision.why };
+  if (waitsOnOthers(item) || decision.addToPeople) return { lead: 'Why it waits: ', text: decision.whyWaits ?? decision.why };
   return { lead: 'Why you are asked: ', text: decision.why };
 }
 
@@ -308,9 +315,10 @@ export function audienceLine(item: Pick<AttentionItem, 'audience'>): string | nu
   const audience = item.audience;
   if (!audience) return null;
   // A held approval for someone People does not have: only they can decide it,
-  // so whoever it came to is told why, and can add them or remind them (#307).
-  if (audience.notInPeople && audience.for === 'approvers') return `@${audience.notInPeople} is not in People, so this came to the approvers.`;
-  if (audience.notInPeople && audience.for === 'everyone') return `@${audience.notInPeople} is not in People and no one approves yet, so this is for everyone.`;
+  // so whoever it came to is told why: the admins can add them, and anyone
+  // can remind them (#307, ADR 0059).
+  if (audience.notInPeople && audience.for === 'approvers') return `@${audience.notInPeople} is not in People, so this came to the admins and approvers.`;
+  if (audience.notInPeople && audience.for === 'everyone') return `@${audience.notInPeople} is not in People and no one approves or is an admin yet, so this is for everyone.`;
   switch (audience.for) {
     case 'everyone':
       return audience.why ? `For everyone: ${audience.why}` : null;

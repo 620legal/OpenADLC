@@ -51,10 +51,12 @@ describe('whom a Needs-you card says it is for', () => {
     expect(audienceLine({})).toBeNull();
   });
 
-  it('says why a held approval came to the approvers, or to everyone, when People has no one by its login', () => {
-    expect(audienceLine({ audience: { for: 'approvers', name: 'approvers', people: ['p-a'], notInPeople: 'Dana' } })).toBe('@Dana is not in People, so this came to the approvers.');
-    expect(audienceLine({ audience: { for: 'everyone', name: 'everyone', people: [], why: 'no one approves yet', notInPeople: 'Dana' } })).toBe(
-      '@Dana is not in People and no one approves yet, so this is for everyone.',
+  it('says why a held approval came to the admins and approvers, or to everyone, when People has no one by its login', () => {
+    expect(audienceLine({ audience: { for: 'approvers', name: 'admins and approvers', people: ['p-a'], notInPeople: 'Dana', admins: ['p-a'] } })).toBe(
+      '@Dana is not in People, so this came to the admins and approvers.',
+    );
+    expect(audienceLine({ audience: { for: 'everyone', name: 'everyone', people: [], why: 'no one approves or is an admin yet', notInPeople: 'Dana' } })).toBe(
+      '@Dana is not in People and no one approves or is an admin yet, so this is for everyone.',
     );
   });
 });
@@ -450,6 +452,27 @@ describe('a held Human-review approval’s card', () => {
     // A bridge that does not say whose it is: not yours.
     expect(decisionButtons(HELD)).toEqual(['remind', 'discuss']);
     expect(decisionButtons(ITEM)).toEqual([]);
+  });
+
+  describe('when its person is not in People and the viewer is an admin (ADR 0059)', () => {
+    const ADMINS: AttentionItem = { ...HELD, decision: { ...HELD.decision!, yours: false, addToPeople: true, whyWaits: 'Because they must.' } };
+    const APPROVERS: AttentionItem = { ...HELD, decision: { ...HELD.decision!, yours: false, waitsOnOther: true, whyWaits: 'Because they must.' } };
+
+    it('leads with Add to People, then Remind and Discuss', () => {
+      expect(decisionButtons(ADMINS)).toEqual(['add_person', 'remind', 'discuss']);
+      expect(decisionButtons(APPROVERS)).toEqual(['remind', 'discuss']);
+    });
+
+    it('is counted as the admin’s, and not listed with others’; the approver’s copy is not counted', () => {
+      expect(waiting([ADMINS])).toEqual([ADMINS]);
+      expect(othersWaiting([ADMINS])).toEqual([]);
+      expect(groupCounts([ADMINS])).toEqual({ work: 1, system: 0 });
+      expect(groupCounts([APPROVERS])).toEqual({ work: 0, system: 0 });
+    });
+
+    it('says why it waits, not why they are asked: an admin is not asked to approve it', () => {
+      expect(decisionWhy(ADMINS)).toEqual({ lead: 'Why it waits: ', text: 'Because they must.' });
+    });
   });
 
   describe('when it is someone else’s (ADR 0058)', () => {
