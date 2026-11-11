@@ -268,3 +268,49 @@ describe('the item’s plan changes no person approved (#77)', () => {
     expect(container.querySelector('[data-plan-changes]')).toBeNull();
   });
 });
+
+describe('why the item isn’t moving, on the board’s sheet', () => {
+  const chain = {
+    links: [{ from: 'api#12', to: 'api#22', kind: 'dependency' as const }],
+    end: { kind: 'person' as const, ref: 'api#22', action: 'approve' as const, number: 30, attentionId: 'approval:api#30@jane', url: null },
+    behind: 2,
+  };
+
+  async function sheet(onClose: () => void, onOpenItem: (ref: string) => void): Promise<void> {
+    item = { ...ITEM, waitChain: chain };
+    const { ItemView } = await import('./item-view');
+    await act(async () =>
+      root.render(
+        <ItemView
+          subject="api#12"
+          initial={item}
+          now="2026-09-30T12:00:00.000Z"
+          variant="sheet"
+          onClose={onClose}
+          onOpenItem={onOpenItem}
+          root={() => ({ label: 'Show in Needs you', scrollTo: 'approval:api#30@jane' })}
+        />,
+      ),
+    );
+    await settle();
+  }
+
+  it('closes the sheet before it scrolls to the Needs you card under it', async () => {
+    const order: string[] = [];
+    const card = document.createElement('div');
+    card.dataset.card = 'approval:api#30@jane';
+    card.scrollIntoView = () => void order.push('scrolled');
+    document.body.appendChild(card);
+    await sheet(() => void order.push('closed'), () => undefined);
+    await act(async () => button('Show in Needs you').click());
+    expect(order).toEqual(['closed', 'scrolled']);
+  });
+
+  it('opens a card the wait names in place, as the board opens one', async () => {
+    const opened: string[] = [];
+    await sheet(() => undefined, (ref) => void opened.push(ref));
+    const link = container.querySelector<HTMLAnchorElement>('[data-wait-block] [data-wait-ref="api#22"]')!;
+    await act(async () => link.click());
+    expect(opened).toEqual(['api#22']);
+  });
+});

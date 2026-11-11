@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { Gate, Message } from '@openadlc/shared';
-import { actsNext, controlRefusal, itemKey, itemOf, itemView, linkStage, lonePullRefusal, messageRoutes, ownSubjects, parseItemKey, routeItemMessage, type ItemBot, type ItemTaskRow } from './items.js';
+import type { WaitChain } from './wait-chain.js';
+import { actsNext, controlRefusal, itemKey, itemOf, itemView, itemWaitChain, linkStage, lonePullRefusal, messageRoutes, ownSubjects, parseItemKey, routeItemMessage, type ItemBot, type ItemTaskRow } from './items.js';
 
 describe('a work item key', () => {
   it('names the number whatever its prefix or case, and is display only', () => {
@@ -388,5 +389,44 @@ describe('what an item’s pause, next and cancel act on', () => {
     expect(controlRefusal({ ...item, issueLink: link('open') }, false)).toMatch(/^api#77 is not on the board yet/);
     expect(controlRefusal({ ...item, issue: { number: 77 } as never }, false)).toBeNull();
     expect(controlRefusal({ ...item, issueLink: null }, false)).toMatch(/pull request with no issue/);
+  });
+});
+
+describe('why an item is not moving, as its card on the board says', () => {
+  const CHAIN: WaitChain = {
+    links: [{ from: 'api#12', to: 'api#9', kind: 'dependency' }],
+    end: { kind: 'person', ref: 'api#9', action: 'answer', number: 9, attentionId: 'gate:g-9', url: null },
+    behind: 1,
+  };
+  const waiting = { repo: 'api', issue: { number: 12, title: 'Retry', url: null, stage: 'build' as const, onBoard: true } };
+
+  it('is the board read of its card, asked for by repo#n', async () => {
+    const waits = vi.fn(async () => CHAIN);
+    expect(await itemWaitChain(waiting, waits)).toEqual(CHAIN);
+    expect(waits).toHaveBeenCalledWith('api#12');
+  });
+
+  it('is null for a card with no chain', async () => {
+    expect(await itemWaitChain(waiting, async () => null)).toBeNull();
+  });
+
+  it.each([
+    ['a request with no issue', { repo: 'api', issue: null }],
+    ['an item in Done', { repo: 'api', issue: { ...waiting.issue, stage: 'done' as const } }],
+    ['an issue the board has no row for', { repo: 'api', issue: { ...waiting.issue, onBoard: false } }],
+    ['an item with no repository', { repo: null, issue: waiting.issue }],
+  ])('is null for %s, without reading the board', async (_name, view) => {
+    const waits = vi.fn(async () => CHAIN);
+    expect(await itemWaitChain(view, waits)).toBeNull();
+    expect(waits).not.toHaveBeenCalled();
+  });
+
+  it('is null when the board cannot be read, as a card is left as it was', async () => {
+    expect(await itemWaitChain(waiting, async () => Promise.reject(new Error('database down')))).toBeNull();
+    expect(
+      await itemWaitChain(waiting, () => {
+        throw new Error('thrown before a promise');
+      }),
+    ).toBeNull();
   });
 });

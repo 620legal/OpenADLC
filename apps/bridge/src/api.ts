@@ -127,6 +127,7 @@ import { registerSigningKeyRoutes } from './signing-key-routes.js';
 import { SubjectTitles } from './subject-titles.js';
 import { retryTask } from './task-retry.js';
 import { doneSince, itemCards, lonePulls, loosePulls, readBoardActivity, readBoardWork, requestsOnCards, withItemIssues, withItemPulls } from './board-work.js';
+import type { WaitChain } from './wait-chain.js';
 import type { WaitingReads } from './waiting.js';
 import { describeSubject } from './thread-view.js';
 import { registerBoardEventRoutes } from './board-events.js';
@@ -1211,9 +1212,12 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
     recheck: () => deps.health?.runSoon(['signing-key']),
   });
 
-  router.get('/v1/board', async ({ query, identity, role }) => {
-    const repoFilter = query.get('repo');
-    const repoName = !repoFilter || repoFilter === 'all' ? undefined : repoFilter;
+  /**
+   * The board's read, from its issues to each card's work and wait chain:
+   * one function, so an item's sheet asks the board's own read why it waits
+   * (`waitChainOf`) and the two never say different things (ADR 0054).
+   */
+  const readBoard = async (repoName: string | undefined) => {
     // Once the install is numbered, a card is a work item's, and an item with
     // a link in this repository is on its board even when its first issue is
     // in another: every repository's cards are read, and filtered after
@@ -1272,6 +1276,20 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
       sessions: activeSessions,
       waiting: waitingReads,
     });
+    return { numbered, since, crew, repoList, openGates, links, organization, activeSessions, listed, cards, ignored, pulls, loose, work };
+  };
+
+  /**
+   * Why the card `ref` waits, as the board of every repository says it: that
+   * read's `behind` counts every card waiting on the same root, which one
+   * repository's board would undercount. Null for a card that does not wait.
+   */
+  const waitChainOf = async (ref: string): Promise<WaitChain | null> => (await readBoard(undefined)).work.byRef.get(ref)?.waitChain ?? null;
+
+  router.get('/v1/board', async ({ query, identity, role }) => {
+    const repoFilter = query.get('repo');
+    const repoName = !repoFilter || repoFilter === 'all' ? undefined : repoFilter;
+    const { since, crew, repoList, openGates, links, organization, activeSessions, listed, cards, ignored, pulls, loose, work } = await readBoard(repoName);
 
     // What is waiting to land, and what the bridge is doing about it. A person
     // looking at the board should not have to guess why a green pull request
@@ -1703,7 +1721,7 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
     return sendThreadMessage(deps, { bot, subject, text: input.text, identity, role });
   });
 
-  registerItemRoutes(router, deps);
+  registerItemRoutes(router, { ...deps, waitChainOf });
   // The command palette's jump list: open items and those closed in the last month.
   registerItemSearchRoutes(router);
   registerItemLinkRoutes(router, defaultItemLinkDeps(() => asAutomation(deps.actors, config)));

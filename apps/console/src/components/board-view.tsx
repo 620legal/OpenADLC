@@ -13,6 +13,7 @@ import { NeedsYou, type OpenBot } from '@/components/needs-you';
 import { namesLine, PAUSE_WORK, pauseLine } from '@/components/pause-work';
 import { PausedMark, PausedReposProvider, RepoBadge, RepoDot, useRepoColors, usePausedRepos } from '@/components/repo-badge';
 import { ItemView } from '@/components/item-view';
+import { RootLink } from '@/components/root-link';
 import { RunningTasks } from '@/components/running-tasks';
 import { ThreadPanel } from '@/components/thread-panel';
 import type { AttentionItem, Board, BoardCard, BoardColumn, BridgeGapReport as GapReport, CrewMember, WaitChain, WorkPause } from '@/lib/api';
@@ -246,6 +247,8 @@ export function BoardView({
     const outside = /^([^/#\s]+\/[^/#\s]+)#(\d+)$/.exec(ref);
     return outside ? `https://github.com/${outside[1]}/issues/${outside[2]}` : null;
   };
+  // One button for a card and for its sheet's "Why it isn't moving", so both go to one place.
+  const rootOf = (card: Pick<BoardCard, 'repo'>, chain: WaitChain) => rootButton(card, chain, shownItems, urlOfRef);
   const cards: CardHandlers = {
     crew,
     moves,
@@ -254,7 +257,7 @@ export function BoardView({
     labelOf,
     columns: board.columns,
     context,
-    root: (card, chain) => rootButton(card, chain, shownItems, urlOfRef),
+    root: rootOf,
     onOpen: (card: BoardCard) => setOpenItem({ subject: card.ref, role: null }),
     onMove: move,
     onDragStart: (ref: string, from: string) => setDragging({ ref, from }),
@@ -483,6 +486,8 @@ export function BoardView({
           variant="sheet"
           onClose={() => setOpenItem(null)}
           now={now}
+          root={rootOf}
+          onOpenItem={(ref) => setOpenItem({ subject: ref, role: null })}
         />
       )}
 
@@ -557,32 +562,6 @@ interface CardHandlers {
   onMove: (card: { ref: string; from: string }, to: string) => void;
   onDragStart: (ref: string, from: string) => void;
   onDragEnd: () => void;
-}
-
-/**
- * The button to the root of a card's wait: to the Needs you card above the
- * board, which it scrolls to, or to the pull request or issue on GitHub.
- */
-function RootLink({ button }: { button: RootButton }) {
-  const style = 'relative z-10 shrink-0 text-[11.5px] font-medium text-link hover:underline';
-  if (button.scrollTo) {
-    const id = button.scrollTo;
-    return (
-      <button
-        type="button"
-        data-root={id}
-        onClick={() => document.querySelector(`[data-card="${CSS.escape(id)}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })}
-        className={style}
-      >
-        {button.label}
-      </button>
-    );
-  }
-  return (
-    <a data-root href={button.url} target="_blank" rel="noreferrer" className={style}>
-      {button.label}
-    </a>
-  );
 }
 
 /**
