@@ -228,6 +228,30 @@ none yet, says its kind of work instead ("writing the change").
 
 ## One request, start to finish
 
+```mermaid
+flowchart LR
+  you([You]) --> intake[Intake]
+  intake --> design[Design]
+  design --> build[Build]
+  build --> review[Review]
+  review --> ship[Merge & ship]
+  ship --> done([Done])
+  intake -. asks you .-> you
+  review -. sends back .-> build
+```
+
+| Stage | What happens |
+|---|---|
+| **Intake** | Asks you, in the request's own conversation, until it is clear, then files the issue |
+| **Design** | Every issue gets a design pass, unless the repository limits it to issues with a spec-required label in Settings; the one stage that remembers earlier decisions |
+| **Build** | Implements it, runs `make ci` until green, opens the pull request |
+| **Review** | Reviewers on more than one model provider post their verdicts; the lead reads them all and approves or sends it back |
+| **Merge & ship** | GitHub CI runs after the lead approves; OpenADLC merges as its GitHub App, one pull request at a time, and your repository's rules deploy |
+
+Any stage can send work back one step, with a reason
+([Sending work back](#sending-work-back)). When an agent needs a decision it
+asks you on the card, and the work waits for your answer. In detail:
+
 1. **Asked.** A person writes what they want in the console's New request —
    a line, the details, and any screenshots, mockups or documents, which are
    kept in OpenADLC's database and never posted to GitHub
