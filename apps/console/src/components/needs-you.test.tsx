@@ -842,12 +842,29 @@ describe('a held Human-review approval', () => {
     const html = needs([HELD({ yours: true })]);
     const text = words(html);
     expect(text).toContain('What it does: Limit each client to 60 requests a minute.');
-    expect(text).toContain("Why you are asked: The lead approved 692cd1f. It changes `infra/`, which AGENTS.md's Human review names @janedoe for");
+    expect(text).toContain("Why you are asked: The lead approved 692cd1f. It changes infra/ , which AGENTS.md's Human review names @janedoe for");
     expect(text).toContain('lead-reviewer approved');
     expect(text).toContain('The limit is per client.');
     expect(html).toContain('href="https://github.com/janedoe/openadlc/pull/40/files"');
     for (const next of Object.values(decision.next)) expect(text).toContain(next);
     expect([...html.matchAll(/data-decide="(\w+)"/g)].map((match) => match[1])).toEqual(['approve', 'reject', 'discuss']);
+  });
+
+  // A review's summary is its markdown: on the card it showed `**`, `##` and backticks, and the why its backticks (#306).
+  it('shows a review’s markdown as formatted words in three lines, and the why’s path as code', () => {
+    const review = { ...decision.reviews[0]!, summary: '## Verdict\n**Approve.** The fix in `cap.ts` holds.\n- one\n- two' };
+    const html = renderToStaticMarkup(<HumanReviewDecisionPanel item={HELD({ yours: true, reviews: [review], why: 'It changes `content/x.md`, so @janedoe decides.' })} />);
+    const reviewHtml = /<li data-review="true">([\s\S]*?)<\/li>/.exec(html)![1]!;
+    const said = words(reviewHtml);
+    for (const word of ['Verdict', 'Approve.', 'cap.ts', 'one', 'two']) expect(said).toContain(word);
+    expect(said).not.toMatch(/[*#`]/);
+    expect(reviewHtml).not.toMatch(/<(?:ul|li|p|h\d)\b/);
+    expect(reviewHtml).toMatch(/<code [^>]*>cap\.ts<\/code>/);
+    expect(reviewHtml).toMatch(/<span data-summary="true" class="[^"]*line-clamp-3/);
+
+    const why = /<p data-why="[^"]*"[^>]*>([\s\S]*?)<\/p>/.exec(html)![1]!;
+    expect(why).toMatch(/<code [^>]*>content\/x\.md<\/code>/);
+    expect(why).not.toContain('`');
   });
 
   it('gives anyone else Discuss alone, and says whose it is', () => {

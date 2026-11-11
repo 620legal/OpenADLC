@@ -37,7 +37,7 @@ import { DeviceCode } from '@/components/device-code';
 import { CheckIcon, ExternalIcon, QuestionIcon, ShipIcon, WarningIcon } from '@/components/icons';
 import type { AttentionAction, AttentionItem, AttentionMember } from '@/lib/api';
 import { cn } from '@/lib/cn';
-import { Markdown } from '@/components/markdown';
+import { Markdown, MarkdownInline } from '@/components/markdown';
 import { RepoBadge } from '@/components/repo-badge';
 import { Dialog, DialogClose, DialogTitle, SheetContent } from '@/components/ui/dialog';
 import { safeAction } from '@/lib/safe-action';
@@ -1716,7 +1716,7 @@ export function HumanReviewDecisionPanel({ item, initialStep, state, full = fals
       )}
       <p data-why className="text-soft">
         <span className="font-medium text-body">Why you are asked: </span>
-        {decision.why}
+        <MarkdownInline text={decision.why} />
       </p>
       <div data-reviews className="flex flex-col gap-1 text-soft">
         <span className="font-medium text-body">What the reviewers found:</span>
@@ -1727,12 +1727,18 @@ export function HumanReviewDecisionPanel({ item, initialStep, state, full = fals
                 <a href={review.url} target="_blank" rel="noreferrer" className="text-link hover:underline">
                   {reviewerName(review)} {reviewVerdict(review.state)}
                 </a>
-                {/* Three lines on the card; whole in its sheet, which has the room. */}
-                {review.summary && (
-                  <span data-summary className={cn('text-muted', full ? 'block whitespace-pre-wrap break-words' : 'line-clamp-3')}>
-                    {review.summary}
-                  </span>
-                )}
+                {/* Three lines of flowing text on the card; whole, as blocks, in its sheet, which has the room.
+                    The summary is the review's markdown, so drawn as text it showed its `**` and `##`. */}
+                {review.summary &&
+                  (full ? (
+                    <div data-summary className="text-muted">
+                      <Markdown text={review.summary} />
+                    </div>
+                  ) : (
+                    <span data-summary className="line-clamp-3 text-muted">
+                      <MarkdownInline text={review.summary} />
+                    </span>
+                  ))}
               </li>
             ))}
           </ul>
