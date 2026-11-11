@@ -40,6 +40,18 @@ export function waitingText(item: AttentionItem): string {
 }
 
 /**
+ * Whether an item is a held approval routed to people other than its named
+ * person: the approvers, or everyone, when the login is not in People. Each of
+ * them is someone else, for whom it is under Waiting on others, not counted,
+ * and so not pushed either (ADR 0058). Left unrecorded, it is sent once it
+ * routes to the person, as when they are added to People. A local install
+ * routes nothing, and is sent as before.
+ */
+export function waitsOnOthers(item: Pick<AttentionItem, 'decision' | 'audience'>): boolean {
+  return Boolean(item.decision && item.audience && item.audience.for !== 'person');
+}
+
+/**
  * Sends a pull request waiting on a person and a review that stopped, once
  * each, read from Needs you.
  *
@@ -122,6 +134,7 @@ export class WaitingNotices {
         // so the next pass that reads them sends it, rather than sent to the
         // wrong people now or to no one for good.
         if (!mayNotify(item.audience)) continue;
+        if (waitsOnOthers(item)) continue;
         const subject = item.subject.item ?? item.subject.ref;
         // To the item's people when it is routed to some, each on their own
         // channel; one record per occurrence either way, so none is sent twice.

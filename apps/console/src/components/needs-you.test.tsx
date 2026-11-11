@@ -2,7 +2,7 @@ import { isValidElement, type ReactElement, type ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Dialog } from '@/components/ui/dialog';
-import { adminOnly, HeldMergePanel, HeldPromotePanel, HumanReviewDecisionPanel, keyOf, NeedsYou, Recoveries } from './needs-you';
+import { adminOnly, HeldMergePanel, HeldPromotePanel, HumanReviewDecisionPanel, keyOf, NeedsYou, OthersWaitingList, Recoveries } from './needs-you';
 import type { AttentionItem } from '@/lib/api';
 
 /** What the card sent the gate-answer route. */
@@ -106,6 +106,8 @@ vi.mock('react', async (original) => ({
   useState: (initial: unknown) => [typeof initial === 'function' ? (initial as () => unknown)() : initial, () => undefined],
   useTransition: () => [false, (work: () => unknown) => void work()],
   useRef: (initial: unknown) => ({ current: initial }),
+  // Called as a function there is no tree to number ids from.
+  useId: () => ':id:',
   // Nothing runs after a first drawing: a sign-in's flow is read only in a browser.
   useEffect: () => undefined,
   // No provider above a card called as a function: the context's default, an admin.
@@ -212,6 +214,11 @@ const SUPERSEDED: AttentionItem = {
     { kind: 'open_page', label: 'Design memory', href: '/settings/repositories/api#api-memory' },
   ],
 };
+
+/** Waiting on others, which the board's strip leaves out, drawn on its own. */
+function others(items: AttentionItem[]): string {
+  return renderToStaticMarkup(<OthersWaitingList items={items} now="2026-09-24T12:00:00.000Z" onOpenBot={() => undefined} />).replace(/<!-- -->/g, '');
+}
 
 function needs(items: AttentionItem[]): string {
   return renderToStaticMarkup(<NeedsYou items={items} now="2026-09-24T12:00:00.000Z" onOpenBot={() => undefined} />).replace(
@@ -858,8 +865,43 @@ describe('a held Human-review approval', () => {
     expect(text).toContain('lead-reviewer approved');
     expect(text).toContain('The limit is per client.');
     expect(html).toContain('href="https://github.com/janedoe/openadlc/pull/40/files"');
-    for (const next of Object.values(decision.next)) expect(text).toContain(next);
+    expect(text).toContain(decision.next.approve);
+    expect(text).toContain(decision.next.reject);
+    // Discuss says one line beside it; what it does in full opens with its box.
+    expect(text).toContain('Discuss Ask the lead reviewer or the builder.');
+    expect(text).not.toContain(decision.next.discuss);
     expect([...html.matchAll(/data-decide="(\w+)"/g)].map((match) => match[1])).toEqual(['approve', 'reject', 'discuss']);
+  });
+
+  it('leads with the item’s title and says whose approval it waits for under it, the headline left to pushes (#308)', () => {
+    const text = words(needs([HELD({ yours: true })]));
+    expect(text).toContain('#39 Rate-limit Waits for your approval');
+    expect(text).not.toContain("Pull request #40 waits for @janedoe's approval");
+    expect(words(others([HELD({ yours: false, waitsOnOther: true } as never)]))).toContain("openadlc#39 Rate-limit Waits for @janedoe's approval");
+  });
+
+  it('says Why it waits on someone else’s card, names the person once, and drops the line that said whose it is', () => {
+    const html = others([
+      HELD({
+        yours: false,
+        waitsOnOther: true,
+        whyWaits: 'The lead approved 692cd1f. It changes `infra/`, so OpenADLC does not merge it until they approve it.',
+        notYours: "This is @janedoe's to decide; you can Discuss it.",
+      } as never),
+    ]);
+    const text = words(html);
+    expect(text).toContain('Why it waits: The lead approved 692cd1f.');
+    expect(text).not.toContain('Why you are asked');
+    expect(text).not.toContain("This is @janedoe's to decide");
+    // An older bridge sends no whyWaits: its why, under the same lead.
+    expect(words(others([HELD({ yours: false, waitsOnOther: true } as never)]))).toContain(
+      "Why it waits: The lead approved 692cd1f. It changes `infra/`, which AGENTS.md's Human review names @janedoe",
+    );
+  });
+
+  it('opens Discuss’s box with what it does in full', () => {
+    const html = words(renderToStaticMarkup(<HumanReviewDecisionPanel item={HELD({ yours: true })} initialStep={{ kind: 'discuss', text: '', role: 'review_lead' }} />));
+    expect(html).toContain(decision.next.discuss);
   });
 
   it('gives anyone else Discuss alone, and says whose it is', () => {

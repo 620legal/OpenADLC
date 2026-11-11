@@ -311,6 +311,12 @@ export interface HumanReviewDecision {
   change: string | null;
   /** Why they are asked: the paths and the Human review rule that names them. */
   why: string;
+  /**
+   * The same reason with the person as they / them / their, for a card that
+   * waits on someone else: it names the person once, in its status line, and
+   * `why` named them a second and third time (#308).
+   */
+  whyWaits: string;
   /** The crew's reviews on the head, as the wait recorded them; null when none were recorded, and the card links to GitHub. */
   reviews: PersonAwaitReview[] | null;
   prUrl: string;
@@ -322,6 +328,14 @@ export interface HumanReviewDecision {
   /** For the viewer only, when it is not theirs: why, and where to link an account when that is why. */
   notYours?: string;
   settingsUrl?: string;
+  /**
+   * For the viewer only: set when the viewer's linked account is known not to
+   * be the named one (`mayDecide` answered 403). Not set for an unlinked
+   * viewer (409), who may be the named person, nor when GitHub could not be
+   * asked (503): keyed on `yours === false`, those moved a person's own
+   * approval out of their count (ADR 0058).
+   */
+  waitsOnOther?: true;
 }
 
 export interface HeldPromote {
@@ -1233,18 +1247,31 @@ function turnOffWhileOn(task: Pick<TaskFacts, 'kind' | 'subjectRef' | 'repoId'> 
   return on ? turnOff(widens.repo, widens.issueNumber) : null;
 }
 
+/** How a held approval's reason names its person: by login for `why`, as they / their for `whyWaits`. */
+interface Who {
+  /** "@x" / "they" */
+  they: string;
+  /** "@x's" / "their" */
+  their: string;
+  /** "@x" / "them" */
+  them: string;
+}
+
+const byLogin = (login: string): Who => ({ they: `@${login}`, their: `@${login}'s`, them: `@${login}` });
+const AS_THEY: Who = { they: 'they', their: 'their', them: 'them' };
+const capital = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
+
 /** What a person's ask to approve again says happened to their approval. */
-function approvalCountsForNothing(ask: PersonAsk): string {
+function approvalCountsForNothing(ask: PersonAsk, who: Who = byLogin(ask.login)): string {
   const short = (sha: string) => sha.slice(0, 7);
-  const who = `@${ask.login}`;
   if (ask.approvedOn && ask.shownOn && ask.approvedOn !== ask.shownOn) {
-    return `GitHub shows ${who}'s approval on ${short(ask.shownOn)}, but it was given on ${short(ask.approvedOn)}, whose diff is another, so it counts for nothing.`;
+    return `GitHub shows ${who.their} approval on ${short(ask.shownOn)}, but it was given on ${short(ask.approvedOn)}, whose diff is another, so it counts for nothing.`;
   }
-  if (ask.approvedOn) return `${who} approved ${short(ask.approvedOn)}, and the diff has changed since, so that approval counts for nothing.`;
+  if (ask.approvedOn) return `${capital(who.they)} approved ${short(ask.approvedOn)}, and the diff has changed since, so that approval counts for nothing.`;
   if (ask.shownOn) {
-    return `GitHub shows ${who}'s approval on ${short(ask.shownOn)}, but nothing says it was given there, and GitHub moves an approval onto later commits, so it counts for nothing.`;
+    return `GitHub shows ${who.their} approval on ${short(ask.shownOn)}, but nothing says it was given there, and GitHub moves an approval onto later commits, so it counts for nothing.`;
   }
-  return `${who}'s approval names no commit, so it counts for nothing.`;
+  return `${capital(who.their)} approval names no commit, so it counts for nothing.`;
 }
 
 /** The kinds of item about one pull request, by id: `merge:repo#pr`, `approve-again:repo#pr@login`, `approval:repo#pr@login`, `stall:repo#pr`. */
@@ -1483,6 +1510,7 @@ export function attentionItems(given: AttentionInput): AttentionItem[] {
         url,
         issue: issueFacts(input.issues, ask.repo, ask.issue),
         why: `${approvalCountsForNothing(ask)} AGENTS.md's Human review names @${ask.login} for what it changes.`,
+        whyWaits: `${approvalCountsForNothing(ask, AS_THEY)} AGENTS.md's Human review names them for what it changes.`,
         reviews: null,
       }),
     });
@@ -1500,7 +1528,9 @@ export function attentionItems(given: AttentionInput): AttentionItem[] {
     const { subject } = subjectOf(`${wait.repo}#${wait.issue}`);
     const url = `https://github.com/${fullName}/pull/${wait.pr}`;
     const who = `@${wait.login}`;
-    const changes = wait.paths.length > 0 ? `${pathsInWords(wait.paths)}, which AGENTS.md's Human review names ${who} for` : `a path AGENTS.md's Human review names ${who} for`;
+    const changesFor = (them: string) =>
+      wait.paths.length > 0 ? `${pathsInWords(wait.paths)}, which AGENTS.md's Human review names ${them} for` : `a path AGENTS.md's Human review names ${them} for`;
+    const changes = changesFor(who);
     items.push({
       id: `approval:${key}`,
       kind: 'merge_waiting',
@@ -1519,6 +1549,7 @@ export function attentionItems(given: AttentionInput): AttentionItem[] {
         url,
         issue: issueFacts(input.issues, wait.repo, wait.issue),
         why: `The lead approved ${wait.head.slice(0, 7)}. It changes ${changes}, so OpenADLC does not merge it until ${who} approves it.`,
+        whyWaits: `The lead approved ${wait.head.slice(0, 7)}. It changes ${changesFor(AS_THEY.them)}, so OpenADLC does not merge it until they approve it.`,
         reviews: wait.reviews,
       }),
     });
@@ -3076,7 +3107,7 @@ export async function readAttention(now: Date, deps: AttentionDeps = {}): Promis
 }
 
 /** Whether a held decision is the viewer's (`HumanReviewDecisions.mayDecide`). */
-export type MayDecideOn = (identity: string, login: string) => Promise<{ yours: true } | { yours: false; why: string; settingsUrl?: string }>;
+export type MayDecideOn = (identity: string, login: string) => Promise<{ yours: true } | { yours: false; why: string; settingsUrl?: string; status?: number }>;
 
 /**
  * Says on each held Human-review decision whether it is the viewer's own: an
@@ -3111,7 +3142,15 @@ export async function forViewer(items: AttentionItem[], identity: string, mayDec
       const said = await may;
       const decision: HumanReviewDecision = said.yours
         ? { ...item.decision, yours: true }
-        : { ...item.decision, yours: false, notYours: said.why, ...(said.settingsUrl ? { settingsUrl: said.settingsUrl } : {}) };
+        : {
+            ...item.decision,
+            yours: false,
+            notYours: said.why,
+            ...(said.settingsUrl ? { settingsUrl: said.settingsUrl } : {}),
+            // Only a 403 says the viewer is someone else: unlinked (409) or
+            // unknown (503, or a throw) may still be the named person.
+            ...(said.status === 403 ? { waitsOnOther: true as const } : {}),
+          };
       return { ...item, decision };
     }),
   );
@@ -3207,6 +3246,7 @@ function heldDecision(input: {
   url: string;
   issue: Pick<IssueFacts, 'title' | 'body'> | null;
   why: string;
+  whyWaits: string;
   reviews: PersonAwaitReview[] | null;
 }): HumanReviewDecision {
   const short = input.head.slice(0, 7);
@@ -3217,6 +3257,7 @@ function heldDecision(input: {
     login: input.login,
     change: outcomeOf(input.issue?.body) ?? (input.issue?.title?.trim() || null),
     why: input.why,
+    whyWaits: input.whyWaits,
     reviews: input.reviews,
     prUrl: input.url,
     diffUrl: `${input.url}/files`,

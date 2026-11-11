@@ -5,12 +5,15 @@ import {
   audienceLine,
   clockTime,
   decisionButtons,
+  decisionStatus,
+  decisionWhy,
   faceActions,
   groupCounts,
   groupOf,
   hasMore,
   heldMergeButtons,
   noMergeReason,
+  othersWaiting,
   plainDetail,
   rejectReady,
   remindAgainLine,
@@ -19,8 +22,10 @@ import {
   requestLine,
   reviewerName,
   reviewVerdict,
+  stripItems,
   unblockedOf,
   unblocksLine,
+  waiting,
 } from './attention-card';
 
 const ITEM: AttentionItem = {
@@ -438,12 +443,48 @@ describe('a held Human-review approval’s card', () => {
     },
   };
 
-  it('gives the person it waits on Approve, Reject and Discuss, and anyone else Discuss alone', () => {
+  it('gives the person it waits on Approve, Reject and Discuss, and anyone else Remind, then Discuss', () => {
     expect(decisionButtons({ ...HELD, decision: { ...HELD.decision!, yours: true } })).toEqual(['approve', 'reject', 'discuss']);
-    expect(decisionButtons({ ...HELD, decision: { ...HELD.decision!, yours: false } })).toEqual(['discuss']);
+    expect(decisionButtons({ ...HELD, decision: { ...HELD.decision!, yours: false } })).toEqual(['remind', 'discuss']);
+    expect(decisionButtons({ ...HELD, decision: { ...HELD.decision!, yours: false, waitsOnOther: true } })).toEqual(['remind', 'discuss']);
     // A bridge that does not say whose it is: not yours.
-    expect(decisionButtons(HELD)).toEqual(['discuss']);
+    expect(decisionButtons(HELD)).toEqual(['remind', 'discuss']);
     expect(decisionButtons(ITEM)).toEqual([]);
+  });
+
+  describe('when it is someone else’s (ADR 0058)', () => {
+    const THEIRS: AttentionItem = { ...HELD, decision: { ...HELD.decision!, yours: false, waitsOnOther: true, whyWaits: 'Because they must.' } };
+    const UNLINKED: AttentionItem = { ...HELD, decision: { ...HELD.decision!, yours: false, notYours: 'You have not linked a GitHub account.' } };
+
+    it('is left out of what waits, the counts and the board’s strip, and listed with others’', () => {
+      const items = [ITEM, THEIRS, UNLINKED];
+      expect(waiting(items)).toEqual([ITEM, UNLINKED]);
+      expect(othersWaiting(items)).toEqual([THEIRS]);
+      expect(groupCounts(items)).toEqual({ work: 2, system: 0 });
+      expect(stripItems([THEIRS])).toEqual([]);
+      expect(stripItems(items)).not.toContain(THEIRS);
+    });
+
+    it('keeps one that may be the viewer’s counted: not yours, but not known to be someone else’s', () => {
+      expect(groupCounts([UNLINKED])).toEqual({ work: 1, system: 0 });
+      expect(othersWaiting([UNLINKED, HELD])).toEqual([]);
+    });
+
+    it('says whose approval it waits for, under its title', () => {
+      expect(decisionStatus(THEIRS)).toBe("Waits for @janedoe's approval");
+      expect(decisionStatus({ ...THEIRS, awaiting: { login: 'janedoe', again: true, paths: [] } })).toBe("Waits for @janedoe's approval again");
+      expect(decisionStatus({ ...HELD, decision: { ...HELD.decision!, yours: true } })).toBe('Waits for your approval');
+      expect(decisionStatus({ ...HELD, decision: { ...HELD.decision!, yours: true }, awaiting: { login: 'janedoe', again: true, paths: [] } })).toBe('Waits for your approval again');
+      // Unknown reads as someone else's, with its own line on the card saying why.
+      expect(decisionStatus(UNLINKED)).toBe("Waits for @janedoe's approval");
+      expect(decisionStatus(ITEM)).toBeNull();
+    });
+
+    it('says Why it waits, from whyWaits, else why; and Why you are asked to anyone who may be asked', () => {
+      expect(decisionWhy(THEIRS)).toEqual({ lead: 'Why it waits: ', text: 'Because they must.' });
+      expect(decisionWhy({ ...THEIRS, decision: { ...THEIRS.decision!, whyWaits: undefined } })).toEqual({ lead: 'Why it waits: ', text: 'Because.' });
+      expect(decisionWhy(UNLINKED)).toEqual({ lead: 'Why you are asked: ', text: 'Because.' });
+    });
   });
 
   it('keeps its decision buttons off the face row, and counts no Show more for them', () => {

@@ -4,11 +4,11 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { AppShell } from '@/components/app-header';
 import { ItemView } from '@/components/item-view';
-import { NEEDS_YOU_PAGE, NeedsList, type CardKeys, type OpenBot, type OpenItem } from '@/components/needs-you';
+import { NEEDS_YOU_PAGE, NeedsList, OthersWaitingList, type CardKeys, type OpenBot, type OpenItem } from '@/components/needs-you';
 import { ThreadPanel } from '@/components/thread-panel';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import type { AttentionItem, CrewMember } from '@/lib/api';
-import { groupCounts, groupOf, waiting as waitingOf, type AttentionGroup } from '@/lib/attention-card';
+import { groupCounts, groupOf, othersWaiting, waiting as waitingOf, type AttentionGroup } from '@/lib/attention-card';
 import { findBot } from '@/lib/bot-label';
 import type { HeaderData } from '@/lib/header';
 import { needsYouKey } from '@/lib/keys';
@@ -85,7 +85,8 @@ export function NeedsYouPage({
     if (keys) cards.current.set(id, keys);
     else cards.current.delete(id);
   }, []);
-  const ids = waitingOf(of(tab)).map((item) => item.id);
+  // Yours first, then Waiting on others under Work, as they are drawn.
+  const ids = [...waitingOf(of(tab)), ...(tab === 'work' ? othersWaiting(of('work')) : [])].map((item) => item.id);
   const idsKey = ids.join('\n');
   // Where the selection was, so a card that goes on a refresh hands it to the one now in its place.
   const lastIndex = useRef(-1);
@@ -146,6 +147,10 @@ export function NeedsYouPage({
               selected={tab === 'work' ? selected : null}
               onCards={onCards}
             />
+            {/* Held approvals that are someone else's: shown, and counted nowhere (ADR 0058). */}
+            <div className="pt-5 empty:hidden">
+              <OthersWaitingList items={of('work')} now={now} onOpenBot={openThread} onOpenItem={openWork} selected={tab === 'work' ? selected : null} onCards={onCards} />
+            </div>
           </TabsContent>
           <TabsContent value="system" className="pt-4">
             <NeedsList

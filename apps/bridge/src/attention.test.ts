@@ -672,6 +672,7 @@ describe('what needs a person', () => {
         login: 'janedoe',
         change: 'Limit each client to 60 requests a minute on the webhook route, so a flood of retries cannot starve the bridge.',
         why: "The lead approved 692cd1f. It changes `infra/`, which AGENTS.md's Human review names @janedoe for, so OpenADLC does not merge it until @janedoe approves it.",
+        whyWaits: "The lead approved 692cd1f. It changes `infra/`, which AGENTS.md's Human review names them for, so OpenADLC does not merge it until they approve it.",
         reviews,
         prUrl: 'https://github.com/janedoe/openadlc-testbed/pull/29',
         diffUrl: 'https://github.com/janedoe/openadlc-testbed/pull/29/files',
@@ -703,6 +704,50 @@ describe('what needs a person', () => {
 
       const failed = await forViewer(items, 'jane@acme.test', async () => Promise.reject(new Error('down')));
       expect(failed[0]?.decision).toMatchObject({ yours: false, notYours: expect.stringContaining('reload') });
+    });
+
+    it('says a decision waits on someone else only when the viewer is known not to be its person (ADR 0058)', async () => {
+      const { attentionItems, forViewer } = await load();
+      const items = attentionItems({ ...base, personAwaits: [awaited(minutesAgo(10))] });
+      const answering = (said: Awaited<ReturnType<Parameters<typeof forViewer>[2]>>) => async () => said;
+
+      const other = await forViewer(items, 'sam@acme.test', answering({ yours: false, status: 403, why: "This is @janedoe's to decide; you can Discuss it." }));
+      expect(other[0]?.decision).toMatchObject({ yours: false, waitsOnOther: true, notYours: "This is @janedoe's to decide; you can Discuss it." });
+
+      // Unlinked may be the person themself, and a lookup that failed knows
+      // nothing: both stay theirs to count, with the line saying why.
+      const unlinked = await forViewer(items, 'new@acme.test', answering({ yours: false, status: 409, why: 'You have not linked a GitHub account.', settingsUrl: '/settings#your-github' }));
+      const unknown = await forViewer(items, 'sam@acme.test', answering({ yours: false, status: 503, why: 'OpenADLC could not ask GitHub who @janedoe is just now.' }));
+      const thrown = await forViewer(items, 'sam@acme.test', async () => Promise.reject(new Error('down')));
+      const yours = await forViewer(items, 'jane@acme.test', answering({ yours: true }));
+      for (const seen of [unlinked, unknown, thrown]) {
+        expect(seen[0]?.decision).toMatchObject({ yours: false, notYours: expect.any(String) });
+        expect(seen[0]?.decision).not.toHaveProperty('waitsOnOther');
+      }
+      expect(yours[0]?.decision).toMatchObject({ yours: true });
+      expect(yours[0]?.decision).not.toHaveProperty('waitsOnOther');
+    });
+
+    it('writes why it waits without naming the person, for both kinds of held approval', async () => {
+      const { attentionItems } = await load();
+      const ask = (payload: Record<string, unknown>) => ({
+        at: minutesAgo(5),
+        payload: { subjectRef: 'openadlc-testbed#29', repo: 'openadlc-testbed', pr: 29, issue: 11, login: 'janedoe', head: B, approvedOn: null, shownOn: null, why: '', ...payload },
+      });
+      const A = 'b7890794b365dd3ec75b81f761f1889dfb11674a';
+      const asks = [ask({}), ask({ approvedOn: A }), ask({ shownOn: B }), ask({ approvedOn: A, shownOn: B })];
+      const decisions = [
+        ...asks.map((one) => attentionItems({ ...base, personAsks: [one] })[0]?.decision),
+        attentionItems({ ...base, personAwaits: [awaited(minutesAgo(10))] })[0]?.decision,
+        attentionItems({ ...base, personAwaits: [awaited(minutesAgo(10), { paths: [] })] })[0]?.decision,
+      ];
+      for (const decision of decisions) {
+        expect(decision?.why).toContain('@janedoe');
+        expect(decision?.whyWaits).not.toContain('@janedoe');
+        expect(decision?.whyWaits).toMatch(/^[A-Z]/);
+      }
+      expect(decisions[0]?.whyWaits).toBe("Their approval names no commit, so it counts for nothing. AGENTS.md's Human review names them for what it changes.");
+      expect(decisions[1]?.whyWaits).toBe("They approved b789079, and the diff has changed since, so that approval counts for nothing. AGENTS.md's Human review names them for what it changes.");
     });
 
     it('sends a held approval only to its audience, and says it is the viewer’s after that filter', async () => {
