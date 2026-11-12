@@ -1,12 +1,10 @@
 <h1 align="center">OpenADLC</h1>
 
-<p align="center">
-  <b>Ask for a change in plain words. An AI crew asks you what's missing, builds it, has three reviewers on more than one model provider check it, and merges and ships it by your repository's rules.</b>
-</p>
+<h3 align="center">Agentic Development LifeCycle Management</h3>
 
-<p align="center">You answer questions; you don't babysit. It runs on your machines or your cloud, on your GitHub.</p>
+<p align="center">Manage your autonomous agentic development easily: control your costs and deployment, and stay in the loop when it matters. Have models from different labs work on each change for the best result.</p>
 
-<p align="center"><b>Your models, your choice:</b> an API key, or the Claude, ChatGPT or Grok subscription you already pay for.</p>
+<p align="center"><b>Use your subscription or an API key: your choice.</b></p>
 
 <p align="center">
   <a href="https://github.com/620legal/OpenADLC/releases"><img alt="Latest release" src="https://img.shields.io/github/v/release/620legal/OpenADLC?label=release&color=2ea44f"></a>
@@ -23,17 +21,8 @@
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/board-dark.png">
-  <img alt="The board: three questions from the crew wait under Needs you, four tasks are running, and requests move from Intake through Design, Build, Review and Ship to Done" src="docs/images/board-light.png">
+  <img alt="The board: requests move from Intake through Design, Build, Review and Ship to Done, each card with its bot, what it is doing and what it has cost" src="docs/images/board-light.png">
 </picture>
-
-<table>
-  <tr>
-    <td align="center" width="25%"><h3>61 of 76</h3>pull requests merged here, 26 Oct – 11 Nov 2026, were <a href="https://github.com/620legal/OpenADLC/pulls?q=is%3Apr+is%3Amerged+author%3Afleet-atlas-orzelig">built by its own crew</a></td>
-    <td align="center" width="25%"><h3>51 minutes</h3>from issue to merge for <a href="#one-change-from-request-to-release">one real change</a></td>
-    <td align="center" width="25%"><h3>$41.86</h3>of model use for that change, at API list prices</td>
-    <td align="center" width="25%"><h3>4 touches</h3>were the person's part: the request, one answer, one OK, the release</td>
-  </tr>
-</table>
 
 ## How it works
 
