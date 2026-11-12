@@ -7,7 +7,10 @@ import { brokenLinksIn, linkTargets } from './check-links.mjs';
 
 /**
  * The README is the repository's front page: the first screen says what
- * OpenADLC does and shows the board, and the detail lives in the docs (#314).
+ * OpenADLC is, in the owner's words, and shows the board, and the detail lives
+ * in the docs (#314). It carries no price: the $41.86 of model use once shown
+ * there, at API list prices, read to a subscription user as the cost of one
+ * change (#317).
  * Its pictures are HTML, which the link checker once skipped, so a renamed
  * screenshot would have left a broken image there with every test green.
  */
@@ -27,11 +30,16 @@ describe('the README', () => {
     expect(headings).toEqual(['How it works', 'One change, from request to release', 'Quick start', 'The crew', 'Safe by design', 'More']);
   });
 
-  it('says on its first screen that the models are yours to choose, and links to the start and the proof', () => {
-    expect(firstScreen).toContain('Your models, your choice');
+  it('says on its first screen that a subscription or an API key will do, and links to the start and the proof', () => {
+    expect(firstScreen).toContain('Use your subscription or an API key');
     const targets = (linkTargets(firstScreen) as Target[]).map((link) => link.target);
     expect(targets).toContain('#quick-start');
     expect(targets).toContain('#one-change-from-request-to-release');
+  });
+
+  it('puts no price on its first screen', () => {
+    // A `$` followed by a digit, so badge URLs and other markup cannot trip it.
+    expect(firstScreen, "a price on the README's first screen reads as the cost of a change (#317)").not.toMatch(/\$\s?\d/);
   });
 
   it('shows the board, light and dark, on its first screen, from files that exist', () => {
