@@ -1,7 +1,7 @@
 import { GitHubApiError } from '@openadlc/github';
 import { parseMarkers } from '@openadlc/shared';
 import { describe, expect, it, vi } from 'vitest';
-import { HumanReviewDecisions, LINK_ACCOUNT_URL, REQUEST_READ_MS, reviewRequestOf, type HumanReviewDeps } from './human-review-decide.js';
+import { APPROVAL_REFUSED, HumanReviewDecisions, LINK_ACCOUNT_URL, REQUEST_READ_MS, reviewRequestOf, type HumanReviewDeps } from './human-review-decide.js';
 import type { GitHubViewer } from './person-github.js';
 import { HttpFailure } from './router.js';
 
@@ -219,7 +219,7 @@ describe('Approve', () => {
     vi.mocked(moved.deps.pull).mockResolvedValue({ open: true, head: NEXT, url: moved.pull.url });
     await expect(moved.signIn({ login: 'janedoe', id: JANE })).rejects.toThrow('moved to c0ffee0 while you signed in');
     expect(moved.posted).toEqual([]);
-    expect(moved.audits).toEqual([]);
+    expect(moved.audits).toEqual([expect.objectContaining({ action: APPROVAL_REFUSED, payload: expect.objectContaining({ reason: 'head_moved' }) })]);
   });
 
   it('reports the approval posted when only its audit row fails: the review stands and counts', async () => {
@@ -279,7 +279,7 @@ describe('an author’s sign-off of their own pull request (#322)', () => {
     on = false;
     await expect(signIn(jane)).rejects.toThrow('Approves is off for you in People');
     expect(signOffs).toEqual([]);
-    expect(audits).toEqual([]);
+    expect(audits).toEqual([expect.objectContaining({ action: APPROVAL_REFUSED, payload: expect.objectContaining({ reason: 'approves_off', stage: 'after_sign_in' }) })]);
   });
 
   it('records nothing when the code is approved by another account, a crew account, or after the head moved', async () => {
@@ -301,7 +301,7 @@ describe('an author’s sign-off of their own pull request (#322)', () => {
     vi.mocked(moved.deps.pull).mockResolvedValue({ open: true, head: NEXT, url: PULL_URL, author: jane });
     await expect(moved.signIn(jane)).rejects.toThrow('moved to c0ffee0 while you signed in');
     expect(moved.signOffs).toEqual([]);
-    expect(moved.audits).toEqual([]);
+    expect(moved.audits).toEqual([expect.objectContaining({ action: APPROVAL_REFUSED, payload: expect.objectContaining({ reason: 'head_moved', how: 'sign_off' }) })]);
   });
 
   it('refuses a viewer whose linked account is not the author’s, 403, and records nothing', async () => {
@@ -360,7 +360,7 @@ describe('an author’s sign-off of their own pull request (#322)', () => {
     await expect(signIn(jane)).rejects.toThrow('@janedoe did not open pull request #40');
     expect(deps.signOff.record).not.toHaveBeenCalled();
     expect(signOffs).toEqual([]);
-    expect(audits).toEqual([]);
+    expect(audits).toEqual([expect.objectContaining({ action: APPROVAL_REFUSED, payload: expect.objectContaining({ reason: 'author_changed' }) })]);
     expect(posted).toEqual([]);
   });
 
@@ -379,6 +379,239 @@ describe('an author’s sign-off of their own pull request (#322)', () => {
     await signIn(jane);
     expect(posted).toHaveLength(1);
     expect(signOffs).toEqual([]);
+  });
+});
+
+describe('a refused Approve is audited (#328)', () => {
+  const PULL_URL = 'https://github.com/acme/openadlc/pull/40';
+  const jane = { login: 'janedoe', id: JANE };
+  /** #40 opened by `author`, waiting on @janedoe at HEAD. */
+  const opened = (author: { login: string; id: number }, over: Partial<HumanReviewDeps> = {}) =>
+    world({ pull: vi.fn(async () => ({ open: true, head: HEAD, url: PULL_URL, author })), ...over });
+
+  /** The one row a refusal wrote, under the decision's target, as the presser. */
+  function refusedRow(audits: { action: string; payload: Record<string, unknown>; target?: string; actor?: string }[], identity = 'jane@acme.test') {
+    expect(audits).toHaveLength(1);
+    const row = audits[0]!;
+    expect(row).toMatchObject({ action: 'pull.human_review_approval_refused', target: 'openadlc#40', actor: identity });
+    expect(row.payload).toMatchObject({ repo: 'openadlc', pr: 40, awaited: 'janedoe', by: identity });
+    return row.payload;
+  }
+
+  /** What every refusal leaves behind besides its row: nothing. */
+  function nothingElse(made: { posted: unknown[]; signOffs: unknown[]; comments: unknown[] }) {
+    expect(made.posted).toEqual([]);
+    expect(made.signOffs).toEqual([]);
+    expect(made.comments).toEqual([]);
+  }
+
+  describe('before the sign-in', () => {
+    it('not_linked: a viewer with no linked account', async () => {
+      const made = world();
+      const refused = await refusal(made.decisions.approve({ ...asked, identity: 'nobody@acme.test' }));
+      expect(refused.status).toBe(409);
+      expect(refused.details).toEqual({ url: LINK_ACCOUNT_URL });
+      expect(refusedRow(made.audits, 'nobody@acme.test')).toEqual({
+        repo: 'openadlc',
+        pr: 40,
+        awaited: 'janedoe',
+        head: HEAD,
+        reason: 'not_linked',
+        why: refused.message,
+        how: null,
+        linkedLogin: null,
+        linkedId: null,
+        stage: 'before_sign_in',
+        by: 'nobody@acme.test',
+      });
+      expect(made.deps.flows.start).not.toHaveBeenCalled();
+      nothingElse(made);
+    });
+
+    it('not_awaited: a linked account that is not the one the gate waits on', async () => {
+      const made = world();
+      const refused = await refusal(made.decisions.approve({ ...asked, identity: 'sam@acme.test' }));
+      expect(refused.status).toBe(403);
+      expect(refused.message).toBe("This is @janedoe's to decide; you can Discuss it.");
+      expect(refusedRow(made.audits, 'sam@acme.test')).toMatchObject({
+        reason: 'not_awaited',
+        why: "This is @janedoe's to decide; you can Discuss it.",
+        head: HEAD,
+        linkedLogin: 'sam',
+        linkedId: 7,
+        how: null,
+        stage: 'before_sign_in',
+      });
+      expect(made.deps.linkOf).toHaveBeenCalledTimes(1);
+      nothingElse(made);
+    });
+
+    it('not_waiting: the pull request no longer waits on the person', async () => {
+      const made = world({ standing: async () => null });
+      const refused = await refusal(made.decisions.approve(asked));
+      expect(refused.status).toBe(409);
+      expect(refusedRow(made.audits)).toMatchObject({ reason: 'not_waiting', why: refused.message, linkedId: JANE, linkedLogin: 'janedoe' });
+      nothingElse(made);
+    });
+
+    it('not_open: the pull request is closed', async () => {
+      const made = world({ pull: async () => ({ open: false, head: HEAD, url: PULL_URL }) });
+      const refused = await refusal(made.decisions.approve(asked));
+      expect(refused.status).toBe(409);
+      expect(refusedRow(made.audits)).toMatchObject({ reason: 'not_open', linkedId: JANE });
+      nothingElse(made);
+    });
+
+    it('head_moved: the head they saw is not the head now, kept as the head they saw', async () => {
+      const made = opened(jane);
+      const refused = await refusal(made.decisions.approve({ ...asked, head: NEXT }));
+      expect(refused.status).toBe(409);
+      expect(refused.message).toContain('reload');
+      expect(refusedRow(made.audits)).toMatchObject({ reason: 'head_moved', head: NEXT, movedTo: HEAD, linkedId: JANE, stage: 'before_sign_in' });
+      expect(made.deps.flows.start).not.toHaveBeenCalled();
+      nothingElse(made);
+    });
+
+    it('on_github: the person awaited did not open their own pull request', async () => {
+      const made = opened({ login: 'sam', id: 7 });
+      const refused = await refusal(made.decisions.approve(asked));
+      expect(refused.status).toBe(409);
+      expect(refused.details).toEqual({ url: `${PULL_URL}/files` });
+      expect(refusedRow(made.audits)).toMatchObject({ reason: 'on_github', why: refused.message, how: null });
+      nothingElse(made);
+    });
+
+    it('approves_off: People has Approves off for the author', async () => {
+      const made = opened(jane, { approves: async () => false });
+      const refused = await refusal(made.decisions.approve(asked));
+      expect(refused.status).toBe(403);
+      expect(refused.message).toContain('Approves is off for you in People');
+      expect(refusedRow(made.audits)).toMatchObject({ reason: 'approves_off', how: 'sign_off', linkedId: JANE, stage: 'before_sign_in' });
+      expect(made.deps.flows.start).not.toHaveBeenCalled();
+      nothingElse(made);
+    });
+  });
+
+  describe('once the device code is approved', () => {
+    it('other_account: the code was approved by another account than the linked one', async () => {
+      const made = opened(jane);
+      await made.decisions.approve(asked);
+      await expect(made.signIn({ login: 'sam', id: 7 })).rejects.toThrow(
+        'You approved the code as @sam, which is not the GitHub account linked to you here; nothing was posted.',
+      );
+      expect(refusedRow(made.audits)).toEqual({
+        repo: 'openadlc',
+        pr: 40,
+        awaited: 'janedoe',
+        head: HEAD,
+        reason: 'other_account',
+        why: 'You approved the code as @sam, which is not the GitHub account linked to you here; nothing was posted.',
+        how: 'sign_off',
+        linkedLogin: 'janedoe',
+        linkedId: JANE,
+        stage: 'after_sign_in',
+        by: 'jane@acme.test',
+        login: 'sam',
+        githubUserId: 7,
+      });
+      nothingElse(made);
+    });
+
+    it('crew_account: the code was approved by a crew account', async () => {
+      const made = world({ linkOf: async () => ({ githubLogin: 'openadlc-bot', githubUserId: JANE }) });
+      await made.decisions.approve(asked);
+      await expect(made.signIn({ login: 'openadlc-bot', id: JANE })).rejects.toThrow('@openadlc-bot is an account the crew uses; nothing was posted.');
+      expect(refusedRow(made.audits)).toMatchObject({ reason: 'crew_account', how: 'review', login: 'openadlc-bot', githubUserId: JANE, stage: 'after_sign_in' });
+      nothingElse(made);
+    });
+
+    it('head_moved: the pull request moved while they signed in', async () => {
+      const made = opened(jane);
+      await made.decisions.approve(asked);
+      vi.mocked(made.deps.pull).mockResolvedValue({ open: true, head: NEXT, url: PULL_URL, author: jane });
+      await expect(made.signIn(jane)).rejects.toThrow('moved to c0ffee0 while you signed in');
+      expect(refusedRow(made.audits)).toMatchObject({ reason: 'head_moved', head: HEAD, movedTo: NEXT, stage: 'after_sign_in' });
+      nothingElse(made);
+    });
+
+    it('approves_off: Approves was turned off while they signed in', async () => {
+      let on = true;
+      const made = opened(jane, { approves: async () => on });
+      await made.decisions.approve(asked);
+      on = false;
+      await expect(made.signIn(jane)).rejects.toThrow('Approves is off for you in People');
+      expect(refusedRow(made.audits)).toMatchObject({ reason: 'approves_off', how: 'sign_off', stage: 'after_sign_in', login: 'janedoe', githubUserId: JANE });
+      nothingElse(made);
+    });
+
+    it('author_changed: GitHub names another author by the time the sign-in completes', async () => {
+      const made = opened(jane);
+      await made.decisions.approve(asked);
+      vi.mocked(made.deps.pull).mockResolvedValue({ open: true, head: HEAD, url: PULL_URL, author: { login: 'bob', id: 9 } });
+      await expect(made.signIn(jane)).rejects.toThrow('@janedoe did not open pull request #40');
+      expect(refusedRow(made.audits)).toMatchObject({ reason: 'author_changed', author: { login: 'bob', id: 9 }, linkedId: JANE, stage: 'after_sign_in' });
+      expect(made.deps.signOff.record).not.toHaveBeenCalled();
+      nothingElse(made);
+    });
+
+    it('keeps the token out of every refusal row', async () => {
+      const made = opened(jane);
+      await made.decisions.approve(asked);
+      await expect(made.signIn({ login: 'sam', id: 7 })).rejects.toThrow();
+      expect(made.audits).toHaveLength(1);
+      expect(JSON.stringify(made.audits)).not.toContain('gho_secret');
+    });
+  });
+
+  it('refuses exactly as before when the refusal’s row cannot be written, and says so in the log', async () => {
+    const warn = vi.fn();
+    const failing = { audit: vi.fn(async () => Promise.reject(new Error('the database is down'))), warn };
+    const before = world(failing);
+    const refused = await refusal(before.decisions.approve({ ...asked, identity: 'sam@acme.test' }));
+    expect(refused.status).toBe(403);
+    expect(refused.message).toBe("This is @janedoe's to decide; you can Discuss it.");
+    expect(before.deps.audit).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith("[bridge] sam@acme.test's refused Approve of openadlc#40 at 692cd1f was not audited: the database is down");
+    expect(before.deps.flows.start).not.toHaveBeenCalled();
+    nothingElse(before);
+
+    const after = opened(jane, failing);
+    await after.decisions.approve(asked);
+    await expect(after.signIn({ login: 'sam', id: 7 })).rejects.toThrow('not the GitHub account linked to you here; nothing was posted.');
+    expect(warn).toHaveBeenLastCalledWith(expect.stringContaining('was not audited: the database is down'));
+    nothingElse(after);
+
+    // One that throws before it returns a promise is refused the same way, not answered 500.
+    const sync = world({
+      audit: vi.fn(() => {
+        throw new Error('no pool');
+      }) as never,
+      warn,
+    });
+    expect((await refusal(sync.decisions.approve({ ...asked, identity: 'sam@acme.test' }))).status).toBe(403);
+    expect(warn).toHaveBeenLastCalledWith(expect.stringContaining('was not audited: no pool'));
+  });
+
+  it('audits no failure that decides nothing about who or what', async () => {
+    const malformed = world();
+    expect((await refusal(malformed.decisions.approve({ ...asked, head: 'not-a-sha' }))).status).toBe(400);
+    expect(malformed.audits).toEqual([]);
+
+    const unknown = world({ userIdOf: async () => null });
+    expect((await refusal(unknown.decisions.approve(asked))).status).toBe(503);
+    expect(unknown.audits).toEqual([]);
+
+    const twice = world();
+    await twice.decisions.approve(asked);
+    const refused = await refusal(twice.decisions.approve(asked));
+    expect(refused.message).toContain('still waiting for you');
+    expect(twice.audits).toEqual([]);
+  });
+
+  it('leaves Reject’s refusals as they were: unaudited', async () => {
+    const made = world();
+    expect((await refusal(made.decisions.reject({ ...asked, identity: 'sam@acme.test', reason: 'No.' }))).status).toBe(403);
+    expect(made.audits).toEqual([]);
   });
 });
 

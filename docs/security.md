@@ -1493,6 +1493,30 @@ The bridge records it only if all of these hold:
 The sign-off row and its audit entry are written in one transaction: both land
 or neither does, so no sign-off counts without an audit entry.
 
+Every refused Approve or sign-off is audited too, as
+`pull.human_review_approval_refused`, under the same target as an accepted one
+(`repo#pr`). Its payload has the `reason`, the head the person saw, the message
+they were shown, their identity, their linked login and account id, and whether
+it was refused before or after the device-code sign-in. After the sign-in it
+also names the account that approved the code. It never holds the token. The
+reasons are:
+- `not_linked`;
+- `not_awaited`;
+- `not_waiting`;
+- `not_open`;
+- `head_moved`;
+- `on_github`;
+- `approves_off`;
+- `other_account`;
+- `crew_account`;
+- `author_changed`.
+
+The refusal itself is unchanged. Nothing is written to `person_sign_offs`, and
+nothing reads the row to decide anything. If the row cannot be written, the
+bridge logs a warning and refuses all the same. Failures that decide nothing
+about who or what are not audited: a malformed head, GitHub not saying who the
+login is, and a second press while a sign-in still waits.
+
 `review-gate` and the merge (`mergeDecision`) count a sign-off as the author's
 approval, but only for their own login, only when the row's account id is the
 pull request author's, and only on the head or on an earlier head with the
