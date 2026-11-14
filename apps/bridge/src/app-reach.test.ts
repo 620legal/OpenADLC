@@ -353,3 +353,18 @@ describe('the repositories offered to pick from', () => {
     });
   });
 });
+
+describe('an account’s type, as the production choice reads it', () => {
+  it('asks GitHub once per login and answers again from the cache', async () => {
+    const lookup = vi.fn(async () => 'User' as const);
+    const { reach } = reachWith([ON_JANEDOE], { accountType: lookup });
+    expect(await reach.accountType('janedoe')).toBe('User');
+    expect(await reach.accountType('JaneDoe')).toBe('User');
+    expect(lookup).toHaveBeenCalledTimes(1);
+  });
+
+  it('is null when GitHub could not answer', async () => {
+    const { reach } = reachWith([ON_JANEDOE], { accountType: async () => null });
+    expect(await reach.accountType('janedoe')).toBeNull();
+  });
+});

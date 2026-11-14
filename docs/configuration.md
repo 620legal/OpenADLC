@@ -317,6 +317,11 @@ default does: repository setup (the walkthrough's Protect step, or `openadlc
 github apply`) asks each repository how production ships, automatically after
 testing or after a named person approves, and records it (`repos.production_*`).
 "After a person approves" cannot be saved without at least one GitHub login.
+The install's owner may be named when it is a person's account, as it is where
+the owner is the only person there. The owner's login is refused only when
+GitHub says the owner is an organization, which cannot review a deployment;
+when GitHub cannot say, the choice is saved, and the `production` environment's
+own check reports a reviewer GitHub cannot hold.
 Repositories that were set up before this was asked keep what they had:
 `reviewers` with no soak, recorded when the install was upgraded. Where the file
 sets `production.approval` itself, setup shows that rule and says the file
