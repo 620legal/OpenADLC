@@ -1371,6 +1371,31 @@ export class GitHubClient {
   }
 
   /**
+   * The newest status of one context from each account that set one, newest
+   * first. The combined status (`statusesFor`) keeps only the newest per
+   * context, whoever set it: a repository's own red `host-check` vanished
+   * there once the bridge posted its own of that name, and with it the hold
+   * it was (#335). This reads every status on the commit, which GitHub lists
+   * newest first.
+   */
+  async latestStatusesByCreator(repo: string, sha: string, context: string): Promise<{ context: string; state: string; creator: string | null }[]> {
+    const newest = new Map<string, { context: string; state: string; creator: string | null }>();
+    for (let page = 1; ; page++) {
+      const listed = await this.request<{ context: string; state: string; creator?: { login?: string } | null }[]>(
+        'GET',
+        `/repos/${repo}/commits/${sha}/statuses?per_page=${PAGE}&page=${page}`,
+      );
+      for (const status of listed) {
+        if (status.context !== context) continue;
+        const creator = status.creator?.login ?? null;
+        const key = creator?.toLowerCase() ?? '';
+        if (!newest.has(key)) newest.set(key, { context: status.context, state: status.state, creator });
+      }
+      if (listed.length < PAGE) return [...newest.values()];
+    }
+  }
+
+  /**
    * What someone may do in a repository — `admin`, `maintain`, `write`,
    * `triage`, `read` or `none` — as GitHub answers it, not as a post's
    * `author_association` says: an organization member whose membership is

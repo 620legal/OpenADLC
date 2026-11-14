@@ -20,15 +20,19 @@ export interface HostCheckAccountReader {
  *
  * Proved by its effect, never by a setting that says so: hostd looks the
  * account up, runs a command as it through `sudo -n`, and has that command try
- * to read `OPENADLC_HOME`, `install.json` and hostd's own home. Root, or
- * hostd's own user, is no account of its own. While this fails no host check
+ * to read `OPENADLC_HOME`, `install.json`, the work root and hostd's own home,
+ * to enter those folders, to connect to a Docker socket and to run `sudo -n
+ * -l`; and asks whether it is in the `docker` group (#335). Root, or hostd's
+ * own user, is no account of its own. While this fails no host check
  * runs, and the held approval's card says it was not run, with the same fix.
  */
 export function hostCheckAccountCheck(reader: HostCheckAccountReader): HealthCheck {
   return {
     id: HOST_CHECK_ACCOUNT_CHECK,
-    proves: 'The account host checks run as exists, hostd can run a command as it, and it cannot read the install’s secrets',
-    how: 'asks hostd to look the account up, run /usr/bin/true as it with sudo -n, and try to read OPENADLC_HOME, install.json and hostd’s home as it',
+    proves: 'The account host checks run as exists, hostd can run a command as it, and it reaches nothing the install guards: not its files, not Docker, not sudo',
+    how:
+      'asks hostd to look the account up, run /usr/bin/true as it with sudo -n, and, as it, try to read or enter OPENADLC_HOME, the work root and hostd’s home, ' +
+      'read install.json, connect to each Docker socket and run sudo -n -l; and whether it is in the docker group',
     everyMinutes: 10,
     steps: [],
     async run() {
@@ -58,6 +62,20 @@ export function hostCheckAccountCheck(reader: HostCheckAccountReader): HealthChe
               action: { label: 'Run in a terminal', command: `chmod 700 ${probe.path ?? '~'}` },
             },
           ];
+        case 'can_enter':
+          return [
+            {
+              ok: false,
+              severity: 'warning',
+              title: `The host check account can enter ${probe.path ?? 'the install'}`,
+              detail: `${accountFix(probe)}, then run openadlc doctor. Until then no host check runs. See ${HOST_CHECK_DOCS}.`,
+              action: { label: 'Run in a terminal', command: `chmod 700 ${probe.path ?? '~'}` },
+            },
+          ];
+        case 'docker':
+          return [{ ok: false, severity: 'warning', title: 'The host check account can reach Docker', detail: `${accountFix(probe)}. Until then no host check runs.`, action }];
+        case 'can_sudo':
+          return [{ ok: false, severity: 'warning', title: 'The host check account can run sudo without a password', detail: `${accountFix(probe)}. Until then no host check runs.`, action }];
       }
     },
   };

@@ -891,6 +891,32 @@ describe('what the merge decides on, read to its end', () => {
     });
   });
 
+  it('reads the newest status of one context from each account that set one, across pages (#335)', async () => {
+    const asked: string[] = [];
+    const status = (context: string, state: string, login: string) => ({ context, state, creator: { login } });
+    // Newest first, as GitHub lists them: the bridge's green is newest, and
+    // the combined status would show only it.
+    const first = [
+      status('host-check', 'success', 'openadlc[bot]'),
+      status('ci', 'failure', 'acme-ci'),
+      status('host-check', 'failure', 'openadlc[bot]'),
+      ...Array.from({ length: 97 }, () => status('lint', 'success', 'acme-ci')),
+    ];
+    const second = [status('host-check', 'failure', 'Acme-CI'), status('host-check', 'success', 'acme-ci')];
+    const fetchImpl = (async (input: string | URL) => {
+      const url = new URL(String(input));
+      asked.push(`${url.pathname}${url.search}`);
+      return new Response(JSON.stringify(url.searchParams.get('page') === '1' ? first : second), { status: 200 });
+    }) as typeof fetch;
+    const client = new GitHubClient({ token: 't', actingAs: 'openadlc-app', fetchImpl });
+
+    expect(await client.latestStatusesByCreator('acme/app', 'abc', 'host-check')).toEqual([
+      { context: 'host-check', state: 'success', creator: 'openadlc[bot]' },
+      { context: 'host-check', state: 'failure', creator: 'Acme-CI' },
+    ]);
+    expect(asked).toEqual(['/repos/acme/app/commits/abc/statuses?per_page=100&page=1', '/repos/acme/app/commits/abc/statuses?per_page=100&page=2']);
+  });
+
   it('lists the pull requests from one branch of the repository, open and closed, and not a fork’s of the same name', async () => {
     const asked: string[] = [];
     const listed = [

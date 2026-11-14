@@ -70,7 +70,7 @@ export interface HostCheckRunView extends HostCheckStart {
 /** What hostd found about the host check's account (`HostChecks.probe`). */
 export type HostCheckAccountProbe =
   | { ok: true; account: string; uid: number; home: string }
-  | { ok: false; account: string; problem: 'no_account' | 'not_dedicated' | 'no_sudo' | 'can_read'; path?: string; detail: string };
+  | { ok: false; account: string; problem: 'no_account' | 'not_dedicated' | 'no_sudo' | 'can_read' | 'can_enter' | 'docker' | 'can_sudo'; path?: string; detail: string };
 
 /** A start or a read of a host check is hostd queueing or looking up; the run itself is reported. */
 const HOST_CHECK_CALL_TIMEOUT_MS = 30_000;
