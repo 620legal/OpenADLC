@@ -955,6 +955,44 @@ dispatch `promote-production`, crew tokens included (the app holds
   access check raises a blocking card for one that holds admin or maintain,
   since it could use the override. The deploy skill never sets it.
 
+### The host check
+
+A repository's host check is code that runs **outside every container**: the
+pull request's own Makefile, run on the install's machine through the command
+an admin set (`make host-ci`, say), with network access
+([self-hosting](self-hosting.md#host-checks),
+[ADR 0064](adr/0064-a-host-check-runs-as-its-own-account-and-the-merge-reads-the-bridges-record.md)).
+Several things bound it.
+
+- **When it runs.** Only once the crew's reviews approve the head, so the code
+  has been read before it runs. Never on a fork's pull request, and never on a
+  draft.
+- **What it runs.** The command comes only from the repository's row in the
+  platform database. An admin writes it there through `PATCH /v1/repos/:name`,
+  as one line of at most 500 characters, and the change is audited. A pull
+  request can change neither the row nor `config/repos.yaml`, which the command
+  is not read from.
+- **Whom it runs as.** An OS account a person made for it, never hostd's user
+  or root. hostd runs it through `sudo -n -u <account> -- /usr/bin/env -i`,
+  with seven fixed variables and none of hostd's. Before each run, hostd proves
+  that the account cannot read `OPENADLC_HOME`, `install.json` or hostd's home;
+  if it can, the run is refused. The account holds no credential. hostd
+  fetches the head with the crew's token into a mirror of its own, then gives
+  the account a git bundle on stdin. No path is shared between the two users.
+- **How long it runs.** It is limited by the repository's time limit, at most
+  a day. A cancel or the limit sends TERM, then KILL, to every process the
+  account runs.
+- **How its result counts.** Only the bridge writes the result, to
+  `host_check_runs`, from hostd's report sent with the install's secret. The
+  merge reads that table. It never reads the `host-check` commit status, which
+  any crew token could set. A green status with no row is not a pass.
+
+What it can still do: anything that account can do. That includes reaching
+the network and `localhost`, and reading what the machine lets every user
+read. The `host-check-account` health check fails while the account can read
+the install's files. Keeping the rest of the machine closed (a home of `0700`)
+is the person's part.
+
 ### The console
 
 Identity is load-bearing: it decides who may answer a gate, move a card and
