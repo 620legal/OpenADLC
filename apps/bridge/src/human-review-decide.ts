@@ -322,7 +322,10 @@ export class HumanReviewDecisions {
    * approved the code is the pull request's author as GitHub says now, and
    * People has Approves on for it. The row is written before its audit row,
    * and taken back when that cannot be written: an approval the gate counts
-   * that nobody can audit is worse than asking the person twice.
+   * that nobody can audit is worse than asking the person twice. Between the
+   * two writes a sweep may read the row; that window is accepted, because the
+   * merge re-reads its facts before landing and a row taken back counts no
+   * more from then on.
    */
   private async signOff(input: {
     repo: PullRepo;

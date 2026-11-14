@@ -44,7 +44,9 @@ For an author who is the named person, nothing else can count.
   People has Approves on for it. Nothing is posted to GitHub. The bridge writes
   one row in `person_sign_offs`, then audits it as
   `pull.human_review_signed_off`. If that audit row cannot be written, the
-  sign-off row is deleted and the person is asked to try again. The console's
+  sign-off row is deleted and the person is asked to try again. A sweep that
+  reads the row in the moment between the two writes may count it; that is
+  accepted, since the merge re-reads its facts before it lands. The console's
   approve route is the only writer of that table.
 - **The gate and the merge count it, for that author only.** A sign-off row
   counts only when its account id is the pull request author's, and the author
@@ -52,6 +54,9 @@ For an author who is the named person, nothing else can count.
   login, on the head or on an earlier head with the same diff. It is never
   counted through a head a conflict resolution carried. Write access is still
   asked of GitHub. With no row, the pull request holds, whoever opened it.
+  Approves is checked when the sign-off is given, not again at the merge:
+  turning it off later does not take back a sign-off already given on that
+  diff, as it would not take back a GitHub review.
 - **A new diff asks again**, as a person's GitHub review does (`sameDiffAs`).
   The merge line's update from the base moves the head without changing the
   diff. A sign-off pinned to the exact head would have asked the author again
