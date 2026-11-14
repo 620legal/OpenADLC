@@ -213,6 +213,8 @@ vi.mock('@openadlc/db', () => ({
     getRepoByName: vi.fn(async () => ({ id: 'repo-1', name: 'openadlc', fullName: 'janedoe/openadlc', defaultBranch: 'main', stageModes: {} })),
     listRepos: vi.fn(async () => store.repos),
     getPlanLimits: vi.fn(async () => store.planLimits),
+    // No host check unless a test sets one (#327).
+    getHostCheck: vi.fn(async () => null),
     // What a real `DeliveryKnowledge` reads besides the file: no stored rules, and no production choice.
     getDelivery: vi.fn(async () => ({ deliveryRules: null, testingUrl: null })),
     getProductionChoice: vi.fn(async () => null),
@@ -11318,6 +11320,43 @@ describe('a crew pull request the lead approved that waits on a person under Hum
     expect(statuses.at(-1)).toEqual({ sha: HEAD, state: 'pending', description: 'waiting on lead-reviewer' });
     expect(log.filter((event) => event.type === 'review.person_awaited')).toEqual([]);
     expect(needsYou()).toEqual([]);
+  });
+
+  it('asks for the host check beside the person, only once the lead’s approval counts on the head (#327)', async () => {
+    const hostChecks = { request: vi.fn(async () => null), cancel: vi.fn(async () => undefined) };
+    const waiting = bridge();
+    waiting.webhooks.useHostChecks(hostChecks);
+    await deliver(waiting.webhooks, 'delivery-host-check-before');
+    expect(hostChecks.request).not.toHaveBeenCalled();
+
+    const approved = bridge();
+    approved.webhooks.useHostChecks(hostChecks);
+    approved.github.reviews.push({ id: 900, user: LEAD, state: 'APPROVED', body: LEAD_BODY, submittedAt: '2026-10-27T02:00:00Z', commitId: HEAD });
+    await deliver(approved.webhooks, 'delivery-host-check-after');
+    expect(hostChecks.request).toHaveBeenCalledTimes(1);
+    expect(hostChecks.request).toHaveBeenCalledWith(expect.objectContaining({ id: 'repo-1', name: 'openadlc' }), 40, HEAD, 'main');
+  });
+
+  it('stops the host check of a pull request that closes, or that gets a new head (#327)', async () => {
+    const hostChecks = { request: vi.fn(async () => null), cancel: vi.fn(async (_repo: unknown, _pr: number, _reason: string) => undefined) };
+    const { webhooks } = bridge();
+    webhooks.useHostChecks(hostChecks);
+    const pull = { number: 40, draft: false, merged: false, user: { login: 'openadlc-builder' }, head: { sha: HEAD, ref: 'agent/builder/39-infra', repo: { full_name: 'janedoe/openadlc' } }, base: { ref: 'main' }, labels: [] };
+    const quiet = [vi.spyOn(console, 'warn').mockImplementation(() => undefined), vi.spyOn(console, 'log').mockImplementation(() => undefined)];
+    try {
+      await webhooks
+        .receive('pull_request', { action: 'synchronize', before: 'e0'.repeat(20), sender: { login: 'openadlc-builder' }, pull_request: pull, repository: { name: 'openadlc', full_name: 'janedoe/openadlc' } } as never, 'delivery-push-40')
+        .catch(() => undefined);
+      await webhooks
+        .receive('pull_request', { action: 'closed', sender: { login: 'janedoe' }, pull_request: pull, repository: { name: 'openadlc', full_name: 'janedoe/openadlc' } } as never, 'delivery-closed-40')
+        .catch(() => undefined);
+    } finally {
+      for (const spy of quiet) spy.mockRestore();
+    }
+    expect(hostChecks.cancel.mock.calls.map(([, pr, reason]) => [pr, reason])).toEqual([
+      [40, `a newer head, ${HEAD.slice(0, 7)}, was pushed, so this run was stopped`],
+      [40, 'the pull request was closed, so its run was stopped'],
+    ]);
   });
 });
 

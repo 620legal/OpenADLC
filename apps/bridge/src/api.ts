@@ -18,6 +18,7 @@ import {
   credentials,
   deployRuns,
   externalSigningKeys,
+  hostCheckRuns,
   hosts,
   issues,
   leases,
@@ -33,6 +34,7 @@ import {
   threads,
   withAdvisoryLock,
   workItems,
+  type HostCheckSetting,
   type Role,
 } from '@openadlc/db';
 import {
@@ -688,6 +690,31 @@ export async function labelledByTask(
   } catch {
     return false;
   }
+}
+
+/**
+ * A repository's host check as an admin sent it, checked, or a 400 that says
+ * what is wrong; null, or an empty command, takes it away. The command runs
+ * as `/bin/sh -c` on the machine, so it is one line: a newline or a NUL in
+ * a pasted command would be a second command nobody read.
+ */
+export function hostCheckSettingFrom(value: unknown): HostCheckSetting | null {
+  if (value === null) return null;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new HttpFailure(400, 'hostCheck is { command, timeoutMinutes, required }, or null to take it away');
+  }
+  const { command, timeoutMinutes, required } = value as Record<string, unknown>;
+  if (typeof command !== 'string') throw new HttpFailure(400, 'hostCheck.command is the command to run, such as make host-ci');
+  const said = command.trim();
+  if (!said) return null;
+  if (said.length > 500) throw new HttpFailure(400, 'hostCheck.command is at most 500 characters: put a longer one in a Makefile target');
+  if (/[\u0000\r\n]/.test(said)) throw new HttpFailure(400, 'hostCheck.command is one line: put more than one command in a Makefile target');
+  const minutes = timeoutMinutes ?? 60;
+  if (typeof minutes !== 'number' || !Number.isInteger(minutes) || minutes < 1 || minutes > 1440) {
+    throw new HttpFailure(400, 'hostCheck.timeoutMinutes is a whole number of minutes from 1 to 1440');
+  }
+  if (required !== undefined && typeof required !== 'boolean') throw new HttpFailure(400, 'hostCheck.required is true or false');
+  return { command: said, timeoutMinutes: minutes, required: required ?? true };
 }
 
 /**
@@ -2211,6 +2238,9 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
             // Whether the app hears a release published, for one that ships
             // by release: without it the deploy sweep finds the release, late.
             releaseEvents: releaseEventsOf(checks, repo.fullName),
+            // The command an admin set to run on this machine, its time limit, and whether the merge waits on it (#327).
+            // A column not there yet is none, not a page that fails.
+            hostCheck: await (async () => repos.getHostCheck(repo.id))().catch(() => null),
           };
         }),
       ),
@@ -2249,7 +2279,10 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
   });
 
   router.patch('/v1/repos/:name', async ({ params, body, identity }) => {
-    const input = await body<{ concurrency?: number; stageModes?: Record<string, string>; color?: unknown; testingDeploy?: unknown; testingUrl?: unknown; defaultBranch?: unknown }>();
+    const input = await body<{ concurrency?: number; stageModes?: Record<string, string>; color?: unknown; testingDeploy?: unknown; testingUrl?: unknown; defaultBranch?: unknown; hostCheck?: unknown }>();
+    // What runs on this machine as the host check's account (docs/adr/0064):
+    // only ever an admin's words, here, and never a file a pull request can change.
+    const hostCheck = input.hostCheck === undefined ? undefined : hostCheckSettingFrom(input.hostCheck);
     // The branch every task starts from and every merge lands on. The
     // reconcile keeps it in step with GitHub; this is for a person who knows
     // better sooner.
@@ -2297,7 +2330,7 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
     // update for an empty patch would still touch updated_at, and a repository
     // OpenADLC does not work in is refused before the setting is written.
     const choiceOnly =
-      (input.testingDeploy !== undefined || input.testingUrl !== undefined) &&
+      (input.testingDeploy !== undefined || input.testingUrl !== undefined || hostCheck !== undefined) &&
       input.concurrency === undefined &&
       input.stageModes === undefined &&
       input.color === undefined &&
@@ -2327,6 +2360,7 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
       const url = typeof input.testingUrl === 'string' && input.testingUrl.trim() ? input.testingUrl.trim() : null;
       await repos.setDelivery(updated.id, { testingUrl: url });
     }
+    if (hostCheck !== undefined) await repos.setHostCheck(updated.id, hostCheck);
     // What the rules were read as is read again on the next ask.
     if (input.testingDeploy !== undefined || input.testingUrl !== undefined) deps.delivery?.forget(updated.fullName);
     await audit({
@@ -2340,6 +2374,17 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
       // What this save resolved to, so Automatic's line updates without a reload.
       ...(shipsByMerging !== undefined ? { testingDeploy: input.testingDeploy, shipsByMerging } : {}),
     };
+  });
+
+  /**
+   * A host check's run, for the page its status and its card link to: what
+   * ran, how it ended, and the end of what it printed (#327). Read by whoever
+   * reads Needs you, since the card that links here is theirs.
+   */
+  router.get('/v1/host-checks/:id', async ({ params }) => {
+    const run = await hostCheckRuns.byId(params.id ?? '');
+    if (!run) throw new HttpFailure(404, 'no such host check run');
+    return { run };
   });
 
   /**

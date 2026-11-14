@@ -63,6 +63,9 @@ export const ROUTE_ROLES: Readonly<Record<string, Role>> = {
   'GET /v1/tasks': 'user',
   'GET /v1/repos': 'user',
   'GET /v1/attention': 'user',
+  // A host check's run and log, which a held approval's card links to: read by
+  // whoever reads Needs you, not admins only (#327).
+  'GET /v1/host-checks/:id': 'user',
   // Leave it on a held merge, Keep holding on a held promote: only an item in
   // the caller's own Needs you, and nothing on GitHub changes (`attention.ts`).
   'POST /v1/attention/leave': 'user',

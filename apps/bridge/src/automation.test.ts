@@ -28,6 +28,9 @@ const world = vi.hoisted(() => ({
   moves: [] as { from: string | null; to: string; kind: string }[],
   /** Authors' sign-offs from the console, as `personSignOffs.forPull` finds them for any pull request (#322). */
   signOffs: [] as { githubUserId: number; githubLogin: string; head: string }[],
+  /** The repository's host check setting, and its runs oldest first, as the bridge recorded them (#327). */
+  hostCheck: null as { command: string; timeoutMinutes: number; required: boolean } | null,
+  hostCheckRuns: [] as { headSha: string; state: string; reason: string | null }[],
 }));
 
 vi.mock('@openadlc/db', () => ({
@@ -91,6 +94,12 @@ vi.mock('@openadlc/db', () => ({
   repos: {
     getRepoByName: vi.fn(async (name: string) => ({ id: 'repo-1', name, fullName: `janedoe/${name}` })),
     listRepos: vi.fn(async () => [{ id: 'repo-1', name: 'app', fullName: 'exampleco/app' }]),
+    // The repository's host check, as an admin set it (#327); none unless a test says.
+    getHostCheck: vi.fn(async () => world.hostCheck),
+  },
+  hostCheckRuns: {
+    passesFor: vi.fn(async () => world.hostCheckRuns.filter((run) => run.state === 'passed').map((run) => run.headSha)),
+    forPull: vi.fn(async () => [...world.hostCheckRuns].reverse()),
   },
   settings: { allSettings: vi.fn(async () => ({})) },
   stageMoves: {
@@ -2162,6 +2171,48 @@ describe('whether the bridge may merge a pull request', () => {
     };
   }
 
+  describe('a repository’s host check, read from the bridge’s record (#327)', () => {
+    const required = (passed: string[], latest: { state: string; reason: string | null } | null = null) => ({ hostCheck: { required: true, passed, latest } });
+
+    it.each([
+      ['missing', null, 'host-check has not passed on this head (not run)'],
+      ['failed', { state: 'failed', reason: null }, 'host-check has not passed on this head (failed)'],
+      ['running', { state: 'running', reason: null }, 'host-check has not passed on this head (running)'],
+      ['refused', { state: 'refused', reason: 'no sudo rule' }, 'host-check has not passed on this head (not run: no sudo rule)'],
+    ] as const)('holds the merge when required and %s', (_name, latest, reason) => {
+      expect(mergeDecision(facts(required([], latest)))).toMatchObject({ land: false, reason });
+    });
+
+    it('lands on a pass on the head, or on an earlier head with the same diff', () => {
+      expect(mergeDecision(facts(required([HEAD]))).land).toBe(true);
+      expect(mergeDecision(facts({ ...required([EARLIER]), sameDiffAs: new Set([EARLIER]) })).land).toBe(true);
+    });
+
+    it('does not carry a pass through a head a conflict resolution led to: its code changed', () => {
+      expect(mergeDecision(facts({ ...required([EARLIER]), carriedFrom: new Set([EARLIER]) }))).toMatchObject({ land: false, reason: expect.stringContaining('host-check has not passed') });
+    });
+
+    it('takes a green host-check status with no record for nothing', () => {
+      const forged = facts({ ...required([]), statuses: [{ context: 'review-gate', state: 'success' }, { context: 'host-check', state: 'success' }] });
+      expect(mergeDecision(forged)).toMatchObject({ land: false, reason: 'host-check has not passed on this head (not run)' });
+    });
+
+    it('lands with a failed host check and a red status where the repository does not require it', () => {
+      const optional = facts({
+        hostCheck: { required: false, passed: [], latest: { state: 'failed', reason: null } },
+        statuses: [{ context: 'review-gate', state: 'success' }, { context: 'host-check', state: 'failure' }],
+      });
+      expect(mergeDecision(optional).land).toBe(true);
+      expect(mergeBlockers(optional)).toEqual([]);
+    });
+
+    it('is a check a person never merges over', () => {
+      const held = facts(required([], { state: 'failed', reason: null }));
+      expect(mergeBlockers(held)[0]).toEqual({ kind: 'check', reason: mergeDecision(held).reason });
+      expect(personMayMergeOver(mergeDecision(held).reason)).toBe(false);
+    });
+  });
+
   it('may, when every requested reviewer approved this head and every check is green, and names the approvals', () => {
     const decision = mergeDecision(facts());
 
@@ -2202,6 +2253,7 @@ describe('whether the bridge may merge a pull request', () => {
       ['a ci run not GitHub Actions’', { checkRuns: [job('check'), ciRun({ app: 'someone-else' })] }, 'check'],
       ['a red check', { checkRuns: [job('check', 'failure'), ciRun()] }, 'check'],
       ['ci not passed', { checkRuns: [job('check'), ciRun({ status: 'in_progress', conclusion: null })] }, 'check'],
+      ['a required host check not passed', { hostCheck: { required: true, passed: [], latest: { state: 'failed', reason: null } } }, 'check'],
       ['review-gate not green', { gate: 'failure' }, 'check'],
       ['Human review rules unread', { humanRulesUnknown: true }, 'unknown'],
       ['history too long', { requestsTakenAway: null }, 'review'],
@@ -4614,6 +4666,30 @@ describe('an author named for their own paths signs off in the console (#322)', 
     changed.signOff(A);
     changed.github.head = B;
     expect((await changed.standing({ login: 'janedoe', id: JANE })).gate).toEqual({ state: 'pending', description: 'waiting on @janedoe' });
+  });
+
+  it('reads a required host check from the record, and carries its pass to a head with the same diff (#327)', async () => {
+    world.hostCheck = { command: 'make host-ci', timeoutMinutes: 90, required: true };
+    try {
+      const none = replay();
+      none.signOff(A);
+      expect(await none.decide()).toMatchObject({ land: false, reason: 'host-check has not passed on this head (not run)' });
+
+      world.hostCheckRuns = [{ headSha: A, state: 'passed', reason: null }];
+      const same = replay({ sameDiff: true });
+      same.signOff(A);
+      same.github.head = B;
+      expect(await same.decide()).toMatchObject({ land: true });
+
+      const changed = replay();
+      changed.signOff(A);
+      changed.signOff(B);
+      changed.github.head = B;
+      expect(await changed.decide()).toMatchObject({ land: false, reason: 'host-check has not passed on this head (not run)' });
+    } finally {
+      world.hostCheck = null;
+      world.hostCheckRuns = [];
+    }
   });
 });
 

@@ -27,7 +27,11 @@ create table if not exists host_check_runs (
   repo_id uuid not null references repos(id) on delete cascade,
   pr_number int not null,
   head_sha text not null,
-  state text not null check (state in ('running', 'passed', 'failed', 'cancelled', 'refused', 'lost')),
+  -- `carried` is no run: a pass on an earlier head whose diff against the
+  -- base is this head's, said on the card and the status. The merge never
+  -- counts it, and decides the same thing itself (`sameDiffAs`).
+  state text not null check (state in ('running', 'passed', 'failed', 'cancelled', 'refused', 'lost', 'carried')),
+  carried_from text,
   -- What was run, as the settings were when it started.
   command text not null,
   timeout_minutes int not null,

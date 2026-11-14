@@ -11,9 +11,9 @@ import { withoutNul } from './local-ci-runs.js';
  * from hostd's report with the install's secret. The merge reads this, never
  * the `host-check` commit status, which any crew token could set.
  */
-export type HostCheckState = 'running' | 'passed' | 'failed' | 'cancelled' | 'refused' | 'lost';
+export type HostCheckState = 'running' | 'passed' | 'failed' | 'cancelled' | 'refused' | 'lost' | 'carried';
 
-export const HOST_CHECK_STATES: readonly HostCheckState[] = ['running', 'passed', 'failed', 'cancelled', 'refused', 'lost'];
+export const HOST_CHECK_STATES: readonly HostCheckState[] = ['running', 'passed', 'failed', 'cancelled', 'refused', 'lost', 'carried'];
 
 /** The end of what the command printed that is kept. */
 export const HOST_CHECK_LOG_TAIL_BYTES = 64_000;
@@ -28,6 +28,8 @@ export interface HostCheckRun {
   prNumber: number;
   headSha: string;
   state: HostCheckState;
+  /** For `carried`: the head whose pass it is. */
+  carriedFrom: string | null;
   command: string;
   timeoutMinutes: number;
   exitCode: number | null;
@@ -47,6 +49,7 @@ interface Row {
   pr_number: number;
   head_sha: string;
   state: HostCheckState;
+  carried_from: string | null;
   command: string;
   timeout_minutes: number;
   exit_code: number | null;
@@ -58,7 +61,7 @@ interface Row {
 }
 
 const COLUMNS = `h.id, h.run_id, h.repo_id, r.name as repo_name, r.full_name as repo_full_name, h.pr_number, h.head_sha, h.state,
-  h.command, h.timeout_minutes, h.exit_code, h.duration_ms, h.log_tail, h.reason, h.started_at, h.finished_at`;
+  h.carried_from, h.command, h.timeout_minutes, h.exit_code, h.duration_ms, h.log_tail, h.reason, h.started_at, h.finished_at`;
 const FROM = 'host_check_runs h join repos r on r.id = h.repo_id';
 
 function toRun(row: Row): HostCheckRun {
@@ -71,6 +74,7 @@ function toRun(row: Row): HostCheckRun {
     prNumber: row.pr_number,
     headSha: row.head_sha,
     state: row.state,
+    carriedFrom: row.carried_from ?? null,
     command: row.command,
     timeoutMinutes: row.timeout_minutes,
     exitCode: row.exit_code,
@@ -114,6 +118,24 @@ export async function start(input: {
   );
   const row = await byRunId(input.runId);
   if (!row) throw new Error(`the host check run ${input.runId} could not be recorded or read; try again`);
+  return row;
+}
+
+/**
+ * Says that a pass on `from` holds for `head`, whose diff against the base is
+ * the same: no run, so `passesFor` never answers it, and the merge decides
+ * the same carry itself. Once per head.
+ */
+export async function carry(input: { repoId: string; prNumber: number; headSha: string; from: string; command: string; timeoutMinutes: number }): Promise<HostCheckRun> {
+  const runId = `carried:${input.repoId}:${input.prNumber}:${input.headSha}`;
+  await query(
+    `insert into host_check_runs (run_id, repo_id, pr_number, head_sha, state, carried_from, command, timeout_minutes, finished_at)
+     values ($1, $2, $3, $4, 'carried', $5, $6, $7, now())
+     on conflict (run_id) do nothing`,
+    [runId, input.repoId, input.prNumber, input.headSha, input.from, input.command, input.timeoutMinutes],
+  );
+  const row = await byRunId(runId);
+  if (!row) throw new Error(`the carried pass on ${input.headSha.slice(0, 7)} could not be recorded or read; try again`);
   return row;
 }
 

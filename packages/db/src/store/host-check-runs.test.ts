@@ -9,7 +9,7 @@ vi.mock('../client.js', () => ({
 }));
 
 import { query, queryOne } from '../client.js';
-import { HOST_CHECK_LOG_TAIL_BYTES, byId, finish, keptTail, passesFor, running, start } from './host-check-runs.js';
+import { HOST_CHECK_LOG_TAIL_BYTES, byId, carry, finish, keptTail, passesFor, running, start } from './host-check-runs.js';
 
 const HEAD = 'a'.repeat(40);
 const ID = '0b6f1d1c-6c55-4c1c-9a59-1f4a4b8f2a10';
@@ -23,6 +23,7 @@ const ROW = {
   pr_number: 46,
   head_sha: HEAD,
   state: 'running',
+  carried_from: null,
   command: 'make host-ci',
   timeout_minutes: 90,
   exit_code: null,
@@ -104,6 +105,14 @@ describe('0168, the host check’s settings and runs', () => {
 
   it('keeps one row per hostd run, in one of the states the store knows', () => {
     expect(sql).toContain('run_id text unique not null');
-    expect(sql).toContain("check (state in ('running', 'passed', 'failed', 'cancelled', 'refused', 'lost'))");
+    expect(sql).toContain("check (state in ('running', 'passed', 'failed', 'cancelled', 'refused', 'lost', 'carried'))");
+  });
+
+  it('says a carried pass apart from a run, so passesFor never answers one', async () => {
+    vi.mocked(query).mockResolvedValueOnce([]);
+    vi.mocked(queryOne).mockResolvedValueOnce({ ...ROW, state: 'carried', carried_from: 'b'.repeat(40) });
+    const carried = await carry({ repoId: 'repo-1', prNumber: 46, headSha: HEAD, from: 'b'.repeat(40), command: 'make host-ci', timeoutMinutes: 90 });
+    expect(carried).toMatchObject({ state: 'carried', carriedFrom: 'b'.repeat(40) });
+    expect(String(vi.mocked(query).mock.calls[0]?.[0])).toContain("'carried'");
   });
 });

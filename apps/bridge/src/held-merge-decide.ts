@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { personMayMergeOver, type MergeBlocker } from './automation.js';
+import { HOST_CHECK_CONTEXT, personMayMergeOver, type MergeBlocker } from './automation.js';
 import { LINK_ACCOUNT_URL, short } from './human-review-decide.js';
 import { REQUIRED_CHECKS } from './merge-line.js';
 import { personKey, type FlowView, type GitHubViewer, type PersonFlows } from './person-github.js';
@@ -54,6 +54,11 @@ export function offer(held: { reason: string; head: string | null }, standing: H
   }
   if (!personMayMergeOver(held.reason)) {
     if (namesRequiredCheck(held.reason)) return { merge: false, why: 'There is no Merge: a required check has not passed on this head. Open it on GitHub, or Discuss it.' };
+    // A required host check is a required check: its build is the one thing
+    // nobody can see from GitHub, so nobody merges over it (docs/adr/0064).
+    if (held.reason.startsWith(`${HOST_CHECK_CONTEXT} `)) {
+      return { merge: false, why: 'There is no Merge: this repository’s host check is required, and has not passed on this head. Open its run, or Discuss it.' };
+    }
     return { merge: false, why: `There is no Merge: OpenADLC does not offer one over this hold (${held.reason}). Open it on GitHub, or Discuss it.` };
   }
   if (standing.refusedOnHead && held.head) {
