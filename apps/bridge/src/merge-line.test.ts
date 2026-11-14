@@ -714,11 +714,11 @@ describe('the front of the line, green and up to date', () => {
     await merge.advance('openadlc');
 
     expect(store.audits).toEqual([expect.objectContaining({ action: 'merge.landed', payload: expect.objectContaining({ approvals }) })]);
-    const body = github.comment.mock.calls.at(-1)?.[2] as string;
-    expect(body.split('\n').slice(-2)).toEqual([
-      '- openadlc-sydney-janedoe approved `c0ffee0`',
-      '- @janedoe signed off `c0ffee0` in the OpenADLC console',
-    ]);
+    expect(github.comment).toHaveBeenCalledWith(
+      'janedoe/openadlc',
+      31,
+      expect.stringMatching(/\n- openadlc-sydney-janedoe approved `c0ffee0`\n- @janedoe signed off `c0ffee0` in the OpenADLC console$/),
+    );
   });
 
   it('is not merged when a rule does not hold, and says which', async () => {
