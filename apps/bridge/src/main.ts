@@ -20,7 +20,7 @@ import { asAutomation, automationBotName } from './automation-bot.js';
 import { accountIdOf, accountTypeOf } from './github-accounts.js';
 import { defaultBackupDeps, registerBackupRoutes } from './backup.js';
 import { sweepExpiredUndo } from './restore-into.js';
-import { Automation } from './automation.js';
+import { Automation, HOST_CHECK_CONTEXT } from './automation.js';
 import { BotNames } from './bot-names.js';
 import { loadBridgeConfig, retiredEnvWarning } from './config.js';
 import { Context } from './context.js';
@@ -34,6 +34,7 @@ import { Notifier, retireOldChannels } from './notify.js';
 import { identityFromConfig } from './identity.js';
 import { HostdClient } from './hostd-client.js';
 import { NO_CLIENT_ID, registerInternalApi } from './internal-api.js';
+import { HostCheckService } from './host-check-service.js';
 import { PauseHolds } from './pause-holds.js';
 import { MergeLine } from './merge-line.js';
 import { Onboarding } from './onboarding.js';
@@ -385,6 +386,29 @@ async function main(): Promise<void> {
     sendBack,
   );
   webhooks.useDelivery(pipeline, delivery);
+  // A repository's host check, run by hostd as its own account once the
+  // crew approves a head; the merge reads its record (docs/adr/0064). Its
+  // status is posted as the app where it can be, for people to read.
+  const hostChecks = new HostCheckService({
+    hostd,
+    postStatus: async (repoFullName, sha, status) => {
+      const client = await deployClient(repoFullName);
+      if (!client) throw new Error('neither the app nor the automation account can post a status here');
+      await client.request('POST', `/repos/${repoFullName}/statuses/${sha}`, {
+        state: status.state,
+        context: HOST_CHECK_CONTEXT,
+        description: status.description.slice(0, 140),
+        ...(status.targetUrl ? { target_url: status.targetUrl } : {}),
+      });
+    },
+    fingerprint: async (repoFullName, base, sha) => {
+      const client = await asAutomation(actors, config).catch(() => null);
+      return client ? client.diffFingerprint(repoFullName, base, sha).catch(() => null) : null;
+    },
+    fetchBot: () => automationBotName(config),
+    consoleUrl: config.consoleUrl ?? null,
+  });
+  webhooks.useHostChecks(hostChecks);
   // A head the merge line finds red is CI's handler's: run again once, then
   // back to build, whether or not a delivery of the run is still coming.
   mergeLine.useRedChecks((head) => webhooks.ciRedAt(head));
@@ -500,6 +524,7 @@ async function main(): Promise<void> {
     { dispatching: anythingDispatches(dispatchMode), startedAt: new Date() },
   );
   scheduler.useDelivery(pipeline, delivery);
+  scheduler.useHostChecks(hostChecks);
   scheduler.useStacking(stacking);
   // OpenADLC updating itself from the releases a person tags (`self-update.ts`):
   // its clock is the `releases` job; while it waits to restart, the gate holds
@@ -966,7 +991,7 @@ async function main(): Promise<void> {
   // A builder round paused on a question holds its review seats for 15
   // minutes, and asks them here once if it is still waiting then (#287).
   const pauseHolds = new PauseHolds({ stages });
-  registerInternalApi(router, { ...deps, webhooks, scheduler, stages, internalSecret, alertsSecret, dispatchRuns, requestFiling, taskInbox, pauseHolds });
+  registerInternalApi(router, { ...deps, webhooks, scheduler, stages, internalSecret, alertsSecret, dispatchRuns, requestFiling, taskInbox, pauseHolds, hostChecks });
 
   const server = createServer((request, response) => {
     // A rejection here used to be unhandled, which under Node's default

@@ -12,10 +12,12 @@ import {
   addRepo,
   getProductionChoice,
   getRepoByName,
+  getHostCheck,
   getTaskPostgres,
   listRepos,
   removeRepo,
   setDefaultBranch,
+  setHostCheck,
   setProductionChoice,
   setTaskPostgres,
   updateRepoSettings,
@@ -417,5 +419,22 @@ describe('a repository’s Postgres servers for its tasks', () => {
       { sql: 'update repos set task_postgres = $2, updated_at = now() where id = $1', params: ['repo-1', JSON.stringify(SETTING)] },
       { sql: 'update repos set task_postgres = $2, updated_at = now() where id = $1', params: ['repo-1', null] },
     ]);
+  });
+});
+
+describe('a repository’s host check', () => {
+  it('reads as none while no command is set, and as the row says once one is', async () => {
+    vi.mocked(queryOne).mockResolvedValueOnce({ host_check_command: null, host_check_timeout_minutes: 60, host_check_required: true });
+    await expect(getHostCheck('repo-1')).resolves.toBeNull();
+    vi.mocked(queryOne).mockResolvedValueOnce({ host_check_command: 'make host-ci', host_check_timeout_minutes: 90, host_check_required: false });
+    await expect(getHostCheck('repo-1')).resolves.toEqual({ command: 'make host-ci', timeoutMinutes: 90, required: false });
+  });
+
+  it('is written whole, and null clears only the command', async () => {
+    vi.mocked(query).mockResolvedValue([]);
+    await setHostCheck('repo-1', { command: 'make host-ci', timeoutMinutes: 90, required: true });
+    await setHostCheck('repo-1', null);
+    expect(vi.mocked(query).mock.calls.map(([, params]) => params)).toEqual([['repo-1', 'make host-ci', 90, true], ['repo-1']]);
+    expect(String(vi.mocked(query).mock.calls[1]?.[0])).toContain('host_check_command = null');
   });
 });

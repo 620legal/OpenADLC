@@ -112,6 +112,11 @@ describe('what a held merge’s card offers', () => {
     ['review-gate as OpenADLC published it is not green on the head', 'There is no Merge: a required check has not passed on this head. Open it on GitHub, or Discuss it.'],
     ['openadlc-lead has not reviewed it', 'There is no Merge: OpenADLC does not offer one over this hold (openadlc-lead has not reviewed it). Open it on GitHub, or Discuss it.'],
     ['@orzelig has not approved this version', 'There is no Merge: OpenADLC does not offer one over this hold (@orzelig has not approved this version). Open it on GitHub, or Discuss it.'],
+    // A required host check (#327), whichever way it has not passed.
+    ...['failed', 'running', 'not run: no sudo rule'].map((why) => [
+      `host-check has not passed on this head (${why})`,
+      'There is no Merge: this repository’s host check is required, and has not passed on this head. Open its run, or Discuss it.',
+    ]),
   ])('offers no Merge over %s', (reason, why) => {
     expect(offer({ reason, head: HEAD }, none)).toEqual({ merge: false, why });
   });

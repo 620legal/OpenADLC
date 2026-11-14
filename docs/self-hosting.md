@@ -2083,6 +2083,176 @@ gives one container two tasks. If a repository's Tasks at once is higher than
 its builders' Tasks at once add up to, the dispatcher says so on every run
 rather than quietly running fewer.
 
+## Host checks
+
+Some builds need this machine itself. A macOS app, for example, only builds
+with Xcode, and no task container has Xcode. A repository like that can have a
+**host check**: a command, such as `make host-ci`, that hostd runs on this
+machine for each pull request, outside every container. It runs once the
+crew's reviews approve the head, and before the person who approves it is
+asked. To count as approved, the lead and every other approver must approve
+the head, and no seat may be asking for changes on it, the security seat
+included. The result is posted on the pull request as the `host-check` commit
+status, and is shown on the held approval's card in Needs you. No model runs
+it, so it spends nothing.
+
+The command runs the pull request's own Makefile. For that reason it never runs
+as you. It runs as an OS account of its own that you make once, which can't
+read `~/.openadlc`, the secret store or your files. Then an admin turns the host
+check on in the repository's settings.
+
+### Make the account
+
+The default name is `openadlc-hostcheck`. To use another name, set
+`OPENADLC_HOST_CHECK_ACCOUNT` in the environment of the shell that runs
+`openadlc up`.
+
+On **macOS**:
+
+```bash
+sudo sysadminctl -addUser openadlc-hostcheck -fullName "OpenADLC host check" -password - -home /Users/openadlc-hostcheck
+sudo createhomedir -c -u openadlc-hostcheck
+# Your own home must not be readable by the account. macOS makes it 0700 or 0750 already:
+ls -ld ~
+chmod 700 ~        # only if the line above shows it readable by others
+```
+
+`-password -` asks you for a password, and nobody needs to know it afterwards:
+hostd never signs in as the account. If the build uses Xcode, accept its
+licence for the machine once, with `sudo xcodebuild -license accept`.
+
+On **Linux**:
+
+```bash
+sudo useradd -m -s /bin/sh openadlc-hostcheck
+chmod 700 ~
+```
+
+On both systems, stop the account from scheduling anything. hostd kills a
+process a build leaves behind when its run ends, and again before the next run
+starts. A `cron` or `at` job, though, would start one again later, between runs
+or during another repository's build:
+
+```bash
+# Linux: cron.deny and at.deny take one account name per line.
+echo openadlc-hostcheck | sudo tee -a /etc/cron.deny /etc/at.deny
+# macOS:
+echo openadlc-hostcheck | sudo tee -a /usr/lib/cron/cron.deny /usr/lib/cron/at.deny
+```
+
+If the machine has a `cron.allow` or `at.allow` file, it overrides the
+`.deny` file, so leave the account out of it. Then check that
+`sudo -u openadlc-hostcheck crontab -l` says the account may not use cron.
+
+### Let hostd run commands as it
+
+hostd runs `sudo -n -u openadlc-hostcheck -- …`. It never asks for a password,
+so the rule has to allow running as that one account without one. Put the rule
+in a file of its own, and write it with `visudo`, which checks it before saving.
+In the rule, replace `jane` with the user `openadlc up` runs as:
+
+```bash
+sudo visudo -f /etc/sudoers.d/openadlc-hostcheck
+```
+
+```
+jane ALL=(openadlc-hostcheck) NOPASSWD: ALL
+```
+
+The rule lets you run commands as `openadlc-hostcheck` and as nobody else. Never
+write `(ALL)`, which would let hostd run commands as root, and never add
+`SETENV`, which would let a caller pass its environment through. hostd clears
+the environment with `env -i` in any case.
+
+### Check it
+
+```bash
+openadlc doctor
+```
+
+The `host-check-account` check proves three things by their effect: the
+account exists, hostd can run a command as it, and that command cannot read
+`OPENADLC_HOME`, `install.json` or your home. The check runs only while some
+repository has a host check. While it fails, no host check runs, and Needs you
+shows a card saying what to do. The held approval's card says **Host check not
+run**, with the same fix. If the check says the account can read a folder, run
+`chmod 700` on that folder. hostd also refuses to use `root` or its own user as
+the account.
+
+### Turn it on for a repository
+
+An admin opens **Settings → Repositories → the repository → Host check** and
+sets three things:
+
+- **Command**: one line, such as `make host-ci`.
+- **Time limit**: in minutes, up to 1440 (a day). The default is 60.
+- **Required for merge**: on by default. While it is on, the merge waits for a
+  pass on the head, or on an earlier head with the same changes. With it off,
+  the result is shown, and a failure doesn't hold the merge.
+
+The command comes only from this setting. It is never read from the pull
+request or from `config/repos.yaml`, because a pull request can change both.
+The Makefile target the command calls is the pull request's, which is why the
+check runs only after the crew approves the head.
+
+### What it does when it runs
+
+- **One at a time on this machine.** A newer head of the same pull request
+  cancels the run that is going. Runs for other pull requests wait their turn.
+- **The code arrives without a credential.** hostd fetches the head into a
+  mirror of its own with the crew's token. It then hands the code to the
+  account as a git bundle on standard input. The account keeps a working
+  folder per repository, `~openadlc-hostcheck/openadlc/<install>/<owner>__<repo>`,
+  between runs, so builds can be incremental. hostd checks out the new head
+  over tracked files and leaves ignored ones. Your `host-ci` target decides
+  what a clean build is.
+- **The environment is cleared.** The command gets only `PATH`, `HOME`, `USER`,
+  `LOGNAME`, `LANG`, `CI=1` and `OPENADLC_HOST_CHECK=1`. It gets no task token
+  and nothing from the secret store.
+- **Every run ends by stopping everything the account runs, a pass
+  included.** hostd sends TERM, then KILL, to every process of the account.
+  The account runs nothing else, so this also stops daemons the build left
+  behind, such as a `nohup … &` from a target that then exited 0. On a time
+  limit or a cancel, the KILL comes as soon as the command exits, or thirty
+  seconds after the TERM at the latest. hostd sends TERM and KILL to the
+  account once more before each run starts, before the new head reaches its
+  folder.
+- **Git runs nothing an earlier run left.** The fetch and checkout in the
+  working folder read neither the account's `~/.gitconfig` nor the system's
+  git config. They run no hook and no fsmonitor, whatever the folder's
+  `.git/config` says.
+- **A pass carries to a head with the same changes.** When the merge line
+  brings a branch up to date with its base, the build doesn't run again. When
+  a conflict was resolved, it does, because the code changed.
+
+### What the account can and can't reach
+
+It **can** reach the network, and services on `localhost`, as any user on the
+machine can. The bridge and hostd answer it nothing without the install's
+secret or a console session. hostd's `/healthz` answers anyone, and says
+nothing secret. It **can** read whatever the machine lets every user read, so
+keep your home `0700`.
+
+It **can't** read `~/.openadlc`, the secret store, a task's token, or your
+files. It can't signal hostd or your processes, and it can't run anything as
+you.
+
+**A result is only as trustworthy as every head that ran before it in that
+folder.** The working folder is kept between runs so that builds can be
+incremental, and each run's build can write anything in it: build products,
+ignored files, even the folder's `.git`. Something an earlier head left there
+can make a later head pass or fail. So can a head of another repository,
+because every repository's folder belongs to the same account. When you need a
+result that depends only on the head, have your `host-ci` target start from a
+clean tree (`git clean -fdx`, plus a fresh derived-data folder for Xcode). Or
+delete the folder before the run that matters:
+`sudo -u openadlc-hostcheck rm -rf ~openadlc-hostcheck/openadlc/<install>/<owner>__<repo>`.
+
+One install per machine runs host checks. A second install on the same machine
+would need its own account, and `openadlc up` does not pass a second one yet.
+Host checks don't run on a cloud install, whose hostd has no account to run
+as. There, the check says so.
+
 ## 11. Operate it
 
 ```bash

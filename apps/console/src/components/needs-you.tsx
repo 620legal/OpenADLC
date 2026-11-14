@@ -37,7 +37,7 @@ import {
 import { Copyable } from '@/components/copyable';
 import { DeviceCode } from '@/components/device-code';
 import { CheckIcon, ExternalIcon, QuestionIcon, ShipIcon, WarningIcon } from '@/components/icons';
-import type { AttentionAction, AttentionItem, AttentionMember, ReviewRequestView } from '@/lib/api';
+import type { AttentionAction, AttentionItem, AttentionMember, HostCheckView, ReviewRequestView } from '@/lib/api';
 import { cn } from '@/lib/cn';
 import { Markdown, MarkdownInline } from '@/components/markdown';
 import { RepoBadge } from '@/components/repo-badge';
@@ -57,6 +57,7 @@ import {
   groupOf,
   hasMore,
   heldMergeButtons,
+  hostCheckLine,
   noMergeReason,
   PEOPLE_SETTINGS_URL,
   plainDetail,
@@ -1534,6 +1535,52 @@ function NextButton({ id, label, next, busy, onPress }: { id: string; label: str
   );
 }
 
+/** How often a running host check's time so far is said again. */
+const HOST_CHECK_TICK_MS = 30_000;
+
+/**
+ * The repository's host check on the head being decided (#327), under the
+ * reviews: a person approves knowing whether it builds on this machine. A
+ * failed run shows the end of its log, clamped on the card and whole in the
+ * sheet; a running one counts its time on the client, since the Needs-you
+ * read is not made again each minute.
+ */
+export function HostCheckLine({ view, full = false, now }: { view: HostCheckView; full?: boolean; now?: string }) {
+  const [clock, setClock] = useState(() => (now ? Date.parse(now) : Date.now()));
+  useEffect(() => {
+    if (view.state !== 'running') return;
+    setClock(Date.now());
+    const timer = setInterval(() => setClock(Date.now()), HOST_CHECK_TICK_MS);
+    return () => clearInterval(timer);
+  }, [view.state]);
+  const line = hostCheckLine(view, clock);
+  const tone = view.state === 'failed' ? 'text-alarm' : view.state === 'passed' ? 'text-body' : 'text-soft';
+  return (
+    <div data-host-check={view.state} className="flex flex-col gap-1">
+      <p className={tone}>
+        {view.url ? (
+          <Link href={view.url} className="hover:underline">
+            {line}
+          </Link>
+        ) : (
+          line
+        )}
+      </p>
+      {view.state === 'failed' && view.logTail && (
+        <pre
+          data-host-check-log
+          className={cn(
+            'overflow-auto whitespace-pre-wrap break-words rounded-md bg-panel px-2 py-1.5 font-mono text-[10.5px] leading-snug text-muted',
+            full ? 'max-h-96' : 'max-h-28',
+          )}
+        >
+          {view.logTail}
+        </pre>
+      )}
+    </div>
+  );
+}
+
 /**
  * A pull request the merge line holds for a person, decided from its card:
  * why it is held, and Merge, Leave it and Discuss, each with what it does
@@ -1612,6 +1659,7 @@ export function HeldMergePanel({ item, initialStep, state, full = false }: Panel
         <span className="font-medium text-body">Why it waits for a person: </span>
         {held.why}
       </p>
+      {held.hostCheck && <HostCheckLine view={held.hostCheck} full={full} />}
       {noMerge && (
         <p data-no-merge className="text-muted">
           {noMerge}{' '}
@@ -1930,6 +1978,7 @@ export function HumanReviewDecisionPanel({
           See the diff <ExternalIcon size={11} />
         </a>
       </div>
+      {decision.hostCheck && <HostCheckLine view={decision.hostCheck} full={full} {...(now ? { now } : {})} />}
       {request.kind !== 'reading' && (
         <div data-review-request className="flex flex-col gap-0.5 text-soft">
           <p data-request-line>

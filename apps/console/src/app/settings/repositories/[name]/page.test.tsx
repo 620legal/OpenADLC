@@ -28,13 +28,32 @@ const ADMIN: Me = { known: true, email: 'janedoe@example.com', role: 'admin', id
 const who = vi.hoisted(() => ({ me: null as unknown as Me }));
 who.me = ADMIN;
 
+/** What the host check form sent the bridge, what the bridge answers, and where the page went after. */
+const saved = vi.hoisted(() => ({
+  calls: [] as { repo: string; hostCheck: unknown }[],
+  answer: { ok: true } as { ok: boolean; error?: string },
+  redirects: [] as string[],
+}));
+
 vi.mock('@/lib/api', () => ({
   readMe: async () => who.me,
+  saveHostCheck: async (repo: string, hostCheck: unknown) => {
+    saved.calls.push({ repo, hostCheck });
+    return saved.answer;
+  },
   api: {
     repos: async () => ({
       repos: [
         { name: 'openadlc-testbed', fullName: 'janedoe/openadlc-testbed', concurrency: 1, owner: 'openadlc-atlas-janedoe', stageModes: { merged: 'assist' }, color: 'blue' },
-        { name: 'website', fullName: 'janedoe/website', concurrency: 1, owner: 'openadlc-atlas-janedoe', stageModes: {}, color: 'amber' },
+        {
+          name: 'website',
+          fullName: 'janedoe/website',
+          concurrency: 1,
+          owner: 'openadlc-atlas-janedoe',
+          stageModes: {},
+          color: 'amber',
+          hostCheck: { command: 'make host-ci', timeoutMinutes: 90, required: false },
+        },
       ],
       maxReviewRounds: 3,
     }),
@@ -49,7 +68,11 @@ vi.mock('@/lib/api', () => ({
 vi.mock('@/lib/read-header', () => ({
   readHeader: async () => headerData({ repos: ['openadlc-testbed'], crew: [], budget: { spentUsd: 0, capUsd: 1500 }, needsYou: 0 }),
 }));
+vi.mock('next/cache', () => ({ revalidatePath: () => undefined }));
 vi.mock('next/navigation', () => ({
+  redirect: (to: string) => {
+    saved.redirects.push(to);
+  },
   useRouter: () => ({ refresh: () => undefined, push: () => undefined }),
   notFound: () => {
     throw new Error('NOT_FOUND');
@@ -98,6 +121,92 @@ describe('a repository’s settings page', () => {
 
   it('is not found for a repository OpenADLC does not have', async () => {
     await expect(page('nowhere')).rejects.toThrow('NOT_FOUND');
+  });
+
+  describe('its host check (#327)', () => {
+    /** The page's host check form's action, as the section draws it. */
+    async function hostCheckAction(name: string): Promise<(form: FormData) => Promise<void>> {
+      const { default: RepositorySettingsPage } = await import('./page');
+      const tree = await RepositorySettingsPage({ params: Promise.resolve({ name }) });
+      const find = (node: unknown): ((form: FormData) => Promise<void>) | null => {
+        if (!node || typeof node !== 'object') return null;
+        if (Array.isArray(node)) {
+          for (const child of node) {
+            const found = find(child);
+            if (found) return found;
+          }
+          return null;
+        }
+        const element = node as { type?: unknown; props?: { action?: unknown; children?: unknown } };
+        if (element.type === 'form' && typeof element.props?.action === 'function') return element.props.action as (form: FormData) => Promise<void>;
+        if (typeof element.type === 'function' && (element.type as { name?: string }).name === 'HostCheckSection') {
+          return find((element.type as (props: unknown) => unknown)(element.props));
+        }
+        return find(element.props?.children);
+      };
+      const action = find(tree);
+      if (!action) throw new Error('no host check form');
+      return action;
+    }
+
+    const form = (fields: Record<string, string>) => {
+      const data = new FormData();
+      for (const [key, value] of Object.entries(fields)) data.set(key, value);
+      return data;
+    };
+
+    it('says what it is, with a command, a time limit and Required for merge on by default', async () => {
+      const html = await page('openadlc-testbed');
+      const said = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+      expect(said).toContain('Host check');
+      expect(said).toContain('as an account of its own, once the crew approves a head');
+      expect(said).toContain('docs/self-hosting.md#host-checks');
+      expect(html).toMatch(/<input[^>]*name="command"[^>]*value=""/);
+      expect(html).toMatch(/<input[^>]*name="timeoutMinutes"[^>]*value="60"/);
+      expect(html).toMatch(/<input[^>]*name="required"[^>]*checked=""/);
+      expect(html).not.toContain('>Clear</button>');
+    });
+
+    it('shows the one set, and offers Clear', async () => {
+      const html = await page('website');
+      expect(html).toMatch(/<input[^>]*name="command"[^>]*value="make host-ci"/);
+      expect(html).toMatch(/<input[^>]*name="timeoutMinutes"[^>]*value="90"/);
+      expect(html).not.toMatch(/<input[^>]*name="required"[^>]*checked=""/);
+      expect(html).toContain('>Clear</button>');
+    });
+
+    it('saves what was typed, and an empty command or Clear takes it away', async () => {
+      saved.calls.length = 0;
+      saved.redirects.length = 0;
+      saved.answer = { ok: true };
+      const save = await hostCheckAction('openadlc-testbed');
+      await save(form({ command: ' make host-ci ', timeoutMinutes: '120', required: 'on', intent: 'save' }));
+      await save(form({ command: '', timeoutMinutes: '60', intent: 'save' }));
+      await save(form({ command: 'make host-ci', timeoutMinutes: '60', intent: 'clear' }));
+      await save(form({ command: 'make host-ci', timeoutMinutes: '30', intent: 'save' }));
+      expect(saved.calls).toEqual([
+        { repo: 'openadlc-testbed', hostCheck: { command: 'make host-ci', timeoutMinutes: 120, required: true } },
+        { repo: 'openadlc-testbed', hostCheck: null },
+        { repo: 'openadlc-testbed', hostCheck: null },
+        { repo: 'openadlc-testbed', hostCheck: { command: 'make host-ci', timeoutMinutes: 30, required: false } },
+      ]);
+      expect(saved.redirects[0]).toBe('/settings/repositories/openadlc-testbed#host-check');
+    });
+
+    it('says the bridge’s refusal beside the form', async () => {
+      saved.redirects.length = 0;
+      saved.answer = { ok: false, error: 'timeoutMinutes is 1 to 1440' };
+      const save = await hostCheckAction('openadlc-testbed');
+      await save(form({ command: 'make host-ci', timeoutMinutes: '5000', intent: 'save' }));
+      expect(saved.redirects[0]).toBe('/settings/repositories/openadlc-testbed?hostCheckError=timeoutMinutes%20is%201%20to%201440#host-check');
+      saved.answer = { ok: true };
+
+      const { default: RepositorySettingsPage } = await import('./page');
+      const html = renderToStaticMarkup(
+        await RepositorySettingsPage({ params: Promise.resolve({ name: 'openadlc-testbed' }), searchParams: Promise.resolve({ hostCheckError: 'timeoutMinutes is 1 to 1440' }) }),
+      );
+      expect(html).toContain('timeoutMinutes is 1 to 1440');
+    });
   });
 
   it('is an admin’s: a user is told so, and shown none of its controls', async () => {

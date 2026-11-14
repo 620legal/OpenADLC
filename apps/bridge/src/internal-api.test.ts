@@ -135,6 +135,7 @@ const designerEnded = vi.fn(async (_task: unknown, _reason: string | null) => un
 const inboxTake = vi.fn(async (_taskId: string, _takeId: string) => [{ id: 'inbox-1', text: 'janedoe wrote to the builder while you worked' }]);
 const inboxSettle = vi.fn(async (_taskId?: string) => 0);
 const inboxRelease = vi.fn(async (_taskId: string, _takeId: string) => 1);
+const hostCheckRecord = vi.fn(async (_report: unknown) => true);
 
 
 let bridge: Server;
@@ -170,6 +171,7 @@ beforeEach(async () => {
     planChanges: { verdict, missingVerdict, designerEnded } as never,
     taskInbox: { take: inboxTake, release: inboxRelease, settle: inboxSettle },
     pauseHolds: { paused: pauseHeld, forget: pauseForget },
+    hostChecks: { record: hostCheckRecord },
   });
   bridge = createServer((request, response) => void router.handle(request, response));
   await new Promise<void>((resolve) => bridge.listen(0, '127.0.0.1', resolve));
@@ -189,6 +191,26 @@ function post(path: string, body: unknown) {
     body: JSON.stringify(body),
   });
 }
+
+describe('a host check hostd reports (#327)', () => {
+  const report = { runId: 'run-1', state: 'passed', exitCode: 0, durationMs: 2520000.4, logTail: 'BUILD SUCCEEDED', repo: 'acme/other', head: 'f'.repeat(40) };
+
+  it('is recorded from hostd with the install secret, and refused without it', async () => {
+    const without = await fetch(`${bridgeUrl}/internal/host-check`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(report) });
+    expect(without.status).toBe(401);
+    expect(hostCheckRecord).not.toHaveBeenCalled();
+
+    const recorded = await post('/internal/host-check', report);
+    expect(await recorded.json()).toEqual({ recorded: true });
+    // The run is the bridge's own row: what the report says of its repository or head is not passed on.
+    expect(hostCheckRecord).toHaveBeenCalledWith({ runId: 'run-1', state: 'passed', exitCode: 0, durationMs: 2520000, logTail: 'BUILD SUCCEEDED', reason: null });
+  });
+
+  it('refuses a report that does not say how the run ended', async () => {
+    expect((await post('/internal/host-check', { runId: 'run-1', state: 'running' })).status).toBe(400);
+    expect(hostCheckRecord).not.toHaveBeenCalled();
+  });
+});
 
 describe('a task asking for paths', () => {
   it('has its request passed to the gate it opens, as data', async () => {

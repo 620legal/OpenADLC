@@ -1,5 +1,5 @@
 import { FORMATTED_LIMIT } from '@/components/markdown';
-import type { AttentionAction, AttentionItem, ReviewRequestView } from './api';
+import type { AttentionAction, AttentionItem, HostCheckView, ReviewRequestView } from './api';
 import { withoutComments } from './comments';
 import { duration, untilIn } from './when';
 
@@ -423,4 +423,30 @@ export function stripItems(items: readonly AttentionItem[], limit = STRIP_LIMIT)
         Date.parse(b.since) - Date.parse(a.since),
     )
     .slice(0, limit);
+}
+
+/** How long, in whole minutes, as a host check line says it; under one is "under a minute". */
+function minutesIn(ms: number): string {
+  const minutes = Math.round(ms / 60_000);
+  return ms < 60_000 || minutes < 1 ? 'under a minute' : `${minutes} min`;
+}
+
+/**
+ * The host check's line on a held approval or a held merge (#327): whether
+ * the head being decided builds on this machine. Running counts from
+ * `startedAt` to `now`, so the card can say it again as time passes.
+ */
+export function hostCheckLine(view: HostCheckView, now: number): string {
+  const head = view.head.slice(0, 7);
+  switch (view.state) {
+    case 'passed':
+      if (view.carriedFrom) return `Host check passed on ${view.carriedFrom.slice(0, 7)}, which has the same changes as ${head}`;
+      return view.durationMs !== undefined ? `Host check passed on ${head} in ${minutesIn(view.durationMs)}` : `Host check passed on ${head}`;
+    case 'failed':
+      return `Host check failed on ${head}`;
+    case 'running':
+      return view.startedAt ? `Host check running for ${minutesIn(Math.max(0, now - Date.parse(view.startedAt)))}` : `Host check running on ${head}`;
+    default:
+      return view.reason ? `Host check not run: ${view.reason}` : `Host check not run on ${head}`;
+  }
 }

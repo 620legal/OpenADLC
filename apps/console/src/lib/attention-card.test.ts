@@ -13,6 +13,7 @@ import {
   groupOf,
   hasMore,
   heldMergeButtons,
+  hostCheckLine,
   noMergeReason,
   othersWaiting,
   plainDetail,
@@ -562,5 +563,34 @@ describe('a held Human-review approval’s card', () => {
     expect(reviewVerdict('approved')).toBe('approved');
     expect(reviewVerdict('changes_requested')).toBe('asked for changes');
     expect(reviewVerdict('commented')).toBe('commented');
+  });
+});
+
+describe('the host check’s line on a card', () => {
+  const HEAD = 'abc1234def5678';
+  const NOW = Date.parse('2026-11-14T12:00:00.000Z');
+
+  it('says a pass on the head, and how long it took', () => {
+    expect(hostCheckLine({ state: 'passed', head: HEAD, durationMs: 42 * 60_000, url: '/host-checks/1' }, NOW)).toBe('Host check passed on abc1234 in 42 min');
+    expect(hostCheckLine({ state: 'passed', head: HEAD, durationMs: 20_000, url: '/host-checks/1' }, NOW)).toBe('Host check passed on abc1234 in under a minute');
+  });
+
+  it('says a pass carried from an earlier head with the same changes', () => {
+    expect(hostCheckLine({ state: 'passed', head: HEAD, carriedFrom: 'fed9876aaaa', url: '/host-checks/1' }, NOW)).toBe(
+      'Host check passed on fed9876, which has the same changes as abc1234',
+    );
+  });
+
+  it('says a failure, and a run still going with its time so far', () => {
+    expect(hostCheckLine({ state: 'failed', head: HEAD, durationMs: 60_000, logTail: 'error', url: '/host-checks/1' }, NOW)).toBe('Host check failed on abc1234');
+    expect(hostCheckLine({ state: 'running', head: HEAD, startedAt: '2026-11-14T11:48:00.000Z', url: '/host-checks/1' }, NOW)).toBe('Host check running for 12 min');
+    expect(hostCheckLine({ state: 'running', head: HEAD, startedAt: '2026-11-14T11:59:40.000Z', url: '/host-checks/1' }, NOW)).toBe('Host check running for under a minute');
+  });
+
+  it('says why it was not run, with what to do', () => {
+    expect(hostCheckLine({ state: 'not_run', head: HEAD, reason: 'there is no account named openadlc-hostcheck', url: null }, NOW)).toBe(
+      'Host check not run: there is no account named openadlc-hostcheck',
+    );
+    expect(hostCheckLine({ state: 'refused', head: HEAD, url: null }, NOW)).toBe('Host check not run on abc1234');
   });
 });

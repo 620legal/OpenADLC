@@ -1002,6 +1002,38 @@ describe('a held Human-review approval', () => {
     expect(html).toContain('<option value="implement">the builder</option>');
   });
 
+  describe('with the repository’s host check on the head (#327)', () => {
+    const run = (hostCheck: Record<string, unknown>) =>
+      words(renderToStaticMarkup(<HumanReviewDecisionPanel item={HELD({ yours: true, hostCheck } as never)} now="2026-09-24T12:00:00.000Z" />));
+
+    it('says a pass, with how long it took, linking to its log', () => {
+      const html = renderToStaticMarkup(
+        <HumanReviewDecisionPanel item={HELD({ yours: true, hostCheck: { state: 'passed', head: HEAD, durationMs: 42 * 60_000, url: '/host-checks/h-1' } } as never)} />,
+      );
+      expect(words(html)).toContain('Host check passed on 692cd1f in 42 min');
+      expect(html).toContain('href="/host-checks/h-1"');
+    });
+
+    it('says a failure, with the end of its log', () => {
+      const text = run({ state: 'failed', head: HEAD, durationMs: 60_000, logTail: "error: no such module 'Foo'", url: '/host-checks/h-2' });
+      expect(text).toContain('Host check failed on 692cd1f');
+      expect(text).toContain("error: no such module 'Foo'");
+    });
+
+    it('says a run still going, and for how long', () => {
+      expect(run({ state: 'running', head: HEAD, startedAt: '2026-09-24T11:48:00.000Z', url: '/host-checks/h-3' })).toContain('Host check running for 12 min');
+    });
+
+    it('says why it was not run, with what to do', () => {
+      const text = run({ state: 'not_run', head: HEAD, reason: 'hostd cannot run a command as openadlc-hostcheck; make its sudo rule', url: null });
+      expect(text).toContain('Host check not run: hostd cannot run a command as openadlc-hostcheck; make its sudo rule');
+    });
+
+    it('draws nothing for a repository with no host check', () => {
+      expect(renderToStaticMarkup(<HumanReviewDecisionPanel item={HELD({ yours: true })} />)).not.toContain('data-host-check');
+    });
+  });
+
   it('keeps the decision buttons off the generic row: only the way to GitHub is beside them', () => {
     const html = needs([HELD({ yours: true })]);
     expect(html.match(/Review it on GitHub/g)).toHaveLength(1);
@@ -1149,6 +1181,18 @@ describe('a held merge, decided from the card (ADR 0037)', () => {
   };
   const words = (html: string) => html.replace(/<[^>]+>/g, ' ').replace(/&#x27;/g, "'").replace(/\s+/g, ' ');
   const decides = (html: string) => [...html.matchAll(/data-decide="(\w+)"/g)].map((match) => match[1]);
+
+  it('says the host check on the held head, failed with the end of its log (#327)', () => {
+    const item = HELD({ yours: true });
+    const withCheck: AttentionItem = {
+      ...item,
+      heldMerge: { ...item.heldMerge!, hostCheck: { state: 'failed', head: HEAD, durationMs: 90_000, logTail: 'xcodebuild: error', url: '/host-checks/h-9' } },
+    };
+    const html = renderToStaticMarkup(<HeldMergePanel item={withCheck} />);
+    expect(words(html)).toContain(`Host check failed on ${HEAD.slice(0, 7)}`);
+    expect(html).toContain('xcodebuild: error');
+    expect(html).toContain('href="/host-checks/h-9"');
+  });
 
   it('says why it is held, what each button does next, and offers Merge to a viewer who may press it', () => {
     const html = needs([HELD({ yours: true })]);

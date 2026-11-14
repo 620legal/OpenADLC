@@ -1704,7 +1704,7 @@ describe('the gates of pull requests in review, worked out again', () => {
   // something happens to the pull request, and nothing more was coming.
   const BUILT = { user: { login: 'openadlc-atlas-janedoe' }, author_association: 'COLLABORATOR' };
 
-  function sweep(options: { standing: { state: string; description: string } | null; gate: { state: 'pending' | 'success'; description: string } }) {
+  function sweep(options: { standing: { state: string; description: string } | null; gate: { state: 'pending' | 'success'; description: string }; approved?: string[] }) {
     store.repos = [{ id: 'repo-1', name: 'openadlc-testbed', fullName: 'janedoe/openadlc-testbed' }];
     store.issues = [
       // As the live install had it: nothing had ever recorded the pull request.
@@ -1742,7 +1742,7 @@ describe('the gates of pull requests in review, worked out again', () => {
       {} as never,
       {
         actors: { asBot: async () => github },
-        reviewStanding: async () => ({ gate: options.gate, decision: { lead: 'openadlc-sydney-janedoe', reviewers: [], approvers: [] }, posted: [], approved: [], leadDue: null }),
+        reviewStanding: async () => ({ gate: options.gate, decision: { lead: 'openadlc-sydney-janedoe', reviewers: [], approvers: [] }, posted: [], approved: options.approved ?? [], leadDue: null }),
         setReviewGate: async (input: { state: string; description: string }) => {
           published.push({ state: input.state, description: input.description });
           return { state: input.state, description: input.description };
@@ -1769,6 +1769,22 @@ describe('the gates of pull requests in review, worked out again', () => {
     expect(await scheduler.settleGates()).toEqual(['openadlc-testbed#2: review gate is success (all required reviews are in)']);
     expect(published).toEqual([{ state: 'success', description: 'all required reviews are in' }]);
     expect(entered).toEqual([{ repoName: 'openadlc-testbed', prNumber: 2, headSha: 'abc123', revert: false }]);
+  });
+
+  it('asks for the host check only once the lead’s approval counts on the head, and finds lost runs first (#327)', async () => {
+    const hostChecks = { request: vi.fn(async () => 'openadlc-testbed#2: host check started on abc123'), sweep: vi.fn(async () => [] as string[]) };
+    const waiting = sweep({ standing: null, gate: { state: 'pending', description: 'waiting on openadlc-sydney-janedoe' } });
+    waiting.scheduler.useHostChecks(hostChecks);
+    await waiting.scheduler.settleGates();
+    expect(hostChecks.sweep).toHaveBeenCalledTimes(1);
+    expect(hostChecks.request).not.toHaveBeenCalled();
+
+    const approved = sweep({ standing: null, gate: { state: 'pending', description: 'waiting on @orzelig' }, approved: ['openadlc-sydney-janedoe'] });
+    approved.scheduler.useHostChecks(hostChecks);
+    const actions = await approved.scheduler.settleGates();
+    expect(hostChecks.request).toHaveBeenCalledTimes(1);
+    expect(hostChecks.request).toHaveBeenCalledWith(expect.objectContaining({ id: 'repo-1', fullName: 'janedoe/openadlc-testbed' }), 2, 'abc123', 'main');
+    expect(actions).toContain('openadlc-testbed#2: host check started on abc123');
   });
 
   it('finds the pull request from GitHub, and records it on the issue that had none', async () => {

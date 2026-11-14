@@ -98,6 +98,11 @@ describe('every console route says who may call it', () => {
     expect(ROUTE_ROLES['POST /v1/attention/leave']).toBe('user');
   });
 
+  it('lets whoever reads Needs you read a host check’s log, and only an admin set what one runs (#327)', () => {
+    expect(roleFor('GET', '/v1/host-checks/:id')).toBe('user');
+    expect(roleFor('PATCH', '/v1/repos/:name')).toBe('admin');
+  });
+
   it('needs an admin for a route nobody classified', () => {
     expect(roleFor('POST', '/v1/something/new')).toBe('admin');
   });

@@ -124,6 +124,16 @@ A change that makes one of these possible is wrong even when its tests pass:
   console sign-off (`person_sign_offs`), which counts only for their own login
   and account id; authorship alone never does
   (docs/adr/0063-an-author-who-is-the-named-person-signs-off-in-the-console.md).
+  Where a repository requires a host check, its pass counts only from the
+  bridge's own record (`host_check_runs`), never from the `host-check` status.
+- A repository's host check runs the pull request's code on the machine, so it
+  runs only after the crew approves the head (the lead and every approver, with
+  no request for changes standing, the security seat's included), only the
+  command an admin set on the repository's row, and only as its own OS account
+  through `sudo -n` and `env -i`, never as hostd's user or with a credential in
+  its environment. Every run, a pass included, ends with nothing of the
+  account left running
+  (docs/adr/0064-a-host-check-runs-as-its-own-account-and-the-merge-reads-the-bridges-record.md).
 - A bot never approves a deploy; the repository's environment rules release
   it — a required reviewer, or a soak timer when it ships automatically — or,
   where GitHub's plan cannot hold a reviewer, a person releasing the promote
@@ -164,8 +174,9 @@ does not change what that pull request is subject to.
 
 They are the files that define how the crew is held in check: the merge
 decision and gates, the access, authorship, human-review and scope rules, the
-workflows and the scripts they run, who GitHub asks to review each path, and
-what each skill may run. Everything else, skill prose, roles and
+workflows and the scripts they run, who GitHub asks to review each path, what
+each skill may run, and the host check's boundary — when a pull request's code
+runs on the machine, as whom and with what, and the record the merge reads. Everything else, skill prose, roles and
 templates included, is left to the crew's review, so the crew can keep
 improving itself. `.github/CODEOWNERS` lists the same paths.
 
@@ -182,4 +193,7 @@ improving itself. `.github/CODEOWNERS` lists the same paths.
 - `packages/shared/src/authorship.ts` @orzelig
 - `packages/shared/src/human-review.ts` @orzelig
 - `packages/shared/src/checks.ts` @orzelig
+- `apps/hostd/src/host-check.ts` @orzelig
+- `apps/bridge/src/host-check-service.ts` @orzelig
+- `packages/db/src/store/host-check-runs.ts` @orzelig
 - `crew/skills/*/tools.yaml` @orzelig

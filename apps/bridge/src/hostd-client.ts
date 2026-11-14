@@ -42,6 +42,41 @@ export interface HostdStartInput {
   baseRef?: string;
 }
 
+/** A host check as the bridge starts it on hostd; see hostd's `host-check.ts`. */
+export interface HostCheckStart {
+  runId: string;
+  /** `owner/name`. */
+  repo: string;
+  pr: number;
+  head: string;
+  /** The repository row's, never the pull request's. */
+  command: string;
+  timeoutMinutes: number;
+  /** The crew account whose token fetches the head into hostd's own mirror. */
+  bot: string | null;
+}
+
+/** A host check run as hostd holds it. */
+export interface HostCheckRunView extends HostCheckStart {
+  state: 'queued' | 'running' | 'passed' | 'failed' | 'cancelled' | 'refused';
+  exitCode: number | null;
+  durationMs: number | null;
+  logTail: string;
+  reason: string | null;
+  startedAt: string;
+  finishedAt: string | null;
+}
+
+/** What hostd found about the host check's account (`HostChecks.probe`). */
+export type HostCheckAccountProbe =
+  | { ok: true; account: string; uid: number; home: string }
+  | { ok: false; account: string; problem: 'no_account' | 'not_dedicated' | 'no_sudo' | 'can_read'; path?: string; detail: string };
+
+/** A start or a read of a host check is hostd queueing or looking up; the run itself is reported. */
+const HOST_CHECK_CALL_TIMEOUT_MS = 30_000;
+/** The probe runs a few commands through sudo. */
+const HOST_CHECK_PROBE_TIMEOUT_MS = 60_000;
+
 /** A local CI run as hostd reports it; see hostd's `local-ci.ts`. */
 export interface LocalCiView {
   id: string;
@@ -417,6 +452,30 @@ export class HostdClient {
   /** Puts the names an admin allowed in Settings on the host's egress proxy; what hostd wrote. */
   async applyEgressHosts(hosts: readonly string[]): Promise<{ hosts: string[] }> {
     return this.call('PUT', '/egress/hosts', { body: { hosts }, timeoutMs: EGRESS_TIMEOUT_MS, notAnswering: HOSTD_NOT_ANSWERING_FOR_EGRESS });
+  }
+
+  /**
+   * Starts a repository's host check on hostd (`apps/hostd/src/host-check.ts`).
+   * The command and limit are the repository row's, read by the caller; hostd
+   * runs them as its own account and reports the end to `/internal/host-check`.
+   */
+  async startHostCheck(input: HostCheckStart): Promise<{ run: HostCheckRunView }> {
+    return this.call('POST', '/host-check/runs', { body: input, timeoutMs: HOST_CHECK_CALL_TIMEOUT_MS });
+  }
+
+  /** A run as hostd holds it; a 404 when hostd has no such run, as after a restart. */
+  async hostCheckRun(runId: string): Promise<{ run: HostCheckRunView }> {
+    return this.call('GET', `/host-check/runs/${encodeURIComponent(runId)}`, { timeoutMs: HOST_CHECK_CALL_TIMEOUT_MS });
+  }
+
+  /** Stops a pull request's run, going or queued. */
+  async cancelHostCheck(repoFullName: string, pr: number): Promise<{ cancelled: boolean }> {
+    return this.call('DELETE', `/host-check/pulls/${encodeURIComponent(repoFullName)}/${pr}`, { timeoutMs: HOST_CHECK_CALL_TIMEOUT_MS });
+  }
+
+  /** Whether the host check's account is fit to run one, proved by its effect (`HostChecks.probe`). */
+  async hostCheckAccount(): Promise<{ probe: HostCheckAccountProbe }> {
+    return this.call('GET', '/host-check/account', { timeoutMs: HOST_CHECK_PROBE_TIMEOUT_MS });
   }
 
   /**
