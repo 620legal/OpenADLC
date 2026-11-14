@@ -8,7 +8,7 @@
  */
 export const FLAGS: Readonly<Record<string, readonly string[]>> = {
   init: ['driver', 'database-url'],
-  up: ['no-seed'],
+  up: ['no-seed', 'login-item', 'no-login-item', 'at-login'],
   down: [],
   status: [],
   'console-link': [],
@@ -152,6 +152,17 @@ export function flagValue(argv: readonly string[], name: string): string | undef
   if (found.inline !== undefined) return found.inline;
   const value = argv[found.index + 1];
   return value && !value.startsWith('--') ? value : '';
+}
+
+/**
+ * `up`'s login item choice from its two flags: `on`, `off`, none given, or
+ * `both`, which `up` refuses rather than choose one.
+ */
+export function loginItemFlag(on: boolean, off: boolean): 'on' | 'off' | 'both' | undefined {
+  if (on && off) return 'both';
+  if (on) return 'on';
+  if (off) return 'off';
+  return undefined;
 }
 
 /** Whether a flag was given, as `--name` or `--name=…`. */

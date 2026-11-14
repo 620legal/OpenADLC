@@ -12,8 +12,9 @@ import { FLAGS, flagValue, hasFlag, refusal, strayArgument, unknownFlag, wantsHe
 describe('a flag a command does not read', () => {
   it('is refused, and the refusal says what the command does take', () => {
     expect(unknownFlag('up', ['--demo'])).toBe('--demo');
-    expect(refusal('up', '--demo')).toBe('openadlc up does not take --demo; it takes --no-seed');
+    expect(refusal('up', '--demo')).toBe('openadlc up does not take --demo; it takes --no-seed, --login-item, --no-login-item, --at-login');
     expect(unknownFlag('up', ['--skip-seed'])).toBe('--skip-seed');
+    expect(unknownFlag('up', ['--login-item', '--no-login-item', '--at-login'])).toBeNull();
     expect(refusal('down', '--force')).toBe('openadlc down does not take --force; it takes no flags');
   });
 

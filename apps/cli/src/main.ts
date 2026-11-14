@@ -20,7 +20,7 @@ import { watch } from './commands/watch.js';
 import { configPath, databaseConflictMessage, databaseUrlConflict, loadConfig, serviceEnv } from './install.js';
 import { keeperPid, logFile } from './processes.js';
 import { ui } from './ui.js';
-import { flagValue, hasFlag, refusal, strayArgument, unknownFlag, wantsHelp } from './flags.js';
+import { flagValue, hasFlag, loginItemFlag, refusal, strayArgument, unknownFlag, wantsHelp } from './flags.js';
 
 function repoRoot(): string {
   // dist/main.js → apps/cli/dist → repository root
@@ -47,10 +47,17 @@ openadlc — a crew of agents that takes a request to a reviewed, deployed chang
   openadlc COMMAND --help          what that command does, and nothing else
   openadlc init [--driver local|docker] [--database-url URL]
                                     where to set this install up (the console does it)
-  openadlc up [--no-seed]          start the stack, and print a link that signs you in to the console;
-                                    --no-seed skips reloading config/bots.yaml and config/repos.yaml
+  openadlc up [--no-seed] [--no-login-item | --login-item]
+                                    start the stack, and print a link that signs you in to the console;
+                                    --no-seed skips reloading config/bots.yaml and config/repos.yaml.
+                                    up registers a login item that starts this install again after
+                                    the computer restarts; --no-login-item takes it off and is
+                                    remembered, --login-item puts it back. --at-login is what
+                                    the login item runs: it waits for Docker, and does nothing
+                                    when the install is already up
   openadlc console-link            a fresh sign-in link for the console (each one works for an hour)
-  openadlc down                    stop the stack
+  openadlc down                    stop the stack, and take off its login item, so it stays
+                                    stopped after a restart
   openadlc status                  what is running, what the board looks like, what it has cost
   openadlc doctor                  check the things that break an install
   openadlc ls [--json]             the tasks running, paused or waiting: each one's seat,
@@ -268,8 +275,15 @@ async function main(): Promise<void> {
     case 'init':
       return init(root, { driver: flag('driver'), databaseUrl: flag('database-url') });
 
-    case 'up':
-      return up(config, { skipSeed: has('no-seed') });
+    case 'up': {
+      const loginItem = loginItemFlag(has('login-item'), has('no-login-item'));
+      if (loginItem === 'both') {
+        ui.fail('openadlc up was given both --login-item and --no-login-item; give one');
+        process.exitCode = 2;
+        return;
+      }
+      return up(config, { skipSeed: has('no-seed'), atLogin: has('at-login'), ...(loginItem ? { loginItem } : {}) });
+    }
 
     case 'down':
       return down();
@@ -405,7 +419,9 @@ async function main(): Promise<void> {
         { checkout, staging, tag, from, to, home: openadlcHome() },
         {
           run: runForApply,
-          down,
+          // The services stop, and the login item stays: a restart during
+          // the update, or one that fails before its up, still comes back.
+          down: () => down({ keepLoginItem: true }),
           running: () => ['hostd', 'bridge', 'console'].filter((name) => keeperPid(name) !== null),
           otherInstalls: () => otherInstallsRunning(checkout, openadlcHome()),
         },
