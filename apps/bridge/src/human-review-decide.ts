@@ -44,6 +44,29 @@ export const APPROVES_OFF = 'Approves is off for you in People; an admin turns i
 /** How long a reason may be: a finding the builder reads, not a document. */
 export const REJECT_REASON_LIMIT = 2000;
 
+/** The audit action of a refused Approve (#328): seen afterwards, and read by nothing that decides. */
+export const APPROVAL_REFUSED = 'pull.human_review_approval_refused';
+
+/** Why an Approve was refused, as its `pull.human_review_approval_refused` row says. */
+export type ApprovalRefusalReason =
+  | 'not_linked'
+  | 'not_awaited'
+  | 'not_waiting'
+  | 'not_open'
+  | 'head_moved'
+  | 'on_github'
+  | 'approves_off'
+  | 'other_account'
+  | 'crew_account'
+  | 'author_changed';
+
+/** What an Approve learned before it was refused, for its audit row. */
+interface ApproveSeen {
+  linkedLogin: string | null;
+  linkedId: number | null;
+  how: 'review' | 'sign_off' | null;
+}
+
 /** What the console says about the viewer and one held approval. */
 export type MayDecide = { yours: true; linkedId: number } | { yours: false; why: string; settingsUrl?: string; status: number };
 
@@ -174,7 +197,69 @@ export class HumanReviewDecisions {
    */
   private readonly requests = new Map<string, { read: number; request: ReviewRequest }>();
 
+  /**
+   * A refusal's reason, kept beside the error rather than in it, so the person
+   * is refused with the very error they were before (#328). An error with no
+   * entry is a failure, not a decision about who or what, and is not audited.
+   */
+  private readonly refusals = new WeakMap<Error, { reason: ApprovalRefusalReason; extra: Record<string, unknown> }>();
+
   constructor(private readonly deps: HumanReviewDeps) {}
+
+  private refused<E extends Error>(error: E, reason: ApprovalRefusalReason, extra: Record<string, unknown> = {}): E {
+    this.refusals.set(error, { reason, extra });
+    return error;
+  }
+
+  /**
+   * Audits a refused Approve, for the caller to throw unchanged. Before #328
+   * only an Approve that went through was audited, so who tried to approve
+   * what, and why it did not count, was in no record. A row that cannot be
+   * written is said in the log: the person is refused all the same.
+   */
+  private async auditRefusal(
+    error: unknown,
+    at: {
+      repo: PullRepo;
+      number: number;
+      login: string;
+      head: string;
+      identity: string;
+      seen: ApproveSeen;
+      stage: 'before_sign_in' | 'after_sign_in';
+      viewer?: GitHubViewer;
+    },
+  ): Promise<void> {
+    const refusal = error instanceof Error ? this.refusals.get(error) : undefined;
+    if (!refusal) return;
+    const { repo, number, login, head, identity, seen, stage, viewer } = at;
+    // Awaited in a try rather than chained with `.catch`: an `audit` that threw
+    // before returning a promise, or returned none, turned the refusal into a 500.
+    try {
+      await this.deps.audit({
+        actor: identity,
+        action: APPROVAL_REFUSED,
+        target: decisionTarget(repo.name, number),
+        payload: {
+          repo: repo.name,
+          pr: number,
+          awaited: login,
+          head,
+          reason: refusal.reason,
+          why: (error as Error).message,
+          how: seen.how,
+          linkedLogin: seen.linkedLogin,
+          linkedId: seen.linkedId,
+          stage,
+          by: identity,
+          ...(viewer ? { login: viewer.login, githubUserId: viewer.id } : {}),
+          ...refusal.extra,
+        },
+      });
+    } catch (failure) {
+      this.warn(`[bridge] ${identity}'s refused Approve of ${repo.name}#${number} at ${short(head)} was not audited: ${failure instanceof Error ? failure.message : failure}`);
+    }
+  }
 
   private warn(message: string): void {
     (this.deps.warn ?? console.warn)(message);
@@ -202,7 +287,16 @@ export class HumanReviewDecisions {
    * People link is: a login can be renamed and taken by somebody else.
    */
   async mayDecide(identity: string, login: string): Promise<MayDecide> {
+    return (await this.decide(identity, login)).may;
+  }
+
+  /** `mayDecide`, with the linked account it read, so a refused Approve's audit row names it without a second read. */
+  private async decide(identity: string, login: string): Promise<{ may: MayDecide; link: { githubLogin: string; githubUserId: number } | null }> {
     const link = await this.deps.linkOf(personKey(identity)).catch(() => null);
+    return { may: await this.decided(link, login), link };
+  }
+
+  private async decided(link: { githubUserId: number } | null, login: string): Promise<MayDecide> {
     if (!link) {
       return {
         yours: false,
@@ -238,28 +332,45 @@ export class HumanReviewDecisions {
     login: string;
     head: string;
     identity: string;
-  }): Promise<{ linkedId: number; url: string; how: 'review' | 'sign_off' }> {
+  }, seen?: ApproveSeen): Promise<{ linkedId: number; url: string; how: 'review' | 'sign_off' }> {
     const { repo, number, login, head } = input;
     if (!/^[0-9a-f]{40}$/i.test(head)) throw new HttpFailure(400, 'head is the commit the decision was shown for');
-    const may = await this.mayDecide(input.identity, login);
-    if (!may.yours) throw new HttpFailure(may.status, may.why, may.settingsUrl ? { url: may.settingsUrl } : {});
+    const { may, link } = await this.decide(input.identity, login);
+    if (seen) {
+      seen.linkedLogin = link?.githubLogin ?? null;
+      seen.linkedId = link?.githubUserId ?? null;
+    }
+    if (!may.yours) {
+      const failure = new HttpFailure(may.status, may.why, may.settingsUrl ? { url: may.settingsUrl } : {});
+      // A 503 is GitHub not saying who the login is: a failure, not a refusal.
+      if (!link) throw this.refused(failure, 'not_linked');
+      throw may.status === 403 ? this.refused(failure, 'not_awaited') : failure;
+    }
     const standing = await this.deps.standing(repo.name, number, login);
-    if (!standing) throw new HttpFailure(409, `Pull request #${number} no longer waits on @${login}'s approval; reload. Nothing was posted.`);
+    if (!standing) throw this.refused(new HttpFailure(409, `Pull request #${number} no longer waits on @${login}'s approval; reload. Nothing was posted.`), 'not_waiting');
     const pull = await this.deps.pull(repo, number);
-    if (!pull.open) throw new HttpFailure(409, `Pull request #${number} is not open; reload. Nothing was posted.`);
+    if (!pull.open) throw this.refused(new HttpFailure(409, `Pull request #${number} is not open; reload. Nothing was posted.`), 'not_open');
     if (pull.head !== head || standing.head !== head) {
-      throw new HttpFailure(409, `Pull request #${number} moved to ${short(pull.head)} since you looked; reload and decide on the new head. Nothing was posted.`, {
-        url: pull.url,
-      });
+      throw this.refused(
+        new HttpFailure(409, `Pull request #${number} moved to ${short(pull.head)} since you looked; reload and decide on the new head. Nothing was posted.`, {
+          url: pull.url,
+        }),
+        'head_moved',
+        { movedTo: pull.head !== head ? pull.head : standing.head },
+      );
     }
     const how = await this.howDecided(pull, may.linkedId);
     // Out of scope by design: a named person who did not open a person's pull
     // request approves it on GitHub, which takes their review (#322).
     if (how === 'on_github') {
-      throw new HttpFailure(409, `@${login} approves pull request #${number} on GitHub; the console signs off only for its author. Nothing was posted.`, {
-        url: `${pull.url}/files`,
-      });
+      throw this.refused(
+        new HttpFailure(409, `@${login} approves pull request #${number} on GitHub; the console signs off only for its author. Nothing was posted.`, {
+          url: `${pull.url}/files`,
+        }),
+        'on_github',
+      );
     }
+    if (seen) seen.how = how;
     return { linkedId: may.linkedId, url: pull.url, how };
   }
 
@@ -267,14 +378,25 @@ export class HumanReviewDecisions {
    * Starts the person's sign-in to approve `head`. Once they approve the code,
    * their own `APPROVE` review is posted with `commit_id` at that head, only if
    * the account that approved is the one linked to them, is no crew account,
-   * and the head has not moved meanwhile.
+   * and the head has not moved meanwhile. Each refusal on the way is audited
+   * as `pull.human_review_approval_refused` before it is thrown (#328).
    */
   async approve(input: { repo: PullRepo; number: number; login: string; head: string; identity: string }): Promise<{ flow: Omit<FlowView<unknown>, 'state' | 'result' | 'error'> }> {
     const { repo, number, login, head, identity } = input;
-    const { linkedId, url, how } = await this.check(input);
-    // Said before the sign-in, so nobody approves a code for a sign-off that
-    // would be refused; asked again once they have, below.
-    if (how === 'sign_off' && !(await this.deps.approves(linkedId).catch(() => false))) throw new HttpFailure(403, APPROVES_OFF, { url: PEOPLE_URL });
+    const seen: ApproveSeen = { linkedLogin: null, linkedId: null, how: null };
+    let checked: { linkedId: number; url: string; how: 'review' | 'sign_off' };
+    try {
+      checked = await this.check(input, seen);
+      // Said before the sign-in, so nobody approves a code for a sign-off that
+      // would be refused; asked again once they have, below.
+      if (checked.how === 'sign_off' && !(await this.deps.approves(checked.linkedId).catch(() => false))) {
+        throw this.refused(new HttpFailure(403, APPROVES_OFF, { url: PEOPLE_URL }), 'approves_off');
+      }
+    } catch (error) {
+      await this.auditRefusal(error, { ...input, seen, stage: 'before_sign_in' });
+      throw error;
+    }
+    const { linkedId, url, how } = checked;
     const key = `${repo.name}#${number}@${head}#${identity}`;
     const waiting = this.signing.get(key);
     if (waiting && this.deps.flows.state(waiting.flowId, waiting.identity).state === 'waiting') {
@@ -283,13 +405,22 @@ export class HumanReviewDecisions {
     const flow = await this.deps.flows.start(
       identity,
       async (viewer: GitHubViewer, accessToken: string) => {
-        if (viewer.id !== linkedId) {
-          throw new Error(`You approved the code as @${viewer.login}, which is not the GitHub account linked to you here; nothing was posted.`);
+        try {
+          if (viewer.id !== linkedId) {
+            throw this.refused(new Error(`You approved the code as @${viewer.login}, which is not the GitHub account linked to you here; nothing was posted.`), 'other_account');
+          }
+          if (await this.deps.isCrew(viewer.login)) throw this.refused(new Error(`@${viewer.login} is an account the crew uses; nothing was posted.`), 'crew_account');
+          const now = await this.deps.pull(repo, number);
+          if (now.head !== head) {
+            throw this.refused(new Error(`Pull request #${number} moved to ${short(now.head)} while you signed in; nothing was posted. Reload and approve the new head.`), 'head_moved', {
+              movedTo: now.head,
+            });
+          }
+          if (how === 'sign_off') return await this.signOff({ repo, number, login, head, identity, viewer, pull: now });
+        } catch (error) {
+          await this.auditRefusal(error, { ...input, seen, stage: 'after_sign_in', viewer });
+          throw error;
         }
-        if (await this.deps.isCrew(viewer.login)) throw new Error(`@${viewer.login} is an account the crew uses; nothing was posted.`);
-        const now = await this.deps.pull(repo, number);
-        if (now.head !== head) throw new Error(`Pull request #${number} moved to ${short(now.head)} while you signed in; nothing was posted. Reload and approve the new head.`);
-        if (how === 'sign_off') return this.signOff({ repo, number, login, head, identity, viewer, pull: now });
         const posted = await this.deps.postReviewAsPerson(accessToken, repo.fullName, number, { commitId: head, body: 'Approved from the OpenADLC console.' });
         // The review is posted and counts in `mergeDecision` from here on. A
         // record that cannot be written is said in the log, not to the person:
@@ -339,9 +470,13 @@ export class HumanReviewDecisions {
   }): Promise<{ commentUrl: string }> {
     const { repo, number, login, head, identity, viewer, pull } = input;
     if (pull.author?.id !== viewer.id) {
-      throw new Error(`@${viewer.login} did not open pull request #${number}, so the console cannot sign it off for you; approve it on GitHub. Nothing was recorded.`);
+      throw this.refused(
+        new Error(`@${viewer.login} did not open pull request #${number}, so the console cannot sign it off for you; approve it on GitHub. Nothing was recorded.`),
+        'author_changed',
+        { author: pull.author ? { login: pull.author.login, id: pull.author.id } : null },
+      );
     }
-    if (!(await this.deps.approves(viewer.id).catch(() => false))) throw new Error(`${APPROVES_OFF} Nothing was recorded.`);
+    if (!(await this.deps.approves(viewer.id).catch(() => false))) throw this.refused(new Error(`${APPROVES_OFF} Nothing was recorded.`), 'approves_off');
     const audit = {
       actor: identity,
       action: 'pull.human_review_signed_off',

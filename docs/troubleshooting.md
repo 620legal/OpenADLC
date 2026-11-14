@@ -2082,7 +2082,29 @@ Settings → Your GitHub account.
 If the pull request moved to a new head while the card was open, Approve and
 Reject are refused with "reload". Nothing is posted; reload and decide on the
 new head. Each decision writes an audit row: `pull.human_review_approved`,
-`pull.human_review_rejected` or `pull.human_review_discussed`.
+`pull.human_review_signed_off`, `pull.human_review_rejected` or
+`pull.human_review_discussed`.
+
+An Approve or Sign off that OpenADLC refuses writes
+`pull.human_review_approval_refused`, under the same `repo#pr` target. It
+records who pressed it, the head they saw, and the message they were shown.
+Its `reason` says why the press did not count:
+- `not_linked`: no GitHub account is linked;
+- `not_awaited`: the linked account is not the person the card waits on;
+- `not_waiting`: the pull request no longer waits on them;
+- `not_open`: the pull request is closed;
+- `head_moved`: the pull request moved, before or during the sign-in (`movedTo`);
+- `on_github`: the person did not open their own pull request and approves it
+  on GitHub;
+- `approves_off`: Approves is off for them in People;
+- `other_account`: the code was approved by another account than the linked one;
+- `crew_account`: the code was approved by a crew account;
+- `author_changed`: GitHub named another author once the code was approved
+  (`author`).
+
+`stage` says whether it was refused before or after the sign-in. If the row
+cannot be written, the bridge logs `refused Approve … was not audited`, and
+the press is refused all the same.
 
 ### Reminding the person
 
