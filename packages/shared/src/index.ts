@@ -35,3 +35,4 @@ export { overlapKind, pathsOverlap, pathMatches as policyPathMatches, type Overl
 export * from './self-update.js';
 export * from './task-postgres.js';
 export * from './task-postgres-compose.js';
+export * from './login-item.js';

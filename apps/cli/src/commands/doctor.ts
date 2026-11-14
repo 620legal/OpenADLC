@@ -1,14 +1,16 @@
 import { execFile } from 'node:child_process';
 import { existsSync, readdirSync } from 'node:fs';
+import { homedir, userInfo } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { bots, closePool, costs, credentials, databaseNotAnswering, describeDatabase, hosts, lastGithubDelivery, settings, waitForDatabase } from '@openadlc/db';
 import { credentialKind, openadlcHome, getSecretStore, webhookSecretRef, type SecretStore } from '@openadlc/github';
-import { actionTarget, stepNamed, type HealthView } from '@openadlc/shared';
+import { LOGIN_ITEMS_SETTING, actionTarget, lingerNote, loginItemCommand, stepNamed, type HealthView, type LoginItemState } from '@openadlc/shared';
+import { inspect as inspectLoginItem } from '../login-item.js';
 import { githubClientId } from '../client-id.js';
 import { bridgeHeaders } from '../console-link.js';
 import { healthUrl } from './up.js';
-import { LOCAL_DRIVER_NOTES, LOCAL_DRIVER_WARNING, dockerProbe, hasPublishedDatabasePassword, homeIsOpen, type InstallConfig } from '../install.js';
+import { LOCAL_DRIVER_NOTES, LOCAL_DRIVER_WARNING, configPath, dockerProbe, hasPublishedDatabasePassword, homeIsOpen, loginItemWanted, type InstallConfig } from '../install.js';
 import { keeperPid } from '../processes.js';
 import {
   DOCKER_NOT_RUNNING,
@@ -203,6 +205,9 @@ export function healthLines(checks: readonly HealthView[], consoleUrl: string): 
   for (const check of checks) if (!order.includes(check.check)) order.push(check.check);
 
   for (const id of order) {
+    // Doctor judges the login item itself (`loginItemLine`), the bridge down
+    // or not; printed from the bridge as well, it was said twice.
+    if (id === 'login-item') continue;
     const rows = checks.filter((check) => check.check === id);
     const failing = rows.filter((row) => row.state === 'failing');
     const unknown = rows.filter((row) => row.state === 'unknown');
@@ -560,6 +565,20 @@ export async function doctor(config: InstallConfig): Promise<void> {
   const docker = await version('docker', ['--version']);
   for (const line of dockerLines(docker, driver, docker ? await dockerProbe.dockerAnswers() : false)) say(line, fail, warn);
 
+  // Only for an install `openadlc up` runs, which has an install.json: the
+  // compose stack and the cloud host start theirs another way.
+  const loginItem = loginItemLine(
+    existsSync(configPath()) && loginItemWanted(config)
+      ? await inspectLoginItem(process.env).catch((error: unknown) => ({ state: 'unsupported' as const, reason: String(error) }))
+      : null,
+    process.env,
+    { userHome: homedir(), user: userName() },
+  );
+  if (loginItem) {
+    ui.heading('After a restart');
+    say(loginItem, fail, warn);
+  }
+
   ui.heading('Containment');
   await checkHostdAuthenticates(config, fail, warn);
   if (homeIsOpen()) {
@@ -717,6 +736,57 @@ export async function doctor(config: InstallConfig): Promise<void> {
   if (problems > 0) process.exitCode = 1;
 
   await closePool();
+}
+
+function userName(): string {
+  try {
+    return userInfo().username;
+  } catch {
+    return process.env.USER ?? '';
+  }
+}
+
+/**
+ * What doctor says about the login item that brings this install back after
+ * the computer restarts, judged by what launchd or systemd holds. Null for an
+ * install that opted out (`state` null), which doctor does not warn about.
+ *
+ * Said whether or not the bridge answers: after a restart that did not bring
+ * the install back, the bridge is exactly what is not running.
+ */
+export function loginItemLine(
+  state: LoginItemState | null,
+  env: NodeJS.ProcessEnv,
+  who: { userHome: string; user: string },
+): DoctorLine | null {
+  if (state === null) return null;
+  const command = loginItemCommand(env, who.userHome);
+  switch (state.state) {
+    case 'registered':
+      return {
+        kind: 'ok',
+        text: `comes back after a restart: ${state.path}`,
+        ...(state.linger === false ? { hint: lingerNote(who.user) } : {}),
+      };
+    case 'missing':
+      return { kind: 'warn', text: 'nothing starts this install after the computer restarts: it has no login item', hint: `run: ${command}` };
+    case 'not-loaded':
+      return { kind: 'warn', text: `this install's login item is not loaded, so nothing starts it after a restart (${state.path})`, hint: `run: ${command}` };
+    case 'disabled':
+      return {
+        kind: 'warn',
+        text: 'this install’s login item is turned off in macOS, so nothing starts it after a restart',
+        hint: `turn on OpenADLC under ${LOGIN_ITEMS_SETTING}, then run ${command}`,
+      };
+    case 'other-install':
+      return {
+        kind: 'warn',
+        text: `${state.path} starts another install, at ${state.home}, so nothing starts this one after a restart`,
+        hint: 'set OPENADLC_INSTALL_ID (and OPENADLC_BOT_PREFIX) for this install, then run openadlc up --login-item with them',
+      };
+    case 'unsupported':
+      return { kind: 'note', text: `no login item: ${state.reason}` };
+  }
 }
 
 /** Said of a check that needs the database, when it is down. */
