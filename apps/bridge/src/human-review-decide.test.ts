@@ -580,6 +580,16 @@ describe('a refused Approve is audited (#328)', () => {
     await expect(after.signIn({ login: 'sam', id: 7 })).rejects.toThrow('not the GitHub account linked to you here; nothing was posted.');
     expect(warn).toHaveBeenLastCalledWith(expect.stringContaining('was not audited: the database is down'));
     nothingElse(after);
+
+    // One that throws before it returns a promise is refused the same way, not answered 500.
+    const sync = world({
+      audit: vi.fn(() => {
+        throw new Error('no pool');
+      }) as never,
+      warn,
+    });
+    expect((await refusal(sync.decisions.approve({ ...asked, identity: 'sam@acme.test' }))).status).toBe(403);
+    expect(warn).toHaveBeenLastCalledWith(expect.stringContaining('was not audited: no pool'));
   });
 
   it('audits no failure that decides nothing about who or what', async () => {

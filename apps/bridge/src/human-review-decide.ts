@@ -233,8 +233,10 @@ export class HumanReviewDecisions {
     const refusal = error instanceof Error ? this.refusals.get(error) : undefined;
     if (!refusal) return;
     const { repo, number, login, head, identity, seen, stage, viewer } = at;
-    await this.deps
-      .audit({
+    // Awaited in a try rather than chained with `.catch`: an `audit` that threw
+    // before returning a promise, or returned none, turned the refusal into a 500.
+    try {
+      await this.deps.audit({
         actor: identity,
         action: APPROVAL_REFUSED,
         target: decisionTarget(repo.name, number),
@@ -253,10 +255,10 @@ export class HumanReviewDecisions {
           ...(viewer ? { login: viewer.login, githubUserId: viewer.id } : {}),
           ...refusal.extra,
         },
-      })
-      .catch((failure: unknown) =>
-        this.warn(`[bridge] ${identity}'s refused Approve of ${repo.name}#${number} at ${short(head)} was not audited: ${failure instanceof Error ? failure.message : failure}`),
-      );
+      });
+    } catch (failure) {
+      this.warn(`[bridge] ${identity}'s refused Approve of ${repo.name}#${number} at ${short(head)} was not audited: ${failure instanceof Error ? failure.message : failure}`);
+    }
   }
 
   private warn(message: string): void {
