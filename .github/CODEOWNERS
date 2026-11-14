@@ -17,4 +17,7 @@
 /packages/shared/src/authorship.ts    @orzelig
 /packages/shared/src/human-review.ts  @orzelig
 /packages/shared/src/checks.ts        @orzelig
+/apps/hostd/src/host-check.ts         @orzelig
+/apps/bridge/src/host-check-service.ts @orzelig
+/packages/db/src/store/host-check-runs.ts @orzelig
 /crew/skills/*/tools.yaml             @orzelig

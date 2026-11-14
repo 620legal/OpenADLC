@@ -11,6 +11,7 @@ import { blockingOverlaps, type WorkInFlight } from '@openadlc/dispatcher';
 import { githubDidNotAnswer, type GitHubClient } from '@openadlc/github';
 import { ATTENTION_WINDOW_DAYS, GITHUB_RETRY_CLAIM_MS, githubRetry, triedAgain } from './attention.js';
 import { ALREADY_LANDED, alreadyLanded, subjectClosed, wasRefused } from './gates.js';
+import { crewApprovedHead, type HostCheckService } from './host-check-service.js';
 import { fastPathOf, pullAuthorOf, seatsWaitedOn, type Automation } from './automation.js';
 import { causeOfFailure, isPrerequisiteRow } from './health/checks/crew.js';
 import { DEPLOY_PATH_BRANCH_PREFIX, REVIEW_ROUND_OPENED, endedBySendingBack, headInRepository, issueForSubject, issueNumberFromBranch, parseRef, stageOfTask } from './work.js';
@@ -1006,6 +1007,9 @@ export class Scheduler {
     // organization, and without them the sweep passed by a pull request its
     // webhooks had reviewed.
     const humans = (await effectiveConfig(this.config).catch(() => null))?.humans ?? [];
+    // A host check hostd no longer holds, as after its restart, is lost
+    // first, so the pull requests below ask for it again.
+    if (this.hostChecks) actions.push(...(await this.hostChecks.sweep().catch(() => [])));
 
     for (const repo of await repos.listRepos()) {
       // GitHub's list, not the issues' own record of their pull requests: that
@@ -1127,6 +1131,14 @@ export class Scheduler {
                 crewReviewsOn(await client.listReviews(repo.fullName, pull.number), { head: pull.headSha, crew, repoFullName: repo.fullName, prNumber: pull.number }),
             })),
           );
+          // And the repository's host check, beside it and on the same
+          // condition: a delivery that never came, a run hostd lost, or an
+          // account a person has just fixed has nothing else to ask for it
+          // (docs/adr/0064). A pull request with no issue too.
+          if (this.hostChecks && !pull.draft && crewApprovedHead(reviewed)) {
+            const asked = await this.hostChecks.request(repo, pull.number, pull.headSha, pull.baseRef);
+            if (asked) actions.push(asked);
+          }
 
           // A lead-only conflict resolution pushed as this head is the lead's to
           // re-check, whatever the gate says: a lead busy at the push is asked
@@ -1235,6 +1247,13 @@ export class Scheduler {
   /** Brings each repository's stored default branch in step with GitHub's (`default-branch.ts`); run with reconcile. */
   useDefaultBranches(sync: () => Promise<string[]>): void {
     this.defaultBranches = sync;
+  }
+
+  private hostChecks: Pick<HostCheckService, 'request' | 'sweep'> | null = null;
+
+  /** A repository's host check (`host-check-service.ts`): asked for on the review sweep, and its lost runs found. */
+  useHostChecks(service: Pick<HostCheckService, 'request' | 'sweep'>): void {
+    this.hostChecks = service;
   }
 
   private stacking: Pick<Stacking, 'sweep'> | null = null;

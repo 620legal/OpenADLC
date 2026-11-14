@@ -1,5 +1,5 @@
 import { permissionOn, theApp } from './people.js';
-import { audit, bots, hasEventOfType, issues, lastEventAt, leases, listEventsOfTypeWith, personSignOffs, recordEvent, repos, stageMoves } from '@openadlc/db';
+import { audit, bots, hasEventOfType, hostCheckRuns, issues, lastEventAt, leases, listEventsOfTypeWith, personSignOffs, recordEvent, repos, stageMoves } from '@openadlc/db';
 import { BRANCH_UPDATED_BY_LINE, REVIEW_DISMISSED_BY_BRIDGE, REVIEW_ROUND_OPENED, REVIEW_SUBMITTED_ON, issueNumberFromBranch, madeByLineUpdate, scopeLabelAcceptedFrom } from './work.js';
 import { BASE_CHANGES, GitHubApiError, ReviewerStandings, isTemplatePlaceholder, reviewRequestRefusal, reviewerStandingOf, type GitHubClient, type PullCommit, type ReviewerStanding, type SuiteWorkflowRun } from '@openadlc/github';
 import {
@@ -144,6 +144,32 @@ function signedOffOn(facts: Pick<MergeFacts, 'signOffs' | 'headSha' | 'sameDiffA
   return onDiff ? { of: 'same diff', head: onDiff.head } : null;
 }
 
+/** The host check's commit status, which the red rule leaves to `hostCheckHold` (docs/adr/0064). */
+export const HOST_CHECK_CONTEXT = 'host-check';
+
+/**
+ * Why a required host check holds the merge, or null when it does not: a
+ * pass on the head, or on an earlier head with its diff, lands it. Never a
+ * pass through `carriedFrom`: a conflict resolution changed the code the
+ * build ran on. The reason names the state, not how long it has run: the
+ * merge line comments each time the reason changes.
+ */
+function hostCheckHold(facts: Pick<MergeFacts, 'hostCheck' | 'headSha' | 'sameDiffAs'>): string | null {
+  const check = facts.hostCheck;
+  if (!check?.required) return null;
+  if (check.passed.some((head) => head === facts.headSha || facts.sameDiffAs.has(head))) return null;
+  const latest = check.latest;
+  const why =
+    !latest || latest.state === 'cancelled' || latest.state === 'lost'
+      ? `not run${latest?.reason ? `: ${latest.reason}` : ''}`
+      : latest.state === 'refused'
+        ? `not run: ${latest.reason ?? 'hostd refused it'}`
+        : latest.state === 'carried'
+          ? 'its pass was on an earlier version whose changes are not these'
+          : latest.state;
+  return `${HOST_CHECK_CONTEXT} has not passed on this head (${why})`;
+}
+
 /** Who opened a pull request, as GitHub's `user` says, with the account id a sign-off is matched by; null without one. */
 export function pullAuthorOf(user: { login?: string | null; id?: number | null } | null | undefined): { login: string; id: number } | null {
   return user?.login && typeof user.id === 'number' ? { login: user.login, id: user.id } : null;
@@ -271,6 +297,19 @@ export interface MergeFacts {
    * who is no crew account (`authorSignOffs`). Absent, none.
    */
   signOffs?: readonly { login: string; head: string }[];
+  /**
+   * The repository's host check, from the bridge's own record
+   * (`host_check_runs`, docs/adr/0064), never the `host-check` status, which
+   * any crew token could set. `passed` is every head a run passed on; a pass
+   * counts on the head or one in `sameDiffAs`, never through `carriedFrom`.
+   * `latest` is the newest run on the head, for the reason. Absent or null:
+   * the repository has none.
+   */
+  hostCheck?: {
+    required: boolean;
+    passed: readonly string[];
+    latest: { state: string; reason: string | null } | null;
+  } | null;
   /** Earlier heads whose diff against the base is the head's own. */
   sameDiffAs: ReadonlySet<string>;
   /**
@@ -1334,12 +1373,17 @@ export function mergeDecision(facts: MergeFacts): {
     if (!elsewhere.again) return refuse(reason);
     return { ...refuse(`${reason}; CI has to run on it again: push a commit to it, or close and reopen it`), ciAgain: { after: elsewhere.after } };
   }
+  // `host-check` is judged from the bridge's record below, whatever its
+  // status says: red on a repository that does not require it holds nothing,
+  // and green from any token proves nothing (docs/adr/0064).
   const red = [
     ...runs.filter((run) => run.status === 'completed' && RED.has(run.conclusion ?? '')).map((run) => run.name),
-    ...facts.statuses.filter((status) => RED.has(status.state)).map((status) => status.context),
+    ...facts.statuses.filter((status) => RED.has(status.state) && status.context !== HOST_CHECK_CONTEXT).map((status) => status.context),
   ];
   if (red.length > 0) return refuse(`${[...new Set(red)].map(nameInReason).join(', ')} failed on the head`);
   if (verdictFor([...ci], [REQUIRED_CHECK]) !== 'green') return refuse(`${REQUIRED_CHECK} has not passed on the head`);
+  const hostHold = hostCheckHold(facts);
+  if (hostHold) return refuse(hostHold);
   if (facts.gate !== 'success') return refuse('review-gate as OpenADLC published it is not green on the head');
   if (facts.humanRulesUnknown) return refuse('the human review rules cannot be read from AGENTS.md on the default branch');
   if (facts.requestsTakenAway === null) return refuse('its history is too long to read, so who was asked for a review is not known');
@@ -1563,10 +1607,13 @@ export function mergeBlockers(facts: MergeFacts): MergeBlocker[] {
   }
   const red = [
     ...runs.filter((run) => run.status === 'completed' && RED.has(run.conclusion ?? '')).map((run) => run.name),
-    ...facts.statuses.filter((status) => RED.has(status.state)).map((status) => status.context),
+    ...facts.statuses.filter((status) => RED.has(status.state) && status.context !== HOST_CHECK_CONTEXT).map((status) => status.context),
   ];
   if (red.length > 0) add('check', `${[...new Set(red)].map(nameInReason).join(', ')} failed on the head`);
   if (verdictFor([...ci], [REQUIRED_CHECK]) !== 'green') add('check', `${REQUIRED_CHECK} has not passed on the head`);
+  // As `mergeDecision`: a required host check, from the bridge's record, is a check a person never merges over.
+  const hostHold = hostCheckHold(facts);
+  if (hostHold) add('check', hostHold);
   if (facts.gate !== 'success') add('check', 'review-gate as OpenADLC published it is not green on the head');
   if (facts.humanRulesUnknown) add('unknown', 'the human review rules cannot be read from AGENTS.md on the default branch');
   if (facts.requestsTakenAway === null) add('review', 'its history is too long to read, so who was asked for a review is not known');
@@ -2630,6 +2677,22 @@ export class Automation {
     return rows.filter((row) => row.githubUserId === who.id).map((row) => ({ login: who.login, head: row.head }));
   }
 
+  /**
+   * The repository's host check as the merge reads it (`MergeFacts.hostCheck`):
+   * its setting, the heads a run passed on, and the newest run on this head.
+   * A store that cannot be read throws, and the merge waits rather than land
+   * a change whose required build nobody could see.
+   */
+  private async hostCheckFacts(repoFullName: string, number: number, headSha: string): Promise<MergeFacts['hostCheck']> {
+    const repo = await repos.getRepoByName(repoFullName);
+    if (!repo) return null;
+    const setting = await repos.getHostCheck(repo.id);
+    if (!setting) return null;
+    const [passed, runs] = await Promise.all([hostCheckRuns.passesFor(repo.id, number), hostCheckRuns.forPull(repo.id, number)]);
+    const latest = runs.find((run) => run.headSha === headSha) ?? null;
+    return { required: setting.required, passed, latest: latest ? { state: latest.state, reason: latest.reason } : null };
+  }
+
   /** The earlier heads whose reviews a lead-only conflict resolution or a stacked update carried to a head; set once at start-up (`main.ts`). */
   private carriedHeads: ((repoName: string, prNumber: number, head: string) => Promise<Set<string>>) | null = null;
 
@@ -2918,13 +2981,16 @@ export class Automation {
     // The author's sign-offs from the console, for a login the rules name who
     // is its author (docs/adr/0063); read only when someone is named.
     const signOffs = humans.required.length > 0 ? await this.authorSignOffs(client, repoFullName, pull.number, crew) : [];
-    // The earlier heads an approval, the security reviewer's verdict, or a sign-off was on.
+    // The repository's host check, from the bridge's own record (docs/adr/0064).
+    const hostCheck = await this.hostCheckFacts(repoFullName, pull.number, pull.headSha);
+    // The earlier heads an approval, the security reviewer's verdict, a sign-off or a host check's pass was on.
     const earlier = [
       ...new Set([
         ...[...counted, ...(checked ?? [])]
           .filter((review) => (review.state === 'APPROVED' || (() => { const author = whoWrote(review.user, crew, { bot: seatOf(review.body) }); return author.kind === 'openadlc' && author.bot?.name === securitySeat; })()) && review.commitId && review.commitId !== pull.headSha)
           .map((review) => review.commitId as string),
         ...signOffs.map((one) => one.head).filter((head) => head !== pull.headSha),
+        ...(hostCheck?.passed ?? []).filter((head) => head !== pull.headSha),
       ]),
     ];
     // Heads a lead-only resolution of a conflict carried from, and any whose
@@ -2983,6 +3049,7 @@ export class Automation {
       statuses,
       gate,
       signOffs,
+      hostCheck,
       sameDiffAs,
       carriedFrom,
       leadRechecks: resolution.rechecks ? decision.lead : null,

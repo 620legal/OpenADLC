@@ -76,6 +76,7 @@ import { stageAfterIntake, type StageHandoff } from './stage-handoff.js';
 import { retakeLease, SendBack } from './send-back.js';
 import { chooseIssueText, editNotTaken } from './vouched-text.js';
 import { workflowFile, type DeployPipeline, type RevertOutcome } from './deploy-pipeline.js';
+import { crewApprovedHead, type HostCheckService } from './host-check-service.js';
 import { releaseOf, type GitHubRelease } from './release-shipping.js';
 import type { DeliveryKnowledge } from './delivery-rules.js';
 import { askPeopleAgain, awaitPeople, BotBusyError, BuilderWorkingError, crewReviewsOn, REVERT_BRANCH_PREFIX, REVIEW_START_REFUSED, reviewStartLock, SubjectClosedError, type TaskService } from './task-service.js';
@@ -309,6 +310,13 @@ export class Webhooks {
   /** A merged change's way to production by its repository's rules; see `deploy-pipeline.ts`. */
   private pipeline: DeployPipeline | null = null;
   private delivery: DeliveryKnowledge | null = null;
+
+  /** A repository's host check (`host-check-service.ts`); set once at start-up (`main.ts`), absent, none is asked for. */
+  private hostChecks: Pick<HostCheckService, 'request' | 'cancel'> | null = null;
+
+  useHostChecks(service: Pick<HostCheckService, 'request' | 'cancel'>): void {
+    this.hostChecks = service;
+  }
 
   /** Set once both exist (`main.ts`); absent, a merge starts no deploy here. */
   useDelivery(pipeline: DeployPipeline, delivery: DeliveryKnowledge): void {
@@ -2418,6 +2426,8 @@ export class Webhooks {
       await this.mergeLine.leave(repo.name, pr.number);
       await this.mergeLine.advance(repo.name).catch(() => null);
       await this.stopReviewsOf(repo.name, pr.number, pr.merged ? 'its pull request merged' : 'its pull request closed');
+      // A build of hours for a pull request nobody will merge holds every other one's.
+      await this.hostChecks?.cancel(repo, pr.number, pr.merged ? 'the pull request merged, so its run was stopped' : 'the pull request was closed, so its run was stopped').catch(() => undefined);
       // And whatever else is paused on it, a patch round's question too. Here,
       // before the returns below: a merge the unreviewed-merge hold keeps, or
       // one into another branch, still ends the work on this pull request.
@@ -2589,6 +2599,10 @@ export class Webhooks {
     // Whether this push is a conflict resolution round's, whichever review it gets.
     let roundPush = false;
     if (payload.action === 'synchronize') {
+      // A new head the crew has not approved: the old head's host check is
+      // for code that will not land. One with the same diff carries its pass
+      // once the approvals count on it (`HostCheckService.request`).
+      await this.hostChecks?.cancel(repo, pr.number, `a newer head, ${pr.head.sha.slice(0, 7)}, was pushed, so this run was stopped`).catch(() => undefined);
       const before = String((payload as { before?: unknown }).before ?? '');
       const client = await asAutomation(this.automation['actors'], this.config);
       const base = pr.base?.ref ?? repo.defaultBranch ?? 'main';
@@ -3795,6 +3809,10 @@ export class Webhooks {
         reviews: async () =>
           crewReviewsOn(await client.listReviews(repoFullName, pr.number), { head: pr.head.sha, crew, repoFullName, prNumber: pr.number }),
       });
+      // The repository's host check, beside the person's card: it runs the
+      // pull request's own code on the machine, so only once the crew's
+      // reviews approve this head (docs/adr/0064).
+      if (this.hostChecks && !pr.draft && crewApprovedHead(standing)) await this.hostChecks.request(repo, pr.number, pr.head.sha, baseRef);
     }
 
     // The lead approved this diff while a blocking seat still asks for changes

@@ -470,6 +470,48 @@ export async function setTaskPostgres(repoId: string, setting: unknown | null): 
 }
 
 /**
+ * A repository's host check: the command hostd runs on the install's own
+ * machine as its own account, how long it may run, and whether the merge
+ * waits on its pass (`migrations/0168_host_check_runs.sql`). Null for none.
+ */
+export interface HostCheckSetting {
+  command: string;
+  timeoutMinutes: number;
+  required: boolean;
+}
+
+export async function getHostCheck(repoId: string): Promise<HostCheckSetting | null> {
+  const row = await queryOne<{ host_check_command: string | null; host_check_timeout_minutes: number; host_check_required: boolean }>(
+    'select host_check_command, host_check_timeout_minutes, host_check_required from repos where id = $1',
+    [repoId],
+  );
+  if (!row?.host_check_command) return null;
+  return { command: row.host_check_command, timeoutMinutes: row.host_check_timeout_minutes, required: row.host_check_required };
+}
+
+/**
+ * Replaces it; null takes it away. Only the bridge's admin route writes it
+ * (`PATCH /v1/repos/:name`), after checking it: the command must come from an
+ * admin, never from a file a pull request can change.
+ */
+export async function setHostCheck(repoId: string, setting: HostCheckSetting | null): Promise<void> {
+  if (setting === null) {
+    await query('update repos set host_check_command = null, updated_at = now() where id = $1', [repoId]);
+    return;
+  }
+  await query(
+    'update repos set host_check_command = $2, host_check_timeout_minutes = $3, host_check_required = $4, updated_at = now() where id = $1',
+    [repoId, setting.command, setting.timeoutMinutes, setting.required],
+  );
+}
+
+/** Whether any repository OpenADLC works in has a host check: the health check asks nothing of the machine otherwise. */
+export async function anyHostCheck(): Promise<boolean> {
+  const row = await queryOne<{ any: boolean }>(`select exists (select 1 from repos where host_check_command is not null and ${ACTIVE}) as any`);
+  return Boolean(row?.any);
+}
+
+/**
  * How a repository's production ships, as recorded when it was set up; see
  * `migrations/0047_repo_production_choice.sql`. `approval` is null while
  * nobody has been asked. It fills what the delivery rules leave out.

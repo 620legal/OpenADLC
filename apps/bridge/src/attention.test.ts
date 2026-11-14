@@ -609,6 +609,39 @@ describe('what needs a person', () => {
       });
     });
 
+    it('shows the host check of the head being approved, and none where the repository has none (#327)', async () => {
+      const { attentionItems } = await load();
+      const run = (headSha: string, state: string, extra: Record<string, unknown> = {}) => ({
+        id: `run-${headSha.slice(0, 4)}-${state}`,
+        runId: 'r',
+        repoId: 'repo-1',
+        repoName: 'openadlc-testbed',
+        repoFullName: 'janedoe/openadlc-testbed',
+        prNumber: 40,
+        headSha,
+        state,
+        carriedFrom: null,
+        command: 'make host-ci',
+        timeoutMinutes: 90,
+        exitCode: null,
+        durationMs: null,
+        logTail: null,
+        reason: null,
+        startedAt: minutesAgo(12),
+        finishedAt: null,
+        ...extra,
+      });
+      const shown = (runs: ReturnType<typeof run>[]) =>
+        attentionItems({ ...base, personAwaits: [awaited(minutesAgo(10))], hostChecks: new Map([['openadlc-testbed#40', runs as never]]) })[0]?.decision?.hostCheck;
+
+      expect(attentionItems({ ...base, personAwaits: [awaited(minutesAgo(10))] })[0]?.decision).not.toHaveProperty('hostCheck');
+      expect(shown([])).toMatchObject({ state: 'not_run', head: B, url: null });
+      expect(shown([run(B, 'running')])).toMatchObject({ state: 'running', startedAt: minutesAgo(12), url: `/host-checks/run-${B.slice(0, 4)}-running` });
+      expect(shown([run(B, 'failed', { logTail: 'error: no such module' })])).toMatchObject({ state: 'failed', logTail: 'error: no such module' });
+      // Another head's pass says nothing of this one.
+      expect(shown([run('c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00', 'passed')])).toMatchObject({ state: 'not_run' });
+    });
+
     it('is for information only when someone else opened it: they approve it on GitHub', async () => {
       const { attentionItems } = await load();
       const [item] = attentionItems({ ...base, personAwaits: [awaited(minutesAgo(10), { author: { login: 'sam', id: 7 } })] });

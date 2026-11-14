@@ -127,6 +127,16 @@ describe('how long make ci and make setup may run', () => {
   });
 });
 
+describe('the account a host check runs as', () => {
+  it('is openadlc-hostcheck when nothing says, and the install’s own when it does', () => {
+    delete process.env.OPENADLC_HOST_CHECK_ACCOUNT;
+    expect(loadHostdConfig().hostCheckAccount).toBe('openadlc-hostcheck');
+    process.env.OPENADLC_HOST_CHECK_ACCOUNT = ' builds2 ';
+    expect(loadHostdConfig().hostCheckAccount).toBe('builds2');
+    delete process.env.OPENADLC_HOST_CHECK_ACCOUNT;
+  });
+});
+
 describe('the install’s prices', () => {
   it('are read once from OPENADLC_CONFIG_ROOT, and a bad price stops hostd naming the file and the model', () => {
     const root = mkdtempSync(join(tmpdir(), 'openadlc-hostd-config-'));

@@ -341,6 +341,29 @@ describe('the bridge asking hostd for a task’s local CI', () => {
   });
 });
 
+describe('the bridge asking hostd for a host check', () => {
+  it('starts, reads and stops one with the install secret, naming the pull request by its full name', async () => {
+    const start = { runId: 'run-1', repo: 'acme/mac-app', pr: 7, head: 'a'.repeat(40), command: 'make host-ci', timeoutMinutes: 90, bot: 'atlas' };
+    answer = { status: 202, body: { run: { ...start, state: 'queued' } } };
+    await client.startHostCheck(start);
+    answer = { status: 200, body: { run: { ...start, state: 'running' } } };
+    await client.hostCheckRun('run-1');
+    answer = { status: 200, body: { cancelled: true } };
+    await expect(client.cancelHostCheck('acme/mac-app', 7)).resolves.toEqual({ cancelled: true });
+    answer = { status: 200, body: { probe: { ok: true, account: 'openadlc-hostcheck', uid: 502, home: '/Users/openadlc-hostcheck' } } };
+    await expect(client.hostCheckAccount()).resolves.toMatchObject({ probe: { ok: true } });
+
+    expect(asked.map((one) => `${one.method} ${one.url}`)).toEqual([
+      'POST /host-check/runs',
+      'GET /host-check/runs/run-1',
+      'DELETE /host-check/pulls/acme%2Fmac-app/7',
+      'GET /host-check/account',
+    ]);
+    expect(asked.every((one) => one.secret === SECRET)).toBe(true);
+    expect(JSON.parse(asked[0]?.body ?? '{}')).toEqual(start);
+  });
+});
+
 describe('starting an engine update on hostd', () => {
   it('sends how old a release must be, with the hold and the person asking', async () => {
     answer = { status: 202, body: { running: true, startedAt: '2026-10-04T10:00:00.000Z', joined: false, last: null } };

@@ -50,6 +50,7 @@ import type { StageHandoff } from './stage-handoff.js';
 import { sentBackReason } from './send-back.js';
 import { issueNumberFromBranch, parseRef, repoOfSubject } from './work.js';
 import type { Webhooks } from './webhooks.js';
+import type { HostCheckService } from './host-check-service.js';
 
 export const INTERNAL_SECRET_HEADER = 'x-openadlc-internal-secret';
 /** What a task's own session presents, in place of the install's secret. */
@@ -177,6 +178,8 @@ export function registerInternalApi(
     taskInbox?: Pick<TaskInbox, 'take' | 'release' | 'settle'> | null;
     /** What a paused builder's hold on its review seats does when it lapses (`pause-holds.ts`). Absent in tests that do not ask. */
     pauseHolds?: Pick<PauseHolds, 'paused' | 'forget'> | null;
+    /** Records what hostd reports of a repository's host check (`host-check-service.ts`). Absent, the route says so. */
+    hostChecks?: Pick<HostCheckService, 'record'> | null;
   },
 ): void {
   /**
@@ -1060,6 +1063,30 @@ export function registerInternalApi(
       payload: { task: task.id, sha: input.headSha, run: input.runId, exitCode: input.exitCode ?? null },
     }).catch(() => undefined);
     return { recorded: Boolean(recorded) };
+  });
+
+  /**
+   * A host check hostd ended, with the install's secret: the one way a host
+   * check's result is written, and what the merge reads (docs/adr/0064). The
+   * run is the one the bridge recorded when it asked for it; its repository,
+   * pull request and head are that row's, not the report's.
+   */
+  post('/internal/host-check', async ({ body }) => {
+    if (!deps.hostChecks) throw new HttpFailure(501, 'this bridge records no host checks');
+    const input = await body<{ runId?: unknown; state?: unknown; exitCode?: unknown; durationMs?: unknown; logTail?: unknown; reason?: unknown }>();
+    const states = ['passed', 'failed', 'cancelled', 'refused'] as const;
+    if (typeof input.runId !== 'string' || !input.runId || !states.includes(input.state as (typeof states)[number])) {
+      throw new HttpFailure(400, 'a host check result names its run and how it ended: passed, failed, cancelled or refused');
+    }
+    const recorded = await deps.hostChecks.record({
+      runId: input.runId,
+      state: input.state as (typeof states)[number],
+      exitCode: typeof input.exitCode === 'number' ? input.exitCode : null,
+      durationMs: typeof input.durationMs === 'number' ? Math.round(input.durationMs) : null,
+      logTail: typeof input.logTail === 'string' ? input.logTail : null,
+      reason: typeof input.reason === 'string' ? input.reason.slice(0, 2_000) : null,
+    });
+    return { recorded };
   });
 
   /**

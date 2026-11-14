@@ -567,10 +567,87 @@ export interface HeldMergeDecision {
   merge: { merge: true } | { merge: false; why: string };
   next: { merge: string; leave: string; discuss: string };
   prUrl: string | null;
+  /** The repository's host check on `head`. Absent where the repository has none, or from an older bridge. */
+  hostCheck?: HostCheckView;
   /** Whether the viewer may press Merge. Absent from a bridge that does not say: then they may not. */
   yours?: boolean;
   whyNot?: string;
   settingsUrl?: string;
+}
+
+/**
+ * A repository's host check on the head a card is about, as the bridge says
+ * it (#327, `host-check-service.ts`). `passed` with `carriedFrom` is a pass on
+ * an earlier head with the same changes.
+ */
+export interface HostCheckView {
+  state: 'passed' | 'failed' | 'running' | 'cancelled' | 'refused' | 'not_run';
+  head: string;
+  carriedFrom?: string;
+  /** Running: the elapsed time counts from it, on the client. */
+  startedAt?: string;
+  durationMs?: number;
+  /** Failed only: its last 40 lines. */
+  logTail?: string;
+  /** Not run, refused or cancelled: what to do, in words. */
+  reason?: string;
+  /** The run's log page, `/host-checks/<id>`; null when nothing ran. */
+  url: string | null;
+}
+
+/** A host check run with its log, as `GET /v1/host-checks/:id` answers it. */
+export interface HostCheckRun {
+  id: string;
+  runId: string;
+  repoName: string;
+  repoFullName: string;
+  prNumber: number;
+  headSha: string;
+  state: 'running' | 'passed' | 'failed' | 'cancelled' | 'refused' | 'lost' | 'carried';
+  carriedFrom: string | null;
+  command: string;
+  timeoutMinutes: number;
+  exitCode: number | null;
+  durationMs: number | null;
+  logTail: string | null;
+  reason: string | null;
+  startedAt: string;
+  finishedAt: string | null;
+}
+
+/** A repository's host check setting, an admin's: the command, its limit, and whether the merge waits on its pass. */
+export interface HostCheckSetting {
+  command: string;
+  timeoutMinutes: number;
+  required: boolean;
+}
+
+/**
+ * Sets a repository's host check, or takes it away with null
+ * (`PATCH /v1/repos/:name`, an admin's). The bridge checks the command and the
+ * limit and audits the change; its refusal comes back as `error`.
+ */
+export async function saveHostCheck(repo: string, hostCheck: HostCheckSetting | null): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const response = await fetch(`${BRIDGE_URL}/v1/repos/${encodeURIComponent(repo)}`, {
+      method: 'PATCH',
+      cache: 'no-store',
+      headers: { 'content-type': 'application/json', ...(await identityHeaders()) },
+      body: JSON.stringify({ hostCheck }),
+    });
+    if (response.ok) return { ok: true };
+    const text = await response.text();
+    const said = (() => {
+      try {
+        return (JSON.parse(text) as { error?: string }).error ?? text;
+      } catch {
+        return text;
+      }
+    })();
+    return { ok: false, error: said.slice(0, 300) || `the bridge answered ${response.status}` };
+  } catch {
+    return { ok: false, error: 'the bridge is not answering, so the host check was not saved; try again' };
+  }
 }
 
 /** A promote held for a person, as its card describes it (`HeldPromoteDecision`). */
@@ -621,6 +698,12 @@ export interface HumanReviewDecision {
    * and absent from an older bridge: decided as before.
    */
   signOff?: 'author' | 'github' | null;
+  /**
+   * The repository's host check on the head being approved (#327), so the
+   * person approves knowing whether it builds on this machine. Absent where
+   * the repository has none, or from an older bridge.
+   */
+  hostCheck?: HostCheckView;
   /** Whether it is the viewer's to decide. Absent from a bridge that does not say: then it is not. */
   yours?: boolean;
   /** Why it is not the viewer's, and where to link an account when that is why. */
@@ -1571,6 +1654,7 @@ export const api = {
   notifications: () => get<NotificationSettingsView>('/v1/settings/notifications'),
   pushDevices: () => get<PushDevicesView>('/v1/me/push'),
   hosts: () => get<HostsView>('/v1/hosts'),
+  hostCheck: (id: string) => get<{ run: HostCheckRun }>(`/v1/host-checks/${encodeURIComponent(id)}`).then((body) => body.run),
   attention: () => get<{ items: AttentionItem[] }>('/v1/attention'),
   modelAccounts: () => get<{ accounts: ModelAccountRef[] }>('/v1/model-accounts'),
   githubAccounts: () => get<GitHubAccountsView>('/v1/github/identities'),
@@ -1632,6 +1716,8 @@ export const api = {
          * from an older bridge.
          */
         releaseEvents?: ReleaseEvents | null;
+        /** Its host check (#327), or null for none. Absent from an older bridge. */
+        hostCheck?: HostCheckSetting | null;
       }[];
       /** How many rounds a review runs before it stops and asks. Absent from an older bridge. */
       maxReviewRounds?: number | null;

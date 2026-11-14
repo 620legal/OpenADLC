@@ -1,4 +1,5 @@
-import { acknowledgements, audit as writeAudit, bots, issues, lastAudit, leases, listEventsOfType, listEventsOfTypeWith, modelAccounts, repos, requests, standingApprovals, tasks, threads, type HealthRow } from '@openadlc/db';
+import { acknowledgements, audit as writeAudit, bots, hostCheckRuns, issues, lastAudit, leases, listEventsOfType, listEventsOfTypeWith, modelAccounts, repos, requests, standingApprovals, tasks, threads, type HealthRow, type HostCheckRun } from '@openadlc/db';
+import { hostCheckCardView, type HostCheckCardView } from './host-check-service.js';
 import { rulesFileEditUrl } from './deploy-routes.js';
 import { REQUIRED_CHECKS } from './merge-line.js';
 import { readUnowned } from './unowned-issues.js';
@@ -284,6 +285,8 @@ export interface HeldMergeDecision {
   /** What each button does next. */
   next: { merge: string; leave: string; discuss: string };
   prUrl: string | null;
+  /** The repository's host check on the held head, as on a held approval's card (#327). Absent where it has none. */
+  hostCheck?: HostCheckCardView;
   /** For the viewer only (`GET /v1/attention`): whether they may press Merge, and why not. */
   yours?: boolean;
   whyNot?: string;
@@ -332,6 +335,12 @@ export interface HumanReviewDecision {
    * Null on a crew pull request, decided as before.
    */
   signOff: 'author' | 'github' | null;
+  /**
+   * The repository's host check on the head being approved (#327): passed,
+   * failed with its tail, running, or not run with why. Absent where the
+   * repository has none; an older console ignores it.
+   */
+  hostCheck?: HostCheckCardView;
   /** For the viewer only (`GET /v1/attention`): whether the decision is theirs to make. */
   yours?: boolean;
   /** For the viewer only, when it is not theirs: why, and where to link an account when that is why. */
@@ -678,6 +687,12 @@ export interface AttentionInput extends WaitFacts {
    * (`REVIEW_SUBMITTED_ON`'s event id): a new one brings the card back.
    */
   heldMergeReviews?: ReadonlyMap<string, number | null>;
+  /**
+   * The runs of each pull request's host check, newest first, by `repo#pr`,
+   * for a repository that has one (#327): a held approval's card and a held
+   * merge's say how the head they are about fared. Absent, none has one.
+   */
+  hostChecks?: ReadonlyMap<string, readonly HostCheckRun[]>;
   /**
    * The people asked to approve a pull request again (`PERSON_ASKED_AGAIN`),
    * and the reviews people submitted (`REVIEW_SUBMITTED_ON`), in the window.
@@ -1495,6 +1510,7 @@ export function attentionItems(given: AttentionInput): AttentionItem[] {
           discuss: 'Sends your message to the lead reviewer, or the builder, who answers on the pull request. It stays held.',
         },
         prUrl: url,
+        ...hostCheckOn(input, ref, head),
       },
     });
   }
@@ -1596,6 +1612,7 @@ export function attentionItems(given: AttentionInput): AttentionItem[] {
         whyWaits: `The lead approved ${wait.head.slice(0, 7)}. It changes ${changesFor(AS_THEY.them)}, so OpenADLC does not merge it until they approve it.${how.they}`,
         reviews: wait.reviews,
         signOff,
+        ...hostCheckOn(input, ref, wait.head),
       }),
     });
   }
@@ -3053,6 +3070,28 @@ export async function readAttention(now: Date, deps: AttentionDeps = {}): Promis
       if (seen.has(`merge:${ref}`)) heldMergeReviews.set(ref, await reviewOf(ref).catch(() => null));
     }),
   );
+  // The host check of each pull request a person is asked to approve or the
+  // line holds, for its card (#327): read only for a repository that has one,
+  // and a read that fails shows none rather than lose the list.
+  const hostChecks = new Map<string, readonly HostCheckRun[]>();
+  const awaitedPulls = personAwaits.flatMap((event) => {
+    const payload = event.payload as { repo?: unknown; pr?: unknown } | null;
+    return typeof payload?.repo === 'string' && typeof payload.pr === 'number' ? [{ repo: payload.repo, pr: payload.pr }] : [];
+  });
+  const pullsShown = new Map([...heldMerges.map((held) => ({ repo: held.repo, pr: held.prNumber })), ...awaitedPulls].map((one) => [`${one.repo}#${one.pr}`, one]));
+  if (pullsShown.size > 0) {
+    const settingOf = new Map<string, Promise<boolean>>();
+    await Promise.all(
+      [...pullsShown].map(async ([ref, { repo: name, pr }]) => {
+        const repo = repoList.find((one) => one.name === name);
+        if (!repo) return;
+        if (!settingOf.has(repo.id)) settingOf.set(repo.id, (async () => (await repos.getHostCheck(repo.id)) !== null)().catch(() => false));
+        if (!(await settingOf.get(repo.id))) return;
+        const runs = await (async () => hostCheckRuns.forPull(repo.id, pr))().catch(() => null);
+        if (runs) hostChecks.set(ref, runs);
+      }),
+    );
+  }
   // Which repositories of a deploy or QA task that did not finish ship by
   // merging. Asked only for those, and an answer that could not be had keeps
   // the card, as the deploy path does.
@@ -3102,6 +3141,7 @@ export async function readAttention(now: Date, deps: AttentionDeps = {}): Promis
     heldPromotes,
     mergeRefusals,
     heldMergeReviews,
+    ...(hostChecks.size > 0 ? { hostChecks } : {}),
     health: checks,
     planChanges,
     standing,
@@ -3297,6 +3337,16 @@ export function outcomeOf(body: string | null | undefined): string | null {
 }
 
 /** What a held Human-review approval's card says, for `approval:…` and `approve-again:…` alike. */
+/**
+ * The host check a card shows for the head it is about, as a field to spread:
+ * empty for a pull request whose repository has none (`AttentionInput.hostChecks`),
+ * or a held merge whose head was not recorded.
+ */
+function hostCheckOn(input: Pick<AttentionInput, 'hostChecks'>, ref: string, head: string | null): { hostCheck?: HostCheckCardView } {
+  const runs = input.hostChecks?.get(ref);
+  return runs && head ? { hostCheck: hostCheckCardView(runs, head) } : {};
+}
+
 function heldDecision(input: {
   repo: string;
   pr: number;
@@ -3308,10 +3358,12 @@ function heldDecision(input: {
   whyWaits: string;
   reviews: PersonAwaitReview[] | null;
   signOff?: HumanReviewDecision['signOff'];
+  hostCheck?: HostCheckCardView;
 }): HumanReviewDecision {
   const short = input.head.slice(0, 7);
   const signOff = input.signOff ?? null;
   return {
+    ...(input.hostCheck ? { hostCheck: input.hostCheck } : {}),
     repo: input.repo,
     pr: input.pr,
     head: input.head,

@@ -1,10 +1,10 @@
 import { availableParallelism, totalmem } from 'node:os';
 import { join } from 'node:path';
 import { bots, closePool, hosts, modelAccounts, repos, settings, tasks, waitForDatabase } from '@openadlc/db';
-import { getSecretStore, internalSecretRef } from '@openadlc/github';
+import { getSecretStore, internalSecretRef, openadlcHome } from '@openadlc/github';
 import { parseEgressHosts } from '@openadlc/shared';
 import { AttachTokens } from './attach-tokens.js';
-import { DEFAULT_LOCAL_CI_TIMEOUT_MINUTES, loadHostdConfig } from './config.js';
+import { DEFAULT_HOST_CHECK_ACCOUNT, DEFAULT_LOCAL_CI_TIMEOUT_MINUTES, loadHostdConfig } from './config.js';
 import { TerminalGateway } from './terminal-gateway.js';
 import { DockerDriver, docker } from './drivers/docker.js';
 import { EgressList, EgressProbe, egressProxyToAsk } from './egress.js';
@@ -21,6 +21,8 @@ import { WarmPool } from './warm-pool.js';
 import { repoKeyOf } from './drivers/base-env.js';
 import { TaskRunner } from './task-runner.js';
 import { LocalCi, bridgeReporter } from './local-ci.js';
+import { HostChecks, hostCheckReporter } from './host-check.js';
+import { gitAuthEnv } from './worktree.js';
 import { TokenClient } from './token-client.js';
 
 async function main(): Promise<void> {
@@ -246,6 +248,22 @@ async function main(): Promise<void> {
     (config.localCiTimeoutMinutes ?? DEFAULT_LOCAL_CI_TIMEOUT_MINUTES) * 60_000,
   );
 
+  // A repository's host check, as an account of its own and outside every
+  // container (`host-check.ts`). The token only fetches the head into hostd's
+  // own mirror; the account is given the code as a bundle, never the token.
+  const hostChecks = new HostChecks({
+    account: config.hostCheckAccount ?? DEFAULT_HOST_CHECK_ACCOUNT,
+    installId: config.installId ?? 'default',
+    openadlcHome: openadlcHome(),
+    mirrorRoot: join(config.workRoot, 'host-check'),
+    remote: (repoFullName) =>
+      process.env[`OPENADLC_REMOTE_${repoFullName.replace(/[^A-Za-z0-9]/g, '_').toUpperCase()}`] ||
+      process.env.OPENADLC_SCRIPTED_REPO_PATH ||
+      `https://github.com/${repoFullName}.git`,
+    fetchAuth: async (bot, repoFullName, remote) => (bot ? gitAuthEnv(remote, (await tokens.tokenForTask(bot, repoFullName)).token) : {}),
+    report: hostCheckReporter(config.bridgeUrl, secretStore),
+  });
+
   const attachTokens = new AttachTokens();
   // The file a cloud host's unit starts hostd's image from, which the
   // bridge's self-update moves it on by; none on a laptop or under compose.
@@ -297,6 +315,7 @@ async function main(): Promise<void> {
     logins,
     engineUpdates,
     localCi,
+    hostChecks,
     ...(restartOntoImage ? { restartOntoImage } : {}),
     egress: { probe: new EgressProbe(egressProxyToAsk()), list: egressList },
     ...(databases ? { taskDatabases: databases } : {}),

@@ -67,6 +67,7 @@ import { pushEgressCheck, reachHost } from './checks/push-egress.js';
 import { sleptCheck } from './checks/slept.js';
 import { taskDatabaseCheck } from './checks/task-database.js';
 import { defaultLoginItemReader, loginItemCheck, type LoginItemReader } from './checks/login-item.js';
+import { hostCheckAccountCheck } from './checks/host-check-account.js';
 import { SLEPT_EVENT, type KeepAwake } from '../keep-awake.js';
 import { effectiveDelivery, type DeliveryKnowledge } from '../delivery-rules.js';
 import type { HealthCheck } from './types.js';
@@ -437,6 +438,12 @@ export function defaultChecks(wiring: HealthWiring): HealthCheck[] {
       available: () => wiring.keepAwake?.state().available ?? false,
     }),
     loginItemCheck(wiring.loginItem ?? defaultLoginItemReader()),
+    // The account a repository's host check runs as, asked of hostd only while
+    // some repository has one (#327, docs/adr/0064).
+    hostCheckAccountCheck({
+      wanted: () => repos.anyHostCheck(),
+      probe: async () => (await hostd.hostCheckAccount()).probe,
+    }),
   ];
 }
 
