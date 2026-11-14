@@ -3242,9 +3242,11 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
    * How a repository's production ships, chosen in repository setup:
    * automatically after a soak on testing, or after a named person approves.
    * Recorded on the repository (`repos.production_*`), it fills what the
-   * delivery rules leave out. `reviewers` names people: nobody, a crew
-   * account or the organization is refused, since production would then be
-   * written for nobody, for a bot, or for an account that cannot review.
+   * delivery rules leave out. `reviewers` names people: nobody or a crew
+   * account is refused, and so is the owner's login when the owner is an
+   * organization, since production would then be written for nobody, for a
+   * bot, or for an account that cannot review. A person's account's owner is
+   * a person, and may approve.
    */
   router.post('/v1/repo-setup/production', async ({ body, identity }) => {
     const input = await body<{ repo?: unknown; approval?: unknown; soakMinutes?: unknown; reviewers?: unknown }>();
@@ -3278,7 +3280,17 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
       if (bot) throw new HttpFailure(400, `@${bot} is one of the crew's accounts, and a bot never approves a deploy. Name a person`);
       const organization = ((await effectiveConfig(config).catch(() => null))?.organization ?? '').toLowerCase();
       const org = organization ? reviewers.find((login) => login.toLowerCase() === organization) : undefined;
-      if (org) throw new HttpFailure(400, `@${org} is the organization, which cannot review a deployment. Name a person in it`);
+      // `organization` holds the owner's login whatever kind of account it is.
+      // On a person's account the owner is usually the only person there, so
+      // refusing every owner left such an install with no way to choose this.
+      // Refused only when GitHub says it is an organization; an unknown type is
+      // saved, and the environment check reports a reviewer GitHub cannot hold.
+      if (org) {
+        const type = (await deps.appReach?.accountType(org).catch(() => null)) ?? null;
+        if (type === 'Organization') {
+          throw new HttpFailure(400, `@${org} is the organization, which cannot review a deployment. Name a person in it`);
+        }
+      }
     }
 
     const choice = { approval, soakMinutes, reviewers: approval === 'reviewers' ? reviewers : [] } as const;
