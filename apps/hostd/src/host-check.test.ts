@@ -20,7 +20,9 @@ const OK: ProcessResult = { code: 0, stdout: '', stderr: '' };
  * and the account is as `fit` says. The long command runs until `finish` is
  * called for it, or it is signalled.
  */
-function machine(fit: { uid?: string; sudo?: boolean; readable?: string[] } = {}) {
+function machine(fit: { uid?: string; sudo?: boolean; readable?: string[]; ignoresTerm?: boolean } = {}) {
+  /** Starts and signals in the order they happened; a signal goes to the whole account, like `kill -1` as it. */
+  const events: string[] = [];
   const ran: { argv: string[]; env?: Record<string, string> }[] = [];
   const piped: { from: { argv: string[]; env?: Record<string, string> }; to: { argv: string[] } }[] = [];
   const started: { argv: string[]; signals: string[]; finish: (code: number) => void; output: (text: string) => void }[] = [];
@@ -58,17 +60,20 @@ function machine(fit: { uid?: string; sudo?: boolean; readable?: string[] } = {}
       });
       const entry = { argv, signals: [] as string[], finish, output: onOutput };
       started.push(entry);
+      events.push(`start ${started.length}`);
       return {
         exited,
         async signalAll(signal) {
           entry.signals.push(signal);
-          if (signal === 'TERM') finish(143);
+          events.push(`${signal} from ${started.indexOf(entry) + 1}`);
+          if (signal === 'TERM' && !fit.ignoresTerm) finish(143);
+          if (signal === 'KILL') finish(137);
         },
       };
     },
   };
   const lastFetched = new Map<string, string>();
-  return { processes, ran, piped, started };
+  return { processes, ran, piped, started, events };
 }
 
 function checks(world: ReturnType<typeof machine>, extra: Partial<ConstructorParameters<typeof HostChecks>[0]> = {}) {
@@ -196,6 +201,36 @@ describe('one host check at a time', () => {
     expect(world.started[0]?.signals).toEqual(['TERM', 'KILL']);
     expect(reports.find((run) => run.runId === 'run-1')).toMatchObject({ state: 'cancelled', reason: expect.stringContaining(NEXT.slice(0, 7)) });
     expect(hostChecks.get('run-2')?.state).toBe('running');
+  });
+
+  it('sends the stopped run’s KILL before the next run starts, so it never reaches the next build', async () => {
+    const world = machine();
+    const { hostChecks, reports } = checks(world, { killAfterMs: 60_000 });
+    hostChecks.start(START);
+    await untilStarted(world, 1);
+    hostChecks.start({ ...START, runId: 'run-2', head: NEXT });
+    await untilStarted(world, 2);
+    // The build obeyed TERM, so its KILL went at once rather than a minute later, into run-2.
+    expect(world.events).toEqual(['start 1', 'TERM from 1', 'KILL from 1', 'start 2']);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(world.started[1]?.signals).toEqual([]);
+    expect(world.events.at(-1)).toBe('start 2');
+    world.started[1]?.finish(0);
+    await hostChecks.settled();
+    expect(reports.find((run) => run.runId === 'run-2')).toMatchObject({ state: 'passed' });
+  });
+
+  it('waits for the KILL of a build that ignores TERM before the next run starts', async () => {
+    const world = machine({ ignoresTerm: true });
+    const { hostChecks, reports } = checks(world, { killAfterMs: 50 });
+    hostChecks.start(START);
+    await untilStarted(world, 1);
+    hostChecks.start({ ...START, runId: 'run-2', head: NEXT });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(world.started).toHaveLength(1);
+    await untilStarted(world, 2);
+    expect(world.events).toEqual(['start 1', 'TERM from 1', 'KILL from 1', 'start 2']);
+    expect(reports.find((run) => run.runId === 'run-1')).toMatchObject({ state: 'cancelled', exitCode: 137 });
   });
 
   it('replaces a queued run of the same pull request rather than run an old head', async () => {

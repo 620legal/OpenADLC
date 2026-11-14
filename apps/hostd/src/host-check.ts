@@ -31,10 +31,14 @@ import { KILL_AFTER_MS } from './drivers/types.js';
  *   secret store or a task token reaches it.
  * - One run at a time on this hostd. A start for a pull request whose run is
  *   going cancels it, and a start queued for it is replaced.
- * - A cancel, or the time limit, sends TERM and then KILL after
- *   `KILL_AFTER_MS` to every process the account runs. The account runs
- *   nothing but host checks, one at a time, so that is exactly the run, and a
- *   daemon the build left in the background goes with it.
+ * - A cancel, or the time limit, sends TERM and then KILL to every process
+ *   the account runs: after `KILL_AFTER_MS`, or as soon as the command has
+ *   exited, whichever is first. The account runs nothing but host checks, one
+ *   at a time, so that is exactly the run, and a daemon the build left in the
+ *   background goes with it. The run ends only once its KILL has been sent,
+ *   so the next run starts after it: a KILL still waiting when the next run
+ *   began reached that run's build too, being sent to the whole account, and
+ *   failed a head that never failed.
  *
  * No model runs it, so it spends nothing. What it printed reaches hostd
  * through a pipe, and its last `LOG_TAIL_BYTES` are reported to the bridge,
@@ -163,6 +167,8 @@ export interface HostCheckDeps {
 }
 
 type Held = HostCheckRun & { stop?: (reason: string, state: 'cancelled' | 'failed') => void };
+type Stopped = { reason: string; state: 'cancelled' | 'failed' };
+type Started = ReturnType<HostProcesses['start']>;
 
 export class HostChecks {
   private readonly runs = new Map<string, Held>();
@@ -305,14 +311,19 @@ export class HostChecks {
   private async execute(run: Held): Promise<void> {
     run.state = 'running';
     const started = this.now();
-    let stopped: { reason: string; state: 'cancelled' | 'failed' } | null = null;
-    let signal: ((which: 'TERM' | 'KILL') => Promise<void>) | null = null;
-    const stop = (reason: string, state: 'cancelled' | 'failed') => {
-      if (stopped) return;
-      stopped = { reason, state };
-      if (signal) void this.kill(signal);
+    const halt: { stopped: Stopped | null; child: Started | null; killing: Promise<void> | null } = { stopped: null, child: null, killing: null };
+    const terminate = () => {
+      if (halt.stopped && halt.child && !halt.killing) halt.killing = this.kill(halt.child);
+    };
+    const stop = (reason: string, state: Stopped['state']) => {
+      if (halt.stopped) return;
+      halt.stopped = { reason, state };
+      terminate();
     };
     run.stop = stop;
+    // Read through a call: TypeScript keeps a property narrowed across an
+    // await, though the closures above may have set it meanwhile.
+    const stoppedNow = (): Stopped | null => halt.stopped;
     const limit = setTimeout(() => {
       const minutes = run.timeoutMinutes;
       stop(`it did not finish within ${minutes} minute${minutes === 1 ? '' : 's'}, so it was stopped: find what keeps it running, or raise the repository's host check time limit`, 'failed');
@@ -321,20 +332,23 @@ export class HostChecks {
     try {
       const fit = await this.probe();
       if (!fit.ok) return this.end(run, 'refused', { reason: `${fit.detail}. ${ACCOUNT_FIX}` }, true);
-      if (stopped) return this.end(run, (stopped as { state: 'cancelled' | 'failed' }).state, { reason: (stopped as { reason: string }).reason }, true);
+      if (halt.stopped) return this.end(run, halt.stopped.state, { reason: halt.stopped.reason }, true);
 
       const folder = await this.prepare(run, fit.home);
-      if (stopped) return this.end(run, (stopped as { state: 'cancelled' | 'failed' }).state, { reason: (stopped as { reason: string }).reason }, true);
+      const early = stoppedNow();
+      if (early) return this.end(run, early.state, { reason: early.reason }, true);
 
       let tail = '';
       const child = this.processes.start(this.asAccount(['/bin/sh', '-c', 'cd "$1" && shift && exec /bin/sh -c "$1"', 'sh', folder, run.command], fit.home), (chunk) => {
         tail = `${tail}${chunk}`.slice(-LOG_TAIL_BYTES);
       });
-      signal = (which) => child.signalAll(which);
-      if (stopped) void this.kill(signal);
+      halt.child = child;
+      terminate();
       const code = await child.exited;
+      // The KILL goes before the run ends, so it cannot reach the next one.
+      if (halt.killing) await halt.killing;
       const durationMs = this.now() - started;
-      const end = stopped as { reason: string; state: 'cancelled' | 'failed' } | null;
+      const end = stoppedNow();
       if (end) return this.end(run, end.state, { exitCode: code, durationMs, logTail: tail, reason: end.reason }, true);
       return this.end(run, code === 0 ? 'passed' : 'failed', { exitCode: code, durationMs, logTail: tail }, true);
     } catch (error) {
@@ -342,14 +356,22 @@ export class HostChecks {
     } finally {
       clearTimeout(limit);
       delete run.stop;
+      if (halt.killing) await halt.killing;
     }
   }
 
-  /** TERM to everything the account runs, then KILL once `killAfterMs` has passed. */
-  private async kill(signal: (which: 'TERM' | 'KILL') => Promise<void>): Promise<void> {
-    await signal('TERM').catch(() => undefined);
-    await new Promise((resolve) => setTimeout(resolve, this.deps.killAfterMs ?? KILL_AFTER_MS));
-    await signal('KILL').catch(() => undefined);
+  /**
+   * TERM to everything the account runs, then KILL once `killAfterMs` has
+   * passed or the command has exited, whichever is first: what the build left
+   * behind is killed at once, and nothing waits on a timer that could outlast
+   * the run.
+   */
+  private async kill(child: Started): Promise<void> {
+    await child.signalAll('TERM').catch(() => undefined);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([child.exited, new Promise((resolve) => (timer = setTimeout(resolve, this.deps.killAfterMs ?? KILL_AFTER_MS)))]);
+    clearTimeout(timer);
+    await child.signalAll('KILL').catch(() => undefined);
   }
 
   /**

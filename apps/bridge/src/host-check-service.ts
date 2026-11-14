@@ -26,6 +26,10 @@ import type { HostCheckAccountProbe, HostdClient } from './hostd-client.js';
  *   token could set a status.
  * - `sweep` ends a `running` row hostd no longer holds, as after its restart,
  *   as `lost`; the next `request` runs it again.
+ * - A head whose run `failed` is not run again: a build can take hours, and
+ *   one that failed holds the merge until a new head is pushed. What kept it
+ *   from running at all — the account, hostd — ends as `refused` or `lost`,
+ *   which are asked for again.
  */
 
 /** A run refused for something other than the account is tried again no sooner than this. */
