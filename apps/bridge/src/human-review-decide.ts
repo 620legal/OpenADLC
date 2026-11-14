@@ -66,13 +66,15 @@ export interface HumanReviewDeps {
   approves(githubUserId: number): Promise<boolean>;
   /**
    * The author's sign-off of their own pull request (`person_sign_offs`), the
-   * only writer of it. `record` answers the row already there for a head and
-   * account with `created: false`; `remove` is only for a row whose audit
-   * could not be written.
+   * only writer of it, written with its audit entry in one transaction: both
+   * land or neither does. It answers the row already there for a head and
+   * account with `created: false`.
    */
   signOff: {
-    record(input: { repo: string; pr: number; head: string; githubUserId: number; githubLogin: string; identity: string }): Promise<{ id: string; created: boolean }>;
-    remove(id: string): Promise<void>;
+    record(
+      input: { repo: string; pr: number; head: string; githubUserId: number; githubLogin: string; identity: string },
+      audit: { actor: string; action: string; target: string; payload: Record<string, unknown> },
+    ): Promise<{ id: string; created: boolean }>;
   };
   /** Posts a review with the person's token; the token goes nowhere else. */
   postReviewAsPerson(accessToken: string, fullName: string, number: number, review: { commitId: string; body: string }): Promise<{ id: number; htmlUrl: string }>;
@@ -320,12 +322,11 @@ export class HumanReviewDecisions {
    * The author's sign-off, once their sign-in proved it is them: recorded,
    * never posted, with nothing done with their token. The account that
    * approved the code is the pull request's author as GitHub says now, and
-   * People has Approves on for it. The row is written before its audit row,
-   * and taken back when that cannot be written: an approval the gate counts
-   * that nobody can audit is worse than asking the person twice. Between the
-   * two writes a sweep may read the row; that window is accepted, because the
-   * merge re-reads its facts before landing and a row taken back counts no
-   * more from then on.
+   * People has Approves on for it. The row and its audit entry are written in
+   * one transaction, so there is never a sign-off the gate counts that nobody
+   * can trace: written one after the other, an audit that failed left the row
+   * to be taken back by a second write, and when that failed too the sign-off
+   * counted with no audit entry (#322).
    */
   private async signOff(input: {
     repo: PullRepo;
@@ -341,25 +342,17 @@ export class HumanReviewDecisions {
       throw new Error(`@${viewer.login} did not open pull request #${number}, so the console cannot sign it off for you; approve it on GitHub. Nothing was recorded.`);
     }
     if (!(await this.deps.approves(viewer.id).catch(() => false))) throw new Error(`${APPROVES_OFF} Nothing was recorded.`);
-    const signed = await this.deps.signOff.record({ repo: repo.name, pr: number, head, githubUserId: viewer.id, githubLogin: viewer.login, identity });
+    const audit = {
+      actor: identity,
+      action: 'pull.human_review_signed_off',
+      target: decisionTarget(repo.name, number),
+      payload: { repo: repo.name, pr: number, login: viewer.login, awaited: login, githubUserId: viewer.id, head, by: identity },
+    };
     try {
-      await this.deps.audit({
-        actor: identity,
-        action: 'pull.human_review_signed_off',
-        target: decisionTarget(repo.name, number),
-        payload: { repo: repo.name, pr: number, login: viewer.login, awaited: login, githubUserId: viewer.id, head, by: identity },
-      });
+      await this.deps.signOff.record({ repo: repo.name, pr: number, head, githubUserId: viewer.id, githubLogin: viewer.login, identity }, audit);
     } catch (error) {
-      // One already there was audited when it was written, and stays.
-      if (signed.created) {
-        await this.deps.signOff
-          .remove(signed.id)
-          .catch((removing: unknown) =>
-            this.warn(`[bridge] @${viewer.login}'s sign-off of ${repo.name}#${number} at ${short(head)} was not audited and could not be taken back: ${removing instanceof Error ? removing.message : removing}`),
-          );
-      }
-      this.warn(`[bridge] @${viewer.login}'s sign-off of ${repo.name}#${number} at ${short(head)} was not audited, so it was not kept: ${error instanceof Error ? error.message : error}`);
-      throw new Error('OpenADLC could not write your sign-off to its audit log, so it does not count. Nothing was posted; sign off again in a moment.');
+      this.warn(`[bridge] @${viewer.login}'s sign-off of ${repo.name}#${number} at ${short(head)} was not recorded: ${error instanceof Error ? error.message : error}`);
+      throw new Error('OpenADLC could not record your sign-off and its audit entry, so it does not count. Nothing was posted; sign off again in a moment.');
     }
     return { commentUrl: pull.url };
   }

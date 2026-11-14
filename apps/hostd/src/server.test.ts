@@ -89,7 +89,7 @@ function logins() {
 
 async function start(
   service: ReturnType<typeof logins> | undefined,
-  parts: { runner?: object; driver?: object } = {},
+  parts: { runner?: object; driver?: object; taskDatabases?: object } = {},
 ) {
   const { createHostdServer } = await import('./server.js');
   const { RegistryCredentials } = await import('./registry.js');
@@ -104,6 +104,7 @@ async function start(
     perTaskCapUsd: 10,
     secret: async () => INSTALL_SECRET,
     logins: service as never,
+    ...(parts.taskDatabases ? { taskDatabases: parts.taskDatabases as never } : {}),
   });
 
   await new Promise<void>((resolve) => http.listen(0, '127.0.0.1', resolve));
@@ -565,5 +566,58 @@ describe('a review task’s part and lens, from the bridge', () => {
 
     expect(runner.start.mock.calls[0]?.[0]).not.toHaveProperty('reviewLens');
     expect(runner.resume).toHaveBeenCalledWith('task-1', [], undefined, undefined, 'advisory', undefined);
+  });
+});
+
+describe('how the task database server is, through hostd', () => {
+  function databases(state: string, extra: Record<string, unknown> = {}) {
+    return {
+      status: vi.fn(async () => ({ state, container: 'second-taskdb', port: 48433, ...extra })),
+      ensure: vi.fn(async () => undefined),
+    };
+  }
+
+  it('is refused to a caller without the install’s secret, and asks nothing of Docker', async () => {
+    const service = databases('idle');
+    server = await start(undefined, { taskDatabases: service });
+
+    expect((await server.call('GET', '/task-database', {})).status).toBe(401);
+    expect(service.status).not.toHaveBeenCalled();
+    expect(service.ensure).not.toHaveBeenCalled();
+  });
+
+  it('answers the server’s status, and starts one nothing has asked for yet', async () => {
+    const service = databases('idle');
+    server = await start(undefined, { taskDatabases: service });
+
+    const answer = await server.call('GET', '/task-database');
+
+    expect(answer).toEqual({ status: 200, body: { state: 'idle', container: 'second-taskdb', port: 48433 } });
+    expect(service.ensure).toHaveBeenCalledOnce();
+  });
+
+  it('answers a failure as one, with its holders, and tries the server again', async () => {
+    const service = databases('failed', { error: 'port is already allocated', holders: ['openadlc-taskdb (install default)'] });
+    service.ensure.mockRejectedValue(new Error('port is already allocated'));
+    server = await start(undefined, { taskDatabases: service });
+
+    const answer = await server.call('GET', '/task-database');
+
+    expect(answer.body).toMatchObject({ state: 'failed', holders: ['openadlc-taskdb (install default)'] });
+    expect(service.ensure).toHaveBeenCalledOnce();
+  });
+
+  it('leaves a running server alone', async () => {
+    const service = databases('running');
+    server = await start(undefined, { taskDatabases: service });
+
+    expect((await server.call('GET', '/task-database')).body).toMatchObject({ state: 'running' });
+    expect(service.ensure).not.toHaveBeenCalled();
+  });
+
+  it('is none under the local driver, which has no server', async () => {
+    server = await start(undefined);
+
+    expect(await server.call('GET', '/task-database')).toEqual({ status: 200, body: { state: 'none' } });
   });
 });

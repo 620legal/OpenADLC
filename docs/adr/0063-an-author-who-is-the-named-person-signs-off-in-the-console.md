@@ -42,12 +42,11 @@ For an author who is the named person, nothing else can count.
 
   Two checks are added: GitHub says that account opened the pull request, and
   People has Approves on for it. Nothing is posted to GitHub. The bridge writes
-  one row in `person_sign_offs`, then audits it as
-  `pull.human_review_signed_off`. If that audit row cannot be written, the
-  sign-off row is deleted and the person is asked to try again. A sweep that
-  reads the row in the moment between the two writes may count it; that is
-  accepted, since the merge re-reads its facts before it lands. The console's
-  approve route is the only writer of that table.
+  one row in `person_sign_offs` and its audit entry,
+  `pull.human_review_signed_off`, in one transaction: both land or neither
+  does, so there is never a sign-off the gate counts that nobody can trace. If
+  they cannot be written, nothing counts and the person is asked to try again.
+  The console's approve route is the only writer of that table.
 - **The gate and the merge count it, for that author only.** A sign-off row
   counts only when its account id is the pull request author's, and the author
   is not a crew account. It counts as that author's approval for their own

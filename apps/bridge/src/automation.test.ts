@@ -4477,8 +4477,8 @@ describe('an author named for their own paths signs off in the console (#322)', 
   const B = '692cd1f88f3e45093ad9ba4e68e84d590af3b595';
   const JANE = 583231;
 
-  function replay(options: { sameDiff?: boolean; author?: { login: string; id: number } } = {}) {
-    world.crew = [{ id: 'b-lead', name: 'lead-reviewer', slot: 'lead-reviewer', role: 'review_lead', githubLogin: 'exampleco-lead' }];
+  function replay(options: { sameDiff?: boolean; author?: { login: string; id: number }; crew?: typeof world.crew; permission?: string } = {}) {
+    world.crew = [{ id: 'b-lead', name: 'lead-reviewer', slot: 'lead-reviewer', role: 'review_lead', githubLogin: 'exampleco-lead' }, ...(options.crew ?? [])];
     world.events = [];
     world.signOffs = [];
     const author = options.author ?? { login: 'janedoe', id: JANE };
@@ -4490,12 +4490,12 @@ describe('an author named for their own paths signs off in the console (#322)', 
       request: vi.fn(async (_method: string, path: string) => {
         if (path === '/repos/exampleco/app/pulls/120') return { user: author };
         if (path.startsWith('/users/')) return { login: path.slice('/users/'.length), type: 'User' };
-        if (path.includes('/collaborators/')) return { permission: 'write', role_name: 'write' };
+        if (path.includes('/collaborators/')) return { permission: options.permission ?? 'write', role_name: options.permission ?? 'write' };
         throw new Error(`no answer for ${path}`);
       }),
       listEveryPullFile: vi.fn(async () => ({ files: ['config/bots.yaml'], complete: true })),
       listReviews: vi.fn(async () => github.reviews.map((review) => ({ ...review }))),
-      permissionOf: vi.fn(async () => 'write'),
+      permissionOf: vi.fn(async () => options.permission ?? 'write'),
       readFileIfPresent: vi.fn(async () => null),
       listPullHistory: vi.fn(async () => []),
       checkRunsFor: vi.fn(async (_repo: string, sha: string) => [{ name: 'ci', status: 'completed', conclusion: 'success', app: 'github-actions', headSha: sha, suiteId: sha === A ? 1 : 2 }]),
@@ -4524,7 +4524,13 @@ describe('an author named for their own paths signs off in the console (#322)', 
     };
     const appGate = { standing: vi.fn(async () => ({ state: 'success', description: 'every requested review has been posted' })), appId: vi.fn(async () => 7) };
     const only = { ...config, review: reviewRulesSchema.parse({ reviewers: [{ seat: 'lead-reviewer', lens: 'lead', lead: true }] }) } as BridgeConfig;
-    const automation = new Automation(only, { asBot: vi.fn(async () => github), attribution } as never, appGate as never);
+    // Its own kept answers: the shared ones hold what an earlier test was told.
+    const automation = new Automation(only, { asBot: vi.fn(async () => github), attribution } as never, appGate as never, new ReviewerStandings());
+    // What GitHub says of @janedoe's access when review-gate asks, as
+    // `reviewerStandingOf` reads it from her permission on the repository.
+    if (options.permission === 'read') {
+      vi.spyOn(automation, 'askStanding').mockResolvedValue({ state: 'cannot-review', reason: 'they have read access to exampleco/app, and a review needs write' });
+    }
     const pull = () => ({
       number: 120,
       draft: false,
@@ -4601,6 +4607,27 @@ describe('an author named for their own paths signs off in the console (#322)', 
     const { standing, signOff } = replay({ author: { login: 'exampleco-lead', id: JANE } });
     signOff(A);
     expect((await standing({ login: 'exampleco-lead', id: JANE })).gate.state).toBe('pending');
+  });
+
+  it('counts nothing when the author named for the paths is a crew account, even with a row that matches it', async () => {
+    // @janedoe is a crew account here, and opened it: the row is hers, by
+    // login and by account id, and still is no person's sign-off.
+    const { decide, standing, signOff } = replay({ crew: [{ id: 'b-jane', name: 'builder', slot: 'builder', role: 'builder', githubLogin: 'janedoe' }] });
+    signOff(A);
+    expect((await standing({ login: 'janedoe', id: JANE })).gate).toEqual({ state: 'pending', description: 'waiting on @janedoe' });
+    expect(await standing()).toMatchObject({ gate: { state: 'pending' } });
+    expect(await decide()).toMatchObject({ land: false });
+  });
+
+  it('holds review-gate for an author who signed off but can no longer write to the repository', async () => {
+    const { decide, standing, signOff } = replay({ permission: 'read' });
+    signOff(A);
+    expect((await standing({ login: 'janedoe', id: JANE })).gate.state).not.toBe('success');
+    expect(await decide()).toMatchObject({ land: false });
+    // Not for want of a sign-off: the same row passes the gate with write access.
+    const writing = replay();
+    writing.signOff(A);
+    expect((await writing.standing({ login: 'janedoe', id: JANE })).gate.state).toBe('success');
   });
 
   it('counts it on a later head with the same diff, and asks again on a new diff', async () => {

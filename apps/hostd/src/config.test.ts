@@ -10,6 +10,20 @@ afterEach(() => {
   process.env = { ...saved };
 });
 
+describe('the port the task database server is published on', () => {
+  it('is OPENADLC_TASKDB_PORT, which `openadlc up` sets from ports.taskdb', () => {
+    process.env.OPENADLC_TASKDB_PORT = '48433';
+
+    expect(loadHostdConfig().taskdbPort).toBe(48433);
+  });
+
+  it('is 47433 when nothing sets it, as on the cloud host', () => {
+    delete process.env.OPENADLC_TASKDB_PORT;
+
+    expect(loadHostdConfig().taskdbPort).toBe(47433);
+  });
+});
+
 describe('where subscription logins live', () => {
   it('is under the install’s own home unless told otherwise', () => {
     delete process.env.OPENADLC_LOGIN_ROOT;

@@ -47,4 +47,10 @@ export const DEFAULT_PORTS = {
   bridge: 47311,
   hostd: 47312,
   postgres: 47432,
+  /**
+   * The host's task database server (hostd's `TaskDatabases`). Its own per
+   * install: two installs on one machine both asked Docker for 47433, and the
+   * second's server never started, so its tasks ran with no database.
+   */
+  taskdb: 47433,
 } as const;

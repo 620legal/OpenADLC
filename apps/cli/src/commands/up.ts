@@ -36,6 +36,7 @@ import {
   serviceEnv,
   setLoginItemChoice,
   storedDriver,
+  taskDatabasePort,
 } from '../install.js';
 import {
   isRunning,
@@ -164,6 +165,38 @@ export function databaseContainer(env: NodeJS.ProcessEnv = process.env): string 
   const install = env.OPENADLC_INSTALL_ID;
   if (!install || install === 'default') return 'openadlc-db';
   return `${env.OPENADLC_BOT_PREFIX || `${install}-`}db`;
+}
+
+/**
+ * The container hostd keeps the task database server in, as hostd names it
+ * (`apps/hostd/src/main.ts`): `<prefix>taskdb` for an install with its own
+ * prefix, `openadlc-taskdb` otherwise.
+ */
+export function taskDatabaseContainer(env: NodeJS.ProcessEnv = process.env): string {
+  const prefix = env.OPENADLC_BOT_PREFIX?.trim();
+  return prefix ? `${prefix}taskdb` : 'openadlc-taskdb';
+}
+
+/**
+ * Whether the task database port is free of every container but this
+ * install's own, said when it is not. A second install on one machine asked
+ * Docker for the first's 47433: its server never started, its tasks ran with
+ * no database, and `doctor` and `status` called it healthy. Only containers
+ * are looked for: hostd publishes on the gateway address, which `up` does
+ * not know, and the bridge's `task-database` check reports anything else
+ * holding the port with Docker's own words.
+ */
+export async function taskDatabasePortClear(
+  port: number,
+  env: NodeJS.ProcessEnv = process.env,
+  docker: DockerRun = runDocker,
+): Promise<boolean> {
+  const own = taskDatabaseContainer(env);
+  const others = (await containersPublishing(port, docker)).filter((name) => name !== own);
+  if (others.length === 0) return true;
+  ui.fail(`the task database port ${port} is published by ${others.join(', ')}, not this install's ${own}`);
+  ui.note(`set ports.taskdb in ${configPath()} to a free port, e.g. 48433, then run openadlc up again`);
+  return false;
 }
 
 /** One of a container's port bindings, as `docker inspect` gives it. */
@@ -1235,6 +1268,10 @@ export async function up(config: InstallConfig, options: UpOptions = {}): Promis
     ui.warn(`could not note this install in ${effective.repoRoot}/.openadlc: ${error instanceof Error ? error.message : error}`);
   }
 
+  // Said, and `up` exits non-zero, but the services still start: hostd
+  // without a task database still runs tasks, only without one.
+  const taskDatabaseBlocked = effective.driver === 'docker' && !(await taskDatabasePortClear(taskDatabasePort(effective), process.env));
+
   let refused = 0;
 
   for (const name of SERVICES) {
@@ -1294,6 +1331,9 @@ export async function up(config: InstallConfig, options: UpOptions = {}): Promis
   ui.plain();
   if (refused > 0) {
     ui.heading(`OpenADLC is partly up: ${refused} service(s) did not start`);
+    process.exitCode = 1;
+  } else if (taskDatabaseBlocked) {
+    ui.heading('OpenADLC is up, but its tasks get no database until ports.taskdb is moved');
     process.exitCode = 1;
   } else {
     ui.heading('OpenADLC is up');

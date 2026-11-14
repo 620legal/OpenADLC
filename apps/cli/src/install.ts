@@ -15,7 +15,12 @@ export interface InstallConfig {
   /** Client id of the OpenADLC GitHub App, with device flow enabled. */
   githubClientId: string;
   databaseUrl: string;
-  ports: { console: number; bridge: number; hostd: number; postgres: number };
+  /**
+   * `taskdb` is where hostd publishes the task database server. `loadConfig`
+   * always fills it; a config built in code without it reads the default
+   * (`taskDatabasePort`).
+   */
+  ports: { console: number; bridge: number; hostd: number; postgres: number; taskdb?: number };
   humans: string[];
   repoRoot: string;
   /** Where GitHub can reach this bridge, for the webhook. */
@@ -89,6 +94,7 @@ export function defaultConfig(repoRoot: string): InstallConfig {
       bridge: DEFAULT_PORTS.bridge,
       hostd: DEFAULT_PORTS.hostd,
       postgres: DEFAULT_PORTS.postgres,
+      taskdb: DEFAULT_PORTS.taskdb,
     },
     humans: [],
     repoRoot,
@@ -441,6 +447,11 @@ export function databaseConflictMessage(conflict: { shell: string; install: stri
   return `DATABASE_URL in this shell is ${conflict.shell}, but the install at ${home} uses ${conflict.install}. Run: unset DATABASE_URL`;
 }
 
+/** The task database server's host port: `ports.taskdb`, 47433 when a config has none. */
+export function taskDatabasePort(config: Pick<InstallConfig, 'ports'>): number {
+  return config.ports.taskdb ?? DEFAULT_PORTS.taskdb;
+}
+
 /** The environment every OpenADLC process is started with. */
 export function serviceEnv(config: InstallConfig): Record<string, string> {
   return {
@@ -453,6 +464,9 @@ export function serviceEnv(config: InstallConfig): Record<string, string> {
     OPENADLC_HOSTD_PORT: String(config.ports.hostd),
     OPENADLC_HOSTD_URL: `http://127.0.0.1:${config.ports.hostd}`,
     OPENADLC_CONSOLE_PORT: String(config.ports.console),
+    // Where hostd publishes the task database server, and what each task's
+    // DATABASE_URL names. Another install on this machine needs its own.
+    OPENADLC_TASKDB_PORT: String(taskDatabasePort(config)),
     OPENADLC_HOSTD_DRIVER: config.driver,
     // These four only when install.json has them, as the webhook secret below:
     // `openadlc github` tells an operator to export OPENADLC_HUMANS, and an
