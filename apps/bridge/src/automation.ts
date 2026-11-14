@@ -965,7 +965,7 @@ function whyBlocked(facts: MergeFacts): string {
     const listed = shown.map((commit) => (plain ? commit.sha.slice(0, 7) : `${commit.sha.slice(0, 7)}: ${nameInReason((commit.reason ?? 'unverified').replace(/_/g, ' '))}`));
     causes.push(
       `${which} ${plain ? 'not signed' : 'not verified as signed'} (${listed.join(', ')}${more}), and ${base} requires signed commits: ` +
-        `sign ${n === 1 ? 'it' : 'them'} and push again (a commit made in GitHub's web editor or through its API is signed by GitHub), or have the crew build it`,
+        `sign ${n === 1 ? 'it' : 'them'} and push again (GitHub signs a commit made in its web editor, or through its API as a GitHub App; not one made through its API with a person's or a bot account's token), or have the crew build it`,
     );
   }
 
@@ -3143,6 +3143,21 @@ export class Automation {
     const app = await this.appGate?.client(repoFullName).catch(() => null);
     if (!app) return null;
     return app.mergePullRequest(repoFullName, prNumber, headSha);
+  }
+
+  /**
+   * Writes a commit object as the app, for the merge line's bridge commit
+   * (`MergeLine.stackedUpdate`). GitHub signs a commit made through its
+   * git-data API only when a GitHub App's installation token makes it; one
+   * made with a crew account's token read `unsigned`, and on a base that
+   * requires signed commits that branch could never land, since the
+   * `agent/**` ruleset refuses the force-push that would take it out (#330).
+   * Null where the app cannot be asked; GitHub's own errors are thrown.
+   */
+  async createCommitAsApp(repoFullName: string, commit: { message: string; tree: string; parents: string[] }): Promise<string | null> {
+    const app = await this.appGate?.client(repoFullName).catch(() => null);
+    if (!app) return null;
+    return app.createCommit(repoFullName, commit);
   }
 
   /** Rewrites the status issue in place, as the automation account. */
