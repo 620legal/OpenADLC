@@ -283,7 +283,18 @@ describe('a root names its Needs you card', () => {
       }),
     ],
     ['a parked issue', base({ issues: [issue(37, 'build', { labels: ['adlc:build', 'needs-triage'] })] })],
+    [
+      'a first approval of a person’s own pull request',
+      base({ personAwaits: [{ at: ago(30), payload: { repo: 'OpenADLC', pr: 45, issue: null, login: 'orzelig', head: 'abc1234def', paths: [], author: { login: 'orzelig', id: 1 } } }] }),
+    ],
   ];
+
+  it('puts a person’s own pull request’s wait on that pull request’s own card (#322)', () => {
+    const input = base({ personAwaits: [{ at: ago(30), payload: { repo: 'OpenADLC', pr: 45, issue: null, login: 'orzelig', head: 'abc1234def', paths: [] } }] });
+    expect(personWaitsOf(input)).toEqual([expect.objectContaining({ on: 'OpenADLC#45', attentionId: 'approval:OpenADLC#45@orzelig', action: 'approve', number: 45 })]);
+    // Signed off by its author on that head, it waits on nobody.
+    expect(personWaitsOf({ ...input, personSignOffs: [{ repo: 'OpenADLC', pr: 45, login: 'Orzelig', head: 'abc1234def', at: ago(5) }] })).toEqual([]);
+  });
 
   it.each(cases)('%s, by the id Needs you gives it', (_name, input) => {
     const waits = personWaitsOf(input);
@@ -311,5 +322,16 @@ describe('a wait on a person carries what the reviewers found', () => {
   it('reads a wait recorded before reviews were as having none recorded', () => {
     expect(personAwaitFrom({ at: '2026-11-10T00:00:00Z', payload })?.reviews).toBeNull();
     expect(personAwaitFrom({ at: '2026-11-10T00:00:00Z', payload: { ...payload, reviews: [] } })?.reviews).toEqual([]);
+  });
+
+  it('reads a person’s own pull request’s wait, with no issue and with its author (#322)', () => {
+    const own = personAwaitFrom({ at: '2026-11-10T00:00:00Z', payload: { ...payload, issue: null, author: { login: 'janedoe', id: 583231 } } });
+    expect(own).toMatchObject({ issue: null, author: { login: 'janedoe', id: 583231 } });
+    // Recorded before the author was: unknown, read as a crew pull request's.
+    expect(personAwaitFrom({ at: '2026-11-10T00:00:00Z', payload })?.author).toBeNull();
+    // An author with no account id is no author: a login alone is never matched.
+    expect(personAwaitFrom({ at: '2026-11-10T00:00:00Z', payload: { ...payload, author: { login: 'janedoe' } } })?.author).toBeNull();
+    // An issue that is neither a number nor null is still no wait.
+    expect(personAwaitFrom({ at: '2026-11-10T00:00:00Z', payload: { ...payload, issue: '39' } })).toBeNull();
   });
 });

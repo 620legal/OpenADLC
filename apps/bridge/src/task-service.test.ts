@@ -2603,11 +2603,29 @@ describe('a crew pull request the lead approved that waits on a person', () => {
     expect(store.awaited.map((event) => event.payload.reviews)).toEqual([reviews, []]);
   });
 
-  it('records nothing for a pull request with no issue of its own', async () => {
-    const read = { files: vi.fn(async () => []), rules: vi.fn(async () => rules) };
-    expect(await awaitPeople({ ...subject, issue: null }, standing('waiting on @janedoe'), read)).toEqual([]);
-    expect(store.awaited).toEqual([]);
-    expect(read.files).not.toHaveBeenCalled();
+  it('records a person’s own pull request too, with no issue and with its author (#322)', async () => {
+    const reviews = [{ login: 'reviewer-bot', seat: 'lead-reviewer', state: 'approved', summary: 'Looks right.', url: 'https://github.com/x/y/pull/40#pullrequestreview-1' }];
+    const read = { files: vi.fn(async () => ['infra/local/build-bot-image.sh']), rules: vi.fn(async () => rules), reviews: async () => reviews };
+    const own = { ...subject, issue: null, author: { login: 'janedoe', id: 583231 } };
+    expect(await awaitPeople(own, standing('waiting on @janedoe'), read)).toEqual(["openadlc#40: waits on @janedoe's approval of 692cd1f"]);
+    expect(store.awaited.map((event) => event.payload)).toEqual([
+      {
+        subjectRef: 'openadlc#40',
+        login: 'janedoe',
+        head: HEAD,
+        repo: 'openadlc',
+        pr: 40,
+        issue: null,
+        paths: ['infra/'],
+        reviews,
+        author: { login: 'janedoe', id: 583231 },
+      },
+    ]);
+    // Once for a head, as a crew pull request's.
+    expect(await awaitPeople(own, standing('waiting on @janedoe'), read)).toEqual([]);
+    // An author GitHub gave no id for is recorded as unknown, never as a login alone.
+    await awaitPeople({ ...own, prNumber: 41, author: { login: 'janedoe', id: null } }, standing('waiting on @janedoe'), read);
+    expect(store.awaited[1]?.payload).not.toHaveProperty('author');
   });
 
   it('records the wait with no paths when the files or rules cannot be read, and says nothing it could not record', async () => {

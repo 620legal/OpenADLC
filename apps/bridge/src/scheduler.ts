@@ -11,7 +11,7 @@ import { blockingOverlaps, type WorkInFlight } from '@openadlc/dispatcher';
 import { githubDidNotAnswer, type GitHubClient } from '@openadlc/github';
 import { ATTENTION_WINDOW_DAYS, GITHUB_RETRY_CLAIM_MS, githubRetry, triedAgain } from './attention.js';
 import { ALREADY_LANDED, alreadyLanded, subjectClosed, wasRefused } from './gates.js';
-import { fastPathOf, seatsWaitedOn, type Automation } from './automation.js';
+import { fastPathOf, pullAuthorOf, seatsWaitedOn, type Automation } from './automation.js';
 import { causeOfFailure, isPrerequisiteRow } from './health/checks/crew.js';
 import { DEPLOY_PATH_BRANCH_PREFIX, REVIEW_ROUND_OPENED, endedBySendingBack, headInRepository, issueForSubject, issueNumberFromBranch, parseRef, stageOfTask } from './work.js';
 import { asAutomation, automationBotName, findOwnOpenIssue } from './automation-bot.js';
@@ -1073,6 +1073,8 @@ export class Scheduler {
             labels: pull.labels.map((name) => ({ name })),
             head: { sha: pull.headSha, ref: opened.head.ref },
             baseRef: pull.baseRef,
+            // Whose sign-off from the console counts in place of a review GitHub refuses them (docs/adr/0063).
+            author: pullAuthorOf(opened.user),
           });
           const computed = reviewed.gate;
           // "waiting on the reviewer account" when a seat it waits on cannot work.
@@ -1115,7 +1117,7 @@ export class Scheduler {
           // a delivery that never came, or a pull request already waiting
           // before the bridge recorded it, has nothing else to say so.
           actions.push(
-            ...(await awaitPeople({ repoName: repo.name, prNumber: pull.number, issue: issueNumber, head: pull.headSha }, reviewed, {
+            ...(await awaitPeople({ repoName: repo.name, prNumber: pull.number, issue: issueNumber, head: pull.headSha, author: pullAuthorOf(opened.user) }, reviewed, {
               files: async () => {
                 const listed = await client.listEveryPullFile(repo.fullName, pull.number);
                 return listed.complete ? listed.files : null;

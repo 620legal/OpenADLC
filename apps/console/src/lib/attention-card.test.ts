@@ -4,6 +4,7 @@ import {
   alarming,
   audienceLine,
   clockTime,
+  approveLabel,
   decisionButtons,
   decisionStatus,
   decisionWhy,
@@ -452,6 +453,32 @@ describe('a held Human-review approval’s card', () => {
     // A bridge that does not say whose it is: not yours.
     expect(decisionButtons(HELD)).toEqual(['remind', 'discuss']);
     expect(decisionButtons(ITEM)).toEqual([]);
+  });
+
+  describe('on a person’s own pull request (#322)', () => {
+    const discussOnly = HELD.actions.filter((action) => action.kind === 'human_review_discuss');
+    const signOffActions = HELD.actions.filter((action) => action.kind !== 'human_review_reject');
+    const AUTHOR: AttentionItem = { ...HELD, actions: signOffActions, decision: { ...HELD.decision!, signOff: 'author' } };
+    const ON_GITHUB: AttentionItem = { ...HELD, actions: discussOnly, decision: { ...HELD.decision!, signOff: 'github' } };
+
+    it('gives its author Sign off and Discuss, and nobody Remind, since GitHub cannot ask its author for a review', () => {
+      expect(decisionButtons({ ...AUTHOR, decision: { ...AUTHOR.decision!, yours: true } })).toEqual(['approve', 'discuss']);
+      expect(decisionButtons({ ...AUTHOR, decision: { ...AUTHOR.decision!, yours: false, waitsOnOther: true } })).toEqual(['discuss']);
+      expect(approveLabel(AUTHOR)).toBe('Sign off');
+      expect(decisionStatus({ ...AUTHOR, decision: { ...AUTHOR.decision!, yours: true } })).toBe('Waits for your sign-off');
+      expect(decisionStatus({ ...AUTHOR, decision: { ...AUTHOR.decision!, yours: false } })).toBe("Waits for @janedoe's sign-off");
+    });
+
+    it('offers no Approve where someone else opened it: they approve it on GitHub', () => {
+      expect(decisionButtons({ ...ON_GITHUB, decision: { ...ON_GITHUB.decision!, yours: true } })).toEqual(['discuss']);
+      expect(approveLabel(ON_GITHUB)).toBe('Approve');
+      expect(decisionStatus({ ...ON_GITHUB, decision: { ...ON_GITHUB.decision!, yours: true } })).toBe('Waits for your approval');
+    });
+
+    it('leaves a crew pull request’s card as it was', () => {
+      expect(approveLabel(HELD)).toBe('Approve');
+      expect(approveLabel({ ...HELD, decision: { ...HELD.decision!, signOff: null } })).toBe('Approve');
+    });
   });
 
   describe('when its person is not in People and the viewer is an admin (ADR 0059)', () => {

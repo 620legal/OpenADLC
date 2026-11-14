@@ -169,6 +169,35 @@ describe('a card’s status line', () => {
     expect(cardStatus(approved, { ...CONTEXT, awaitedApproval: [] }).text).toBe('Waiting for the reviewers');
   });
 
+  it('says a person’s own pull request waits on its named person, not on the reviewers (#322)', () => {
+    // A lone pull request's card is named by the pull request (`lonePulls`), and
+    // its held approval's subject is that pull request, with no issue.
+    const subject = { repo: 'openadlc', number: 46, title: 'Raise the cap', ref: 'openadlc#46', url: null, item: 'openadlc#46' };
+    const own = {
+      id: 'approval:openadlc#46@janedoe',
+      kind: 'merge_waiting' as const,
+      headline: '',
+      subject,
+      bot: null,
+      since: NOW,
+      detail: '',
+      actions: [],
+      awaiting: { login: 'janedoe', again: false, paths: ['infra/'] },
+    };
+    const awaited = awaitedApprovalsOf([own]);
+    expect(awaited.get('openadlc#46')).toEqual([{ login: 'janedoe', yours: false }]);
+
+    const lone = card({ ref: 'openadlc#46', number: 46, prNumber: 46, stage: 'review', labels: [] });
+    expect(cardStatus(lone, { ...CONTEXT, awaitedApproval: awaited.get(lone.ref) ?? [] })).toEqual({
+      text: "Approved · waiting for @janedoe's approval",
+      tone: 'attention',
+      mark: 'dot',
+    });
+    // Its author, signed in, is told it waits on them.
+    const theirs = awaitedApprovalsOf([{ ...own, decision: { yours: true, signOff: 'author' } as never }]);
+    expect(cardStatus(lone, { ...CONTEXT, awaitedApproval: theirs.get(lone.ref) ?? [] }).text).toBe('Approved · waiting for your approval');
+  });
+
   it('says it waits on you when you are the person it waits on, and on them by name for anyone else', () => {
     const approved = card({ stage: 'review', prNumber: 40, reviewRound: 1 });
     expect(cardStatus(approved, { ...CONTEXT, awaitedApproval: [{ login: 'janedoe', yours: true }] }).text).toBe('Approved · waiting for your approval');

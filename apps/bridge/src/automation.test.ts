@@ -26,9 +26,12 @@ const world = vi.hoisted(() => ({
   events: [] as { type: string; payload: Record<string, string | number> }[],
   /** Stage moves as `stageMoves.record` stored them. */
   moves: [] as { from: string | null; to: string; kind: string }[],
+  /** Authors' sign-offs from the console, as `personSignOffs.forPull` finds them for any pull request (#322). */
+  signOffs: [] as { githubUserId: number; githubLogin: string; head: string }[],
 }));
 
 vi.mock('@openadlc/db', () => ({
+  personSignOffs: { forPull: vi.fn(async () => world.signOffs.map((row) => ({ ...row }))) },
   // A review's nonce, bound to it the first time it is read (`Attribution.reviewsThatCount`).
   attributions: { bindNonce: vi.fn(async () => true) },
   audit: vi.fn(async (entry: Record<string, unknown>) => {
@@ -2502,6 +2505,51 @@ describe('whether the bridge may merge a pull request', () => {
       }
     });
 
+    describe('an author’s sign-off from the console, where GitHub refuses their approval (#322)', () => {
+      const SAME = '5a3e'.repeat(10);
+      const OTHER = 'd1ff'.repeat(10);
+      const named = (overrides: Partial<MergeFacts> = {}) => facts({ humansRequired: ['janedoe'], askingPermission: new Map([['janedoe', 'write']]), ...overrides });
+
+      it('may on their sign-off of the head, recorded as theirs', () => {
+        const decision = mergeDecision(named({ signOffs: [{ login: 'janedoe', head: HEAD }] }));
+        expect(decision.land).toBe(true);
+        expect(decision.approvals.at(-1)).toEqual({ reviewer: 'janedoe', person: true, commitId: HEAD, ofHead: true, signedOff: true });
+        expect(mergeBlockers(named({ signOffs: [{ login: 'janedoe', head: HEAD }] }))).toEqual([]);
+      });
+
+      it('may on their sign-off of an earlier head with the same diff: a new diff asks again', () => {
+        const same = named({ signOffs: [{ login: 'JaneDoe', head: SAME }], sameDiffAs: new Set([SAME]) });
+        expect(mergeDecision(same).land).toBe(true);
+        expect(mergeDecision(same).approvals.at(-1)).toMatchObject({ commitId: SAME, ofHead: false, signedOff: true });
+        expect(mergeBlockers(same)).toEqual([]);
+
+        const another = named({ signOffs: [{ login: 'janedoe', head: OTHER }] });
+        expect(mergeDecision(another)).toMatchObject({ land: false, reason: '@janedoe has not approved this version' });
+        expect(mergeBlockers(another)).toEqual([{ kind: 'human_review', reason: '@janedoe has not approved this version' }]);
+      });
+
+      it('may not on a sign-off of a head a conflict resolution carried', () => {
+        const carried = named({ signOffs: [{ login: 'janedoe', head: EARLIER }], carriedFrom: new Set([EARLIER]) });
+        expect(mergeDecision(carried)).toMatchObject({ land: false, reason: '@janedoe has not approved this version' });
+        expect(mergeBlockers(carried).map((one) => one.kind)).toEqual(['human_review']);
+      });
+
+      it('counts only for the login it is, and still asks GitHub for write access', () => {
+        const someoneElse = named({ humansRequired: ['janedoe', 'orzelig'], askingPermission: new Map([['janedoe', 'write'], ['orzelig', 'admin']]), signOffs: [{ login: 'janedoe', head: HEAD }] });
+        expect(mergeDecision(someoneElse)).toMatchObject({ land: false, reason: '@orzelig has not approved this version' });
+        expect(mergeBlockers(someoneElse)).toEqual([{ kind: 'human_review', reason: '@orzelig has not approved this version' }]);
+
+        const reading = named({ askingPermission: new Map([['janedoe', 'read']]), signOffs: [{ login: 'janedoe', head: HEAD }] });
+        expect(mergeDecision(reading)).toMatchObject({ land: false, reason: expect.stringContaining('lacks write access') });
+        expect(mergeBlockers(reading).map((one) => one.kind)).toEqual(['human_review']);
+      });
+
+      it('holds without one, whoever the author is', () => {
+        expect(mergeDecision(named())).toMatchObject({ land: false, reason: '@janedoe has not approved this version' });
+        expect(mergeDecision(named({ signOffs: [] }))).toMatchObject({ land: false, reason: '@janedoe has not approved this version' });
+      });
+    });
+
     it('may not while anyone who can write to it still asks for changes, named or not', () => {
       expect(mergeDecision(facts({ reviews: [...facts().reviews, person('owner-janedoe', 'CHANGES_REQUESTED', 'OWNER')] }))).toMatchObject({
         land: false,
@@ -4417,6 +4465,155 @@ describe('a person’s approval GitHub moved onto a later head (620legal/OpenADL
     expect((await moved.standing()).peopleNotCounted).toEqual([
       { login: 'janedoe', reviewId: REVIEW, head: B, approvedOn: null, shownOn: B, why: 'their approval is not known to be of 692cd1f' },
     ]);
+  });
+});
+
+describe('an author named for their own paths signs off in the console (#322)', () => {
+  // Seen on a real install: @janedoe opened a pull request under `config/`,
+  // which AGENTS.md names her for; the crew approved and `ci` passed, and
+  // `review-gate` said `waiting on @janedoe` for good, since GitHub takes no
+  // approval from a pull request's author.
+  const A = 'b7890794b365dd3ec75b81f761f1889dfb11674a';
+  const B = '692cd1f88f3e45093ad9ba4e68e84d590af3b595';
+  const JANE = 583231;
+
+  function replay(options: { sameDiff?: boolean; author?: { login: string; id: number } } = {}) {
+    world.crew = [{ id: 'b-lead', name: 'lead-reviewer', slot: 'lead-reviewer', role: 'review_lead', githubLogin: 'exampleco-lead' }];
+    world.events = [];
+    world.signOffs = [];
+    const author = options.author ?? { login: 'janedoe', id: JANE };
+    const github = {
+      head: A,
+      reviews: [{ id: 5622816900, user: 'exampleco-lead', state: 'APPROVED', body: 'Approved.\n\n<!-- openadlc-seat:lead-reviewer -->', submittedAt: '2026-10-23T01:15:30Z', commitId: A }],
+      // Who opened it, read only when there is a sign-off and the caller did not
+      // say; and whether @janedoe can review here, as `cannotReviewHere` asks.
+      request: vi.fn(async (_method: string, path: string) => {
+        if (path === '/repos/exampleco/app/pulls/120') return { user: author };
+        if (path.startsWith('/users/')) return { login: path.slice('/users/'.length), type: 'User' };
+        if (path.includes('/collaborators/')) return { permission: 'write', role_name: 'write' };
+        throw new Error(`no answer for ${path}`);
+      }),
+      listEveryPullFile: vi.fn(async () => ({ files: ['config/bots.yaml'], complete: true })),
+      listReviews: vi.fn(async () => github.reviews.map((review) => ({ ...review }))),
+      permissionOf: vi.fn(async () => 'write'),
+      readFileIfPresent: vi.fn(async () => null),
+      listPullHistory: vi.fn(async () => []),
+      checkRunsFor: vi.fn(async (_repo: string, sha: string) => [{ name: 'ci', status: 'completed', conclusion: 'success', app: 'github-actions', headSha: sha, suiteId: sha === A ? 1 : 2 }]),
+      statusesFor: vi.fn(async () => []),
+      workflowRunOfSuite: vi.fn(async (_repo: string, suite: number) => ({
+        name: 'ci',
+        headSha: suite === 1 ? A : B,
+        path: '.github/workflows/ci.yml',
+        event: 'pull_request',
+        headBranch: 'feature',
+        headRepoFullName: 'exampleco/app',
+        createdAt: '2026-10-23T01:16:30Z',
+      })),
+      pullsFromBranch: vi.fn(async () => [{ number: 120, baseRef: 'main', headSha: github.head, createdAt: '2026-10-23T00:58:00Z', closedAt: null }]),
+      readFileAtRef: vi.fn(async () => '# Agent notes\n\n## Human review\n\n- `config/` @janedoe\n'),
+      listPullFiles: vi.fn(async () => ['config/bots.yaml']),
+      diffFingerprint: vi.fn(async (_repo: string, _base: string, sha: string) =>
+        sha === A || options.sameDiff ? 'the diff b789079 proposes' : 'the diff with main’s changes to config/bots.yaml',
+      ),
+    };
+    const attribution = {
+      reviewsThatCount: vi.fn(async (_repo: string, _n: number, reviews: { user: string }[]) =>
+        reviews.filter((review) => review.user === 'exampleco-lead').map((review) => ({ ...review, commitId: github.head })),
+      ),
+      countable: vi.fn(async (posts: unknown[]) => [...posts]),
+    };
+    const appGate = { standing: vi.fn(async () => ({ state: 'success', description: 'every requested review has been posted' })), appId: vi.fn(async () => 7) };
+    const only = { ...config, review: reviewRulesSchema.parse({ reviewers: [{ seat: 'lead-reviewer', lens: 'lead', lead: true }] }) } as BridgeConfig;
+    const automation = new Automation(only, { asBot: vi.fn(async () => github), attribution } as never, appGate as never);
+    const pull = () => ({
+      number: 120,
+      draft: false,
+      headSha: github.head,
+      headRef: 'feature',
+      baseRef: 'main',
+      labels: [],
+      mergeableState: 'clean',
+      headRepoFullName: 'exampleco/app',
+      requestedReviewers: [],
+      requestedTeams: [],
+    });
+    const decide = async () => mergeDecision((await automation.mergeFacts({ fullName: 'exampleco/app', defaultBranch: 'main' }, pull()))!);
+    const standing = (given?: { login: string; id: number } | null) =>
+      automation.reviewStanding('exampleco/app', {
+        number: 120,
+        draft: false,
+        labels: [],
+        head: { sha: github.head, ref: 'feature' },
+        baseRef: 'main',
+        ...(given !== undefined ? { author: given } : {}),
+      });
+    const signOff = (head: string, githubUserId = JANE) => world.signOffs.push({ githubUserId, githubLogin: 'janedoe', head });
+    return { github, decide, standing, signOff };
+  }
+
+  afterEach(() => {
+    world.signOffs = [];
+  });
+
+  it('holds without her sign-off: authorship alone is never the approval', async () => {
+    const { decide, standing, github } = replay();
+    expect((await standing({ login: 'janedoe', id: JANE })).gate).toEqual({ state: 'pending', description: 'waiting on @janedoe' });
+    expect(await decide()).toMatchObject({ land: false, reason: '@janedoe has not approved this version' });
+    // Nothing to count: the author is not even read.
+    expect(github.request).not.toHaveBeenCalledWith('GET', '/repos/exampleco/app/pulls/120');
+  });
+
+  it('passes review-gate and merges on her sign-off of the head', async () => {
+    const { decide, standing, signOff } = replay();
+    signOff(A);
+    const now = await standing({ login: 'janedoe', id: JANE });
+    expect(now.gate).toEqual({ state: 'success', description: 'every requested review has been posted' });
+    expect(now.peopleNotCounted).toEqual([]);
+    expect(await decide()).toMatchObject({
+      land: true,
+      approvals: [{ reviewer: 'lead-reviewer' }, { reviewer: 'janedoe', person: true, commitId: A, ofHead: true, signedOff: true }],
+    });
+  });
+
+  it('reads who opened it from GitHub when the caller did not say', async () => {
+    const { standing, signOff, github } = replay();
+    signOff(A);
+    expect((await standing()).gate.state).toBe('success');
+    expect(github.request).toHaveBeenCalledWith('GET', '/repos/exampleco/app/pulls/120');
+  });
+
+  it('counts no row whose account is not the author’s, whoever wrote it', async () => {
+    const { decide, standing, signOff } = replay();
+    signOff(A, 7);
+    expect((await standing({ login: 'janedoe', id: JANE })).gate).toEqual({ state: 'pending', description: 'waiting on @janedoe' });
+    expect(await decide()).toMatchObject({ land: false, reason: '@janedoe has not approved this version' });
+  });
+
+  it('counts nothing for a named person who did not open it: they approve on GitHub', async () => {
+    // @sam opened it; a row in @janedoe's name is none of the author's.
+    const { decide, standing, signOff } = replay({ author: { login: 'sam', id: 7 } });
+    signOff(A);
+    expect((await standing({ login: 'sam', id: 7 })).gate).toEqual({ state: 'pending', description: 'waiting on @janedoe' });
+    expect(await decide()).toMatchObject({ land: false, reason: '@janedoe has not approved this version' });
+  });
+
+  it('counts nothing for a crew account that opened it', async () => {
+    const { standing, signOff } = replay({ author: { login: 'exampleco-lead', id: JANE } });
+    signOff(A);
+    expect((await standing({ login: 'exampleco-lead', id: JANE })).gate.state).toBe('pending');
+  });
+
+  it('counts it on a later head with the same diff, and asks again on a new diff', async () => {
+    const same = replay({ sameDiff: true });
+    same.signOff(A);
+    same.github.head = B;
+    expect((await same.standing({ login: 'janedoe', id: JANE })).gate.state).toBe('success');
+    expect(await same.decide()).toMatchObject({ land: true, approvals: [{ reviewer: 'lead-reviewer' }, { reviewer: 'janedoe', commitId: A, ofHead: false, signedOff: true }] });
+
+    const changed = replay();
+    changed.signOff(A);
+    changed.github.head = B;
+    expect((await changed.standing({ login: 'janedoe', id: JANE })).gate).toEqual({ state: 'pending', description: 'waiting on @janedoe' });
   });
 });
 

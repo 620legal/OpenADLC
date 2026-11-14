@@ -1,6 +1,6 @@
-import { bots, issues, lastAudit, listEventsOfTypeWith, mergeLines, audit as writeAudit, people as peopleStore, personAccounts, repos } from '@openadlc/db';
+import { bots, issues, lastAudit, listEventsOfTypeWith, mergeLines, audit as writeAudit, people as peopleStore, personAccounts, personSignOffs, repos } from '@openadlc/db';
 import { GitHubClient } from '@openadlc/github';
-import { mergeBlockers, mergeDecision, type Automation } from './automation.js';
+import { mergeBlockers, mergeDecision, pullAuthorOf, type Automation } from './automation.js';
 import { HeldMergeDecisions } from './held-merge-decide.js';
 import { decisionTarget, HumanReviewDecisions, remindTarget, type HumanReviewDeps } from './human-review-decide.js';
 import { heldForPerson } from './merge-line.js';
@@ -10,7 +10,7 @@ import { PersonFlows, personKey, type FlowView, type PersonGitHubDeps } from './
 import { PullCommands, PullRules, useDeclaredCommands, type PullCommandDeps, type PullReader, type PullRepo } from './pull-commands.js';
 import { HttpFailure, STREAMING, type Router } from './router.js';
 import type { SendBack } from './send-back.js';
-import { standingPersonAsks, standingPersonAwaits } from './wait-chain.js';
+import { signOffFact, standingPersonAsks, standingPersonAwaits } from './wait-chain.js';
 import { parseRef, PERSON_ASKED_AGAIN, PERSON_AWAITED, REVIEW_ROUND_OPENED, REVIEW_SUBMITTED_ON } from './work.js';
 
 /**
@@ -137,27 +137,52 @@ export function liveHumanReviewDecisions(input: {
       const subjectRef = `${repo}#${pr}`;
       const since = Date.now() - WAIT_WINDOW_MS;
       const recent = <T extends { at: string }>(rows: readonly T[]) => rows.filter((row) => Date.parse(row.at) >= since);
-      const [awaits, asks, reviews, rounds, listed] = await Promise.all([
+      const [awaits, asks, reviews, rounds, listed, signOffs] = await Promise.all([
         listEventsOfTypeWith(PERSON_AWAITED, { subjectRef }),
         listEventsOfTypeWith(PERSON_ASKED_AGAIN, { subjectRef }),
         listEventsOfTypeWith(REVIEW_SUBMITTED_ON, { subjectRef }),
         listEventsOfTypeWith(REVIEW_ROUND_OPENED, { subjectRef }),
         issues.listIssues(repo),
+        // An author's sign-off ends the wait on them, as Needs you reads it (`readWaitFacts`).
+        (async () => {
+          const found = await repos.getRepoByName(repo);
+          return found ? (await personSignOffs.forPull(found.id, pr)).map(signOffFact) : [];
+        })().catch(() => []),
       ]);
       const key = `${subjectRef}@${login.toLowerCase()}`;
       // Asked again first, as Needs you shows one card per person and pull request.
       const ask = standingPersonAsks(recent(asks), recent(reviews), listed).get(key);
       if (ask) return { head: ask.head };
-      const wait = standingPersonAwaits(recent(awaits), recent(reviews), recent(rounds), listed).get(key);
+      const wait = standingPersonAwaits(recent(awaits), recent(reviews), recent(rounds), listed, signOffs).get(key);
       return wait ? { head: wait.head } : null;
     },
     pull: async (repo, number) => {
       const client = await reader();
-      const pull = await client.request<{ state: string; html_url: string; head: { sha: string } }>('GET', `/repos/${repo.fullName}/pulls/${number}`);
-      return { open: pull.state === 'open', head: pull.head.sha, url: pull.html_url };
+      const pull = await client.request<{ state: string; html_url: string; head: { sha: string }; user?: { login: string; id?: number } | null }>(
+        'GET',
+        `/repos/${repo.fullName}/pulls/${number}`,
+      );
+      return { open: pull.state === 'open', head: pull.head.sha, url: pull.html_url, author: pullAuthorOf(pull.user) };
     },
     flows: input.flows,
     isCrew: input.person.isCrew,
+    approves: async (githubUserId) => (await peopleStore.personByGithubId(githubUserId))?.approves === true,
+    signOff: {
+      record: async (entry) => {
+        const found = await repos.getRepoByName(entry.repo);
+        if (!found) throw new Error(`${entry.repo} is not a repository this install manages; nothing was recorded.`);
+        const { signOff, created } = await personSignOffs.record({
+          repoId: found.id,
+          prNumber: entry.pr,
+          head: entry.head,
+          githubUserId: entry.githubUserId,
+          githubLogin: entry.githubLogin,
+          identity: entry.identity,
+        });
+        return { id: signOff.id, created };
+      },
+      remove: (id) => personSignOffs.remove(id),
+    },
     postReviewAsPerson,
     commentAsApp: async (fullName, number, body) => {
       const app = await theApp(fullName);

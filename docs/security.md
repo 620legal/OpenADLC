@@ -1426,6 +1426,40 @@ needs no sign-in, unless the console person's linked account id is the
 awaited login's
 ([ADR 0036](adr/0036-a-person-decides-a-held-human-review-approval-from-the-console.md)).
 
+**When the named person is the pull request's author.** GitHub takes no
+approval from a pull request's own author. Without another way, a person's
+pull request on a path `AGENTS.md`'s Human review names them for could never
+pass `review-gate`. On such a pull request the card's button is **Sign off**,
+not Approve. The person proves it is them with the same device code, and the
+token is used for nothing else. Instead of posting a review, the bridge records
+their sign-off in `person_sign_offs` and audits it as
+`pull.human_review_signed_off`.
+
+The bridge records it only if all of these hold:
+- the console person's linked account is the awaited login's, matched by account id;
+- the account that approved the code is that same account, and is not a crew account;
+- that account opened the pull request, as GitHub says once the code is approved;
+- People has Approves on for it;
+- the head has not moved.
+
+The sign-off row is written before its audit row, and taken back if the audit
+row cannot be written.
+
+`review-gate` and the merge (`mergeDecision`) count a sign-off as the author's
+approval, but only for their own login, only when the row's account id is the
+pull request author's, and only on the head or on an earlier head with the
+same diff. A head a conflict resolution carried never counts. Write access is
+still asked of GitHub. Authorship alone is never the approval: with no sign-off
+row, the pull request holds whoever opened it. A token acting as the account
+is not enough either, because the sign-off needs the console sign-in that is
+linked to that account.
+
+A reader of GitHub does not see the sign-off as a review. The audit log and
+`person_sign_offs` are where it is seen, and the merge line's audit row marks
+the approval `signedOff`. When the named person did not open the pull request,
+the card is for information only, and they approve it on GitHub
+([ADR 0063](adr/0063-an-author-who-is-the-named-person-signs-off-in-the-console.md)).
+
 The same token may also perform one merge, from the console's Merge on a pull
 request the merge line holds for a person
 ([troubleshooting](troubleshooting.md#deciding-a-held-merge-from-the-console)),

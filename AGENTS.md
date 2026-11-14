@@ -116,7 +116,10 @@ A change that makes one of these possible is wrong even when its tests pass:
   Only the merge line merges, as the app, once `mergeDecision` holds: the lead's
   approval of that head, or of an earlier head with the same diff against the
   base, GitHub Actions' `ci` on it, and the people this file names for their
-  paths.
+  paths. A named person who opened the pull request approves it with their
+  console sign-off (`person_sign_offs`), which counts only for their own login
+  and account id; authorship alone never does
+  (docs/adr/0063-an-author-who-is-the-named-person-signs-off-in-the-console.md).
 - A bot never approves a deploy; the repository's environment rules release
   it — a required reviewer, or a soak timer when it ships automatically — or,
   where GitHub's plan cannot hold a reviewer, a person releasing the promote

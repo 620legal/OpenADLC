@@ -945,6 +945,50 @@ describe('a held Human-review approval', () => {
     expect(decided).toEqual([{ what: 'approve', subject: 'openadlc#40', input: { head: HEAD, login: 'janedoe' } }]);
   });
 
+  describe('on a person’s own pull request (#322)', () => {
+    const SIGN_OFF =
+      "Records your sign-off of 692cd1f for the paths named for you, after you approve a one-time code as @janedoe. GitHub does not take an approval from a pull request's author, so this is not posted as a review. OpenADLC merges it once CI passes.";
+    /** #40 with no issue, opened by `signOff === 'author'` its awaited person, or by someone else. */
+    const OWN = (signOff: 'author' | 'github', over: { yours?: boolean; waitsOnOther?: true } = {}): AttentionItem => {
+      const held = HELD(over);
+      const keep = signOff === 'author' ? ['human_review_approve', 'human_review_discuss', 'open_url'] : ['human_review_discuss', 'open_url'];
+      return {
+        ...held,
+        subject: { repo: 'openadlc', number: 40, title: 'Raise the cap', ref: 'openadlc#40', url: null, item: 'openadlc#40' },
+        actions: held.actions
+          .filter((action) => keep.includes(action.kind))
+          .map((action) => (action.kind === 'human_review_approve' ? { ...action, label: 'Sign off' } : action)),
+        decision: { ...held.decision!, signOff, next: { ...held.decision!.next, approve: SIGN_OFF } },
+      };
+    };
+    const decides = (html: string) => [...html.matchAll(/data-decide="(\w+)"/g)].map((match) => match[1]);
+
+    it('gives its author Sign off, saying nothing is posted as a review, and Discuss', () => {
+      const html = renderToStaticMarkup(<HumanReviewDecisionPanel item={OWN('author', { yours: true })} />);
+      expect(decides(html)).toEqual(['approve', 'discuss']);
+      expect(words(html)).toContain(`Sign off ${SIGN_OFF}`);
+      expect(words(html)).not.toContain('Reject');
+      press(buttonsIn(<HumanReviewDecisionPanel item={OWN('author', { yours: true })} />), `Sign off${SIGN_OFF}`);
+      expect(decided.at(-1)).toEqual({ what: 'approve', subject: 'openadlc#40', input: { head: HEAD, login: 'janedoe' } });
+    });
+
+    it('says the sign-off is recorded, not posted, while the author signs in', () => {
+      const html = words(renderToStaticMarkup(<HumanReviewDecisionPanel item={OWN('author', { yours: true })} initialStep={{ kind: 'signing', flowId: 'f', userCode: 'ABCD-1234', verificationUri: 'https://github.com/login/device' }} />));
+      expect(html).toContain('your sign-off of 692cd1f is recorded once you do. Nothing is posted on the pull request.');
+    });
+
+    it('offers nobody Remind on it: GitHub cannot ask its author for a review', () => {
+      const html = renderToStaticMarkup(<HumanReviewDecisionPanel item={OWN('author', { yours: false, waitsOnOther: true })} initialRequest={{ kind: 'read', view: { login: 'janedoe', request: { state: 'none' }, reminded: null, remindAfter: null } }} />);
+      expect(html).not.toContain('data-remind-button');
+      expect(decides(html)).toEqual(['discuss']);
+    });
+
+    it('is for information only where someone else opened it: Discuss, and no Approve', () => {
+      const html = renderToStaticMarkup(<HumanReviewDecisionPanel item={OWN('github', { yours: true })} />);
+      expect(decides(html)).toEqual(['discuss']);
+    });
+  });
+
   it('holds Send it back until the reason has text', () => {
     const empty = renderToStaticMarkup(<HumanReviewDecisionPanel item={HELD({ yours: true })} initialStep={{ kind: 'reject', reason: '  ' }} />);
     expect(empty).toMatch(/<button type="submit" disabled=""[^>]*>Send it back<\/button>/);

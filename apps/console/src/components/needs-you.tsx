@@ -47,6 +47,7 @@ import {
   CHOICES_ON_CARD,
   alarming,
   audienceLine,
+  approveLabel,
   decisionButtons,
   decisionStatus,
   decisionWhy,
@@ -1814,6 +1815,9 @@ export function HumanReviewDecisionPanel({
   const who = theirs ? 'them' : undefined;
   const why = decisionWhy(item)!;
   const hint = useId();
+  // Its author signs off where GitHub refuses their approval (#322): nothing is posted on GitHub.
+  const approveSaid = approveLabel(item);
+  const signsOff = decision.signOff === 'author';
 
   // An Approve's sign-in, read until the person approves its code or it ends.
   useEffect(() => {
@@ -1824,14 +1828,19 @@ export function HumanReviewDecisionPanel({
         .then((said: { state: string; error?: string }) => {
           if (said.state === 'waiting') return;
           setStep({ kind: 'idle' });
-          if (said.state === 'sent') setDone(`Approved ${short} on GitHub as @${decision.login}. The card goes once GitHub says so.`);
-          else if (said.state === 'failed') setError(said.error ?? 'The sign-in ended before anything was posted. Press Approve again.');
-          else setError('OpenADLC no longer knows how this sign-in went. Look at the pull request before you press Approve again.');
+          if (said.state === 'sent') {
+            setDone(
+              signsOff
+                ? `Signed off ${short} as @${decision.login}. The card goes, and review-gate passes once OpenADLC next settles the gates.`
+                : `Approved ${short} on GitHub as @${decision.login}. The card goes once GitHub says so.`,
+            );
+          } else if (said.state === 'failed') setError(said.error ?? `The sign-in ended before anything was recorded. Press ${approveSaid} again.`);
+          else setError(`OpenADLC no longer knows how this sign-in went. Look at the pull request before you press ${approveSaid} again.`);
         })
         .catch(() => undefined);
     }, DECISION_FLOW_READ_MS);
     return () => clearInterval(timer);
-  }, [full, step, subject, short, decision.login, setStep, setDone, setError]);
+  }, [full, step, subject, short, decision.login, signsOff, approveSaid, setStep, setDone, setError]);
 
   const press = (button: DecisionButton) => {
     if (busy || done) return;
@@ -1872,7 +1881,7 @@ export function HumanReviewDecisionPanel({
     });
   };
 
-  const LABEL: Record<Exclude<DecisionButton, 'remind' | 'add_person'>, string> = { approve: 'Approve', reject: 'Reject', discuss: 'Discuss' };
+  const LABEL: Record<Exclude<DecisionButton, 'remind' | 'add_person'>, string> = { approve: approveSaid, reject: 'Reject', discuss: 'Discuss' };
   // Remind and Add to People stay after a message is sent; the others go once one is done.
   const shown = buttons.filter((button) => (button === 'remind' ? mayRemind : button === 'add_person' || !done));
 
@@ -2014,7 +2023,11 @@ export function HumanReviewDecisionPanel({
       )}
       {step.kind === 'signing' && (
         <div data-signing className="flex flex-col gap-1.5">
-          <p className="text-soft">Approve this code as @{decision.login} on GitHub; your approval of {short} is posted once you do.</p>
+          <p className="text-soft">
+            {signsOff
+              ? `Approve this code as @${decision.login} on GitHub; your sign-off of ${short} is recorded once you do. Nothing is posted on the pull request.`
+              : `Approve this code as @${decision.login} on GitHub; your approval of ${short} is posted once you do.`}
+          </p>
           <DeviceCode code={step.userCode} url={step.verificationUri} />
         </div>
       )}

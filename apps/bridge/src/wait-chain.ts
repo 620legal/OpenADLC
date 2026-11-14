@@ -1,4 +1,4 @@
-import { leases, listEventsOfType, mergeLines } from '@openadlc/db';
+import { leases, listEventsOfType, mergeLines, personSignOffs } from '@openadlc/db';
 import { hasAbandonedLabel, hasPausedLabel, sameLogin } from '@openadlc/shared';
 import { heldForPerson } from './merge-line.js';
 import { heldStacks, stackLinks, stackWaitsOn, type HeldStack, type StackLink } from './stacking.js';
@@ -66,9 +66,11 @@ export interface WaitFacts {
   /** The people asked to approve again (`PERSON_ASKED_AGAIN`), and the reviews people submitted (`REVIEW_SUBMITTED_ON`). */
   personAsks?: Events;
   personReviews?: Events;
-  /** The people crew pull requests wait on for a first approval (`PERSON_AWAITED`), and the review rounds opened (`REVIEW_ROUND_OPENED`). */
+  /** The people pull requests wait on for a first approval (`PERSON_AWAITED`), and the review rounds opened (`REVIEW_ROUND_OPENED`). */
   personAwaits?: Events;
   roundsOpened?: Events;
+  /** Authors who signed off their own pull request from the console (`person_sign_offs`), which ends the wait on them. */
+  personSignOffs?: readonly SignOffFact[];
   /** The stacked changes OpenADLC holds (`heldStacks`). */
   heldStacks?: readonly HeldStack[];
   /** Every stack of a repository with an issue in Build or Review (`stackLinks`); which still wait is `stackWaitsOn`'s. */
@@ -157,11 +159,16 @@ function answeredSince(reviews: Events, subjectRef: string, login: string, at: s
   });
 }
 
-/** A person a crew pull request waits on for a first approval (`PERSON_AWAITED`), as its card reads it. */
+/**
+ * A person a pull request waits on for a first approval (`PERSON_AWAITED`),
+ * as its card reads it: a crew pull request's, with its issue, or a person's
+ * own, with none (#322).
+ */
 export interface PersonAwait {
   repo: string;
   pr: number;
-  issue: number;
+  /** The issue it closes; null on a person's own pull request, whose card is the pull request's. */
+  issue: number | null;
   login: string;
   /** The head the lead approved, which they are asked to approve. */
   head: string;
@@ -172,7 +179,28 @@ export interface PersonAwait {
    * null on a wait recorded before they were, whose card links to GitHub instead.
    */
   reviews: PersonAwaitReview[] | null;
+  /**
+   * Who opened the pull request, as GitHub said when the wait was recorded;
+   * null on a wait recorded before it was, which reads as a crew pull
+   * request's did. Whether the awaited person is its author decides whether
+   * they sign off in the console (docs/adr/0063).
+   */
+  author: { login: string; id: number } | null;
   at: string;
+}
+
+/** An author's sign-off of their own pull request (`person_sign_offs`), as the waits read it. */
+export interface SignOffFact {
+  repo: string;
+  pr: number;
+  login: string;
+  head: string;
+  at: string;
+}
+
+/** A store row as `SignOffFact`. */
+export function signOffFact(row: { repoName: string; prNumber: number; githubLogin: string; head: string; signedAt: string }): SignOffFact {
+  return { repo: row.repoName, pr: row.prNumber, login: row.githubLogin, head: row.head, at: row.signedAt };
 }
 
 /** One crew review a wait carries, as its card shows it. */
@@ -194,28 +222,40 @@ function awaitReviewsOf(value: unknown): PersonAwaitReview[] | null {
   });
 }
 
+function authorOf(value: unknown): { login: string; id: number } | null {
+  const author = (value ?? {}) as Record<string, unknown>;
+  return typeof author.login === 'string' && author.login && typeof author.id === 'number' ? { login: author.login, id: author.id } : null;
+}
+
 export function personAwaitFrom(event: { at: string; payload: unknown }): PersonAwait | null {
   const payload = (event.payload ?? {}) as Record<string, unknown>;
   const { repo, pr, issue, login, head } = payload;
-  if (typeof repo !== 'string' || typeof pr !== 'number' || typeof issue !== 'number' || typeof login !== 'string' || typeof head !== 'string') return null;
+  if (typeof repo !== 'string' || typeof pr !== 'number' || typeof login !== 'string' || typeof head !== 'string') return null;
+  // A person's own pull request closes no issue, and says so as null.
+  if (typeof issue !== 'number' && issue !== null) return null;
   const paths = Array.isArray(payload.paths) ? payload.paths.filter((path): path is string => typeof path === 'string') : [];
-  return { repo, pr, issue, login, head, paths, reviews: awaitReviewsOf(payload.reviews), at: event.at };
+  return { repo, pr, issue, login, head, paths, reviews: awaitReviewsOf(payload.reviews), author: authorOf(payload.author), at: event.at };
 }
 
 /**
- * The people a crew pull request still waits on for a first approval, by
+ * The people a pull request still waits on for a first approval, by
  * `repo#pr` and login: the newest wait on each, while the issue is in Review
  * when the board has it — a merge, a close and a send back to Build each move
  * it out — the person has given no verdict on it since, and no review round
  * opened after it on another head. A new round is a new diff, which the lead's
  * approval the wait rested on is not of; the next wait is recorded when the lead approves
  * that. A pull request that closed is the caller's to leave out.
+ *
+ * An author who signed off the awaited head from the console
+ * (`person_sign_offs`, docs/adr/0063) has given their verdict too: GitHub
+ * takes no review from them, so no `REVIEW_SUBMITTED_ON` ever comes.
  */
 export function standingPersonAwaits(
   awaits: Events,
   reviews: Events,
   rounds: Events,
   issues: readonly Pick<IssueFacts, 'repoName' | 'number' | 'prNumber' | 'stage'>[],
+  signOffs: readonly SignOffFact[] = [],
 ): Map<string, PersonAwait> {
   const newest = new Map<string, PersonAwait>();
   for (const event of awaits) {
@@ -228,9 +268,10 @@ export function standingPersonAwaits(
   const standing = new Map<string, PersonAwait>();
   for (const [key, wait] of newest) {
     const ref = `${wait.repo}#${wait.pr}`;
-    const issue = issues.find((one) => one.repoName === wait.repo && one.number === wait.issue);
+    const issue = wait.issue !== null ? issues.find((one) => one.repoName === wait.repo && one.number === wait.issue) : undefined;
     if (issue && issue.stage !== 'review') continue;
     if (answeredSince(reviews, ref, wait.login, wait.at)) continue;
+    if (signOffs.some((one) => one.repo === wait.repo && one.pr === wait.pr && one.head === wait.head && sameLogin(one.login, wait.login))) continue;
     // Only a round on another head ends the wait. A duplicate delivery, or a
     // reopen or ready_for_review on the awaited head, records a round with the
     // same sha, and awaitPeople does not record that head again, so clearing on
@@ -292,16 +333,18 @@ export async function readWaitFacts(
     stacked.length > 0 ? quietly(() => stackLinks(stacked), [] as StackLink[]) : Promise.resolve([] as StackLink[]),
   ]);
   const awaiting = personAwaits.some((event) => personAwaitFrom(event));
-  const [personReviews, roundsOpened] = await Promise.all([
+  const [personReviews, roundsOpened, signOffs] = await Promise.all([
     personAsks.some((event) => personAskFrom(event)) || awaiting ? quietly(() => listEventsOfType(REVIEW_SUBMITTED_ON, since), []) : Promise.resolve([]),
     // A newer round is a new diff, which the lead's approval a wait rested on is not of.
     awaiting ? quietly(() => listEventsOfType(REVIEW_ROUND_OPENED, since), []) : Promise.resolve([]),
+    // An author's sign-off ends the wait on them, as a review ends anyone else's.
+    awaiting ? quietly(async () => (await personSignOffs.listSince(since)).map(signOffFact), [] as SignOffFact[]) : Promise.resolve([] as SignOffFact[]),
   ]);
   const heldMerges = line
     .map((entry) => ({ entry, reason: heldForPerson(entry) }))
     .filter((one): one is { entry: (typeof one)['entry']; reason: string } => one.reason !== null)
     .map(({ entry, reason }) => ({ repo: entry.repoName, prNumber: entry.prNumber, reason, since: entry.enteredAt, head: entry.headSha ?? null }));
-  return { heldPlanChanges, heldMerges, personAsks, personReviews, personAwaits, roundsOpened, heldStacks: holds, stackLinks: links, stallEvents };
+  return { heldPlanChanges, heldMerges, personAsks, personReviews, personAwaits, roundsOpened, personSignOffs: signOffs, heldStacks: holds, stackLinks: links, stallEvents };
 }
 
 /** What a person does at a chain's root: answer a question, merge or approve a pull request, decide on a stalled review, resume a hold, triage a parked issue, or what `words` says. */
@@ -371,9 +414,11 @@ export function personWaitsOf(input: PersonWaitInput): PersonWait[] {
     askedAgain.add(key);
     waits.push({ on: nodeOf(ask.issue ? `${ask.repo}#${ask.issue}` : ref), attentionId: `approve-again:${key}`, action: 'approve', number: ask.pr, url: pullUrl(ask.repo, ask.pr) });
   }
-  for (const [key, wait] of standingPersonAwaits(input.personAwaits ?? [], input.personReviews ?? [], input.roundsOpened ?? [], input.issues)) {
-    if (input.closed?.has(`${wait.repo}#${wait.pr}`) || askedAgain.has(key) || !fullNameOf(wait.repo)) continue;
-    waits.push({ on: nodeOf(`${wait.repo}#${wait.issue}`), attentionId: `approval:${key}`, action: 'approve', number: wait.pr, url: pullUrl(wait.repo, wait.pr) });
+  for (const [key, wait] of standingPersonAwaits(input.personAwaits ?? [], input.personReviews ?? [], input.roundsOpened ?? [], input.issues, input.personSignOffs ?? [])) {
+    const ref = `${wait.repo}#${wait.pr}`;
+    if (input.closed?.has(ref) || askedAgain.has(key) || !fullNameOf(wait.repo)) continue;
+    // A person's own pull request is a card of its own (`lonePulls`).
+    waits.push({ on: nodeOf(wait.issue !== null ? `${wait.repo}#${wait.issue}` : ref), attentionId: `approval:${key}`, action: 'approve', number: wait.pr, url: pullUrl(wait.repo, wait.pr) });
   }
 
   for (const [key, stall] of standingStalls(input.stallEvents ?? [], input.issues, input.tasks)) {
