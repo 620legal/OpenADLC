@@ -1,4 +1,5 @@
 import { createHmac, randomBytes } from 'node:crypto';
+import { DEFAULT_PORTS } from '@openadlc/shared';
 import type { DockerResult } from './drivers/docker.js';
 
 /**
@@ -33,7 +34,8 @@ import type { DockerResult } from './drivers/docker.js';
 export const TASK_TEMPLATE = 'openadlc_task_template';
 /** What the template holds: what pgvector's image offers and repositories most often ask for. */
 export const TEMPLATE_EXTENSIONS = ['vector', 'pgcrypto', 'citext', 'uuid-ossp'] as const;
-export const TASKDB_PORT = 47433;
+/** Where the server is published when nothing says: install.json's `ports.taskdb` moves it. */
+export const TASKDB_PORT = DEFAULT_PORTS.taskdb;
 const SUPERUSER = 'openadlc';
 
 export interface TaskDatabasesOptions {
@@ -50,6 +52,11 @@ export interface TaskDatabasesOptions {
    * the network.
    */
   bindAddress: string;
+  /**
+   * The host port it is published on, and the one each task's URL names:
+   * `OPENADLC_TASKDB_PORT`, 47433 when unset. Two installs on one machine
+   * each need their own; the second's server never started on the first's.
+   */
   port?: number;
   /** The password the image needs to make a new server, removed as soon as it is up; random unless a test says otherwise. */
   bootPassword?: () => string;
@@ -110,8 +117,31 @@ export async function taskdbBindAddress(
   return gateway.code === 0 && /^\d+\.\d+\.\d+\.\d+$/.test(address) ? address : '172.17.0.1';
 }
 
+/**
+ * How the server is, for the bridge's `task-database` check: `idle` before
+ * anything asked for it, `starting` while `ensure` runs, `running`, or
+ * `failed` with why and which containers publish its port.
+ */
+export interface TaskDatabaseStatus {
+  state: 'idle' | 'starting' | 'running' | 'failed';
+  container: string;
+  port: number;
+  error?: string;
+  /** Other containers publishing the port, as `name (install <id>)`; only when failed. */
+  holders?: string[];
+}
+
+/** The `docker inspect` format `bringUp` reads: state, Postgres's bindings, and whose install it is. */
+const INSPECT_FORMAT = '{{.State.Status}}\t{{json .HostConfig.PortBindings}}\t{{index .Config.Labels "openadlc.install"}}';
+
 export class TaskDatabases {
   private ready: Promise<void> | null = null;
+  /** Whether `bringUp` is running now. */
+  private starting = false;
+  /** Whether the last `bringUp` finished. */
+  private up = false;
+  /** Why the last `bringUp` failed, until one succeeds. */
+  private lastError: string | null = null;
 
   constructor(private readonly options: TaskDatabasesOptions) {}
 
@@ -133,6 +163,19 @@ export class TaskDatabases {
     return onStdin ? this.options.docker([...args, '-tA', '-f', '-'], sql) : this.options.docker([...args, '-tAc', sql]);
   }
 
+  /** Whether `docker inspect`'s bindings publish Postgres on this install's address and port. */
+  private publishedHere(json: string): boolean {
+    let bindings: Record<string, { HostIp?: string; HostPort?: string }[] | null> | null;
+    try {
+      bindings = JSON.parse(json || 'null') as typeof bindings;
+    } catch {
+      return false;
+    }
+    return (bindings?.['5432/tcp'] ?? []).some(
+      (binding) => binding.HostIp === this.options.bindAddress && binding.HostPort === String(this.port),
+    );
+  }
+
   private async must(sql: string, database = 'postgres', onStdin = false): Promise<string> {
     const result = await this.psql(sql, database, onStdin);
     if (result.code !== 0) throw new Error(`the task database server refused \`${sql.split(' ').slice(0, 4).join(' ')} …\`: ${result.stderr.trim().slice(0, 200)}`);
@@ -144,16 +187,92 @@ export class TaskDatabases {
    * is tried again by the next task that needs a database.
    */
   ensure(): Promise<void> {
-    this.ready ??= this.bringUp().catch((error: unknown) => {
-      this.ready = null;
-      throw error;
-    });
+    if (!this.ready) {
+      this.starting = true;
+      this.up = false;
+      this.ready = this.bringUp().then(
+        () => {
+          this.starting = false;
+          this.up = true;
+          this.lastError = null;
+        },
+        (error: unknown) => {
+          this.starting = false;
+          this.ready = null;
+          this.lastError = error instanceof Error ? error.message : String(error);
+          throw error;
+        },
+      );
+    }
     return this.ready;
   }
 
+  /**
+   * Where the server stands, asked of Docker when it was up: a server that
+   * stopped since is `failed`, and the next `ensure` starts it again rather
+   * than handing tasks a URL nothing answers.
+   */
+  async status(): Promise<TaskDatabaseStatus> {
+    const base = { container: this.options.container, port: this.port };
+    if (this.starting) return { ...base, state: 'starting' };
+    if (this.up) {
+      const state = await this.options.docker(['inspect', '-f', '{{.State.Status}}', this.options.container]);
+      const status = state.stdout.trim();
+      if (state.code === 0 && status === 'running') return { ...base, state: 'running' };
+      this.up = false;
+      this.ready = null;
+      this.lastError = state.code === 0 ? `${this.options.container} is ${status}, not running` : `${this.options.container} is gone`;
+    }
+    if (this.lastError === null) return { ...base, state: 'idle' };
+    return { ...base, state: 'failed', error: this.lastError, holders: await this.holders() };
+  }
+
+  /** The other containers publishing this server's port, each with the install it is labelled with. */
+  private async holders(): Promise<string[]> {
+    const listed = await this.options.docker([
+      'ps',
+      '--filter',
+      `publish=${this.port}`,
+      '--format',
+      '{{.Names}}\t{{.Label "openadlc.install"}}',
+    ]);
+    if (listed.code !== 0) return [];
+    return listed.stdout.split('\n').flatMap((line) => {
+      const [name = '', install = ''] = line.trim().split('\t');
+      if (!name || name === this.options.container) return [];
+      return [install && install !== '<no value>' ? `${name} (install ${install})` : name];
+    });
+  }
+
+  /**
+   * The container, made again when it no longer publishes where this install
+   * says: a changed `ports.taskdb` or bind address, or a container created on
+   * another install's port and stuck in `Created`, which `docker start` could
+   * never start. Removing it loses only the databases of tasks running now —
+   * each is dropped with its task, and the template is made again below.
+   * Another install's container under this name is never touched.
+   */
   private async bringUp(): Promise<void> {
-    const state = await this.options.docker(['inspect', '-f', '{{.State.Status}}', this.options.container]);
-    if (state.code !== 0) {
+    const inspected = await this.options.docker(['inspect', '-f', INSPECT_FORMAT, this.options.container]);
+    let present = inspected.code === 0;
+    if (present) {
+      const [status = '', bindings = '', labelled = ''] = inspected.stdout.trim().split('\t');
+      // Go's template prints a missing map key as `<no value>`.
+      const install = labelled === '<no value>' ? '' : labelled;
+      const own = this.options.installLabel.slice(this.options.installLabel.indexOf('=') + 1);
+      if (install && install !== own) {
+        throw new Error(`${this.options.container} belongs to install ${install}, not ${own}; it is left alone. Give this install its own OPENADLC_BOT_PREFIX and OPENADLC_INSTALL_ID`);
+      }
+      if (!this.publishedHere(bindings)) {
+        const removed = await this.options.docker(['rm', '-f', this.options.container]);
+        if (removed.code !== 0) throw new Error(`could not remove ${this.options.container} to publish it on ${this.port}: ${removed.stderr.trim().slice(0, 200)}`);
+        present = false;
+      } else if (status !== 'running') {
+        const started = await this.options.docker(['start', this.options.container]);
+        if (started.code !== 0) throw new Error(`could not start ${this.options.container}: ${started.stderr.trim().slice(0, 200)}`);
+      }
+    }
+    if (!present) {
       const run = await this.options.docker([
         'run',
         '-d',
@@ -180,8 +299,6 @@ export class TaskDatabases {
         this.options.image,
       ], undefined, { POSTGRES_PASSWORD: (this.options.bootPassword ?? (() => randomBytes(24).toString('hex')))() });
       if (run.code !== 0) throw new Error(`could not start ${this.options.container}: ${run.stderr.trim().slice(0, 200)}`);
-    } else if (state.stdout.trim() !== 'running') {
-      await this.options.docker(['start', this.options.container]);
     }
 
     // It takes a moment to take connections after it starts.

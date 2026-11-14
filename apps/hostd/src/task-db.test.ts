@@ -11,7 +11,29 @@ import { TASK_TEMPLATE, TaskDatabases, taskDatabaseName, taskdbBindAddress } fro
 
 const TASK = '3f2a9c1e-7b4d-4e8a-9c2f-1a2b3c4d5e6f';
 
-function server(state: { running?: boolean; template?: boolean; superuserPassword?: boolean; bootPassword?: () => string; key?: string } = {}) {
+interface ServerState {
+  /** Undefined: no container. */
+  running?: boolean;
+  template?: boolean;
+  superuserPassword?: boolean;
+  bootPassword?: () => string;
+  key?: string;
+  /** The port hostd is configured with; none is the default. */
+  port?: number;
+  /** Where the existing container publishes Postgres, when not where hostd says. */
+  boundTo?: string;
+  /** The install the existing container is labelled with: `default` unless said. */
+  label?: string;
+  /** What `docker start` and `docker run` answer, when not success. */
+  start?: DockerResult;
+  run?: DockerResult;
+  /** What `docker ps --filter publish=…` lists. */
+  publishing?: string;
+  /** This install's container: `openadlc-taskdb` unless said. */
+  container?: string;
+}
+
+function server(state: ServerState = {}) {
   /** The task databases made on it, so a lookup finds only those. */
   const made = new Set<string>();
   const calls: string[][] = [];
@@ -23,8 +45,34 @@ function server(state: { running?: boolean; template?: boolean; superuserPasswor
     if (input !== undefined) inputs.set(args, input);
     if (secrets) clientEnv.set(args, secrets);
     if (args[0] === 'inspect') {
-      return state.running === undefined ? { code: 1, stdout: '', stderr: 'no such container' } : { code: 0, stdout: state.running ? 'running\n' : 'exited\n', stderr: '' };
+      if (state.running === undefined) return { code: 1, stdout: '', stderr: 'no such container' };
+      const status = state.running ? 'running' : 'created';
+      if (!String(args[2]).includes('PortBindings')) return { code: 0, stdout: `${status}\n`, stderr: '' };
+      const [ip, port] = (state.boundTo ?? `172.17.0.1:${state.port ?? 47433}`).split(':');
+      const bindings = JSON.stringify({ '5432/tcp': [{ HostIp: ip, HostPort: port }] });
+      return { code: 0, stdout: `${status}\t${bindings}\t${state.label ?? 'default'}\n`, stderr: '' };
     }
+    if (args[0] === 'rm') {
+      state.running = undefined;
+      return { code: 0, stdout: '', stderr: '' };
+    }
+    if (args[0] === 'start') {
+      if (state.start) return state.start;
+      state.running = true;
+      return { code: 0, stdout: '', stderr: '' };
+    }
+    if (args[0] === 'run') {
+      if (state.run) {
+        // Docker leaves the container it could not start behind, in `Created`.
+        state.running = false;
+        return state.run;
+      }
+      state.running = true;
+      state.superuserPassword ??= true;
+      state.boundTo = undefined;
+      return { code: 0, stdout: '', stderr: '' };
+    }
+    if (args[0] === 'ps') return { code: 0, stdout: state.publishing ?? '', stderr: '' };
     if (args.includes('psql') && String(args.at(-1)).startsWith('select 1 from pg_database')) {
       const name = /datname = '([^']+)'/.exec(String(args.at(-1)))?.[1] ?? '';
       const there = name === TASK_TEMPLATE ? state.template : made.has(name);
@@ -34,17 +82,18 @@ function server(state: { running?: boolean; template?: boolean; superuserPasswor
     if (args.includes('psql') && making?.[1]) made.add(making[1]);
     if (args.includes('psql') && String(args.at(-1)).includes('from pg_authid')) {
       // A server just made has the password it was made with.
-      return { code: 0, stdout: (state.superuserPassword ?? state.running === undefined) ? 't\n' : 'f\n', stderr: '' };
+      return { code: 0, stdout: state.superuserPassword ? 't\n' : 'f\n', stderr: '' };
     }
     if (args.includes('psql') && String(args.at(-1)).startsWith('drop database if exists openadlc_task_template')) state.template = false;
     return { code: 0, stdout: '', stderr: '' };
   };
   const databases = new TaskDatabases({
     docker,
-    container: 'openadlc-taskdb',
+    container: state.container ?? 'openadlc-taskdb',
     image: 'pgvector/pgvector:pg16',
     installLabel: 'openadlc.install=default',
     bindAddress: '172.17.0.1',
+    ...(state.port === undefined ? {} : { port: state.port }),
     ...(state.key === undefined ? { password: () => 'a-random-password' } : { key: async () => state.key ?? null }),
     ...(state.bootPassword ? { bootPassword: state.bootPassword } : {}),
   });
@@ -53,7 +102,7 @@ function server(state: { running?: boolean; template?: boolean; superuserPasswor
     calls
       .filter((args) => args.includes('psql'))
       .map((args) => `${args[args.indexOf('-d') + 1]}: ${inputs.get(args) ?? args.at(-1)}`);
-  return { calls, databases, sql, inputs, clientEnv };
+  return { calls, databases, sql, inputs, clientEnv, state };
 }
 
 const NAME = 't_3f2a9c1e7b4d4e8a9c2f1a2b3c4d5e6f';
@@ -223,6 +272,106 @@ describe('a task’s database', () => {
       'postgres: drop role if exists t_3f2a9c1e',
     ]);
     await expect(server().databases.drop(TASK)).resolves.toBeUndefined();
+  });
+});
+
+describe('the port an install’s server is published on', () => {
+  it('is the configured one, in the published binding and in every task’s URL', async () => {
+    const { calls, databases } = server({ port: 48433 });
+
+    const url = await databases.create(TASK);
+
+    expect(calls.find((args) => args[0] === 'run')).toEqual(expect.arrayContaining(['-p', '172.17.0.1:48433:5432']));
+    expect(url).toMatch(new RegExp(`@host\\.docker\\.internal:48433/${NAME}$`));
+  });
+
+  it('is 47433 when nothing is configured', async () => {
+    const { calls, databases } = server();
+
+    const url = await databases.create(TASK);
+
+    expect(calls.find((args) => args[0] === 'run')).toEqual(expect.arrayContaining(['-p', '172.17.0.1:47433:5432']));
+    expect(url).toMatch(new RegExp(`@host\\.docker\\.internal:47433/${NAME}$`));
+  });
+
+  it('leaves a running container that already publishes there alone', async () => {
+    const { calls, databases } = server({ running: true, template: true, port: 48433 });
+
+    await databases.ensure();
+
+    expect(calls.filter((args) => ['rm', 'run', 'start'].includes(args[0]!))).toEqual([]);
+  });
+
+  it('makes the container again when it publishes on another port, a stuck `Created` one included', async () => {
+    const { calls, databases } = server({ running: false, template: true, port: 48433, boundTo: '172.17.0.1:47433' });
+
+    await databases.ensure();
+
+    const lifecycle = calls.filter((args) => ['rm', 'run', 'start'].includes(args[0]!));
+    expect(lifecycle.map((args) => args[0])).toEqual(['rm', 'run']);
+    expect(lifecycle[0]).toEqual(['rm', '-f', 'openadlc-taskdb']);
+    expect(lifecycle[1]).toEqual(expect.arrayContaining(['-p', '172.17.0.1:48433:5432']));
+  });
+
+  it('never removes another install’s container under its name, and says whose it is', async () => {
+    const { calls, databases } = server({ running: true, port: 48433, boundTo: '172.17.0.1:47433', label: 'second' });
+
+    await expect(databases.ensure()).rejects.toThrow(/openadlc-taskdb belongs to install second/);
+    expect(calls.filter((args) => ['rm', 'run', 'start'].includes(args[0]!))).toEqual([]);
+  });
+
+  it('fails with what Docker said when `docker start` does, rather than waiting a minute on a server that is not there', async () => {
+    const { calls, databases } = server({
+      running: false,
+      start: { code: 1, stdout: '', stderr: 'Error response from daemon: failed programming external connectivity: Bind for 172.17.0.1:47433 failed: port is already allocated\n' },
+    });
+
+    await expect(databases.ensure()).rejects.toThrow(/could not start openadlc-taskdb: .*port is already allocated/);
+    expect(calls.some((args) => args.includes('pg_isready'))).toBe(false);
+  });
+});
+
+describe('how the server is, as hostd reports it', () => {
+  it('is idle before anything asks for it', async () => {
+    const { databases } = server();
+
+    expect(await databases.status()).toEqual({ state: 'idle', container: 'openadlc-taskdb', port: 47433 });
+  });
+
+  it('is starting while it is brought up, and running once it is', async () => {
+    const { databases } = server();
+
+    const ensuring = databases.ensure();
+    expect((await databases.status()).state).toBe('starting');
+    await ensuring;
+    expect(await databases.status()).toEqual({ state: 'running', container: 'openadlc-taskdb', port: 47433 });
+  });
+
+  it('is failed, with why and which other install holds its port, after a start on an allocated port', async () => {
+    const { databases } = server({
+      container: 'second-taskdb',
+      run: { code: 125, stdout: '', stderr: 'docker: Error response from daemon: failed programming external connectivity: port is already allocated.\n' },
+      // Its own container, left in `Created`, is never its own holder.
+      publishing: 'openadlc-taskdb\tdefault\nsecond-taskdb\tdefault\n',
+    });
+
+    await expect(databases.ensure()).rejects.toThrow(/could not start second-taskdb/);
+    const status = await databases.status();
+
+    expect(status).toMatchObject({ state: 'failed', container: 'second-taskdb', port: 47433 });
+    expect(status.error).toMatch(/port is already allocated/);
+    expect(status.holders).toEqual(['openadlc-taskdb (install default)']);
+  });
+
+  it('is failed, and started again by the next ensure, once a server that was up has stopped', async () => {
+    const { databases, state } = server();
+    await databases.ensure();
+
+    state.running = false;
+
+    expect(await databases.status()).toMatchObject({ state: 'failed', error: 'openadlc-taskdb is created, not running' });
+    await databases.ensure();
+    expect(await databases.status()).toMatchObject({ state: 'running' });
   });
 });
 

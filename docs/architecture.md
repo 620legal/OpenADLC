@@ -27,7 +27,7 @@ to Done. The design and its decisions are in
 | **console** (`apps/console`) | Next.js, :47300 | The board, the bots' threads, gates, costs, settings and onboarding. It holds nothing: every read is the bridge's, and the bridge leaves out every issue labelled `openadlc:ignore` and its pull request (`ignoredSubjects`) |
 | **cli** (`apps/cli`) | `openadlc …` | Sets an install up, starts and stops it, checks it; each service runs under a keeper that restarts it |
 | **Postgres** | `openadlc-db`, :47432 | The platform's own state. GitHub stays the record of the work |
-| **Task database server** | `openadlc-taskdb`, :47433, one per host, on the host's gateway address only (docker driver) | A database of its own for each task whose seat has `sidecarDb`, dropped with the task's computer |
+| **Task database server** | `openadlc-taskdb`, :47433 (`ports.taskdb`, `OPENADLC_TASKDB_PORT`), one per install on a host, on the host's gateway address only (docker driver) | A database of its own for each task whose seat has `sidecarDb`, dropped with the task's computer |
 
 GitHub is the system of record: an issue's stage is its `adlc:*` label, a
 decision is a comment, a change is a pull request. OpenADLC's database holds what

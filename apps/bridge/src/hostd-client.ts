@@ -67,6 +67,22 @@ export type WorktreeAnswer =
   | { kind: 'directory'; path: string; entries: { name: string; kind: string; size: number | null }[]; truncated: boolean }
   | { kind: 'file'; path: string; size: number; bytes: number; truncated: boolean; content: string };
 
+/**
+ * The host's task database server as hostd reports it (`GET /task-database`):
+ * `none` under the local driver, which has none; `failed` with why and the
+ * other containers publishing its port.
+ */
+export interface TaskDatabaseView {
+  state: 'none' | 'idle' | 'starting' | 'running' | 'failed';
+  container?: string;
+  port?: number;
+  error?: string;
+  holders?: string[];
+}
+
+/** How long the bridge waits on hostd for its task database server's status: a `docker inspect` and a `docker ps`. */
+export const TASK_DATABASE_TIMEOUT_MS = 15_000;
+
 /** What hostd reports about one engine: the engines package's own type, which the bridge proxies and does not compute. */
 export type { EngineReadiness };
 
@@ -247,6 +263,14 @@ export class HostdClient {
    */
   async engines(): Promise<{ host?: string; bots: { bot: string; readiness: EngineReadiness }[] }> {
     return this.call('GET', '/engines', { timeoutMs: this.options.enginesTimeoutMs ?? ENGINES_TIMEOUT_MS });
+  }
+
+  /**
+   * How the host's task database server is, for the `task-database` check.
+   * hostd starts one nothing asked for yet, or one that failed, as it answers.
+   */
+  async taskDatabase(): Promise<TaskDatabaseView> {
+    return this.call('GET', '/task-database', { timeoutMs: TASK_DATABASE_TIMEOUT_MS });
   }
 
   async sessions(bot: string): Promise<{ sessions: unknown[] }> {
