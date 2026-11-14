@@ -1480,8 +1480,8 @@ The bridge records it only if all of these hold:
 - People has Approves on for it;
 - the head has not moved.
 
-The sign-off row is written before its audit row, and taken back if the audit
-row cannot be written.
+The sign-off row and its audit entry are written in one transaction: both land
+or neither does, so no sign-off counts without an audit entry.
 
 `review-gate` and the merge (`mergeDecision`) count a sign-off as the author's
 approval, but only for their own login, only when the row's account id is the

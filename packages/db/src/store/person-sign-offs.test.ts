@@ -5,11 +5,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../client.js', () => ({
   query: vi.fn(),
-  queryOne: vi.fn(),
+  withTransaction: vi.fn(),
 }));
 
-import { query, queryOne } from '../client.js';
-import { forPull, listSince, record, remove } from './person-sign-offs.js';
+import { query, withTransaction } from '../client.js';
+import { forPull, listSince, record } from './person-sign-offs.js';
 
 const HEAD = 'a'.repeat(40);
 
@@ -40,26 +40,73 @@ const SIGNED = {
 
 const INPUT = { repoId: 'repo-1', prNumber: 46, head: HEAD, githubUserId: 583231, githubLogin: 'janedoe', identity: 'jane@example.com' };
 
+const AUDIT = {
+  actor: 'jane@example.com',
+  action: 'pull.human_review_signed_off',
+  target: 'app#46',
+  payload: { repo: 'app', pr: 46, login: 'janedoe', head: HEAD },
+};
+
+/**
+ * A transaction as the database keeps one: its statements are kept only when
+ * it commits, and none of them when any throws. `answer` gives each
+ * statement's rows, or throws for it.
+ */
+function transaction(answer: (sql: string) => unknown[]) {
+  const committed: { sql: string; params: unknown[] }[] = [];
+  vi.mocked(withTransaction).mockImplementation(async (fn) => {
+    const pending: { sql: string; params: unknown[] }[] = [];
+    const client = {
+      query: async (sql: string, params: unknown[] = []) => {
+        const rows = answer(sql);
+        pending.push({ sql, params });
+        return { rows };
+      },
+    };
+    const result = await fn(client as never);
+    committed.push(...pending);
+    return result;
+  });
+  return committed;
+}
+
 beforeEach(() => {
   vi.mocked(query).mockReset();
-  vi.mocked(queryOne).mockReset();
+  vi.mocked(withTransaction).mockReset();
 });
 
 describe('an author’s sign-off of their own pull request', () => {
-  it('is recorded once per head and account: a second press answers the one already there', async () => {
-    vi.mocked(queryOne).mockResolvedValueOnce(ROW);
-    await expect(record(INPUT)).resolves.toEqual({ signOff: SIGNED, created: true });
-    const [sql, params] = vi.mocked(queryOne).mock.calls[0] ?? [];
-    expect(String(sql)).toMatch(/on conflict \(repo_id, pr_number, head, github_user_id\) do nothing/);
-    expect(params).toEqual(['repo-1', 46, HEAD, 583231, 'janedoe', 'jane@example.com']);
-
-    vi.mocked(queryOne).mockResolvedValueOnce(null).mockResolvedValueOnce(ROW);
-    await expect(record(INPUT)).resolves.toEqual({ signOff: SIGNED, created: false });
+  it('is recorded with its audit entry in one transaction', async () => {
+    const committed = transaction((sql) => (sql.includes('insert into person_sign_offs') ? [ROW] : []));
+    await expect(record(INPUT, AUDIT)).resolves.toEqual({ signOff: SIGNED, created: true });
+    expect(committed).toHaveLength(2);
+    expect(committed[0]?.sql).toMatch(/on conflict \(repo_id, pr_number, head, github_user_id\) do nothing/);
+    expect(committed[0]?.params).toEqual(['repo-1', 46, HEAD, 583231, 'janedoe', 'jane@example.com']);
+    expect(committed[1]).toEqual({
+      sql: 'insert into audit (actor, action, target, payload) values ($1, $2, $3, $4)',
+      params: ['jane@example.com', 'pull.human_review_signed_off', 'app#46', JSON.stringify(AUDIT.payload)],
+    });
   });
 
-  it('says so when it can be neither recorded nor read', async () => {
-    vi.mocked(queryOne).mockResolvedValueOnce(null).mockResolvedValueOnce(null);
-    await expect(record(INPUT)).rejects.toThrow(/could not be recorded or read; try again/);
+  it('keeps no sign-off when its audit entry cannot be written: neither lands', async () => {
+    const committed = transaction((sql) => {
+      if (sql.startsWith('insert into audit')) throw new Error('the audit table is full');
+      return sql.includes('insert into person_sign_offs') ? [ROW] : [];
+    });
+    await expect(record(INPUT, AUDIT)).rejects.toThrow('the audit table is full');
+    expect(committed).toEqual([]);
+  });
+
+  it('answers the one already there on a second press, and audits that press too', async () => {
+    const committed = transaction((sql) => (sql.includes('insert into person_sign_offs') ? [] : sql.startsWith('select') ? [ROW] : []));
+    await expect(record(INPUT, AUDIT)).resolves.toEqual({ signOff: SIGNED, created: false });
+    expect(committed.map((one) => one.sql.split(' ')[0])).toEqual(['with', 'select', 'insert']);
+  });
+
+  it('says so when it can be neither recorded nor read, and audits nothing', async () => {
+    const committed = transaction(() => []);
+    await expect(record(INPUT, AUDIT)).rejects.toThrow(/could not be recorded or read; try again/);
+    expect(committed).toEqual([]);
   });
 
   it('is read by pull request, and since a moment, with the repository’s name', async () => {
@@ -72,12 +119,6 @@ describe('an author’s sign-off of their own pull request', () => {
     vi.mocked(query).mockResolvedValueOnce([ROW]);
     await expect(listSince(since)).resolves.toEqual([SIGNED]);
     expect(vi.mocked(query).mock.calls[1]?.[1]).toEqual([since]);
-  });
-
-  it('is removed by id, for one whose audit row could not be written', async () => {
-    vi.mocked(query).mockResolvedValueOnce([]);
-    await remove('sign-off-1');
-    expect(vi.mocked(query).mock.calls[0]).toEqual(['delete from person_sign_offs where id = $1', ['sign-off-1']]);
   });
 });
 

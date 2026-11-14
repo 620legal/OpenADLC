@@ -95,6 +95,56 @@ describe('the container an install keeps its database in', () => {
 });
 
 /**
+ * A second install on one machine asked Docker for the first's task database
+ * port, and its tasks ran with no database while `up` said it was up.
+ */
+describe('the task database port `openadlc up` checks', () => {
+  const SECOND = { OPENADLC_INSTALL_ID: 'second', OPENADLC_BOT_PREFIX: 'second-' };
+
+  function listing(lines: string): DockerRun {
+    return async (args) => {
+      if (args[0] !== 'ps') throw new Error(`docker ${args.join(' ')} was not expected`);
+      return { stdout: lines };
+    };
+  }
+
+  async function checking(port: number, env: NodeJS.ProcessEnv, docker: DockerRun) {
+    const { taskDatabasePortClear } = await import('./up.js');
+    const printed: string[] = [];
+    const log = vi.spyOn(console, 'log').mockImplementation((line: string) => void printed.push(String(line)));
+    const error = vi.spyOn(console, 'error').mockImplementation((line: string) => void printed.push(String(line)));
+    try {
+      return { clear: await taskDatabasePortClear(port, env, docker), said: printed.join('\n') };
+    } finally {
+      log.mockRestore();
+      error.mockRestore();
+    }
+  }
+
+  it('names the container hostd keeps it in, as hostd does', async () => {
+    const { taskDatabaseContainer } = await import('./up.js');
+    expect(taskDatabaseContainer({})).toBe('openadlc-taskdb');
+    expect(taskDatabaseContainer(SECOND)).toBe('second-taskdb');
+  });
+
+  it('fails, naming the other install’s container and ports.taskdb, when another container publishes the port', async () => {
+    const { clear, said } = await checking(47433, SECOND, listing('openadlc-taskdb\t172.17.0.1:47433->5432/tcp\n'));
+
+    expect(clear).toBe(false);
+    expect(said).toContain('the task database port 47433 is published by openadlc-taskdb, not this install');
+    expect(said).toContain('second-taskdb');
+    expect(said).toContain('set ports.taskdb in');
+  });
+
+  it('passes when only the install’s own container publishes it, or nothing does', async () => {
+    expect((await checking(47433, SECOND, listing('second-taskdb\t172.17.0.1:47433->5432/tcp\n'))).clear).toBe(true);
+    expect((await checking(47433, {}, listing('openadlc-taskdb\t172.17.0.1:47433->5432/tcp\n'))).clear).toBe(true);
+    expect((await checking(48433, SECOND, listing('openadlc-taskdb\t172.17.0.1:47433->5432/tcp\n'))).clear).toBe(true);
+    expect((await checking(47433, SECOND, listing(''))).clear).toBe(true);
+  });
+});
+
+/**
  * The container `openadlc up` creates. It used to be given `openadlc` as its
  * password whatever `databaseUrl` said, and was published on every address,
  * where Docker's rules go around a host firewall.

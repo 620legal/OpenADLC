@@ -102,6 +102,7 @@ role alone before it has one (`botInWords`, `packages/shared/src/bot-words.ts`).
 |---|---|---|---|
 | `hostd` | 2 min | OpenADLC’s host service is not answering | `openadlc up` on the machine OpenADLC runs on |
 | `hostd-driver` | 10 min | Tasks run on this machine as your user, not in containers (a warning) | `infra/local/build-bot-image.sh`, then `openadlc init --driver docker` and `openadlc down && openadlc up` |
+| `task-database` | 5 min | Tasks are starting without a database | Set `ports.taskdb` in `install.json` to a free port, then `openadlc down && openadlc up` while no task runs ([a port is already in use](#a-port-is-already-in-use)) |
 | `webhook` | 5 min | GitHub is not sending events to OpenADLC, and five others | [Webhooks do not arrive](#webhooks-do-not-arrive) |
 | `app-installed` | 15 min | The OpenADLC app is not installed on `<repo>` — or is private, so it cannot be; is suspended there; or is not given `<repo>` | The step on the card: install it on the account, make it public first ([more than one account](self-hosting.md#repositories-under-more-than-one-account)), unsuspend it, or add the repository on the installation's page |
 | `app-selection` | 60 min | The OpenADLC app is given all of `<organization>`’s repositories (a warning) | Choose **Only select repositories** on the installation's page and pick the ones the crew works in; set the organization's base permission to No permission and keep the bots out of teams ([more than one account](self-hosting.md#repositories-under-more-than-one-account)) |
@@ -1323,8 +1324,14 @@ process it started is the one answering (`apps/cli/src/commands/up.ts`).
 Postgres is not asked: it is reached at `install.json`'s `databaseUrl` (47432
 by default), and a server there that is not this install's ends `openadlc up`
 with `cannot reach postgres`. Under the docker driver hostd also publishes its
-task database server (`openadlc-taskdb`) on 47433, which no setting moves; a
-conflict there shows in hostd's log as `task … gets no database`.
+task database server (`openadlc-taskdb`) on 47433, which `ports.taskdb` moves.
+A second install on the same machine needs its own: `openadlc up` names
+another install's container publishing it, and the `task-database` check says
+"Tasks are starting without a database" with what holds the port. Set
+`"ports": {"taskdb": 48433}` (any free port) in that install's `install.json`
+and run `openadlc down && openadlc up` while no task is running: hostd makes its
+container again on the new port, which drops the databases of tasks running
+then.
 
 **What to do.** Find what holds the port. It is usually the same services,
 started under another `OPENADLC_HOME`, and `openadlc down` there stops them:

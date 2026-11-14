@@ -20,6 +20,7 @@ import { isWorktreeRefusal, readWorktree } from './worktree-files.js';
 import { LocalCiRefused, type LocalCi } from './local-ci.js';
 import { hostCheckRequestFrom, type HostChecks } from './host-check.js';
 import type { ImageRestart } from './restart-onto-image.js';
+import type { TaskDatabases } from './task-db.js';
 import { ATTACH_SUBPROTOCOL_PREFIX } from './terminal-gateway.js';
 
 async function readBody(request: IncomingMessage): Promise<Record<string, unknown>> {
@@ -113,6 +114,8 @@ export function createHostdServer(input: {
   restartOntoImage?: ImageRestart;
   /** Asks the egress proxy about a name, and puts Settings' names on it (`egress.ts`). Absent, its routes say so. */
   egress?: { probe: Pick<EgressProbe, 'ask'>; list: Pick<EgressList, 'available' | 'apply'> };
+  /** The host's task database server, under the docker driver (`task-db.ts`). Absent, its route answers `none`. */
+  taskDatabases?: Pick<TaskDatabases, 'status' | 'ensure'>;
 }): Server {
   const { config, driver, runner, attachTokens } = input;
 
@@ -410,6 +413,23 @@ export function createHostdServer(input: {
         if (error instanceof EngineUpdateRefused) return send(response, error.status, { error: error.message });
         throw error;
       }
+    }
+
+    /**
+     * How the task database server is, for the bridge's `task-database`
+     * check. Behind the secret, not on `/healthz`: that is open and polled
+     * every few seconds, and this names containers and asks Docker. A server
+     * nothing has asked for, or one that failed, is started in the
+     * background — answered first, so a failure is reported as one and not
+     * as `starting` — which is safe to retry now each install publishes on a
+     * port of its own.
+     */
+    if (method === 'GET' && path === '/task-database') {
+      const databases = input.taskDatabases;
+      if (!databases) return send(response, 200, { state: 'none' });
+      const status = await databases.status();
+      if (status.state === 'idle' || status.state === 'failed') void databases.ensure().catch(() => undefined);
+      return send(response, 200, status);
     }
 
     /**

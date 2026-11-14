@@ -1,4 +1,4 @@
-import { query, queryOne } from '../client.js';
+import { query, withTransaction } from '../client.js';
 
 /**
  * A pull request's author, named by AGENTS.md's Human review for its paths,
@@ -52,37 +52,53 @@ function toSignOff(row: Row): PersonSignOff {
   };
 }
 
+/** The audit entry a sign-off is written with, in the same transaction. */
+export interface SignOffAudit {
+  actor: string;
+  action: string;
+  target: string;
+  payload: Record<string, unknown>;
+}
+
 /**
- * Records one, or answers the one already there for this head and account:
- * a second press, in another tab, signs off nothing twice.
+ * Records one with its audit entry, in one transaction: both land or neither
+ * does. Written one after the other, a failed audit row took the sign-off
+ * back with a second write, and when that failed too a sign-off counted
+ * toward `review-gate` and the merge with no audit entry at all (#322).
+ *
+ * A second press, in another tab, signs off nothing twice: it answers the
+ * row already there with `created: false`, and its press is audited too.
  */
-export async function record(input: {
-  repoId: string;
-  prNumber: number;
-  head: string;
-  githubUserId: number;
-  githubLogin: string;
-  identity: string;
-}): Promise<{ signOff: PersonSignOff; created: boolean }> {
-  const inserted = await queryOne<Row>(
-    `with added as (
-       insert into person_sign_offs (repo_id, pr_number, head, github_user_id, github_login, identity)
-       values ($1, $2, $3, $4, $5, $6)
-       on conflict (repo_id, pr_number, head, github_user_id) do nothing
-       returning *
-     )
-     select ${COLUMNS} from added s join repos r on r.id = s.repo_id`,
-    [input.repoId, input.prNumber, input.head, input.githubUserId, input.githubLogin, input.identity],
-  );
-  if (inserted) return { signOff: toSignOff(inserted), created: true };
-  const had = await queryOne<Row>(`select ${COLUMNS} from ${FROM} where s.repo_id = $1 and s.pr_number = $2 and s.head = $3 and s.github_user_id = $4`, [
-    input.repoId,
-    input.prNumber,
-    input.head,
-    input.githubUserId,
-  ]);
-  if (!had) throw new Error(`the sign-off of #${input.prNumber} at ${input.head.slice(0, 7)} could not be recorded or read; try again`);
-  return { signOff: toSignOff(had), created: false };
+export async function record(
+  input: {
+    repoId: string;
+    prNumber: number;
+    head: string;
+    githubUserId: number;
+    githubLogin: string;
+    identity: string;
+  },
+  audit: SignOffAudit,
+): Promise<{ signOff: PersonSignOff; created: boolean }> {
+  return withTransaction(async (client) => {
+    const key = [input.repoId, input.prNumber, input.head, input.githubUserId];
+    const inserted = (
+      await client.query<Row>(
+        `with added as (
+           insert into person_sign_offs (repo_id, pr_number, head, github_user_id, github_login, identity)
+           values ($1, $2, $3, $4, $5, $6)
+           on conflict (repo_id, pr_number, head, github_user_id) do nothing
+           returning *
+         )
+         select ${COLUMNS} from added s join repos r on r.id = s.repo_id`,
+        [...key, input.githubLogin, input.identity],
+      )
+    ).rows[0];
+    const row = inserted ?? (await client.query<Row>(`select ${COLUMNS} from ${FROM} where s.repo_id = $1 and s.pr_number = $2 and s.head = $3 and s.github_user_id = $4`, key)).rows[0];
+    if (!row) throw new Error(`the sign-off of #${input.prNumber} at ${input.head.slice(0, 7)} could not be recorded or read; try again`);
+    await client.query('insert into audit (actor, action, target, payload) values ($1, $2, $3, $4)', [audit.actor, audit.action, audit.target, JSON.stringify(audit.payload)]);
+    return { signOff: toSignOff(row), created: Boolean(inserted) };
+  });
 }
 
 /** Every sign-off on one pull request, oldest first: what `review-gate` and the merge read. */
@@ -95,9 +111,4 @@ export async function forPull(repoId: string, prNumber: number): Promise<PersonS
 export async function listSince(since: Date): Promise<PersonSignOff[]> {
   const rows = await query<Row>(`select ${COLUMNS} from ${FROM} where s.signed_at >= $1 order by s.signed_at, s.id`, [since]);
   return rows.map(toSignOff);
-}
-
-/** Takes one back: only for a sign-off whose audit row could not be written, which must not count. */
-export async function remove(id: string): Promise<void> {
-  await query('delete from person_sign_offs where id = $1', [id]);
 }

@@ -168,20 +168,22 @@ export function liveHumanReviewDecisions(input: {
     isCrew: input.person.isCrew,
     approves: async (githubUserId) => (await peopleStore.personByGithubId(githubUserId))?.approves === true,
     signOff: {
-      record: async (entry) => {
+      record: async (entry, audit) => {
         const found = await repos.getRepoByName(entry.repo);
         if (!found) throw new Error(`${entry.repo} is not a repository this install manages; nothing was recorded.`);
-        const { signOff, created } = await personSignOffs.record({
-          repoId: found.id,
-          prNumber: entry.pr,
-          head: entry.head,
-          githubUserId: entry.githubUserId,
-          githubLogin: entry.githubLogin,
-          identity: entry.identity,
-        });
+        const { signOff, created } = await personSignOffs.record(
+          {
+            repoId: found.id,
+            prNumber: entry.pr,
+            head: entry.head,
+            githubUserId: entry.githubUserId,
+            githubLogin: entry.githubLogin,
+            identity: entry.identity,
+          },
+          audit,
+        );
         return { id: signOff.id, created };
       },
-      remove: (id) => personSignOffs.remove(id),
     },
     postReviewAsPerson,
     commentAsApp: async (fullName, number, body) => {

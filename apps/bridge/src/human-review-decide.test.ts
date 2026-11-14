@@ -42,18 +42,22 @@ function world(over: Partial<HumanReviewDeps> = {}) {
     isCrew: vi.fn(async (login: string) => login === 'openadlc-bot'),
     // People has Approves on for @janedoe only.
     approves: vi.fn(async (id: number) => id === JANE),
+    // Written as the store writes them, in one transaction: the row and its
+    // audit entry land together, or neither does.
     signOff: {
-      record: vi.fn(async (entry: { repo: string; pr: number; head: string; githubUserId: number; githubLogin: string; identity: string }) => {
-        const had = signOffs.find((one) => one.repo === entry.repo && one.pr === entry.pr && one.head === entry.head && one.githubUserId === entry.githubUserId);
-        if (had) return { id: had.id, created: false };
-        const id = `sign-off-${signOffs.length + 1}`;
-        signOffs.push({ id, ...entry });
-        return { id, created: true };
-      }),
-      remove: vi.fn(async (id: string) => {
-        const at = signOffs.findIndex((one) => one.id === id);
-        if (at >= 0) signOffs.splice(at, 1);
-      }),
+      record: vi.fn(
+        async (
+          entry: { repo: string; pr: number; head: string; githubUserId: number; githubLogin: string; identity: string },
+          audit: { actor: string; action: string; target: string; payload: Record<string, unknown> },
+        ) => {
+          const had = signOffs.find((one) => one.repo === entry.repo && one.pr === entry.pr && one.head === entry.head && one.githubUserId === entry.githubUserId);
+          audits.push(audit);
+          if (had) return { id: had.id, created: false };
+          const id = `sign-off-${signOffs.length + 1}`;
+          signOffs.push({ id, ...entry });
+          return { id, created: true };
+        },
+      ),
     },
     postReviewAsPerson: vi.fn(async (token: string, _full: string, number: number, review: { commitId: string; body: string }) => {
       posted.push({ token, number, review });
@@ -319,19 +323,45 @@ describe('an author’s sign-off of their own pull request (#322)', () => {
     expect(posted).toEqual([]);
   });
 
-  it('keeps no sign-off whose audit row could not be written, and tells the person', async () => {
+  it('keeps neither the sign-off nor its audit entry when they cannot be written together, and tells the person', async () => {
     const warn = vi.fn();
-    const { decisions, signIn, signOffs, deps } = opened(jane, {
-      audit: async () => {
-        throw new Error('the database is down');
+    const { decisions, signIn, signOffs, audits, deps } = opened(jane, {
+      signOff: {
+        record: vi.fn(async () => {
+          throw new Error('the database is down');
+        }),
       },
       warn,
     });
     await decisions.approve(asked);
-    await expect(signIn(jane)).rejects.toThrow('could not write your sign-off to its audit log, so it does not count');
-    expect(deps.signOff.remove).toHaveBeenCalledWith('sign-off-1');
+    await expect(signIn(jane)).rejects.toThrow('could not record your sign-off and its audit entry, so it does not count');
+    expect(deps.signOff.record).toHaveBeenCalledTimes(1);
     expect(signOffs).toEqual([]);
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('was not audited, so it was not kept'));
+    expect(audits).toEqual([]);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('was not recorded: the database is down'));
+  });
+
+  it('writes the sign-off with its audit entry, never the audit on its own', async () => {
+    const { decisions, signIn, deps } = opened(jane);
+    await decisions.approve(asked);
+    await signIn(jane);
+    expect(deps.signOff.record).toHaveBeenCalledWith(
+      { repo: 'openadlc', pr: 40, head: HEAD, githubUserId: JANE, githubLogin: 'janedoe', identity: 'jane@acme.test' },
+      expect.objectContaining({ action: 'pull.human_review_signed_off', target: 'openadlc#40' }),
+    );
+    expect(deps.audit).not.toHaveBeenCalled();
+  });
+
+  it('records nothing when GitHub names another author by the time the sign-in completes', async () => {
+    const { decisions, signIn, signOffs, audits, deps, posted } = opened(jane);
+    await decisions.approve(asked);
+    // Checked as @janedoe's before the sign-in; GitHub names @bob once it completes.
+    vi.mocked(deps.pull).mockResolvedValue({ open: true, head: HEAD, url: PULL_URL, author: { login: 'bob', id: 9 } });
+    await expect(signIn(jane)).rejects.toThrow('@janedoe did not open pull request #40');
+    expect(deps.signOff.record).not.toHaveBeenCalled();
+    expect(signOffs).toEqual([]);
+    expect(audits).toEqual([]);
+    expect(posted).toEqual([]);
   });
 
   it('sends nothing back from a person’s own pull request: it has no builder', async () => {

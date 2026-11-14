@@ -40,6 +40,7 @@ async function main(): Promise<void> {
           image: process.env.OPENADLC_TASKDB_IMAGE ?? process.env.OPENADLC_SIDECAR_IMAGE ?? 'pgvector/pgvector:pg16',
           installLabel: `openadlc.install=${config.installId ?? 'default'}`,
           bindAddress: await taskdbBindAddress(docker, config.taskdbBind ?? null),
+          port: config.taskdbPort,
           // What a task role's password is derived from, so an adopted
           // computer's URL can be rebuilt; read when asked, since the bridge
           // makes it and may start after hostd.
@@ -317,6 +318,7 @@ async function main(): Promise<void> {
     hostChecks,
     ...(restartOntoImage ? { restartOntoImage } : {}),
     egress: { probe: new EgressProbe(egressProxyToAsk()), list: egressList },
+    ...(databases ? { taskDatabases: databases } : {}),
   });
 
   // Take-over rides on the same port: the console opens a socket at /terminal
