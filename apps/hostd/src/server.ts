@@ -18,6 +18,7 @@ import { HostFull, type ReviewMode, type TaskRunner } from './task-runner.js';
 import { readEngineCredential } from './session-env.js';
 import { isWorktreeRefusal, readWorktree } from './worktree-files.js';
 import { LocalCiRefused, type LocalCi } from './local-ci.js';
+import { hostCheckRequestFrom, type HostChecks } from './host-check.js';
 import type { ImageRestart } from './restart-onto-image.js';
 import { ATTACH_SUBPROTOCOL_PREFIX } from './terminal-gateway.js';
 
@@ -106,6 +107,8 @@ export function createHostdServer(input: {
   engineUpdates?: Pick<EngineUpdater, 'status' | 'update' | 'rollback'>;
   /** Runs a task's checks on its head for the bridge (`local-ci.ts`). Absent, its routes say so. */
   localCi?: Pick<LocalCi, 'start' | 'get'>;
+  /** Runs a repository's host check as its own account, for the bridge (`host-check.ts`). Absent, its routes say so. */
+  hostChecks?: Pick<HostChecks, 'start' | 'get' | 'cancel' | 'probe'>;
   /** Moves this hostd onto a release's image on a cloud host (`restart-onto-image.ts`). Absent, its route says why. */
   restartOntoImage?: ImageRestart;
   /** Asks the egress proxy about a name, and puts Settings' names on it (`egress.ts`). Absent, its routes say so. */
@@ -595,6 +598,29 @@ export function createHostdServer(input: {
       if (method === 'GET' && localCiMatch[2]) {
         const run = input.localCi.get(localCiMatch[1], localCiMatch[2]);
         return run ? send(response, 200, { run }) : send(response, 404, { error: `no local CI run ${localCiMatch[2]} for task ${localCiMatch[1]} on this host` });
+      }
+    }
+
+    // A repository's host check, started, read and stopped by the bridge
+    // only; what it runs is the repository row's command, which the bridge
+    // sends, and its result reaches the bridge from here (`host-check.ts`).
+    if (path.startsWith('/host-check/')) {
+      if (!input.hostChecks) return send(response, 501, { error: 'this hostd runs no host checks' });
+      if (method === 'GET' && path === '/host-check/account') return send(response, 200, { probe: await input.hostChecks.probe() });
+      if (method === 'POST' && path === '/host-check/runs') {
+        const body = await readBody(request);
+        const request_ = hostCheckRequestFrom(body);
+        if (typeof request_ === 'string') return send(response, 400, { error: request_ });
+        return send(response, 202, { run: input.hostChecks.start(request_) });
+      }
+      const runMatch = /^\/host-check\/runs\/([^/]+)$/.exec(path);
+      if (method === 'GET' && runMatch?.[1]) {
+        const run = input.hostChecks.get(decodeURIComponent(runMatch[1]));
+        return run ? send(response, 200, { run }) : send(response, 404, { error: `no host check run ${runMatch[1]} on this host` });
+      }
+      const pullMatch = /^\/host-check\/pulls\/([^/]+)\/(\d+)$/.exec(path);
+      if (method === 'DELETE' && pullMatch?.[1] && pullMatch[2]) {
+        return send(response, 200, { cancelled: input.hostChecks.cancel(decodeURIComponent(pullMatch[1]), Number(pullMatch[2])) });
       }
     }
 

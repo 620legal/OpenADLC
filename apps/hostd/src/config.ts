@@ -7,6 +7,8 @@ import { openadlcHome } from '@openadlc/github';
 /** `make ci`'s limit for local CI, and `make setup`'s for a task start, when nothing says. */
 export const DEFAULT_LOCAL_CI_TIMEOUT_MINUTES = 60;
 export const DEFAULT_SETUP_TIMEOUT_MINUTES = 30;
+/** The account a host check runs as when nothing says; `host-check.ts` keeps the same. */
+export const DEFAULT_HOST_CHECK_ACCOUNT = 'openadlc-hostcheck';
 
 export interface HostdConfig {
   hostName: string;
@@ -51,6 +53,12 @@ export interface HostdConfig {
    * `OPENADLC_SETUP_TIMEOUT_MINUTES`, default 30.
    */
   setupTimeoutMinutes?: number;
+  /**
+   * The OS account a repository's host check runs as (`host-check.ts`): one a
+   * person made for it, which cannot read `OPENADLC_HOME`.
+   * `OPENADLC_HOST_CHECK_ACCOUNT`, default `openadlc-hostcheck`.
+   */
+  hostCheckAccount?: string;
   /**
    * Where the host's task database server is published: the Docker bridge's
    * gateway on Linux, loopback on Docker Desktop and OrbStack (see
@@ -171,6 +179,7 @@ export function loadHostdConfig(): HostdConfig {
     localCiTimeoutMinutes: Math.max(1, envInt('OPENADLC_LOCAL_CI_TIMEOUT_MINUTES', DEFAULT_LOCAL_CI_TIMEOUT_MINUTES)),
     setupTimeoutMinutes: Math.max(1, envInt('OPENADLC_SETUP_TIMEOUT_MINUTES', DEFAULT_SETUP_TIMEOUT_MINUTES)),
     taskdbBind: process.env.OPENADLC_TASKDB_BIND || null,
+    hostCheckAccount: process.env.OPENADLC_HOST_CHECK_ACCOUNT?.trim() || DEFAULT_HOST_CHECK_ACCOUNT,
     warmPool: envBool('OPENADLC_WARM_POOL', false),
     warmPoolMax: Math.max(0, envInt('OPENADLC_WARM_POOL_MAX', 3)),
     tmuxBin: envOr('OPENADLC_TMUX_BIN', 'tmux'),

