@@ -31,14 +31,20 @@ import { KILL_AFTER_MS } from './drivers/types.js';
  *   secret store or a task token reaches it.
  * - One run at a time on this hostd. A start for a pull request whose run is
  *   going cancels it, and a start queued for it is replaced.
- * - A cancel, or the time limit, sends TERM and then KILL to every process
- *   the account runs: after `KILL_AFTER_MS`, or as soon as the command has
- *   exited, whichever is first. The account runs nothing but host checks, one
- *   at a time, so that is exactly the run, and a daemon the build left in the
- *   background goes with it. The run ends only once its KILL has been sent,
- *   so the next run starts after it: a KILL still waiting when the next run
- *   began reached that run's build too, being sent to the whole account, and
- *   failed a head that never failed.
+ * - Every run ends by sending TERM and then KILL to every process the account
+ *   runs, a pass included. On a cancel or the time limit the KILL waits up to
+ *   `KILL_AFTER_MS` for the command to exit; once it has, it goes at once.
+ *   The account runs nothing but host checks, one at a time, so that is
+ *   exactly the run, and a daemon the build left in the background goes with
+ *   it. The account is cleared the same way before each run, after the probe.
+ *   The run ends only once its KILL has been sent, so the next run starts
+ *   after it: a KILL still waiting when the next run began reached that
+ *   run's build too, being sent to the whole account, and failed a head that
+ *   never failed.
+ * - The git steps the account runs read neither the system's git config nor
+ *   the account's `~/.gitconfig`, and run no hook and no fsmonitor whatever
+ *   the folder's `.git/config` says: an earlier run, of any repository, could
+ *   have written any of them, and git ran what they named.
  *
  * No model runs it, so it spends nothing. What it printed reaches hostd
  * through a pipe, and its last `LOG_TAIL_BYTES` are reported to the bridge,
@@ -329,9 +335,16 @@ export class HostChecks {
       stop(`it did not finish within ${minutes} minute${minutes === 1 ? '' : 's'}, so it was stopped: find what keeps it running, or raise the repository's host check time limit`, 'failed');
     }, run.timeoutMinutes * (this.deps.msPerMinute ?? 60_000));
     limit.unref?.();
+    /** The account's home once the probe passed: from then on the run ends by clearing the account. */
+    let home: string | null = null;
     try {
       const fit = await this.probe();
       if (!fit.ok) return this.end(run, 'refused', { reason: `${fit.detail}. ${ACCOUNT_FIX}` }, true);
+      home = fit.home;
+      // Whatever the account still runs — left by a run hostd did not see
+      // end, as across its restart, or started by something other than a
+      // host check — goes before this head reaches the folder.
+      await this.clearAccount(home);
       if (halt.stopped) return this.end(run, halt.stopped.state, { reason: halt.stopped.reason }, true);
 
       const folder = await this.prepare(run, fit.home);
@@ -345,8 +358,13 @@ export class HostChecks {
       halt.child = child;
       terminate();
       const code = await child.exited;
-      // The KILL goes before the run ends, so it cannot reach the next one.
-      if (halt.killing) await halt.killing;
+      // TERM and KILL to everything the account runs, on every end, a pass
+      // included: a Makefile that started `nohup … &` and exited 0 left a
+      // process running as the account through every later run, of every
+      // repository, free to change their folders and pass a broken head. The
+      // KILL goes before the run ends, so it cannot reach the next one.
+      halt.killing ??= this.kill(child);
+      await halt.killing;
       const durationMs = this.now() - started;
       const end = stoppedNow();
       if (end) return this.end(run, end.state, { exitCode: code, durationMs, logTail: tail, reason: end.reason }, true);
@@ -357,6 +375,21 @@ export class HostChecks {
       clearTimeout(limit);
       delete run.stop;
       if (halt.killing) await halt.killing;
+      // A run that ended before its command did — stopped, or its folder
+      // could not be given the head — still clears the account: the git
+      // steps ran as it.
+      else if (home) await this.clearAccount(home).catch(() => undefined);
+    }
+  }
+
+  /**
+   * TERM, then KILL, to every process the account runs (`kill -1` as it),
+   * with no wait between: nothing should be running, since each run ends by
+   * killing what it left, and anything that is gets no grace.
+   */
+  private async clearAccount(home: string): Promise<void> {
+    for (const signal of ['TERM', 'KILL'] as const) {
+      await this.processes.run(this.asAccount(['/bin/kill', `-${signal}`, '-1'], home), { timeoutMs: 30_000 });
     }
   }
 
@@ -457,18 +490,25 @@ const GIT_ENV: Record<string, string> = { GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_G
  * forced over what a build changed in tracked files, and the bundle removed.
  * Untracked and ignored files stay, so the next build is incremental; the
  * repository's own `host-ci` target decides what a clean build is.
+ *
+ * Every git here is `g`: no system or global config, and no hook or
+ * fsmonitor, which an earlier run could have set in `~/.gitconfig`, the
+ * folder's `.git/config` or `.git/hooks` to run its own code at this fetch
+ * and checkout, in the next repository's folder too.
  */
-const RECEIVE = [
+export const RECEIVE = [
   'set -e',
+  'export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1',
+  'g() { git -c core.hooksPath=/dev/null -c core.fsmonitor=false "$@"; }',
   'dir="$1"; head="$2"',
   'mkdir -p "$dir"',
   'cd "$dir"',
-  '[ -d .git ] || git init --quiet .',
+  '[ -d .git ] || g init --quiet .',
   'bundle=.git/openadlc-incoming.bundle',
   'cat > "$bundle"',
   'trap \'rm -f "$bundle"\' EXIT',
-  "git fetch --quiet \"$bundle\" '+refs/openadlc/host-check/*:refs/openadlc/host-check/*'",
-  'git -c advice.detachedHead=false checkout --quiet --force --detach "$head"',
+  "g fetch --quiet \"$bundle\" '+refs/openadlc/host-check/*:refs/openadlc/host-check/*'",
+  'g -c advice.detachedHead=false checkout --quiet --force --detach "$head"',
 ].join('\n');
 
 function view(run: HostCheckRun): HostCheckRun {

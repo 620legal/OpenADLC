@@ -1,10 +1,10 @@
 import type { ChildProcess, SpawnOptions } from 'node:child_process';
-import { spawn } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { HostChecks, hostCheckEnv, hostCheckRequestFrom, nodeProcesses, type HostCheckRun, type HostProcesses, type ProcessResult } from './host-check.js';
+import { HostChecks, RECEIVE, hostCheckRequestFrom, nodeProcesses, type HostCheckRun, type HostProcesses, type ProcessResult } from './host-check.js';
 
 const HEAD = 'a'.repeat(40);
 const NEXT = 'b'.repeat(40);
@@ -33,6 +33,8 @@ function machine(fit: { uid?: string; sudo?: boolean; readable?: string[]; ignor
       if (argv[0] === '/bin/sh' && argv[2]?.includes('eval')) return { code: 0, stdout: `${HOME}\n`, stderr: '' };
       if (argv[0] === 'sudo') {
         if (fit.sudo === false) return { code: 1, stdout: '', stderr: 'sudo: a password is required' };
+        const kill = argv.indexOf('/bin/kill');
+        if (kill >= 0 && argv[kill + 2] === '-1') events.push(`clear ${argv[kill + 1]?.slice(1)}`);
         const path = argv[argv.length - 1] ?? '';
         if (argv.includes('test -r "$1" || ls "$1" >/dev/null 2>&1')) return { code: (fit.readable ?? []).includes(path) ? 0 : 1, stdout: '', stderr: '' };
         return OK;
@@ -130,7 +132,18 @@ describe('the command a host check runs', () => {
     const argv = world.started[0]?.argv ?? [];
     expect(argv.slice(0, 7)).toEqual(['sudo', '-n', '-u', ACCOUNT, '--', '/usr/bin/env', '-i']);
     const assignments = argv.slice(7).filter((part) => /^[A-Z_]+=/.test(part));
-    expect(Object.fromEntries(assignments.map((part) => part.split(/=(.*)/s).slice(0, 2)))).toEqual(hostCheckEnv(ACCOUNT, HOME));
+    // A fixed list, not `hostCheckEnv` itself: a name added there from
+    // hostd's environment, as `SSH_AUTH_SOCK`, has to fail here.
+    expect(assignments.map((part) => part.split('=')[0])).toEqual(['PATH', 'HOME', 'USER', 'LOGNAME', 'LANG', 'CI', 'OPENADLC_HOST_CHECK']);
+    expect(Object.fromEntries(assignments.map((part) => part.split(/=(.*)/s).slice(0, 2)))).toEqual({
+      PATH: '/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin',
+      HOME,
+      USER: ACCOUNT,
+      LOGNAME: ACCOUNT,
+      LANG: 'en_US.UTF-8',
+      CI: '1',
+      OPENADLC_HOST_CHECK: '1',
+    });
     expect(argv[argv.length - 1]).toBe('make host-ci');
     expect(argv).toContain(join(HOME, 'openadlc', 'default', 'acme__mac-app'));
     for (const secret of [TOKEN, 'task-token-of-some-task', 'install-secret', 'postgres://']) expect(argv.join(' ')).not.toContain(secret);
@@ -211,7 +224,7 @@ describe('one host check at a time', () => {
     hostChecks.start({ ...START, runId: 'run-2', head: NEXT });
     await untilStarted(world, 2);
     // The build obeyed TERM, so its KILL went at once rather than a minute later, into run-2.
-    expect(world.events).toEqual(['start 1', 'TERM from 1', 'KILL from 1', 'start 2']);
+    expect(world.events).toEqual(['clear TERM', 'clear KILL', 'start 1', 'TERM from 1', 'KILL from 1', 'clear TERM', 'clear KILL', 'start 2']);
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(world.started[1]?.signals).toEqual([]);
     expect(world.events.at(-1)).toBe('start 2');
@@ -229,8 +242,48 @@ describe('one host check at a time', () => {
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(world.started).toHaveLength(1);
     await untilStarted(world, 2);
-    expect(world.events).toEqual(['start 1', 'TERM from 1', 'KILL from 1', 'start 2']);
+    expect(world.events).toEqual(['clear TERM', 'clear KILL', 'start 1', 'TERM from 1', 'KILL from 1', 'clear TERM', 'clear KILL', 'start 2']);
     expect(reports.find((run) => run.runId === 'run-1')).toMatchObject({ state: 'cancelled', exitCode: 137 });
+  });
+
+  it('clears everything the account runs when a run passes, not only when it is stopped', async () => {
+    const world = machine();
+    const { hostChecks, reports } = checks(world, { killAfterMs: 60_000 });
+    hostChecks.start(START);
+    await untilStarted(world, 1);
+    // The build exits 0, leaving a `nohup … &` behind it, as the account.
+    world.started[0]?.finish(0);
+    await hostChecks.settled();
+    expect(world.started[0]?.signals).toEqual(['TERM', 'KILL']);
+    expect(world.events).toEqual(['clear TERM', 'clear KILL', 'start 1', 'TERM from 1', 'KILL from 1']);
+    expect(reports.at(-1)).toMatchObject({ state: 'passed', exitCode: 0 });
+  });
+
+  it('clears the account before each run starts, before the head reaches its folder', async () => {
+    const world = machine();
+    const { hostChecks } = checks(world);
+    hostChecks.start(START);
+    await untilStarted(world, 1);
+    const clears = world.ran.findIndex((call) => call.argv.includes('/bin/kill'));
+    expect(world.ran[clears]?.argv.slice(0, 7)).toEqual(['sudo', '-n', '-u', ACCOUNT, '--', '/usr/bin/env', '-i']);
+    expect(world.ran[clears]?.argv.slice(-3)).toEqual(['/bin/kill', '-TERM', '-1']);
+    expect(world.ran[clears + 1]?.argv.slice(-3)).toEqual(['/bin/kill', '-KILL', '-1']);
+    expect(world.piped).toHaveLength(1);
+    expect(world.events.slice(0, 3)).toEqual(['clear TERM', 'clear KILL', 'start 1']);
+  });
+
+  it('clears the account when a run ends before its command starts, since the git steps ran as it', async () => {
+    const world = machine();
+    world.processes.pipe = async (from, to) => {
+      world.piped.push({ from, to });
+      return { code: 1, stdout: '', stderr: 'fatal: bad bundle' };
+    };
+    const { hostChecks, reports } = checks(world);
+    hostChecks.start(START);
+    await hostChecks.settled();
+    expect(world.started).toHaveLength(0);
+    expect(reports.at(-1)).toMatchObject({ state: 'refused' });
+    expect(world.events).toEqual(['clear TERM', 'clear KILL', 'clear TERM', 'clear KILL']);
   });
 
   it('replaces a queued run of the same pull request rather than run an old head', async () => {
@@ -293,6 +346,67 @@ describe('the account, proved before every run', () => {
     await hostChecks.settled();
     expect(world.started).toHaveLength(0);
     expect(reports.at(-1)).toMatchObject({ state: 'refused', reason: expect.stringContaining('docs/self-hosting.md#host-checks') });
+  });
+});
+
+describe('the git steps the account runs', () => {
+  it('runs no hook, fsmonitor or global config an earlier run left, and checks the head out', () => {
+    const root = mkdtempSync(join(tmpdir(), 'openadlc-host-check-receive-'));
+    dirs.push(root);
+    const marks = join(root, 'marks');
+    mkdirSync(marks);
+    const clean = { PATH: process.env.PATH ?? '/usr/bin:/bin', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
+    const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, env: clean, encoding: 'utf8' }).trim();
+
+    // The pull request's head, whose .gitattributes names a filter only config defines.
+    const source = join(root, 'source');
+    mkdirSync(source);
+    git(source, 'init', '--quiet', '.');
+    writeFileSync(join(source, 'Makefile'), 'host-ci:\n\ttrue\n');
+    writeFileSync(join(source, '.gitattributes'), '* filter=planted\n');
+    git(source, 'add', '.');
+    git(source, '-c', 'user.name=t', '-c', 'user.email=t@example.com', 'commit', '--quiet', '-m', 'head');
+    const head = git(source, 'rev-parse', 'HEAD');
+    git(source, 'update-ref', 'refs/openadlc/host-check/7', head);
+    const bundle = join(root, 'head.bundle');
+    git(source, 'bundle', 'create', bundle, 'refs/openadlc/host-check/7');
+
+    // What an earlier run, as the account, could have left: a planted program,
+    // named by the account's ~/.gitconfig and by the folder's own config and hooks.
+    const planted = join(root, 'planted.sh');
+    writeFileSync(planted, `#!/bin/sh\ntouch "${marks}/$(basename "$0")-ran"\ncat\n`);
+    chmodSync(planted, 0o755);
+    const hooks = join(root, 'hooks');
+    mkdirSync(hooks);
+    for (const hook of ['post-checkout', 'reference-transaction']) {
+      writeFileSync(join(hooks, hook), `#!/bin/sh\ntouch "${marks}/${hook}"\n`);
+      chmodSync(join(hooks, hook), 0o755);
+    }
+    const home = join(root, 'home');
+    mkdirSync(home);
+    writeFileSync(join(home, '.gitconfig'), `[core]\n\thooksPath = ${hooks}\n[filter "planted"]\n\tsmudge = ${planted}\n\tclean = ${planted}\n`);
+    const folder = join(home, 'openadlc', 'default', 'acme__mac-app');
+    mkdirSync(folder, { recursive: true });
+    git(folder, 'init', '--quiet', '.');
+    git(folder, 'config', 'core.hooksPath', hooks);
+    git(folder, 'config', 'core.fsmonitor', planted);
+    for (const hook of ['post-checkout', 'reference-transaction']) {
+      writeFileSync(join(folder, '.git', 'hooks', hook), `#!/bin/sh\ntouch "${marks}/local-${hook}"\n`);
+      chmodSync(join(folder, '.git', 'hooks', hook), 0o755);
+    }
+
+    // As hostd runs it, with only the command's environment.
+    const received = spawnSync('/bin/sh', ['-c', RECEIVE, 'sh', folder, head], {
+      input: readFileSync(bundle),
+      env: { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: home, LANG: 'en_US.UTF-8' },
+      encoding: 'utf8',
+    });
+    expect(received.stderr).toBe('');
+    expect(received.status).toBe(0);
+    expect(git(folder, 'rev-parse', 'HEAD')).toBe(head);
+    expect(readFileSync(join(folder, 'Makefile'), 'utf8')).toBe('host-ci:\n\ttrue\n');
+    expect(existsSync(join(folder, '.git', 'openadlc-incoming.bundle'))).toBe(false);
+    expect(execFileSync('ls', [marks], { encoding: 'utf8' })).toBe('');
   });
 });
 
