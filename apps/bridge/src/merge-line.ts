@@ -160,13 +160,22 @@ export function verdictFor(
   return pending ? 'pending' : 'green';
 }
 
-/** What the pull request is told when the bridge lands it: the approvals it landed on. */
+/**
+ * What the pull request is told when the bridge lands it: the approvals it
+ * landed on. An author's console sign-off is named as one: GitHub refuses an
+ * author's review of their own pull request, so "approved" would send a reader
+ * looking for a review that does not exist (docs/adr/0063). It branches on
+ * `signedOff` alone, since a person's GitHub review is `person` too.
+ */
 export function landedComment(head: string, merged: string, approvals: readonly LandedApproval[]): string {
-  const lines = approvals.map(
-    (approval) =>
-      `- ${approval.person ? `@${approval.reviewer}` : approval.reviewer} approved \`${approval.commitId.slice(0, 7)}\`` +
-      (approval.ofHead ? '' : ', an earlier head with the same diff against the base'),
-  );
+  const lines = approvals.map((approval) => {
+    const who = approval.person ? `@${approval.reviewer}` : approval.reviewer;
+    const commit = `\`${approval.commitId.slice(0, 7)}\``;
+    return (
+      (approval.signedOff ? `- ${who} signed off ${commit} in the OpenADLC console` : `- ${who} approved ${commit}`) +
+      (approval.ofHead ? '' : ', an earlier head with the same diff against the base')
+    );
+  });
   return [
     `Merged by OpenADLC, as its GitHub App, as \`${merged.slice(0, 7)}\` (squash). \`${head.slice(0, 7)}\` was up to date with the base branch, and ${REQUIRED_CHECKS.map((name) => `\`${name}\``).join(' and ')} were green on it.`,
     '',

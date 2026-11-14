@@ -780,7 +780,9 @@ asks you on the card, and the work waits for your answer. In detail:
    the head that lands must be approved itself.
 
    Each merge is audited as `merge.landed`, with every approval it landed on,
-   and said on the pull request. OpenADLC's `gh` refuses a bot's merge, and
+   and said on the pull request. An author's console sign-off is listed as
+   one (`@login signed off <commit> in the OpenADLC console`), not as a GitHub
+   approval, since GitHub holds no review for it. OpenADLC's `gh` refuses a bot's merge, and
    where GitHub enforces rulesets the main ruleset requires the reviews. On a
    private repository whose plan refuses rulesets a crew account's token can
    still merge through the API: the bridge detects that merge

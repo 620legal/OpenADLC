@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { CI_REQUEST_WAIT_MS, MergeLine, REQUIRED_CHECKS, UNKNOWN_WAIT_MS, UPDATE_WAIT_MS, askedForCi, heldForPerson, verdictFor } from './merge-line.js';
+import { CI_REQUEST_WAIT_MS, MergeLine, REQUIRED_CHECKS, UNKNOWN_WAIT_MS, UPDATE_WAIT_MS, askedForCi, heldForPerson, landedComment, verdictFor } from './merge-line.js';
 import { REQUIRED_CHECK, REVIEW_GATE_CHECK } from '@openadlc/shared';
 
 const green = (name: string) => ({ name, status: 'completed', conclusion: 'success' });
@@ -706,6 +706,21 @@ describe('the front of the line, green and up to date', () => {
     expect(github.comment).toHaveBeenCalledWith('janedoe/openadlc', 31, expect.stringContaining('- openadlc-sydney-janedoe approved `c0ffee0`'));
   });
 
+  it('says on the pull request that an author landed it on their console sign-off, and audits the sign-off as given', async () => {
+    const approvals = [...APPROVALS, { reviewer: 'janedoe', person: true, commitId: HEAD, ofHead: true, signedOff: true as const }];
+    decide.mockReturnValue({ land: true, reason: 'ok', approvals });
+    const { line: merge, github } = line();
+
+    await merge.advance('openadlc');
+
+    expect(store.audits).toEqual([expect.objectContaining({ action: 'merge.landed', payload: expect.objectContaining({ approvals }) })]);
+    const body = github.comment.mock.calls.at(-1)?.[2] as string;
+    expect(body.split('\n').slice(-2)).toEqual([
+      '- openadlc-sydney-janedoe approved `c0ffee0`',
+      '- @janedoe signed off `c0ffee0` in the OpenADLC console',
+    ]);
+  });
+
   it('is not merged when a rule does not hold, and says which', async () => {
     decide.mockReturnValue({ land: false, reason: 'openadlc-vega-janedoe has not reviewed it', approvals: [] });
     const { line: merge, github, automation } = line();
@@ -998,6 +1013,53 @@ describe('a pull request only a person can land', () => {
     expect(heldForPerson({ state: 'merging', detail: 'green and up to date; waiting for a person to merge it' })).toBe('auto-merge is not on for it');
     expect(heldForPerson({ state: 'merging', detail: 'green and up to date; auto-merge will land it' })).toBeNull();
     expect(heldForPerson({ state: 'testing', detail: 'waiting for the checks' })).toBeNull();
+  });
+});
+
+describe('landedComment', () => {
+  const HEAD = 'c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00';
+  const MERGED = 'merged00merged00merged00merged00merged00';
+  const approvalLines = (comment: string) => comment.split('\n').filter((text) => text.startsWith('- '));
+
+  it('names an author’s console sign-off as one, not as a GitHub approval', () => {
+    const comment = landedComment(HEAD, MERGED, [{ reviewer: 'janedoe', person: true, commitId: HEAD, ofHead: true, signedOff: true }]);
+    expect(approvalLines(comment)).toEqual(['- @janedoe signed off `c0ffee0` in the OpenADLC console']);
+    expect(comment).not.toContain('approved');
+  });
+
+  it('says a sign-off of an earlier head with the same diff the way it says a review of one', () => {
+    expect(approvalLines(landedComment(HEAD, MERGED, [{ reviewer: 'janedoe', person: true, commitId: HEAD, ofHead: false, signedOff: true }]))).toEqual([
+      '- @janedoe signed off `c0ffee0` in the OpenADLC console, an earlier head with the same diff against the base',
+    ]);
+  });
+
+  it('words a GitHub review exactly as before, a seat’s and a person’s, of the head and of an earlier one', () => {
+    expect(
+      approvalLines(
+        landedComment(HEAD, MERGED, [
+          { reviewer: 'openadlc-sydney-janedoe', person: false, commitId: HEAD, ofHead: true },
+          { reviewer: 'janedoe', person: true, commitId: HEAD, ofHead: true },
+          { reviewer: 'openadlc-sydney-janedoe', person: false, commitId: HEAD, ofHead: false },
+          { reviewer: 'janedoe', person: true, commitId: HEAD, ofHead: false },
+        ]),
+      ),
+    ).toEqual([
+      '- openadlc-sydney-janedoe approved `c0ffee0`',
+      '- @janedoe approved `c0ffee0`',
+      '- openadlc-sydney-janedoe approved `c0ffee0`, an earlier head with the same diff against the base',
+      '- @janedoe approved `c0ffee0`, an earlier head with the same diff against the base',
+    ]);
+  });
+
+  it('words each approval of a mixed list by its own kind, in order', () => {
+    expect(
+      approvalLines(
+        landedComment(HEAD, MERGED, [
+          { reviewer: 'openadlc-sydney-janedoe', person: false, commitId: HEAD, ofHead: true },
+          { reviewer: 'janedoe', person: true, commitId: HEAD, ofHead: true, signedOff: true },
+        ]),
+      ),
+    ).toEqual(['- openadlc-sydney-janedoe approved `c0ffee0`', '- @janedoe signed off `c0ffee0` in the OpenADLC console']);
   });
 });
 
