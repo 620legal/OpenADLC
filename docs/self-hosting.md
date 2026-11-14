@@ -190,13 +190,16 @@ live or not configured yet. Nothing reaches GitHub before you supply
 credentials, and a bot whose engine is missing fails its task rather than
 pretending.
 
-Ports default to 47300 (console), 47311 (bridge), 47312 (hostd) and 47432
-(postgres) — deliberately uncommon, so they are unlikely to collide with anything
-(and `openadlc up` refuses to start a service whose port something else already
-answers on). Under the
-docker driver, the task database server (`openadlc-taskdb`) also uses 47433,
-published on loopback (Docker Desktop, OrbStack) or on the Docker bridge's
-gateway (Linux).
+Ports default to 47300 (console), 47311 (bridge), 47312 (hostd), 47432
+(postgres) and 47433 (taskdb) — deliberately uncommon, so they are unlikely to
+collide with anything (and `openadlc up` refuses to start a service whose port
+something else already answers on). Each moves with `ports` in `install.json`
+(`"ports": {"taskdb": 48433}`). Under the docker driver, the task database
+server (`openadlc-taskdb`) is published on `ports.taskdb`, on loopback (Docker
+Desktop, OrbStack) or on the Docker bridge's gateway (Linux). A second install
+on the same machine needs a `ports.taskdb` of its own: `openadlc up` says when
+another install's container publishes it, and the `task-database` check raises
+"Tasks are starting without a database" while the server cannot start.
 
 The database container `openadlc up` makes, `openadlc-db`, is published on
 127.0.0.1 only, and its password is generated for the install and kept in

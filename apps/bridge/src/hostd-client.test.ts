@@ -61,6 +61,24 @@ describe('the bridge asking whether hostd is up', () => {
   });
 });
 
+describe('the bridge asking hostd how its task database server is', () => {
+  it('asks GET /task-database with the install secret, and hands back what hostd said', async () => {
+    answer = {
+      status: 200,
+      body: { state: 'failed', container: 'second-taskdb', port: 47433, error: 'port is already allocated', holders: ['openadlc-taskdb (install default)'] },
+    };
+
+    const view = await client.taskDatabase();
+
+    expect(asked[0]).toMatchObject({ url: '/task-database', method: 'GET', secret: SECRET });
+    expect(view).toEqual(answer.body);
+  });
+
+  it('throws when hostd does not answer, which the check reads as no answer', async () => {
+    await expect(new HostdClient('http://127.0.0.1:1', SECRET).taskDatabase()).rejects.toMatchObject({ status: 502 });
+  });
+});
+
 describe('the bridge reading a worktree through hostd', () => {
   it('presents the install secret, which hostd refuses a caller without', async () => {
     await client.worktree('task-live', '');

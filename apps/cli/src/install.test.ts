@@ -307,8 +307,20 @@ describe('a hand-edited install.json', () => {
 
   it('keeps the default for each port it does not name', () => {
     const config = load({ ports: { console: 3001 } });
-    expect(config.ports).toEqual({ console: 3001, bridge: 47311, hostd: 47312, postgres: 47432 });
+    expect(config.ports).toEqual({ console: 3001, bridge: 47311, hostd: 47312, postgres: 47432, taskdb: 47433 });
     expect(Object.values(serviceEnv(config)).join(' ')).not.toContain('undefined');
+  });
+
+  it('gives hostd the task database port it names, and 47433 when it names none', () => {
+    // Two installs on one machine both published on 47433, and the second's
+    // tasks ran with no database.
+    expect(serviceEnv(load({ ports: { taskdb: 48433 } })).OPENADLC_TASKDB_PORT).toBe('48433');
+    expect(serviceEnv(load({})).OPENADLC_TASKDB_PORT).toBe('47433');
+  });
+
+  it('refuses a task database port it cannot use, as it does the others', () => {
+    expect(() => load({ ports: { taskdb: 70000 } })).toThrow(/"ports\.taskdb" in .*install\.json is 70000; write a port from 1 to 65535, e\.g\. "ports": \{"taskdb": 47433\}/);
+    expect(() => load({ ports: { taskdb: 'x' } })).toThrow(/"ports\.taskdb" in .*install\.json is "x"/);
   });
 
   it('points the default database at the postgres port it names, and keeps a url it writes', () => {

@@ -78,7 +78,7 @@ Setting it is how a second install lives on the same machine; see
 | `organization` | `''` | The GitHub account the repositories belong to, organization or user |
 | `githubClientId` | `''` | The OpenADLC GitHub App's client id, for the crew's device-flow sign-in |
 | `databaseUrl` | `postgres://openadlc:<password>@127.0.0.1:47432/openadlc_db` | The platform database. The password is generated for each install by its first `openadlc up`, which replaces an older install's `openadlc` the same way; this file is the only place it is kept |
-| `ports` | console 47300, bridge 47311, hostd 47312, postgres 47432 | Where each service listens |
+| `ports` | console 47300, bridge 47311, hostd 47312, postgres 47432, taskdb 47433 | Where each service listens. `taskdb` is where hostd publishes the task database server under the docker driver, and the port in each task's `DATABASE_URL` (`OPENADLC_TASKDB_PORT`); a second install on the same machine needs its own |
 | `humans` | `[]` | GitHub logins that approve, handed to the services as `OPENADLC_HUMANS`. They approve only while nobody in Settings → People has Approves on; Settings shows them as approvers it cannot change. See [People](#people) |
 | `repoRoot` | the checkout | Where labels, templates, skills and roles are read from |
 | `publicUrl` | `''` | Where GitHub reaches the bridge's webhook; empty means a tunnel is used |
@@ -1171,6 +1171,7 @@ nothing sets a variable.
 | `OPENADLC_LOCAL_CI_TIMEOUT_MINUTES` | 60 | How long `make ci` may run for `openadlc-ci`. A run past it is killed in the task's computer and fails with "make ci did not finish within N minutes", and the next `openadlc-ci` starts a fresh run | |
 | `OPENADLC_SETUP_TIMEOUT_MINUTES` | 30 | How long a task's `make setup` may run. One past it is killed, warned about, and the task starts without it, as after any failed setup | |
 | `OPENADLC_WARM_POOL`, `OPENADLC_WARM_POOL_MAX` | off, 3 | `1` keeps computers made ahead of their task, so a start claims one (resized to the seat, renamed the task's) rather than waiting for a container: one for work on no repository and one per repository worked in during the last two hours, never more than the maximum or than the host has room for beside its tasks. None holds a login; a task that needs one starts cold. Drained on a replaced image, after a day, and at hostd's start. Docker driver only | |
+| `OPENADLC_TASKDB_PORT` | 47433 | The host port hostd publishes the task database server on, and the one in each task's `DATABASE_URL`. `openadlc up` sets it from `ports.taskdb`; a change makes hostd replace its own container on the new port, never another install's | |
 | `OPENADLC_TASKDB_BIND` | worked out | Where the task database server is published on the host: loopback on Docker Desktop and OrbStack, the default bridge's gateway (172.17.0.1) on Linux. Never an address the network reaches: a wildcard (`0.0.0.0`, `::`) is refused when hostd starts | |
 | `OPENADLC_TASKDB_IMAGE` | `OPENADLC_SIDECAR_IMAGE`, then `pgvector/pgvector:pg16` | The task database server's image | |
 | `OPENADLC_PER_TASK_CAP_USD` | 15 | The cap a task gets when the bridge's request to start it names none. The bridge always names one — the lower of Settings' global and repository per-task limits — so this is a fallback for a caller that is not the bridge | |

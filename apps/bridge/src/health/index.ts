@@ -65,6 +65,7 @@ import { shipsByReleaseCheck } from './checks/ships-by-release.js';
 import { testingEgressCheck } from './checks/testing-egress.js';
 import { pushEgressCheck, reachHost } from './checks/push-egress.js';
 import { sleptCheck } from './checks/slept.js';
+import { taskDatabaseCheck } from './checks/task-database.js';
 import { SLEPT_EVENT, type KeepAwake } from '../keep-awake.js';
 import { effectiveDelivery, type DeliveryKnowledge } from '../delivery-rules.js';
 import type { HealthCheck } from './types.js';
@@ -273,6 +274,7 @@ export function defaultChecks(wiring: HealthWiring): HealthCheck[] {
   return [
     hostCheck(hostd),
     hostDriverCheck(hostd),
+    taskDatabaseCheck({ crew: () => bots.listBots(), taskDatabase: () => hostd.taskDatabase() }),
     dispatcherCheck(wiring.dispatch ?? dispatchModeOf(process.env.OPENADLC_DISPATCH_IN_BRIDGE === '1')),
     webhookCheck({
       status: () => wiring.webhookSetup.status(),

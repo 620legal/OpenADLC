@@ -60,6 +60,13 @@ export interface HostdConfig {
    */
   taskdbBind?: string | null;
   /**
+   * The host port the task database server is published on, and the one in
+   * each task's `DATABASE_URL`: `OPENADLC_TASKDB_PORT`, which `openadlc up`
+   * sets from install.json's `ports.taskdb`; 47433 when unset. Two installs
+   * on one machine each need their own.
+   */
+  taskdbPort?: number;
+  /**
    * Computers made ahead of their task, so a start claims one rather than
    * making one (`WarmPool`): `OPENADLC_WARM_POOL=1`, off by default, and at
    * most `OPENADLC_WARM_POOL_MAX` of them (three). Docker driver only.
@@ -171,6 +178,7 @@ export function loadHostdConfig(): HostdConfig {
     localCiTimeoutMinutes: Math.max(1, envInt('OPENADLC_LOCAL_CI_TIMEOUT_MINUTES', DEFAULT_LOCAL_CI_TIMEOUT_MINUTES)),
     setupTimeoutMinutes: Math.max(1, envInt('OPENADLC_SETUP_TIMEOUT_MINUTES', DEFAULT_SETUP_TIMEOUT_MINUTES)),
     taskdbBind: process.env.OPENADLC_TASKDB_BIND || null,
+    taskdbPort: envInt('OPENADLC_TASKDB_PORT', DEFAULT_PORTS.taskdb),
     warmPool: envBool('OPENADLC_WARM_POOL', false),
     warmPoolMax: Math.max(0, envInt('OPENADLC_WARM_POOL_MAX', 3)),
     tmuxBin: envOr('OPENADLC_TMUX_BIN', 'tmux'),
