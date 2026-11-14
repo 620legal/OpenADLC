@@ -170,10 +170,30 @@ describe('stopping and finding lost runs', () => {
 });
 
 describe('when a host check is asked for', () => {
+  const decision = { lead: 'atlas', approvers: ['atlas', 'quill'] };
+  const approvedByAll = { approved: ['atlas', 'quill'], decision, changesRequested: [], securityAsks: null, leadDue: null };
+
+  it('runs once the lead and every approver approve the head, with no request for changes standing', () => {
+    expect(crewApprovedHead(approvedByAll)).toBe(true);
+  });
+
   it('waits for the lead’s approval to count on the head, and not while the lead is due again', () => {
-    expect(crewApprovedHead({ approved: ['quill'], decision: { lead: 'atlas' } })).toBe(false);
-    expect(crewApprovedHead({ approved: ['quill', 'atlas'], decision: { lead: 'atlas' } })).toBe(true);
-    expect(crewApprovedHead({ approved: ['atlas'], decision: { lead: 'atlas' }, leadDue: { lateAsks: [] } })).toBe(false);
+    expect(crewApprovedHead({ ...approvedByAll, approved: ['quill'] })).toBe(false);
+    expect(crewApprovedHead({ ...approvedByAll, leadDue: { lateAsks: [] } })).toBe(false);
+  });
+
+  it('waits for every approver, not the lead alone', () => {
+    expect(crewApprovedHead({ ...approvedByAll, approved: ['atlas'] })).toBe(false);
+  });
+
+  it('does not run while an approver asks for changes on the head', () => {
+    expect(crewApprovedHead({ ...approvedByAll, changesRequested: ['quill'] })).toBe(false);
+  });
+
+  it('does not run while the security seat asks for changes, though the lead approved after it', () => {
+    // The security seat is no approver, so its ask is in `securityAsks` only,
+    // and the lead's later approval leaves `leadDue` null.
+    expect(crewApprovedHead({ ...approvedByAll, securityAsks: 'vega' })).toBe(false);
   });
 });
 

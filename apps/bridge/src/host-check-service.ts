@@ -9,8 +9,9 @@ import type { HostCheckAccountProbe, HostdClient } from './hostd-client.js';
  * hostd runs it (`apps/hostd/src/host-check.ts`); the bridge decides when, with
  * what, and what it means:
  *
- * - `request` is called once the lead's approval counts on a head
- *   (`crewApprovedHead`), beside `awaitPeople`, by the review webhook and the
+ * - `request` is called once the crew's reviews approve a head — the lead's
+ *   and every approver's, with no request for changes standing
+ *   (`crewApprovedHead`) — beside `awaitPeople`, by the review webhook and the
  *   scheduler's sweep, and for a pull request with no issue too. The command
  *   and the time limit are read from the repository's row, which only an
  *   admin writes, and from nowhere else: nothing on the pull request — its
@@ -103,11 +104,32 @@ function lastLines(text: string, count: number): string {
 
 /**
  * Whether the crew's reviews approve the head, as a host check waits for:
- * the lead's approval counts on it, and the lead is not deciding again
+ * the lead and every other approver approve it, no approver asks for changes
+ * on it, the security seat does not either (`securityAsks`, set on a change
+ * to how CI runs, a Makefile's included), and the lead is not deciding again
  * (`leadDue`, docs/adr/0038). The person is asked beside it, not after it.
+ *
+ * The lead's approval alone was once enough, and a security request for
+ * changes on a Makefile, followed by the lead's approval, ran the Makefile
+ * it flagged outside the containers: `leadDue` stays null when the lead
+ * approves after the other seat. The command is the pull request's own code
+ * on the machine, so every seat that holds the merge holds this too.
  */
-export function crewApprovedHead(standing: { approved: readonly string[]; decision: { lead: string }; leadDue?: unknown }): boolean {
-  return standing.approved.includes(standing.decision.lead) && !standing.leadDue;
+export function crewApprovedHead(standing: {
+  approved: readonly string[];
+  decision: { lead: string; approvers: readonly string[] };
+  changesRequested?: readonly string[];
+  securityAsks?: string | null;
+  leadDue?: unknown;
+}): boolean {
+  const { approved, decision } = standing;
+  return (
+    approved.includes(decision.lead) &&
+    decision.approvers.every((seat) => approved.includes(seat)) &&
+    (standing.changesRequested ?? []).length === 0 &&
+    !standing.securityAsks &&
+    !standing.leadDue
+  );
 }
 
 /** What hostd reports when a run ends (`POST /internal/host-check`). */
