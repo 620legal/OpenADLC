@@ -435,6 +435,64 @@ describe('an issue that depends on one in review', () => {
       expect(client.getPullRequest).toHaveBeenCalledWith('janedoe/shop', 44);
     });
 
+    it('is none when where its own commits would begin is already in the base: there is nothing to replay', async () => {
+      // #334, built from main for an issue whose earlier pull request was
+      // stacked: the merge base of the dependency's head and its own was the
+      // main commit the dependency had branched from, and a bridge to it
+      // replayed nothing but was written all the same, unsigned.
+      const { subject, client, events } = await merged({ inBase: false });
+      expect(world.stacks.get(5)?.onHeadSha ?? null).toBeNull();
+      client.mergeBase.mockImplementation(async (_repo: string, a: string, b: string) => (b === 'main' ? (a === DEP_HEAD ? 'f'.repeat(40) : a) : OWN_FROM));
+
+      expect(await update(subject)).toEqual({ on: 4, replayFrom: null });
+      expect(client.mergeBase).toHaveBeenCalledWith('janedoe/shop', OWN_FROM, 'main');
+      expect(events.at(-1)).toMatchObject({ type: STACK_UPDATING, payload: { pr: 31, replayFrom: null } });
+    });
+
+    describe('for a pull request whose branch was not built on the stack', () => {
+      const STARTED_FROM = '5'.repeat(40);
+      const MAIN_COMMIT = '6'.repeat(40);
+
+      /** #5's stack started from #4's head at STARTED_FROM; `descends` says whether the head being updated holds it. */
+      async function rebuilt(options: { descends: boolean }) {
+        const stacked = await merged({ inBase: false });
+        Object.assign(world.stacks.get(5)!, { onHeadSha: STARTED_FROM });
+        stacked.client.mergeBase.mockImplementation(async (_repo: string, a: string, b: string) =>
+          a === STARTED_FROM ? (options.descends ? STARTED_FROM : MAIN_COMMIT) : b === 'main' ? 'f'.repeat(40) : OWN_FROM,
+        );
+        return stacked;
+      }
+
+      it('is not updated as stacked, and notes no update, when built from the base for an issue whose earlier pull request was stacked', async () => {
+        vi.spyOn(console, 'log').mockImplementation(() => undefined);
+        const { subject, client, events } = await rebuilt({ descends: false });
+
+        expect(
+          await subject.updating({ repoName: 'shop', repoFullName: 'janedoe/shop', prNumber: 34, issue: 5, baseRef: 'main', headSha: before }),
+        ).toBeNull();
+        expect(client.mergeBase).toHaveBeenCalledWith('janedoe/shop', STARTED_FROM, before);
+        expect(events.some((event) => event.type === STACK_UPDATING)).toBe(false);
+        expect(console.log).toHaveBeenCalledWith(expect.stringContaining('its branch holds none of #4’s work'.replace('’', "'")));
+      });
+
+      it('is still stacked when its head descends from the head its build started from', async () => {
+        const { subject } = await rebuilt({ descends: true });
+
+        expect(await update(subject)).toEqual({ on: 4, replayFrom: OWN_FROM });
+      });
+
+      it('is still stacked when whether it descends cannot be read', async () => {
+        const { subject, client } = await rebuilt({ descends: false });
+        const ancestry = client.mergeBase.getMockImplementation()!;
+        client.mergeBase.mockImplementation(async (repo: string, a: string, b: string) => {
+          if (a === STARTED_FROM) throw new Error('GitHub answered 502');
+          return ancestry(repo, a, b);
+        });
+
+        expect(await update(subject)).toEqual({ on: 4, replayFrom: OWN_FROM });
+      });
+    });
+
     it('is none, and the update the plain merge it was, when it cannot be read', async () => {
       const { subject, client } = await merged({ inBase: false });
       client.mergeBase.mockRejectedValue(new Error('GitHub answered 502'));

@@ -214,7 +214,7 @@ export class MergeLine {
     private readonly actors: Actors,
     private readonly taskService: TaskService,
     /** What lands a pull request as the app; without it, nothing is merged here. */
-    private readonly automation: Pick<Automation, 'mergeFacts' | 'mergeAsApp' | 'setCiLabel'> | null = null,
+    private readonly automation: Pick<Automation, 'mergeFacts' | 'mergeAsApp' | 'setCiLabel' | 'createCommitAsApp'> | null = null,
     private readonly now: () => number = Date.now,
   ) {}
 
@@ -536,6 +536,12 @@ export class MergeLine {
    * `replayFrom`, and only the branch's own changes are applied to the base.
    * The result is still a merge whose first parent is the head read here. A
    * bridge that cannot be written falls back to the plain merge.
+   *
+   * The bridge is written as the app (`createCommitAsApp`), or not at all.
+   * Written with the crew account's token, as it first was, GitHub left it
+   * unsigned, and on a base requiring signed commits the pull request could
+   * never land: nothing can take the commit out again (#330, #334). With no
+   * app client here the plain merge, which GitHub signs, is the better loss.
    */
   private async stackedUpdate(
     client: GitHubClient,
@@ -549,11 +555,17 @@ export class MergeLine {
       const from = stacked.replayFrom;
       try {
         const base = await client.commitOf(repo.fullName, pull.baseRef);
-        head = await client.createCommit(repo.fullName, {
-          message: `Mark #${stacked.on}'s squashed work (${from.slice(0, 7)}) as in ${pull.baseRef}, for #${prNumber}'s update (OpenADLC)`,
-          tree: base.tree,
-          parents: [base.sha, from],
-        });
+        const bridge =
+          (await this.automation?.createCommitAsApp(repo.fullName, {
+            message: `Mark #${stacked.on}'s squashed work (${from.slice(0, 7)}) as in ${pull.baseRef}, for #${prNumber}'s update (OpenADLC)`,
+            tree: base.tree,
+            parents: [base.sha, from],
+          })) ?? null;
+        if (bridge) head = bridge;
+        else
+          console.warn(
+            `[bridge] ${repo.name}#${prNumber}: merging ${pull.baseRef} in plainly: no GitHub App client here to write the commit that replays only its own changes, and one written as the crew would be unsigned`,
+          );
       } catch (error) {
         console.warn(
           `[bridge] ${repo.name}#${prNumber}: merging ${pull.baseRef} in plainly, since the commit that replays only its own changes could not be made: ${error instanceof Error ? error.message : error}`,
