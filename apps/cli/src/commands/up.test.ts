@@ -1,10 +1,17 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { defaultConfig, type InstallConfig } from '../install.js';
+import { defaultConfig, loginItemWanted, type InstallConfig } from '../install.js';
+import { loginItemFlag } from '../flags.js';
+import type { RegisterOutcome } from '../login-item.js';
 import {
   addressesInstallDatabase,
+  atLoginStart,
+  down,
+  NO_LOGIN_ITEM,
+  settleLoginItem,
+  type LoginItemDeps,
   bridgeDispatches,
   clientIdConfigured,
   COMPOSE_ONLY_BLANK,
@@ -674,7 +681,7 @@ describe('openadlc down', () => {
     const log = vi.spyOn(console, 'log').mockImplementation((line: string) => void printed.push(String(line)));
     try {
       writeFileSync(join(runtimeDir(), 'bridge.pid'), '999999');
-      await down();
+      await down({ keepLoginItem: true });
 
       expect(printed.join('\n')).toContain('bridge was not running (stale pid file removed)');
       expect(printed.join('\n')).not.toContain('would not stop');
@@ -846,5 +853,216 @@ describe('up after a restart onto a release stopped partway', () => {
       else process.env.OPENADLC_HOME = was;
       rmSync(home, { recursive: true, force: true });
     }
+  });
+});
+
+/** Login-item effects that remember what `up` and `down` asked of them. */
+function loginItems(registered: RegisterOutcome = { done: 'registered', path: '/Users/me/Library/LaunchAgents/dev.openadlc.up.default.plist' }) {
+  const calls: string[] = [];
+  const deps: LoginItemDeps = {
+    platform: 'darwin',
+    user: 'me',
+    register: vi.fn(async (env: NodeJS.ProcessEnv, program: { node: string; cli: string }) => {
+      calls.push(`register ${env.OPENADLC_HOME ?? ''} ${program.cli}`);
+      return registered;
+    }),
+    remove: vi.fn(async (env: NodeJS.ProcessEnv) => {
+      calls.push(`remove ${env.OPENADLC_HOME ?? ''}`);
+      return 'removed' as const;
+    }),
+    recheck: vi.fn(async () => void calls.push('recheck')),
+  };
+  return { deps, calls };
+}
+
+/** Runs `body` with OPENADLC_HOME on a fresh folder, printing into `printed`. */
+async function inScratchHome<T>(body: (home: string, printed: string[]) => Promise<T>): Promise<T> {
+  const home = mkdtempSync(join(tmpdir(), 'openadlc-login-item-'));
+  const before = { home: process.env.OPENADLC_HOME, exitCode: process.exitCode };
+  const printed: string[] = [];
+  const log = vi.spyOn(console, 'log').mockImplementation((line: string) => void printed.push(String(line)));
+  process.env.OPENADLC_HOME = home;
+  try {
+    return await body(home, printed);
+  } finally {
+    log.mockRestore();
+    if (before.home === undefined) delete process.env.OPENADLC_HOME;
+    else process.env.OPENADLC_HOME = before.home;
+    process.exitCode = before.exitCode;
+    rmSync(home, { recursive: true, force: true });
+  }
+}
+
+const PROGRAM = { node: '/usr/local/bin/node', cli: '/src/OpenADLC/apps/cli/dist/main.js' };
+
+describe('the login item up registers', () => {
+  it('is written and loaded, then the bridge is asked to check it again', async () => {
+    await inScratchHome(async (_home, printed) => {
+      const { deps, calls } = loginItems();
+      const env = { OPENADLC_HOME: '/Users/me/.openadlc' };
+      expect(await settleLoginItem({ wanted: true, scripted: false, env, program: PROGRAM, deps })).toMatchObject({ done: 'registered' });
+      expect(calls).toEqual([`register /Users/me/.openadlc ${PROGRAM.cli}`, 'recheck']);
+      expect(printed.join('\n')).toContain('comes back after a restart: /Users/me/Library/LaunchAgents/dev.openadlc.up.default.plist');
+    });
+  });
+
+  it('is a second install’s own, from that install’s environment', async () => {
+    await inScratchHome(async () => {
+      const { deps } = loginItems();
+      const env = { OPENADLC_HOME: '/tmp/two', OPENADLC_INSTALL_ID: 'two', OPENADLC_BOT_PREFIX: 'two-', OPENADLC_BOT_IMAGE: 'img:two' };
+      await settleLoginItem({ wanted: true, scripted: false, env, program: PROGRAM, deps });
+      expect(deps.register).toHaveBeenCalledWith(env, PROGRAM);
+    });
+  });
+
+  it('is taken off, and nothing is written, for an install that opted out', async () => {
+    await inScratchHome(async (_home, printed) => {
+      const { deps, calls } = loginItems();
+      expect(await settleLoginItem({ wanted: false, scripted: false, env: {}, program: PROGRAM, deps })).toBe('removed');
+      expect(calls).toEqual(['remove ']);
+      expect(printed.join('\n')).toContain(NO_LOGIN_ITEM);
+    });
+  });
+
+  it('is never written for a scratch install the integration suites start', async () => {
+    await inScratchHome(async (_home, printed) => {
+      const { deps, calls } = loginItems();
+      expect(await settleLoginItem({ wanted: true, scripted: true, env: {}, program: PROGRAM, deps })).toBe('scripted');
+      expect(calls).toEqual([]);
+      expect(printed.join('\n')).toContain('no login item: OPENADLC_SCRIPTED_ENGINES is set');
+    });
+  });
+
+  it('says to allow the background item when launchd would not load it', async () => {
+    await inScratchHome(async (_home, printed) => {
+      const { deps } = loginItems({ done: 'failed', path: '/p.plist', reason: 'launchctl bootstrap said Operation not permitted' });
+      await settleLoginItem({ wanted: true, scripted: false, env: {}, program: PROGRAM, deps });
+      expect(printed.join('\n')).toContain('this install will not come back after a restart: launchctl bootstrap said Operation not permitted');
+      expect(printed.join('\n')).toContain('System Settings > General > Login Items');
+    });
+  });
+
+  it('says how to start at boot for a Linux user without linger', async () => {
+    await inScratchHome(async (_home, printed) => {
+      const { deps } = loginItems({ done: 'registered', path: '/u.service', linger: false });
+      await settleLoginItem({ wanted: true, scripted: false, env: {}, program: PROGRAM, deps });
+      expect(printed.join('\n')).toContain('starts at your next login, not at boot: loginctl enable-linger me');
+    });
+  });
+
+  it('warns, naming the other install, when the name is another install’s', async () => {
+    await inScratchHome(async (_home, printed) => {
+      const { deps } = loginItems({ done: 'refused', path: '/p.plist', home: '/Users/me/.openadlc-two' });
+      await settleLoginItem({ wanted: true, scripted: false, env: {}, program: PROGRAM, deps });
+      expect(printed.join('\n')).toContain('/Users/me/.openadlc-two');
+      expect(printed.join('\n')).toContain('set OPENADLC_INSTALL_ID for this install');
+    });
+  });
+});
+
+describe('up --no-login-item and --login-item', () => {
+  // Stopped at the driver, after the choice: what it remembers and removes is all a test needs.
+  const stopAtDriver = { dockerAnswers: async () => { throw new Error('stop'); }, botImagePresent: async () => false };
+
+  it('remembers the opt-out alone in install.json, writes no item and removes one already there', async () => {
+    await inScratchHome(async (home) => {
+      writeFileSync(join(home, 'install.json'), JSON.stringify({ organization: 'acme' }));
+      const { deps, calls } = loginItems();
+      await expect(up(defaultConfig('/repo'), { loginItem: 'off', probe: stopAtDriver, loginItemDeps: deps })).rejects.toThrow('stop');
+      // No driver written: an install that names none keeps having one chosen for it.
+      expect(JSON.parse(readFileSync(join(home, 'install.json'), 'utf8'))).toEqual({ organization: 'acme', loginItem: false });
+      expect(statSync(join(home, 'install.json')).mode & 0o777).toBe(0o600);
+      expect(calls).toEqual([`remove ${home}`]);
+      expect(deps.register).not.toHaveBeenCalled();
+    });
+  });
+
+  it('a later plain up keeps the opt-out, and --login-item turns it back on', async () => {
+    await inScratchHome(async (home) => {
+      writeFileSync(join(home, 'install.json'), JSON.stringify({ loginItem: false }));
+      const { loadConfig } = await import('../install.js');
+      expect(loginItemWanted(loadConfig('/repo'), {})).toBe(false);
+      const { deps } = loginItems();
+      await expect(up(loadConfig('/repo'), { loginItem: 'on', probe: stopAtDriver, loginItemDeps: deps })).rejects.toThrow('stop');
+      expect(JSON.parse(readFileSync(join(home, 'install.json'), 'utf8'))).toEqual({ loginItem: true });
+      expect(loginItemWanted(loadConfig('/repo'), {})).toBe(true);
+    });
+  });
+
+  it('is refused when given both', () => {
+    expect(loginItemFlag(true, true)).toBe('both');
+    expect(loginItemFlag(true, false)).toBe('on');
+    expect(loginItemFlag(false, true)).toBe('off');
+    expect(loginItemFlag(false, false)).toBeUndefined();
+  });
+});
+
+describe('up --at-login, which the login item runs', () => {
+  const docker = (answers: boolean) => ({
+    installed: async () => true,
+    answers: async () => answers,
+    open: vi.fn(async () => 'Docker Desktop'),
+    sleep: async () => undefined,
+    now: (() => {
+      let now = 0;
+      return () => (now += 60_000);
+    })(),
+  });
+
+  it('does nothing when the three services already run, which is the run a manual up’s bootstrap starts', async () => {
+    await inScratchHome(async (_home, printed) => {
+      const { deps } = loginItems();
+      const probe = { dockerAnswers: async () => { throw new Error('up went on'); }, botImagePresent: async () => false };
+      process.exitCode = undefined;
+      await up(defaultConfig('/repo'), { atLogin: true, running: () => true, probe, loginItemDeps: deps });
+      expect(process.exitCode).toBeUndefined();
+      expect(printed.join('\n')).toContain('already up');
+      expect(deps.register).not.toHaveBeenCalled();
+      expect(deps.remove).not.toHaveBeenCalled();
+    });
+  });
+
+  it('opens Docker and waits for it before going on', async () => {
+    await inScratchHome(async (_home, printed) => {
+      let asked = 0;
+      const wait = { ...docker(false), answers: async () => (asked += 1) > 2 };
+      expect(await atLoginStart({ running: () => false, wait, stored: () => 'docker' })).toEqual({ go: true });
+      expect(wait.open).toHaveBeenCalledOnce();
+      expect(printed.join('\n')).toContain('opened Docker Desktop');
+    });
+  });
+
+  it('fails, saying what to open, when Docker never answers', async () => {
+    await inScratchHome(async (_home, printed) => {
+      expect(await atLoginStart({ running: () => false, wait: docker(false), stored: () => 'docker' })).toEqual({ go: false, exitCode: 1 });
+      expect(printed.join('\n')).toContain('open Docker Desktop (or OrbStack), then run openadlc up');
+      // An install that names no driver is not started on local in Docker's place.
+      expect(await atLoginStart({ running: () => false, wait: docker(false), stored: () => undefined })).toEqual({ go: false, exitCode: 1 });
+    });
+  });
+
+  it('goes on under the local driver install.json names', async () => {
+    await inScratchHome(async () => {
+      expect(await atLoginStart({ running: () => false, wait: docker(false), stored: () => 'local' })).toEqual({ go: true });
+    });
+  });
+});
+
+describe('openadlc down and the login item', () => {
+  it('takes it off, so a stopped install stays stopped after a restart', async () => {
+    await inScratchHome(async (home, printed) => {
+      const { deps, calls } = loginItems();
+      await down({ loginItemDeps: deps });
+      expect(calls).toEqual([`remove ${home}`]);
+      expect(printed.join('\n')).toContain('this install no longer starts after a restart; openadlc up brings that back');
+    });
+  });
+
+  it('keeps it for self-update, which stops the services and starts them again', async () => {
+    await inScratchHome(async () => {
+      const { deps } = loginItems();
+      await down({ keepLoginItem: true, loginItemDeps: deps });
+      expect(deps.remove).not.toHaveBeenCalled();
+    });
   });
 });

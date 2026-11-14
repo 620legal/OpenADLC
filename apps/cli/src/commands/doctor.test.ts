@@ -10,6 +10,7 @@ import {
   databaseLine,
   databasePasswordGap,
   healthLines,
+  loginItemLine,
   spendCapRemedy,
   unreachableDatabaseHint,
   webhookSecretMismatch,
@@ -635,5 +636,76 @@ describe('openadlc status on who a request is from', () => {
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
+  });
+});
+
+describe('openadlc doctor on the login item', () => {
+  const who = { userHome: '/Users/me', user: 'me' };
+  const PLIST = '/Users/me/Library/LaunchAgents/dev.openadlc.up.default.plist';
+
+  it('warns when it is missing, with what to run', () => {
+    expect(loginItemLine({ state: 'missing', path: PLIST }, {}, who)).toEqual({
+      kind: 'warn',
+      text: 'nothing starts this install after the computer restarts: it has no login item',
+      hint: 'run: openadlc up --login-item',
+    });
+  });
+
+  it('gives another install’s variables with what to run, so it does not act on ~/.openadlc', () => {
+    const line = loginItemLine({ state: 'not-loaded', path: '/x.plist' }, { OPENADLC_HOME: '/tmp/two', OPENADLC_INSTALL_ID: 'two', OPENADLC_BOT_PREFIX: 'two-' }, who);
+    expect(line).toMatchObject({ kind: 'warn', hint: 'run: OPENADLC_HOME=/tmp/two OPENADLC_INSTALL_ID=two OPENADLC_BOT_PREFIX=two- openadlc up --login-item' });
+  });
+
+  it('passes when it is registered', () => {
+    expect(loginItemLine({ state: 'registered', path: PLIST }, {}, who)).toEqual({ kind: 'ok', text: `comes back after a restart: ${PLIST}` });
+  });
+
+  it('notes linger for a Linux user unit', () => {
+    expect(loginItemLine({ state: 'registered', path: '/u.service', linger: false }, {}, who)).toMatchObject({
+      kind: 'ok',
+      hint: 'starts at your next login, not at boot: loginctl enable-linger me',
+    });
+  });
+
+  it('points a login item turned off in macOS at the setting to turn on', () => {
+    const line = loginItemLine({ state: 'disabled', path: PLIST }, {}, who);
+    expect(line).toMatchObject({ kind: 'warn' });
+    expect(line?.hint).toContain('System Settings > General > Login Items');
+  });
+
+  it('names the other install when the item there is another’s', () => {
+    const line = loginItemLine({ state: 'other-install', path: PLIST, home: '/Users/me/.openadlc-two' }, {}, who);
+    expect(line).toMatchObject({ kind: 'warn' });
+    expect(line?.text).toContain('/Users/me/.openadlc-two');
+    expect(line?.hint).toContain('OPENADLC_INSTALL_ID');
+  });
+
+  it('prints nothing for an install that opted out', () => {
+    expect(loginItemLine(null, {}, who)).toBeNull();
+  });
+
+  it('is a note where nothing can hold one', () => {
+    expect(loginItemLine({ state: 'unsupported', reason: 'this is win32' }, {}, who)).toEqual({ kind: 'note', text: 'no login item: this is win32' });
+  });
+
+  it('leaves the bridge’s login-item row out, since doctor says its own', () => {
+    const row = (check: string): HealthView => ({
+      id: check,
+      check,
+      subject: null,
+      proves: `${check} proves something`,
+      state: 'failing',
+      severity: 'warning',
+      title: `${check} is failing`,
+      detail: null,
+      action: null,
+      since: null,
+      checkedAt: '2026-11-14T12:00:00.000Z',
+      bot: null,
+      steps: [],
+      waitingFor: [],
+    });
+    const { lines } = healthLines([row('login-item'), row('webhook')], 'http://127.0.0.1:47300');
+    expect(lines.map((line) => line.text)).toEqual(['webhook is failing']);
   });
 });

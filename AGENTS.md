@@ -60,7 +60,11 @@ tests/scratch.sh down
 
 Never run `openadlc up`, `openadlc down` or `openadlc restore` without knowing which
 `OPENADLC_HOME` they act on: `~/.openadlc` is a real install on a machine that runs
-OpenADLC. Never stop or remove the `openadlc-db`, `openadlc-taskdb`, `task-*` or
+OpenADLC. `up` also registers that install's login item (a LaunchAgent or a
+`systemd --user` unit that starts it after a restart) and `down` removes it,
+except under `OPENADLC_SCRIPTED_ENGINES=1`, where `up` registers none; a test
+of either passes its own login-item effects (`LoginItemDeps`), never this
+machine's launchd. Never stop or remove the `openadlc-db`, `openadlc-taskdb`, `task-*` or
 `bot-<name>` containers: a `task-*` container is a task's computer, with its
 work in it.
 

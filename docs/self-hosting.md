@@ -234,6 +234,55 @@ another machine, start it with `OPENADLC_CONSOLE_HOST=0.0.0.0` (and add the
 name you use to `OPENADLC_ALLOWED_HOSTS`), then open a link from
 `openadlc console-link` with that machine's name in place of `127.0.0.1`.
 
+### After a restart
+
+What comes back by itself when the computer restarts:
+
+- **The database, always.** `openadlc-db` runs with `--restart unless-stopped`,
+  so Docker starts it again as soon as Docker itself is running.
+- **hostd, the bridge and the console, through the login item.** They are
+  processes `openadlc up` starts, not containers, so nothing else brings them
+  back. Each `openadlc up` registers a login item for its install, which runs
+  `openadlc up --at-login` when you log in:
+  - on macOS, a LaunchAgent, `dev.openadlc.up.<id>` in
+    `~/Library/LaunchAgents/dev.openadlc.up.<id>.plist`;
+  - on Linux, a `systemd --user` unit, `openadlc-up-<id>.service` in
+    `~/.config/systemd/user/`.
+
+  `<id>` is the install's `OPENADLC_INSTALL_ID`, or `default`. The item carries
+  that install's `OPENADLC_HOME`, `OPENADLC_INSTALL_ID`, `OPENADLC_BOT_PREFIX`
+  and `OPENADLC_BOT_IMAGE`, and the `PATH` of the shell that ran `up`. It
+  carries nothing else: no database URL and no key. What it says goes to
+  `run/login-item.log` under the install's home.
+
+`up --at-login` does nothing when the services are already running. Otherwise,
+when Docker is installed and not answering, it opens Docker Desktop or OrbStack,
+whichever is installed, and waits up to five minutes for it. If Docker never
+answers, it stops and its log says what to open, unless `install.json` names
+the local driver.
+
+On Linux, a user unit starts at your next login, not at boot, unless the user
+lingers. `openadlc up` says so, and `loginctl enable-linger $USER` changes it.
+On macOS, if `openadlc up` says launchd would not load the item, or `openadlc
+doctor` says it is turned off, turn on OpenADLC under System Settings >
+General > Login Items.
+
+To turn it off:
+
+- `openadlc up --no-login-item` takes the item off and keeps the install
+  running. The choice is remembered (`"loginItem": false` in `install.json`),
+  so a later `openadlc up` does not register it again.
+- `openadlc up --login-item` turns it back on.
+- `openadlc down` takes the item off as well, so a stopped install stays
+  stopped after a restart. The next `openadlc up` registers it again, unless
+  you opted out.
+
+`openadlc doctor` and a card on the board warn when the item is missing, not
+loaded or turned off, and say what to run. They say nothing for an install
+that opted out. A scratch install the integration suites start
+(`OPENADLC_SCRIPTED_ENGINES=1`) never gets one. The compose stack and a cloud
+install start their services another way and have none either.
+
 ### Or with Docker Compose
 
 [`infra/local/docker-compose.yml`](../infra/local/docker-compose.yml) runs the

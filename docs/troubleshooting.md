@@ -995,6 +995,48 @@ A page with no host at all means no hostd has ever registered with this
 install's database: check `openadlc doctor`, and that hostd's `DATABASE_URL` is
 this install's.
 
+### OpenADLC did not come back after a restart
+
+**What it means.** After a restart, the database container comes back by
+itself. hostd, the bridge and the console come back only through the install's
+login item, which `openadlc up` registers
+([self-hosting](self-hosting.md#after-a-restart)). A restart before there was
+one left a real install stopped for about 28 hours, with nothing said.
+
+**What to do.**
+
+```bash
+openadlc doctor                          # its "After a restart" line says what is wrong
+cat ~/.openadlc/run/login-item.log       # what the login item's own up said
+openadlc up                              # starts it now, and registers the item again
+```
+
+What `doctor`, or the card on the board, may say:
+
+- **It has no login item.** Run `openadlc up --login-item`. For an install
+  other than `~/.openadlc`, the command it prints puts that install's
+  `OPENADLC_HOME`, `OPENADLC_INSTALL_ID` and `OPENADLC_BOT_PREFIX` in front.
+  Run it as printed: run bare, it would act on `~/.openadlc`.
+- **It is not loaded.** The file is there, but launchd or systemd does not hold
+  it. `openadlc up --login-item` loads it again.
+- **It is turned off in macOS.** Someone turned off OpenADLC under System
+  Settings > General > Login Items, or macOS asked and nobody allowed it. Turn
+  it on there, then run `openadlc up`.
+- **It starts another install.** Two installs with no `OPENADLC_INSTALL_ID`
+  share the item's name. Give this one its own `OPENADLC_INSTALL_ID` and
+  `OPENADLC_BOT_PREFIX`, then run `openadlc up` with them.
+- **It starts at your next login, not at boot.** This is Linux, where a user
+  unit runs at boot only when the user lingers: `loginctl enable-linger $USER`.
+
+If the log says `Docker did not answer within 5 minutes after this computer
+started`, Docker Desktop or OrbStack was not running and did not start when it
+was opened. Open it, then run `openadlc up`. To have it start by itself, turn on
+its own "start at login" setting.
+
+To have the install not come back after a restart, run
+`openadlc up --no-login-item`. It is remembered, and `doctor` stops warning.
+`openadlc down` also takes the item off until the next `up`.
+
 ## The install's database isn't answering
 
 **What you see.** Every console page says **The install's database isn't

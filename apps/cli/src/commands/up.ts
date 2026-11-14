@@ -5,9 +5,20 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { describeDatabase } from '@openadlc/db';
 import { ensureConsoleSecret, ensureInternalSecret, openadlcHome } from '@openadlc/github';
-import { applyingRefusal, recordCheckoutInstall, stepNamed } from '@openadlc/shared';
+import { LOGIN_ITEMS_SETTING, applyingRefusal, lingerNote, recordCheckoutInstall, stepNamed } from '@openadlc/shared';
 import { githubClientId } from '../client-id.js';
-import { signInLink } from '../console-link.js';
+import { bridgeHeaders, signInLink } from '../console-link.js';
+import {
+  DOCKER_DID_NOT_ANSWER,
+  openDockerApp,
+  registerLoginItem,
+  removeLoginItem,
+  thisMachine,
+  waitForDocker,
+  type DockerWait,
+  type RegisterOutcome,
+  type RemoveOutcome,
+} from '../login-item.js';
 import type { DriverProbe, InstallConfig } from '../install.js';
 import {
   LOCAL_DRIVER_NOTES,
@@ -19,9 +30,11 @@ import {
   dockerProbe,
   ensureDatabasePassword,
   hasPublishedDatabasePassword,
+  loginItemWanted,
   makeHomePrivate,
   saveConfig,
   serviceEnv,
+  setLoginItemChoice,
   storedDriver,
   taskDatabasePort,
 } from '../install.js';
@@ -984,7 +997,146 @@ export function sayDriver(driver: InstallConfig['driver'], reason?: string): voi
   for (const note of LOCAL_DRIVER_NOTES) ui.note(note);
 }
 
-export async function up(config: InstallConfig, options: { skipSeed?: boolean; probe?: DriverProbe } = {}): Promise<void> {
+/** What `up` and `down` do to the login item; the tests give their own. */
+export interface LoginItemDeps {
+  platform: NodeJS.Platform;
+  user: string;
+  register(env: NodeJS.ProcessEnv, program: { node: string; cli: string }): Promise<RegisterOutcome>;
+  remove(env: NodeJS.ProcessEnv): Promise<RemoveOutcome>;
+  /** Has the bridge run its `login-item` check now, so a card raised before the item existed clears. */
+  recheck(): Promise<void>;
+}
+
+export function loginItemDeps(ports: Pick<InstallConfig['ports'], 'bridge'>): LoginItemDeps {
+  const machine = thisMachine();
+  return {
+    platform: machine.platform,
+    user: machine.user,
+    register: (env, program) => registerLoginItem(env, program, machine),
+    remove: (env) => removeLoginItem(env, machine),
+    recheck: async () => {
+      await fetch(`http://127.0.0.1:${ports.bridge}/v1/health/checks/login-item/run`, {
+        method: 'POST',
+        headers: await bridgeHeaders(),
+        signal: AbortSignal.timeout(10_000),
+      }).catch(() => undefined);
+    },
+  };
+}
+
+/** What `up` says once the login item is taken off for an install that opted out. */
+export const NO_LOGIN_ITEM = 'no login item: this install does not start after a restart (openadlc up --login-item turns it on)';
+
+/**
+ * What `up` does about the login item: registers it, or takes it off for an
+ * install that opted out, and says which. A scratch install the integration
+ * suites start never gets one: it would come back by itself after a restart,
+ * fabricating work.
+ */
+export async function settleLoginItem(input: {
+  wanted: boolean;
+  scripted: boolean;
+  env: NodeJS.ProcessEnv;
+  program: { node: string; cli: string };
+  deps: LoginItemDeps;
+}): Promise<RegisterOutcome | RemoveOutcome | 'scripted'> {
+  const { deps } = input;
+  if (input.scripted) {
+    ui.note('no login item: OPENADLC_SCRIPTED_ENGINES is set, and a scratch install does not start after a restart');
+    return 'scripted';
+  }
+  if (!input.wanted) {
+    const removed = await deps.remove(input.env);
+    ui.note(NO_LOGIN_ITEM);
+    return removed;
+  }
+  const outcome = await deps.register(input.env, input.program);
+  if (outcome.done === 'registered') {
+    ui.ok(`comes back after a restart: ${outcome.path}`);
+    if (outcome.linger === false) ui.note(lingerNote(deps.user));
+    await deps.recheck().catch(() => undefined);
+  } else if (outcome.done === 'refused') {
+    ui.warn(`no login item: ${outcome.path} is another install’s, at ${outcome.home}`);
+    ui.note('set OPENADLC_INSTALL_ID for this install (and OPENADLC_BOT_PREFIX), then run openadlc up');
+  } else if (outcome.done === 'unsupported') {
+    ui.note(`no login item: ${outcome.reason}`);
+  } else {
+    ui.warn(`this install will not come back after a restart: ${outcome.reason}`);
+    ui.note(
+      deps.platform === 'darwin'
+        ? `if macOS asked to allow a background item, turn on OpenADLC under ${LOGIN_ITEMS_SETTING}, then run openadlc up`
+        : `see ${outcome.path}, then run openadlc up`,
+    );
+  }
+  return outcome;
+}
+
+/**
+ * The start of `up --at-login`, which the login item runs after the computer
+ * starts: nothing when the three keepers already run, which is the run
+ * `launchctl bootstrap` starts beside a manual `up`; otherwise Docker,
+ * opened and waited for, before the driver is chosen, since a driver chosen
+ * while Docker is still starting would be local.
+ *
+ * `go` false means up stops here: already up (exit 0), or Docker never
+ * answered for an install install.json does not put on the local driver
+ * (exit 1). An install that names no driver is not started on local then:
+ * it may have been docker before the restart.
+ */
+export async function atLoginStart(deps: {
+  running: () => boolean;
+  wait: DockerWait;
+  stored: () => InstallConfig['driver'] | undefined;
+}): Promise<{ go: boolean; exitCode?: number }> {
+  if (deps.running()) {
+    ui.ok('already up: hostd, the bridge and the console are running');
+    return { go: false };
+  }
+  const docker = await waitForDocker({
+    ...deps.wait,
+    open: async () => {
+      const opened = await deps.wait.open();
+      ui.note(opened ? `Docker is not answering yet: opened ${opened}, and waiting for it` : 'Docker is not answering yet: waiting for it');
+      return opened;
+    },
+  });
+  if (!docker.installed || docker.answered) return { go: true };
+  if (deps.stored() === 'local') {
+    ui.warn('Docker did not answer within 5 minutes; starting on the local driver, which install.json names');
+    return { go: true };
+  }
+  ui.fail(DOCKER_DID_NOT_ANSWER);
+  return { go: false, exitCode: 1 };
+}
+
+/** The keepers `up` starts, all running. */
+function allRunning(): boolean {
+  return SERVICES.every((name) => keeperPid(name) !== null);
+}
+
+function dockerWait(): DockerWait {
+  return {
+    installed: () => commandExists('docker'),
+    answers: () => dockerProbe.dockerAnswers(),
+    open: () => openDockerApp(),
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    now: () => Date.now(),
+  };
+}
+
+export interface UpOptions {
+  skipSeed?: boolean;
+  probe?: DriverProbe;
+  /** `--login-item` or `--no-login-item`: recorded in install.json before anything else. */
+  loginItem?: 'on' | 'off';
+  /** `--at-login`: run by the login item, which it never registers or removes. */
+  atLogin?: boolean;
+  loginItemDeps?: LoginItemDeps;
+  /** Whether the keepers run, for `--at-login`; the tests answer. */
+  running?: () => boolean;
+}
+
+export async function up(config: InstallConfig, options: UpOptions = {}): Promise<void> {
   // A restart onto a release that stopped partway left the checkout between
   // two releases: started now, it would run that mix, and the release's
   // migrations. Said first, before anything is started.
@@ -995,6 +1147,30 @@ export async function up(config: InstallConfig, options: { skipSeed?: boolean; p
     process.exitCode = 1;
     return;
   }
+
+  if (options.atLogin) {
+    ui.heading(`Starting OpenADLC after this computer started (${new Date().toISOString()})`);
+    const start = await atLoginStart({ running: options.running ?? allRunning, wait: dockerWait(), stored: storedDriver });
+    if (!start.go) {
+      if (start.exitCode) process.exitCode = start.exitCode;
+      return;
+    }
+  }
+
+  const loginDeps = options.loginItemDeps ?? loginItemDeps(config.ports);
+  const loginProgram = { node: process.execPath, cli: join(config.repoRoot, 'apps/cli/dist/main.js') };
+  if (options.loginItem && !options.atLogin) {
+    // Kept before anything else, so an up that stops early still remembers it.
+    setLoginItemChoice(options.loginItem === 'on');
+    config = { ...config, loginItem: options.loginItem === 'on' };
+    if (keeperPid('bridge') !== null) {
+      ui.note('the running bridge goes by the login item choice it started with until it restarts: openadlc down, then openadlc up');
+    }
+    if (options.loginItem === 'off') {
+      await settleLoginItem({ wanted: false, scripted: SCRIPTED_ENGINES, env: process.env, program: loginProgram, deps: loginDeps });
+    }
+  }
+
   const driven = await upDriver(config, options.probe);
   let effective: InstallConfig = driven.config;
   ui.heading(`Starting OpenADLC (${effective.driver} driver)`);
@@ -1145,6 +1321,13 @@ export async function up(config: InstallConfig, options: { skipSeed?: boolean; p
     }
   }
 
+  // Last, once the services run: registered first, launchd's `RunAtLoad`
+  // would start a second `up` beside this one. Never from the login item's own
+  // run, and an opt-out given now was settled at the start.
+  if (!options.atLogin && options.loginItem !== 'off') {
+    await settleLoginItem({ wanted: loginItemWanted(effective), scripted: SCRIPTED_ENGINES, env: process.env, program: loginProgram, deps: loginDeps });
+  }
+
   ui.plain();
   if (refused > 0) {
     ui.heading(`OpenADLC is partly up: ${refused} service(s) did not start`);
@@ -1188,7 +1371,14 @@ export function consoleLines(
   ];
 }
 
-export async function down(): Promise<void> {
+/**
+ * Stops the services, and takes this install's login item off, so a stopped
+ * install stays stopped after a restart. Self-update stops the services with
+ * this too, and keeps the item (`keepLoginItem`): a restart during an update,
+ * or an update that fails before its `up`, would otherwise leave an install
+ * that never comes back.
+ */
+export async function down(options: { keepLoginItem?: boolean; loginItemDeps?: LoginItemDeps } = {}): Promise<void> {
   ui.heading(`Stopping OpenADLC (state under ${openadlcHome()})`);
   for (const name of [...SERVICES].reverse()) {
     const pid = readPid(name);
@@ -1207,4 +1397,8 @@ export async function down(): Promise<void> {
   // container `openadlc up` starts for the default install, and on a machine with
   // a scratch install or a database of its own it is another install's.
   ui.note('postgres and the bot containers were left alone: they hold the data and the bots’ sessions');
+  if (options.keepLoginItem) return;
+  const deps = options.loginItemDeps ?? loginItemDeps({ bridge: 0 });
+  const removed = await deps.remove(process.env).catch(() => 'none' as const);
+  if (removed === 'removed') ui.note('this install no longer starts after a restart; openadlc up brings that back');
 }

@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -15,6 +15,7 @@ import {
   loadConfig,
   maskDatabaseUrl,
   serviceEnv,
+  setLoginItemChoice,
   settleWebhookSecret,
   storedDriver,
 } from './install.js';
@@ -409,5 +410,55 @@ describe('a DATABASE_URL exported beside install.json', () => {
     expect(maskDatabaseUrl('postgres://u:p%40ss@db:5432/x')).toBe('postgres://u:***@db:5432/x');
     expect(maskDatabaseUrl('postgres://u@db/x?password=hunter2')).toBe('postgres://u@db/x?password=***');
     expect(maskDatabaseUrl('not a url hunter2')).not.toContain('hunter2');
+  });
+});
+
+describe('the login item choice in install.json', () => {
+  function inHome<T>(body: (home: string) => T): T {
+    const home = mkdtempSync(join(tmpdir(), 'openadlc-login-choice-'));
+    const before = process.env.OPENADLC_HOME;
+    process.env.OPENADLC_HOME = home;
+    try {
+      return body(home);
+    } finally {
+      if (before === undefined) delete process.env.OPENADLC_HOME;
+      else process.env.OPENADLC_HOME = before;
+      rmSync(home, { recursive: true, force: true });
+    }
+  }
+
+  it('changes that key alone, leaving every other as written and the file 0600', () => {
+    inHome((home) => {
+      const path = join(home, 'install.json');
+      writeFileSync(path, JSON.stringify({ organization: 'acme', ports: { console: 3001 } }), { mode: 0o644 });
+      setLoginItemChoice(false);
+      expect(JSON.parse(readFileSync(path, 'utf8'))).toEqual({ organization: 'acme', ports: { console: 3001 }, loginItem: false });
+      expect(statSync(path).mode & 0o777).toBe(0o600);
+      setLoginItemChoice(true);
+      expect(JSON.parse(readFileSync(path, 'utf8'))).toEqual({ organization: 'acme', ports: { console: 3001 }, loginItem: true });
+    });
+  });
+
+  it('creates the file with that key alone when there is none, so no driver is pinned', () => {
+    inHome((home) => {
+      setLoginItemChoice(false);
+      expect(JSON.parse(readFileSync(join(home, 'install.json'), 'utf8'))).toEqual({ loginItem: false });
+    });
+  });
+
+  it('reaches the bridge as OPENADLC_LOGIN_ITEM: on by default, off when opted out or scripted', () => {
+    const fresh = defaultConfig('/repo');
+    const scripted = process.env.OPENADLC_SCRIPTED_ENGINES;
+    try {
+      delete process.env.OPENADLC_SCRIPTED_ENGINES;
+      expect(serviceEnv(fresh).OPENADLC_LOGIN_ITEM).toBe('on');
+      expect(serviceEnv({ ...fresh, loginItem: true }).OPENADLC_LOGIN_ITEM).toBe('on');
+      expect(serviceEnv({ ...fresh, loginItem: false }).OPENADLC_LOGIN_ITEM).toBe('off');
+      process.env.OPENADLC_SCRIPTED_ENGINES = '1';
+      expect(serviceEnv(fresh).OPENADLC_LOGIN_ITEM).toBe('off');
+    } finally {
+      if (scripted === undefined) delete process.env.OPENADLC_SCRIPTED_ENGINES;
+      else process.env.OPENADLC_SCRIPTED_ENGINES = scripted;
+    }
   });
 });
