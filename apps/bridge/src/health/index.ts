@@ -65,6 +65,7 @@ import { shipsByReleaseCheck } from './checks/ships-by-release.js';
 import { testingEgressCheck } from './checks/testing-egress.js';
 import { pushEgressCheck, reachHost } from './checks/push-egress.js';
 import { sleptCheck } from './checks/slept.js';
+import { defaultLoginItemReader, loginItemCheck, type LoginItemReader } from './checks/login-item.js';
 import { SLEPT_EVENT, type KeepAwake } from '../keep-awake.js';
 import { effectiveDelivery, type DeliveryKnowledge } from '../delivery-rules.js';
 import type { HealthCheck } from './types.js';
@@ -92,6 +93,8 @@ export interface HealthWiring {
   keepAwake?: Pick<KeepAwake, 'state'>;
   /** Whether an admin has a device that receives push; absent, read the same way from the store. */
   notifier?: Pick<Notifier, 'adminPush'>;
+  /** This install's login item; absent, read from this machine and the bridge's environment. */
+  loginItem?: LoginItemReader;
 }
 
 /** The public half of each stored key, by the private half's digest: ssh-keygen is not run every quarter hour. */
@@ -431,6 +434,7 @@ export function defaultChecks(wiring: HealthWiring): HealthCheck[] {
       events: (since) => listEventsOfType(SLEPT_EVENT, since),
       available: () => wiring.keepAwake?.state().available ?? false,
     }),
+    loginItemCheck(wiring.loginItem ?? defaultLoginItemReader()),
   ];
 }
 

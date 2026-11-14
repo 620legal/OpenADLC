@@ -45,6 +45,13 @@ export interface InstallConfig {
    * only exported, so a `openadlc up` from another shell keeps them.
    */
   allowedHosts?: string[];
+  /**
+   * Whether `openadlc up` registers the login item that brings this install
+   * back after the computer restarts. Unset or true is on; false is a person's
+   * `openadlc up --no-login-item`, kept so a later plain `up` does not
+   * register it again (`setLoginItemChoice`).
+   */
+  loginItem?: boolean;
 }
 
 /**
@@ -359,6 +366,35 @@ export async function settleWebhookSecret(
   return { config: ensured.config, source: 'generated' };
 }
 
+/**
+ * Records `--login-item` or `--no-login-item` in install.json, changing that
+ * key alone and creating the file when there is none.
+ *
+ * Not `saveConfig(loadConfig())`: that writes every default back, `driver:
+ * "local"` among them, and `upDriver` chooses a driver for an install.json
+ * that names none. An opt-out would have pinned this install to local.
+ */
+export function setLoginItemChoice(on: boolean): string {
+  const path = configPath();
+  const stored = existsSync(path) ? readInstallJson(path) : {};
+  if (!stored || typeof stored !== 'object' || Array.isArray(stored)) {
+    throw new Error(`${path} is not a JSON object; write {"driver": "local"} or delete it and run openadlc init`);
+  }
+  mkdirSync(openadlcHome(), { recursive: true, mode: 0o700 });
+  writeFileSync(path, `${JSON.stringify({ ...(stored as object), loginItem: on }, null, 2)}\n`, { mode: 0o600 });
+  chmodSync(path, 0o600);
+  return path;
+}
+
+/**
+ * Whether this install has a login item to keep: off for one a person opted
+ * out of, and for a scratch install the integration suites start, which must
+ * never come back by itself after a restart.
+ */
+export function loginItemWanted(config: Pick<InstallConfig, 'loginItem'>, env: NodeJS.ProcessEnv = process.env): boolean {
+  return config.loginItem !== false && env.OPENADLC_SCRIPTED_ENGINES !== '1';
+}
+
 export function saveConfig(config: InstallConfig): string {
   const path = configPath();
   mkdirSync(openadlcHome(), { recursive: true, mode: 0o700 });
@@ -434,6 +470,10 @@ export function serviceEnv(config: InstallConfig): Record<string, string> {
     ...(config.humans.length > 0 ? { OPENADLC_HUMANS: config.humans.join(',') } : {}),
     // Only when set, so a value exported by hand is not overwritten with nothing.
     ...(allowedHostsOf(config) ? { OPENADLC_ALLOWED_HOSTS: allowedHostsOf(config) } : {}),
+    // What the bridge's login-item check goes by: it reads no install.json.
+    // Only `openadlc up` starts a service with this, so under the compose
+    // stack and the cloud it is unset and the check says nothing.
+    OPENADLC_LOGIN_ITEM: loginItemWanted(config) ? 'on' : 'off',
     // Integration suites only. `OPENADLC_SCRIPTED_ENGINES` is never written by
     // `openadlc init` or stored in install.json — it has to be exported by hand,
     // which is the point: an operator cannot arrive at a fabricating install by
