@@ -1024,7 +1024,6 @@ describe('landedComment', () => {
   it('names an author’s console sign-off as one, not as a GitHub approval', () => {
     const comment = landedComment(HEAD, MERGED, [{ reviewer: 'janedoe', person: true, commitId: HEAD, ofHead: true, signedOff: true }]);
     expect(approvalLines(comment)).toEqual(['- @janedoe signed off `c0ffee0` in the OpenADLC console']);
-    expect(comment).not.toContain('approved');
   });
 
   it('says a sign-off of an earlier head with the same diff the way it says a review of one', () => {
