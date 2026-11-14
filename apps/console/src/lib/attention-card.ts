@@ -123,13 +123,22 @@ export type DecisionButton = 'approve' | 'reject' | 'discuss' | 'remind' | 'add_
  * bridge has no route for it. An admin on one whose person is not in People
  * (`decision.addToPeople`) gets Add to People ahead of those: adding them is
  * what lets it reach the one person who can decide it (ADR 0059).
+ *
+ * On a pull request its author signs off (`decision.signOff === 'author'`,
+ * #322) there is no Remind: GitHub will not request a review from a pull
+ * request's author, so it could only fail.
  */
 export function decisionButtons(item: Pick<AttentionItem, 'decision' | 'actions'>): DecisionButton[] {
   if (!item.decision) return [];
   const offered = item.actions.filter(isDecisionAction).map((action): DecisionButton => (action.kind === 'human_review_approve' ? 'approve' : action.kind === 'human_review_reject' ? 'reject' : 'discuss'));
   if (item.decision.yours === true) return offered;
-  const others: DecisionButton[] = ['remind', ...offered.filter((button) => button === 'discuss')];
+  const others: DecisionButton[] = [...(item.decision.signOff === 'author' ? [] : (['remind'] as const)), ...offered.filter((button) => button === 'discuss')];
   return item.decision.addToPeople ? ['add_person', ...others] : others;
+}
+
+/** What Approve is called on a held approval's card: Sign off where its author gives it (#322). */
+export function approveLabel(item: Pick<AttentionItem, 'decision'>): string {
+  return item.decision?.signOff === 'author' ? 'Sign off' : 'Approve';
 }
 
 /** Discuss's one line on a held approval's card; what it does in full is at the top of the box it opens. */
@@ -155,8 +164,9 @@ export function decisionStatus(item: Pick<AttentionItem, 'decision' | 'awaiting'
   const decision = item.decision;
   if (!decision) return null;
   const again = item.awaiting?.again ? ' again' : '';
-  if (decision.yours === true) return `Waits for your approval${again}`;
-  return `Waits for @${decision.login}'s approval${again}`;
+  const what = decision.signOff === 'author' ? 'sign-off' : 'approval';
+  if (decision.yours === true) return `Waits for your ${what}${again}`;
+  return `Waits for @${decision.login}'s ${what}${again}`;
 }
 
 /**

@@ -79,7 +79,7 @@ import { workflowFile, type DeployPipeline, type RevertOutcome } from './deploy-
 import { releaseOf, type GitHubRelease } from './release-shipping.js';
 import type { DeliveryKnowledge } from './delivery-rules.js';
 import { askPeopleAgain, awaitPeople, BotBusyError, BuilderWorkingError, crewReviewsOn, REVERT_BRANCH_PREFIX, REVIEW_START_REFUSED, reviewStartLock, SubjectClosedError, type TaskService } from './task-service.js';
-import { CI_APP, FORBIDDEN_PUSH, ciKeysChanged, contentChanged, fastPathOf, forbiddenPushGate, reviewSample } from './automation.js';
+import { CI_APP, FORBIDDEN_PUSH, ciKeysChanged, contentChanged, fastPathOf, forbiddenPushGate, pullAuthorOf, reviewSample } from './automation.js';
 import { continuesBranch } from './build-left.js';
 import { BRANCH_UPDATED_BY_LINE, DEPLOY_PATH_BRANCH_PREFIX, headInRepository, issueNumberFromBranch, issuesMergedBy, madeByLineUpdate, ownIssueOf, REVIEW_ROUND_OPENED, REVIEW_STALLED, REVIEW_SUBMITTED_ON, scopeLabelAcceptedFrom } from './work.js';
 import { shipsByMerging, testingDeployChoice } from './deploys.js';
@@ -3703,6 +3703,8 @@ export class Webhooks {
       labels: pr.labels,
       head: { sha: pr.head.sha, ref: pr.head.ref },
       baseRef: pr.base?.ref ?? repo?.defaultBranch ?? 'main',
+      // Whose sign-off from the console counts in place of a review GitHub refuses them (docs/adr/0063).
+      author: pullAuthorOf(pr.user),
     });
     const { gate, decision, posted } = standing;
 
@@ -3783,7 +3785,7 @@ export class Webhooks {
     // lead's approval is a review delivery, so the card comes as it lands.
     if (repo && !fork) {
       const baseRef = pr.base?.ref ?? repo.defaultBranch ?? 'main';
-      await awaitPeople({ repoName: repo.name, prNumber: pr.number, issue: ownIssueOf(pr, repoFullName), head: pr.head.sha }, standing, {
+      await awaitPeople({ repoName: repo.name, prNumber: pr.number, issue: ownIssueOf(pr, repoFullName), head: pr.head.sha, author: pullAuthorOf(pr.user) }, standing, {
         files: async () => {
           const listed = await client.listEveryPullFile(repoFullName, pr.number);
           return listed.complete ? listed.files : null;

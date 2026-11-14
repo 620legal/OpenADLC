@@ -564,6 +564,82 @@ describe('what needs a person', () => {
     });
   });
 
+  describe('a person’s own pull request the lead approved that waits on a person (#322)', () => {
+    // Seen on a real install: the crew approved a person's pull request on a
+    // path named for its author, `ci` passed, and `review-gate` said
+    // `waiting on @janedoe` for good. GitHub refuses an author's own approval,
+    // and no card said anything.
+    const B = '692cd1f88f3e45093ad9ba4e68e84d590af3b595';
+    const JANE = { login: 'janedoe', id: 583231 };
+    const reviews = [{ login: 'irisexampleco', seat: 'second-reviewer', state: 'approved', summary: 'Fine.', url: 'https://github.com/janedoe/openadlc-testbed/pull/40#pullrequestreview-3' }];
+    const awaited = (at: string, payload: Record<string, unknown> = {}) => ({
+      at,
+      payload: { subjectRef: 'openadlc-testbed#40', repo: 'openadlc-testbed', pr: 40, issue: null, login: 'janedoe', head: B, paths: ['infra/'], reviews, author: JANE, ...payload },
+    });
+    const base = { now: NOW, gates: [], tasks: [], bots: BOTS, repos: REPOS, issues: ISSUES, requests: [], stallEvents: [] };
+
+    it('is the same held-approval card, on the pull request’s own card, and its author signs it off', async () => {
+      const { attentionItems } = await load();
+      const [item, ...rest] = attentionItems({ ...base, personAwaits: [awaited(minutesAgo(10))] });
+
+      expect(rest).toEqual([]);
+      expect(item).toMatchObject({
+        id: 'approval:openadlc-testbed#40@janedoe',
+        kind: 'merge_waiting',
+        headline: "Pull request #40 waits for @janedoe's sign-off",
+        subject: expect.objectContaining({ repo: 'openadlc-testbed', number: 40, ref: 'openadlc-testbed#40' }),
+        detail:
+          "The lead approved 692cd1f. It changes `infra/`, which AGENTS.md's Human review names @janedoe for. OpenADLC does not merge it until @janedoe approves it. GitHub takes no approval from a pull request's author, so @janedoe signs it off here.",
+        actions: [
+          { kind: 'human_review_approve', label: 'Sign off', subject: 'openadlc-testbed#40', login: 'janedoe', head: B },
+          { kind: 'human_review_discuss', label: 'Discuss', subject: 'openadlc-testbed#40', login: 'janedoe', head: B },
+          { kind: 'open_url', label: 'Review it on GitHub', url: 'https://github.com/janedoe/openadlc-testbed/pull/40/files' },
+        ],
+        awaiting: { login: 'janedoe', again: false, paths: ['infra/'] },
+      });
+      expect(item?.decision).toMatchObject({
+        repo: 'openadlc-testbed',
+        pr: 40,
+        head: B,
+        login: 'janedoe',
+        reviews,
+        signOff: 'author',
+        whyWaits: expect.stringContaining("GitHub takes no approval from a pull request's author, so they sign it off here."),
+        next: expect.objectContaining({ approve: expect.stringContaining("GitHub does not take an approval from a pull request's author, so this is not posted as a review.") }),
+      });
+    });
+
+    it('is for information only when someone else opened it: they approve it on GitHub', async () => {
+      const { attentionItems } = await load();
+      const [item] = attentionItems({ ...base, personAwaits: [awaited(minutesAgo(10), { author: { login: 'sam', id: 7 } })] });
+
+      expect(item?.headline).toBe("Pull request #40 waits for @janedoe's approval");
+      expect(item?.actions).toEqual([
+        { kind: 'human_review_discuss', label: 'Discuss', subject: 'openadlc-testbed#40', login: 'janedoe', head: B },
+        { kind: 'open_url', label: 'Review it on GitHub', url: 'https://github.com/janedoe/openadlc-testbed/pull/40/files' },
+      ]);
+      expect(item?.decision).toMatchObject({ signOff: 'github', why: expect.stringContaining('@janedoe approves it on GitHub') });
+    });
+
+    it('goes once the author signs off its head, and not for a sign-off of another head', async () => {
+      const { attentionItems } = await load();
+      const wait = [awaited(minutesAgo(10))];
+      const signed = (head: string, login = 'JaneDoe') => [{ repo: 'openadlc-testbed', pr: 40, login, head, at: minutesAgo(2) }];
+
+      expect(attentionItems({ ...base, personAwaits: wait, personSignOffs: signed(B) })).toEqual([]);
+      expect(attentionItems({ ...base, personAwaits: wait, personSignOffs: signed('c0ffee00c0ffee00c0ffee00c0ffee00c0ffee00') })).toHaveLength(1);
+      expect(attentionItems({ ...base, personAwaits: wait, personSignOffs: signed(B, 'sam') })).toHaveLength(1);
+    });
+
+    it('leaves a crew pull request’s card as it was, whoever its wait names as author', async () => {
+      const { attentionItems } = await load();
+      const crew = awaited(minutesAgo(10), { subjectRef: 'openadlc-testbed#29', pr: 29, issue: 11, author: { login: 'openadlc-atlas-janedoe', id: 9 } });
+      const [item] = attentionItems({ ...base, personAwaits: [crew] });
+      expect(item?.decision?.signOff).toBeNull();
+      expect(item?.actions.map((action) => action.label)).toEqual(['Approve', 'Reject', 'Discuss', 'Review it on GitHub']);
+    });
+  });
+
   describe('a crew pull request the lead approved that waits on a person', () => {
     // 620legal/OpenADLC#199: a crew pull request under `infra/` had the lead's
     // approval and `review-gate` waiting on @janedoe. The merge line never
@@ -681,6 +757,8 @@ describe('what needs a person', () => {
           reject: 'Sends it back to the builder with your reason. The lead reviews the fix, and you are asked again.',
           discuss: 'Sends your message to the lead reviewer, or the builder, who answers on the pull request. The decision stays open.',
         },
+        // A crew pull request is decided as before #322.
+        signOff: null,
       });
       // No Outcome: the issue's title. A wait recorded before reviews were: none, and the card links to GitHub.
       const [plain] = attentionItems({ ...base, personAwaits: [awaited(minutesAgo(10))] });

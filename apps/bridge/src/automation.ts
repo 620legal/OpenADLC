@@ -1,5 +1,5 @@
 import { permissionOn, theApp } from './people.js';
-import { audit, bots, hasEventOfType, issues, lastEventAt, leases, listEventsOfTypeWith, recordEvent, repos, stageMoves } from '@openadlc/db';
+import { audit, bots, hasEventOfType, issues, lastEventAt, leases, listEventsOfTypeWith, personSignOffs, recordEvent, repos, stageMoves } from '@openadlc/db';
 import { BRANCH_UPDATED_BY_LINE, REVIEW_DISMISSED_BY_BRIDGE, REVIEW_ROUND_OPENED, REVIEW_SUBMITTED_ON, issueNumberFromBranch, madeByLineUpdate, scopeLabelAcceptedFrom } from './work.js';
 import { BASE_CHANGES, GitHubApiError, ReviewerStandings, isTemplatePlaceholder, reviewRequestRefusal, reviewerStandingOf, type GitHubClient, type PullCommit, type ReviewerStanding, type SuiteWorkflowRun } from '@openadlc/github';
 import {
@@ -126,6 +126,27 @@ export interface LandedApproval {
   commitId: string;
   /** False when it was given on an earlier head whose diff against the base is the same. */
   ofHead: boolean;
+  /** Set when it is the author's sign-off from the console, not a GitHub review (docs/adr/0063). */
+  signedOff?: true;
+}
+
+/**
+ * Whether the pull request's author signed off from the console as `login`
+ * (`MergeFacts.signOffs`), on the head or an earlier head with its diff, and
+ * on which. Never through a head a conflict resolution carried
+ * (`carriedFrom`): a person approves this diff, not one carried to it.
+ */
+function signedOffOn(facts: Pick<MergeFacts, 'signOffs' | 'headSha' | 'sameDiffAs'>, login: string): { of: 'head' | 'same diff'; head: string } | null {
+  const theirs = (facts.signOffs ?? []).filter((one) => sameLogin(one.login, login));
+  const onHead = theirs.find((one) => one.head === facts.headSha);
+  if (onHead) return { of: 'head', head: onHead.head };
+  const onDiff = theirs.find((one) => facts.sameDiffAs.has(one.head));
+  return onDiff ? { of: 'same diff', head: onDiff.head } : null;
+}
+
+/** Who opened a pull request, as GitHub's `user` says, with the account id a sign-off is matched by; null without one. */
+export function pullAuthorOf(user: { login?: string | null; id?: number | null } | null | undefined): { login: string; id: number } | null {
+  return user?.login && typeof user.id === 'number' ? { login: user.login, id: user.id } : null;
 }
 
 /** The app whose check runs are CI's: GitHub Actions. */
@@ -242,6 +263,14 @@ export interface MergeFacts {
   statuses: readonly { context: string; state: string }[];
   /** `review-gate` as OpenADLC published it on the head, or null when it cannot be read. */
   gate: 'pending' | 'success' | 'failure' | null;
+  /**
+   * The pull request's author's sign-offs from the console, by the head each
+   * is of (`person_sign_offs`, docs/adr/0063): GitHub takes no approval from
+   * an author, so for a login the rules name who is its author this stands
+   * in for one. Only rows whose account id is the author's, from an author
+   * who is no crew account (`authorSignOffs`). Absent, none.
+   */
+  signOffs?: readonly { login: string; head: string }[];
   /** Earlier heads whose diff against the base is the head's own. */
   sameDiffAs: ReadonlySet<string>;
   /**
@@ -1418,8 +1447,13 @@ export function mergeDecision(facts: MergeFacts): {
   }
   for (const login of facts.humansRequired) {
     const review = byPerson.get(login.toLowerCase());
-    const of = approved(review, null);
-    if (!review || !of) return refuse(review?.state === 'APPROVED' ? personApprovedAnother(login, review, facts.headSha) : `@${login} has not approved this version`);
+    const reviewed = approved(review, null);
+    // GitHub takes no approval from a pull request's author: their sign-off
+    // from the console stands in for one, for their own login only
+    // (docs/adr/0063, `signOffs`).
+    const signed = reviewed ? null : signedOffOn(facts, login);
+    const of = reviewed ?? signed?.of ?? null;
+    if (!of) return refuse(review?.state === 'APPROVED' ? personApprovedAnother(login, review, facts.headSha) : `@${login} has not approved this version`);
     // A login is only a name, free for anyone to register once its account is
     // renamed or deleted, and anyone can review a public repository. So the
     // approval counts only from an account GitHub says can write here, the
@@ -1428,7 +1462,11 @@ export function mergeDecision(facts: MergeFacts): {
     if (!MAY_APPROVE.has(permission)) {
       return refuse(`@${login} approved, but lacks write access to ${facts.repoFullName} (GitHub says ${permission}), so the approval does not count`);
     }
-    approvals.push({ reviewer: login, person: true, commitId: review.commitId ?? '', ofHead: of === 'head' });
+    approvals.push(
+      signed
+        ? { reviewer: login, person: true, commitId: signed.head, ofHead: of === 'head', signedOff: true }
+        : { reviewer: login, person: true, commitId: review?.commitId ?? '', ofHead: of === 'head' },
+    );
   }
   if (approvals.length === 0) return refuse('nobody was asked to review it');
   return { land: true, reason: 'every requested reviewer approved this version, and its checks are green', approvals };
@@ -1613,7 +1651,8 @@ export function mergeBlockers(facts: MergeFacts): MergeBlocker[] {
   }
   for (const login of facts.humansRequired) {
     const review = byPerson.get(login.toLowerCase());
-    if (!review || !approved(review, null)) {
+    // As `mergeDecision`: the author's sign-off stands in for the approval GitHub refuses them.
+    if ((!review || !approved(review, null)) && !signedOffOn(facts, login)) {
       add('human_review', review?.state === 'APPROVED' ? personApprovedAnother(login, review, facts.headSha) : `@${login} has not approved this version`);
       continue;
     }
@@ -2228,7 +2267,19 @@ export class Automation {
    */
   async reviewStanding(
     repoFullName: string,
-    pr: { number: number; draft: boolean; labels: { name: string }[]; head: { sha: string; ref?: string }; baseRef: string },
+    pr: {
+      number: number;
+      draft: boolean;
+      labels: { name: string }[];
+      head: { sha: string; ref?: string };
+      baseRef: string;
+      /**
+       * Who opened it (`pullAuthorOf`), whose sign-off from the console counts
+       * for their own login (docs/adr/0063). Absent, it is read from GitHub,
+       * and only when there is a sign-off to count.
+       */
+      author?: { login: string; id: number } | null;
+    },
   ): Promise<{
     gate: ReviewGate;
     decision: ReviewerDecision;
@@ -2366,7 +2417,21 @@ export class Automation {
         ? (await this.onThisDiff(client, repoFullName, pr.baseRef, pr.head.sha, theirs)).flatMap((review) => (review.commitId ? [review.commitId] : []))
         : [],
     );
-    const humansApproved = this.approvedTheHead(required, theirs, pr.head.sha, peopleOnDiff, cannot);
+    const reviewedBy = this.approvedTheHead(required, theirs, pr.head.sha, peopleOnDiff, cannot);
+    // The author named for their own paths, whose approval GitHub refuses,
+    // signs off in the console instead (docs/adr/0063): counted as `mergeDecision`
+    // counts it, on this diff and never through a carried head.
+    const signOffs = required.length > reviewedBy.length ? await this.authorSignOffs(client, repoFullName, pr.number, crew, pr.author) : [];
+    const signedOnDiff = new Set(
+      client && signOffs.length > 0
+        ? (await this.onThisDiff(client, repoFullName, pr.baseRef, pr.head.sha, signOffs.map((one) => ({ commitId: one.head })))).map((one) => one.commitId)
+        : [],
+    );
+    const humansApproved = required.filter(
+      (login) =>
+        reviewedBy.includes(login) ||
+        (!cannot.has(login.toLowerCase()) && signOffs.some((one) => sameLogin(one.login, login) && (one.head === pr.head.sha || signedOnDiff.has(one.head)))),
+    );
     const people = peopleNotCounted(required, theirs, humansApproved, cannot, pr.head.sha);
 
     let gate = this.computeReviewGate({
@@ -2529,6 +2594,40 @@ export class Automation {
       }
     }
     return reviews.filter((review) => Boolean(review.commitId) && same.has(review.commitId as string));
+  }
+
+  /**
+   * The pull request's author's sign-offs from the console
+   * (`person_sign_offs`, docs/adr/0063), as the login they count for and the
+   * head each is of. A row counts only when its account id is the author's,
+   * by an author who is no crew account: a row anything else wrote, for
+   * anyone else, is ignored. Authorship alone is never one: with no row there
+   * is nothing. The author is read from GitHub only when there is a row and
+   * the caller did not say. A store or a read that fails counts none, which
+   * holds the pull request rather than lands it.
+   */
+  private async authorSignOffs(
+    client: GitHubClient | null,
+    repoFullName: string,
+    number: number,
+    crew: readonly { githubLogin?: string | null }[],
+    author?: { login: string; id: number } | null,
+  ): Promise<{ login: string; head: string }[]> {
+    const rows = await (async () => {
+      const repo = await repos.getRepoByName(repoFullName);
+      return repo ? await personSignOffs.forPull(repo.id, number) : [];
+    })().catch(() => []);
+    if (rows.length === 0) return [];
+    const who =
+      author ??
+      (client
+        ? await client.request<{ user?: { login: string; id?: number } | null }>('GET', `/repos/${repoFullName}/pulls/${number}`).then(
+            (pull) => pullAuthorOf(pull.user),
+            () => null,
+          )
+        : null);
+    if (!who || crew.some((bot) => sameLogin(bot.githubLogin, who.login))) return [];
+    return rows.filter((row) => row.githubUserId === who.id).map((row) => ({ login: who.login, head: row.head }));
   }
 
   /** The earlier heads whose reviews a lead-only conflict resolution or a stacked update carried to a head; set once at start-up (`main.ts`). */
@@ -2816,13 +2915,17 @@ export class Automation {
     // Unreadable settings may be the ones that asked for a person: a person.
     const ciMergedBy = !live || !live.settingsRead || live.ciMergeByPerson.includes(repoFullName.split('/')[1]?.toLowerCase() ?? '') ? 'person' : 'openadlc';
 
-    // The earlier heads an approval, or the security reviewer's verdict, was on.
+    // The author's sign-offs from the console, for a login the rules name who
+    // is its author (docs/adr/0063); read only when someone is named.
+    const signOffs = humans.required.length > 0 ? await this.authorSignOffs(client, repoFullName, pull.number, crew) : [];
+    // The earlier heads an approval, the security reviewer's verdict, or a sign-off was on.
     const earlier = [
-      ...new Set(
-        [...counted, ...(checked ?? [])]
+      ...new Set([
+        ...[...counted, ...(checked ?? [])]
           .filter((review) => (review.state === 'APPROVED' || (() => { const author = whoWrote(review.user, crew, { bot: seatOf(review.body) }); return author.kind === 'openadlc' && author.bot?.name === securitySeat; })()) && review.commitId && review.commitId !== pull.headSha)
           .map((review) => review.commitId as string),
-      ),
+        ...signOffs.map((one) => one.head).filter((head) => head !== pull.headSha),
+      ]),
     ];
     // Heads a lead-only resolution of a conflict carried from, and any whose
     // diff is one of theirs, are kept apart from heads with this diff: they
@@ -2879,6 +2982,7 @@ export class Automation {
       ciContext,
       statuses,
       gate,
+      signOffs,
       sameDiffAs,
       carriedFrom,
       leadRechecks: resolution.rechecks ? decision.lead : null,

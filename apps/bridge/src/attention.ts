@@ -15,6 +15,7 @@ import {
   parseDependencyRefs,
   PLAN_CHANGE_REFUSE,
   roleLabel,
+  sameLogin,
   STAGE_COLUMN_TITLES,
   STAGE_KEYS,
   type StageKey,
@@ -323,6 +324,14 @@ export interface HumanReviewDecision {
   diffUrl: string;
   /** What each button does next. */
   next: { approve: string; reject: string; discuss: string };
+  /**
+   * How the person gives it on a pull request a person opened (#322,
+   * docs/adr/0063): `author`, they opened it and sign off here, since GitHub
+   * takes no approval from a pull request's author; `github`, someone else
+   * opened it and they approve it on GitHub, so the card offers no Approve.
+   * Null on a crew pull request, decided as before.
+   */
+  signOff: 'author' | 'github' | null;
   /** For the viewer only (`GET /v1/attention`): whether the decision is theirs to make. */
   yours?: boolean;
   /** For the viewer only, when it is not theirs: why, and where to link an account when that is why. */
@@ -1444,7 +1453,7 @@ export function attentionItems(given: AttentionInput): AttentionItem[] {
   // until something about it changes; or Discuss.
   const awaitedOn = new Map<string, string>();
   for (const ask of standingPersonAsks(input.personAsks ?? [], input.personReviews ?? [], input.issues).values()) awaitedOn.set(`${ask.repo}#${ask.pr}`, ask.login);
-  for (const wait of standingPersonAwaits(input.personAwaits ?? [], input.personReviews ?? [], input.roundsOpened ?? [], input.issues).values()) {
+  for (const wait of standingPersonAwaits(input.personAwaits ?? [], input.personReviews ?? [], input.roundsOpened ?? [], input.issues, input.personSignOffs ?? []).values()) {
     if (!awaitedOn.has(`${wait.repo}#${wait.pr}`)) awaitedOn.set(`${wait.repo}#${wait.pr}`, wait.login);
   }
   for (const held of input.heldMerges ?? []) {
@@ -1523,30 +1532,58 @@ export function attentionItems(given: AttentionInput): AttentionItem[] {
     });
   }
 
-  // A person the repository names that a crew pull request waits on for a
-  // first approval, once the lead's counts. One item per pull request and
-  // person: one asked to approve again has that card, and not this one too.
+  // A person the repository names that a pull request waits on for a first
+  // approval, once the lead's counts: a crew pull request's, or a person's
+  // own (#322). One item per pull request and person: one asked to approve
+  // again has that card, and not this one too.
   const askedAgain = new Set(items.filter((item) => item.id.startsWith('approve-again:')).map((item) => item.id.slice('approve-again:'.length)));
-  for (const [key, wait] of standingPersonAwaits(input.personAwaits ?? [], input.personReviews ?? [], input.roundsOpened ?? [], input.issues)) {
+  for (const [key, wait] of standingPersonAwaits(input.personAwaits ?? [], input.personReviews ?? [], input.roundsOpened ?? [], input.issues, input.personSignOffs ?? [])) {
     const ref = `${wait.repo}#${wait.pr}`;
     if (input.closed?.has(ref) || askedAgain.has(key)) continue;
     const fullName = reposByName.get(wait.repo)?.fullName;
     if (!fullName) continue;
-    const { subject } = subjectOf(`${wait.repo}#${wait.issue}`);
+    // A person's own pull request is a card of its own (`lonePulls`), named by its own ref.
+    const { subject } = subjectOf(wait.issue !== null ? `${wait.repo}#${wait.issue}` : ref);
     const url = `https://github.com/${fullName}/pull/${wait.pr}`;
     const who = `@${wait.login}`;
     const changesFor = (them: string) =>
       wait.paths.length > 0 ? `${pathsInWords(wait.paths)}, which AGENTS.md's Human review names ${them} for` : `a path AGENTS.md's Human review names ${them} for`;
     const changes = changesFor(who);
+    const signOff = signOffOf(wait, input.bots);
+    // How it is given, after why: signed off here by its author, whom GitHub
+    // refuses, or approved on GitHub by anyone else on a person's pull request.
+    const how = {
+      named:
+        signOff === 'author'
+          ? ` GitHub takes no approval from a pull request's author, so ${who} signs it off here.`
+          : signOff === 'github'
+            ? ` ${who} approves it on GitHub; the console signs off only for a pull request's author.`
+            : '',
+      they:
+        signOff === 'author'
+          ? " GitHub takes no approval from a pull request's author, so they sign it off here."
+          : signOff === 'github'
+            ? " They approve it on GitHub; the console signs off only for a pull request's author."
+            : '',
+    };
+    const actions: AttentionAction[] =
+      signOff === 'author'
+        ? [
+            { kind: 'human_review_approve', label: 'Sign off', subject: ref, login: wait.login, head: wait.head },
+            { kind: 'human_review_discuss', label: 'Discuss', subject: ref, login: wait.login, head: wait.head },
+          ]
+        : signOff === 'github'
+          ? [{ kind: 'human_review_discuss', label: 'Discuss', subject: ref, login: wait.login, head: wait.head }]
+          : decisionActions(ref, wait.login, wait.head);
     items.push({
       id: `approval:${key}`,
       kind: 'merge_waiting',
-      headline: `Pull request #${wait.pr} waits for ${who}'s approval`,
+      headline: signOff === 'author' ? `Pull request #${wait.pr} waits for ${who}'s sign-off` : `Pull request #${wait.pr} waits for ${who}'s approval`,
       subject: { ...subject, url: subject.url ?? url },
       bot: null,
       since: wait.at,
-      detail: `The lead approved ${wait.head.slice(0, 7)}. It changes ${changes}. OpenADLC does not merge it until ${who} approves it.`,
-      actions: [...decisionActions(ref, wait.login, wait.head), { kind: 'open_url', label: 'Review it on GitHub', url: `${url}/files` }],
+      detail: `The lead approved ${wait.head.slice(0, 7)}. It changes ${changes}. OpenADLC does not merge it until ${who} approves it.${how.named}`,
+      actions: [...actions, { kind: 'open_url', label: 'Review it on GitHub', url: `${url}/files` }],
       awaiting: { login: wait.login, again: false, paths: [...wait.paths] },
       decision: heldDecision({
         repo: wait.repo,
@@ -1555,9 +1592,10 @@ export function attentionItems(given: AttentionInput): AttentionItem[] {
         login: wait.login,
         url,
         issue: issueFacts(input.issues, wait.repo, wait.issue),
-        why: `The lead approved ${wait.head.slice(0, 7)}. It changes ${changes}, so OpenADLC does not merge it until ${who} approves it.`,
-        whyWaits: `The lead approved ${wait.head.slice(0, 7)}. It changes ${changesFor(AS_THEY.them)}, so OpenADLC does not merge it until they approve it.`,
+        why: `The lead approved ${wait.head.slice(0, 7)}. It changes ${changes}, so OpenADLC does not merge it until ${who} approves it.${how.named}`,
+        whyWaits: `The lead approved ${wait.head.slice(0, 7)}. It changes ${changesFor(AS_THEY.them)}, so OpenADLC does not merge it until they approve it.${how.they}`,
         reviews: wait.reviews,
+        signOff,
       }),
     });
   }
@@ -3094,7 +3132,7 @@ export async function readAttention(now: Date, deps: AttentionDeps = {}): Promis
   const unboardedAsks = [...standingPersonAsks(personAsks, personReviews, present.issues).values()]
     .filter((ask) => !present.issues.some((one) => one.repoName === ask.repo && one.number === ask.issue))
     .map((ask) => `${ask.repo}#${ask.pr}`);
-  const unboardedAwaits = [...standingPersonAwaits(personAwaits, personReviews, roundsOpened, present.issues).values()]
+  const unboardedAwaits = [...standingPersonAwaits(personAwaits, personReviews, roundsOpened, present.issues, facts.personSignOffs).values()]
     .filter((wait) => !present.issues.some((one) => one.repoName === wait.repo && one.number === wait.issue))
     .map((wait) => `${wait.repo}#${wait.pr}`);
   const endable = [...new Set([...failedTaskCandidates(present).map((task) => task.subjectRef), ...unboarded, ...unboardedAsks, ...unboardedAwaits].filter((ref) => parseRef(ref)))];
@@ -3269,8 +3307,10 @@ function heldDecision(input: {
   why: string;
   whyWaits: string;
   reviews: PersonAwaitReview[] | null;
+  signOff?: HumanReviewDecision['signOff'];
 }): HumanReviewDecision {
   const short = input.head.slice(0, 7);
+  const signOff = input.signOff ?? null;
   return {
     repo: input.repo,
     pr: input.pr,
@@ -3283,9 +3323,27 @@ function heldDecision(input: {
     prUrl: input.url,
     diffUrl: `${input.url}/files`,
     next: {
-      approve: `Posts your approval of ${short} on GitHub as @${input.login}, after you approve a one-time code. OpenADLC merges it once CI passes.`,
+      approve:
+        signOff === 'author'
+          ? `Records your sign-off of ${short} for the paths named for you, after you approve a one-time code as @${input.login}. GitHub does not take an approval from a pull request's author, so this is not posted as a review. OpenADLC merges it once CI passes.`
+          : `Posts your approval of ${short} on GitHub as @${input.login}, after you approve a one-time code. OpenADLC merges it once CI passes.`,
       reject: 'Sends it back to the builder with your reason. The lead reviews the fix, and you are asked again.',
       discuss: 'Sends your message to the lead reviewer, or the builder, who answers on the pull request. The decision stays open.',
     },
+    signOff,
   };
+}
+
+/**
+ * How a wait's person approves (`HumanReviewDecision.signOff`): `author`
+ * when they opened it and no crew account did, `github` on a pull request with
+ * no issue that someone else opened, null on a crew pull request and on a wait
+ * recorded before its author was, which reads as one did.
+ */
+function signOffOf(wait: { issue: number | null; login: string; author: { login: string; id: number } | null }, crew: readonly { githubLogin: string | null }[]): HumanReviewDecision['signOff'] {
+  const author = wait.author;
+  const crewAuthor = author !== null && crew.some((bot) => sameLogin(bot.githubLogin, author.login));
+  if (author && !crewAuthor && sameLogin(author.login, wait.login)) return 'author';
+  if (wait.issue === null && !crewAuthor) return 'github';
+  return null;
 }

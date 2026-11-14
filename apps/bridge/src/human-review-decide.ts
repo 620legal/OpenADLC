@@ -21,10 +21,25 @@ import { HttpFailure } from './router.js';
  * Hiding a button is not the check. Each decision here is refused unless the
  * viewer's linked account id is the awaited login's, and the head is still the
  * one they saw.
+ *
+ * On a person's own pull request GitHub refuses the review: its author cannot
+ * approve it. When the person awaited is its author, Approve is their sign-off
+ * instead (docs/adr/0063-an-author-who-is-the-named-person-signs-off-in-the-console.md):
+ * the same sign-in proves it is them, People must have Approves on for that
+ * account, and it is recorded in `person_sign_offs` and audited, which
+ * `review-gate` and `mergeDecision` count for their login only. Nothing is
+ * posted. When the person awaited is not its author, the card is for
+ * information only and they approve it on GitHub, as before.
  */
 
 /** Where a console person links their GitHub account. */
 export const LINK_ACCOUNT_URL = '/settings#your-github';
+
+/** Where an admin turns Approves on for a person. */
+export const PEOPLE_URL = '/settings#people';
+
+/** Why an author's sign-off is refused when People does not let them approve. */
+export const APPROVES_OFF = 'Approves is off for you in People; an admin turns it on in Settings → People, or a reviewer approves it on GitHub.';
 
 /** How long a reason may be: a finding the builder reads, not a document. */
 export const REJECT_REASON_LIMIT = 2000;
@@ -39,10 +54,28 @@ export interface HumanReviewDeps {
   userIdOf(login: string): Promise<number | null>;
   /** The head a pull request waits on `login`'s approval of (`standingPersonAwaits`, `standingPersonAsks`), or null when it no longer does. */
   standing(repo: string, pr: number, login: string): Promise<{ head: string } | null>;
-  /** The pull request as GitHub has it now. */
-  pull(repo: PullRepo, number: number): Promise<{ open: boolean; head: string; url: string }>;
+  /**
+   * The pull request as GitHub has it now, with who opened it: its login and
+   * account id, null when GitHub did not say, which is decided as a crew pull
+   * request's was.
+   */
+  pull(repo: PullRepo, number: number): Promise<{ open: boolean; head: string; url: string; author?: { login: string; id: number } | null }>;
   flows: Pick<PersonFlows, 'start' | 'state'>;
   isCrew(login: string): Promise<boolean>;
+  /** Whether People has Approves on for the person this account is linked to (`people.approves`); false for nobody in People. */
+  approves(githubUserId: number): Promise<boolean>;
+  /**
+   * The author's sign-off of their own pull request (`person_sign_offs`), the
+   * only writer of it, written with its audit entry in one transaction: both
+   * land or neither does. It answers the row already there for a head and
+   * account with `created: false`.
+   */
+  signOff: {
+    record(
+      input: { repo: string; pr: number; head: string; githubUserId: number; githubLogin: string; identity: string },
+      audit: { actor: string; action: string; target: string; payload: Record<string, unknown> },
+    ): Promise<{ id: string; created: boolean }>;
+  };
   /** Posts a review with the person's token; the token goes nowhere else. */
   postReviewAsPerson(accessToken: string, fullName: string, number: number, review: { commitId: string; body: string }): Promise<{ id: number; htmlUrl: string }>;
   /** Comments as the app; null when it is not installed on the repository. */
@@ -186,8 +219,26 @@ export class HumanReviewDecisions {
     return { yours: false, status: 403, why: `This is @${login}'s to decide; you can Discuss it.` };
   }
 
+  /**
+   * How a held approval is given, from who opened the pull request: a review
+   * posted as the person on a crew pull request (or one whose author GitHub
+   * did not say); the author's sign-off when the person awaited opened it;
+   * and on GitHub only when someone else did, which this refuses.
+   */
+  private async howDecided(pull: { author?: { login: string; id: number } | null }, linkedId: number): Promise<'review' | 'sign_off' | 'on_github'> {
+    const author = pull.author ?? null;
+    if (!author || (await this.deps.isCrew(author.login))) return 'review';
+    return author.id === linkedId ? 'sign_off' : 'on_github';
+  }
+
   /** Everything both decisions check before anything is posted, in the order a person can act on. */
-  private async check(input: { repo: PullRepo; number: number; login: string; head: string; identity: string }): Promise<{ linkedId: number; url: string }> {
+  private async check(input: {
+    repo: PullRepo;
+    number: number;
+    login: string;
+    head: string;
+    identity: string;
+  }): Promise<{ linkedId: number; url: string; how: 'review' | 'sign_off' }> {
     const { repo, number, login, head } = input;
     if (!/^[0-9a-f]{40}$/i.test(head)) throw new HttpFailure(400, 'head is the commit the decision was shown for');
     const may = await this.mayDecide(input.identity, login);
@@ -201,7 +252,15 @@ export class HumanReviewDecisions {
         url: pull.url,
       });
     }
-    return { linkedId: may.linkedId, url: pull.url };
+    const how = await this.howDecided(pull, may.linkedId);
+    // Out of scope by design: a named person who did not open a person's pull
+    // request approves it on GitHub, which takes their review (#322).
+    if (how === 'on_github') {
+      throw new HttpFailure(409, `@${login} approves pull request #${number} on GitHub; the console signs off only for its author. Nothing was posted.`, {
+        url: `${pull.url}/files`,
+      });
+    }
+    return { linkedId: may.linkedId, url: pull.url, how };
   }
 
   /**
@@ -212,7 +271,10 @@ export class HumanReviewDecisions {
    */
   async approve(input: { repo: PullRepo; number: number; login: string; head: string; identity: string }): Promise<{ flow: Omit<FlowView<unknown>, 'state' | 'result' | 'error'> }> {
     const { repo, number, login, head, identity } = input;
-    const { linkedId, url } = await this.check(input);
+    const { linkedId, url, how } = await this.check(input);
+    // Said before the sign-in, so nobody approves a code for a sign-off that
+    // would be refused; asked again once they have, below.
+    if (how === 'sign_off' && !(await this.deps.approves(linkedId).catch(() => false))) throw new HttpFailure(403, APPROVES_OFF, { url: PEOPLE_URL });
     const key = `${repo.name}#${number}@${head}#${identity}`;
     const waiting = this.signing.get(key);
     if (waiting && this.deps.flows.state(waiting.flowId, waiting.identity).state === 'waiting') {
@@ -227,6 +289,7 @@ export class HumanReviewDecisions {
         if (await this.deps.isCrew(viewer.login)) throw new Error(`@${viewer.login} is an account the crew uses; nothing was posted.`);
         const now = await this.deps.pull(repo, number);
         if (now.head !== head) throw new Error(`Pull request #${number} moved to ${short(now.head)} while you signed in; nothing was posted. Reload and approve the new head.`);
+        if (how === 'sign_off') return this.signOff({ repo, number, login, head, identity, viewer, pull: now });
         const posted = await this.deps.postReviewAsPerson(accessToken, repo.fullName, number, { commitId: head, body: 'Approved from the OpenADLC console.' });
         // The review is posted and counts in `mergeDecision` from here on. A
         // record that cannot be written is said in the log, not to the person:
@@ -243,11 +306,55 @@ export class HumanReviewDecisions {
           );
         return { commentUrl: posted.htmlUrl };
       },
-      { noClientId: `OpenADLC cannot sign in as a person on this install: no GitHub App client id is configured. Approve it on GitHub: ${url}/files` },
+      {
+        noClientId:
+          how === 'sign_off'
+            ? 'OpenADLC cannot sign in as a person on this install: no GitHub App client id is configured, so it cannot take your sign-off. An admin adds the client id in Settings.'
+            : `OpenADLC cannot sign in as a person on this install: no GitHub App client id is configured. Approve it on GitHub: ${url}/files`,
+      },
     );
     for (const [held, one] of this.signing) if (this.deps.flows.state(one.flowId, one.identity).state !== 'waiting') this.signing.delete(held);
     this.signing.set(key, { flowId: flow.flowId, identity });
     return { flow: { flowId: flow.flowId, userCode: flow.userCode, verificationUri: flow.verificationUri, expiresInSeconds: flow.expiresInSeconds } };
+  }
+
+  /**
+   * The author's sign-off, once their sign-in proved it is them: recorded,
+   * never posted, with nothing done with their token. The account that
+   * approved the code is the pull request's author as GitHub says now, and
+   * People has Approves on for it. The row and its audit entry are written in
+   * one transaction, so there is never a sign-off the gate counts that nobody
+   * can trace: written one after the other, an audit that failed left the row
+   * to be taken back by a second write, and when that failed too the sign-off
+   * counted with no audit entry (#322).
+   */
+  private async signOff(input: {
+    repo: PullRepo;
+    number: number;
+    login: string;
+    head: string;
+    identity: string;
+    viewer: GitHubViewer;
+    pull: { url: string; author?: { login: string; id: number } | null };
+  }): Promise<{ commentUrl: string }> {
+    const { repo, number, login, head, identity, viewer, pull } = input;
+    if (pull.author?.id !== viewer.id) {
+      throw new Error(`@${viewer.login} did not open pull request #${number}, so the console cannot sign it off for you; approve it on GitHub. Nothing was recorded.`);
+    }
+    if (!(await this.deps.approves(viewer.id).catch(() => false))) throw new Error(`${APPROVES_OFF} Nothing was recorded.`);
+    const audit = {
+      actor: identity,
+      action: 'pull.human_review_signed_off',
+      target: decisionTarget(repo.name, number),
+      payload: { repo: repo.name, pr: number, login: viewer.login, awaited: login, githubUserId: viewer.id, head, by: identity },
+    };
+    try {
+      await this.deps.signOff.record({ repo: repo.name, pr: number, head, githubUserId: viewer.id, githubLogin: viewer.login, identity }, audit);
+    } catch (error) {
+      this.warn(`[bridge] @${viewer.login}'s sign-off of ${repo.name}#${number} at ${short(head)} was not recorded: ${error instanceof Error ? error.message : error}`);
+      throw new Error('OpenADLC could not record your sign-off and its audit entry, so it does not count. Nothing was posted; sign off again in a moment.');
+    }
+    return { commentUrl: pull.url };
   }
 
   /**
@@ -270,7 +377,9 @@ export class HumanReviewDecisions {
     if (this.rejecting.has(key)) throw new HttpFailure(409, `Pull request #${number} at ${short(head)} is being sent back already; nothing was done again.`);
     this.rejecting.add(key);
     try {
-      await this.check(input);
+      const { how } = await this.check(input);
+      // A person's own pull request has no builder to send it back to.
+      if (how !== 'review') throw new HttpFailure(409, `Pull request #${number} is @${login}'s own, with no builder to send it back to; nothing was done. Push the change to it yourself, or Discuss it.`);
       const already = await this.deps.rejected(repo.name, number, head).catch(() => {
         throw new HttpFailure(503, `OpenADLC cannot tell whether #${number} was already sent back; nothing was done. Try again in a moment.`);
       });

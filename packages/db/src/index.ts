@@ -76,6 +76,8 @@ export * as insights from './store/insights.js';
 export * as personAccounts from './store/person-accounts.js';
 export * as people from './store/people.js';
 export * as pushDevices from './store/push-devices.js';
+export * as personSignOffs from './store/person-sign-offs.js';
+export type { PersonSignOff } from './store/person-sign-offs.js';
 export type { PushDevice } from './store/push-devices.js';
 export { AccountLinkedElsewhere } from './store/people.js';
 export type { Person, PersonInput } from './store/people.js';

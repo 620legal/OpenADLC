@@ -613,6 +613,14 @@ export interface HumanReviewDecision {
   prUrl: string;
   diffUrl: string;
   next: { approve: string; reject: string; discuss: string };
+  /**
+   * How it is given on a pull request a person opened (#322): `author`, its
+   * author signs it off here, since GitHub takes no approval from them, and
+   * Approve reads Sign off; `github`, someone else opened it and they approve
+   * it on GitHub, so the card offers no Approve. Null on a crew pull request,
+   * and absent from an older bridge: decided as before.
+   */
+  signOff?: 'author' | 'github' | null;
   /** Whether it is the viewer's to decide. Absent from a bridge that does not say: then it is not. */
   yours?: boolean;
   /** Why it is not the viewer's, and where to link an account when that is why. */

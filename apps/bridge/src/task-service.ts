@@ -2053,9 +2053,12 @@ export function crewReviewsOn(
  * which Needs you shows until they review it (`attention.ts`). A crew
  * branch's CI runs only once the merge line asks for it, so a pull request
  * held on a person never reached the green card that says it waits for one,
- * and on the local install one under `infra/` waited with nobody told. Only a
- * pull request with its own issue: on a person's own the named person often
- * wrote it. Once for each head, as `askPeopleAgain` asks; the files and rules
+ * and on the local install one under `infra/` waited with nobody told. A
+ * person's own pull request, with no issue, is recorded too, with its author:
+ * recorded only for a crew one, a person's own on a path named for them sat
+ * at `waiting on @login` for good with no card, and GitHub refuses the
+ * author's own approval, which the card's sign-off stands in for (#322,
+ * docs/adr/0063). Once for each head, as `askPeopleAgain` asks; the files and rules
  * are read only when something is recorded, and a read that fails records
  * the wait with no paths rather than none. The crew's reviews on the head go
  * with it (`crewReviewsOn`), so the card says what they found without a
@@ -2063,11 +2066,18 @@ export function crewReviewsOn(
  * Says each one it recorded.
  */
 export async function awaitPeople(
-  subject: { repoName: string; prNumber: number; issue: number | null; head: string },
+  subject: {
+    repoName: string;
+    prNumber: number;
+    issue: number | null;
+    head: string;
+    /** Who opened it, as GitHub says: whether the awaited person is its author decides how they approve. */
+    author?: { login?: string | null; id?: number | null } | null;
+  },
   standing: AwaitedStanding,
   read: { files(): Promise<string[] | null>; rules(): Promise<HumanReviewRule[] | null>; reviews?(): Promise<AwaitedReview[] | null> },
 ): Promise<string[]> {
-  if (subject.issue === null) return [];
+  const author = subject.author?.login && typeof subject.author.id === 'number' ? { login: subject.author.login, id: subject.author.id } : null;
   const subjectRef = `${subject.repoName}#${subject.prNumber}`;
   let reads: Promise<{ files: string[] | null; rules: HumanReviewRule[] | null; reviews: AwaitedReview[] | null }> | null = null;
   const facts = () =>
@@ -2083,7 +2093,8 @@ export async function awaitPeople(
     if (had) continue;
     const { files, rules, reviews } = await facts();
     const paths = files && rules ? humanReviewPathsFor(login, files, rules) : [];
-    const payload = { ...fields, repo: subject.repoName, pr: subject.prNumber, issue: subject.issue, paths, reviews: reviews ?? [] };
+    // An author GitHub gave no id for is left out, and reads as unknown (`personAwaitFrom`).
+    const payload = { ...fields, repo: subject.repoName, pr: subject.prNumber, issue: subject.issue, paths, reviews: reviews ?? [], ...(author ? { author } : {}) };
     const ok = await (async () => recordEvent({ source: 'platform', type: PERSON_AWAITED, payload }))().then(
       () => true,
       (error: unknown) => {

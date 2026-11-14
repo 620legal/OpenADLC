@@ -133,6 +133,8 @@ describe('deciding a held Human-review approval', () => {
       pull: async () => ({ open: true, head: HEAD, url: 'https://github.com/620legal/www/pull/46' }),
       flows: { start: vi.fn(), state: vi.fn() } as never,
       isCrew: async () => false,
+      approves: async () => true,
+      signOff: { record: vi.fn() },
       postReviewAsPerson: vi.fn(),
       commentAsApp: vi.fn(),
       rejected: async () => false,
@@ -179,6 +181,8 @@ describe('deciding a held Human-review approval', () => {
       pull: async () => ({ open: true, head: HEAD, url: 'https://github.com/620legal/www/pull/46' }),
       flows: { start, state: vi.fn() } as never,
       isCrew: async () => false,
+      approves: async () => true,
+      signOff: { record: vi.fn() },
       postReviewAsPerson: vi.fn(),
       commentAsApp,
       rejected: async () => false,
@@ -198,6 +202,38 @@ describe('deciding a held Human-review approval', () => {
     expect((await post('reject', { head: HEAD, login: 'janedoe', reason: 'No.' }, 'bob@example.com')).status).toBe(403);
     expect(start).not.toHaveBeenCalled();
     expect(commentAsApp).not.toHaveBeenCalled();
+  });
+
+  it('answers 409 to the awaited person on someone else’s own pull request, and starts no sign-in (#322)', async () => {
+    const start = vi.fn();
+    const record = vi.fn();
+    const decisions = new HumanReviewDecisions({
+      linkOf: async () => ({ githubLogin: 'janedoe', githubUserId: 1 }),
+      userIdOf: async (login) => (login === 'janedoe' ? 1 : 2),
+      standing: async () => ({ head: HEAD }),
+      // Opened by @bob, a person, not by @janedoe whom it waits on.
+      pull: async () => ({ open: true, head: HEAD, url: 'https://github.com/620legal/www/pull/46', author: { login: 'bob', id: 2 } }),
+      flows: { start, state: vi.fn() } as never,
+      isCrew: async () => false,
+      approves: async () => true,
+      signOff: { record },
+      postReviewAsPerson: vi.fn(),
+      commentAsApp: vi.fn(),
+      rejected: async () => false,
+      audit: vi.fn(),
+      sendBack: vi.fn(),
+      history: async () => [],
+      requestReviewers: vi.fn(),
+      removeReviewRequest: vi.fn(),
+      lastReminded: async () => null,
+      nameOf: async () => null,
+    });
+    const { post } = await serveDecisions(decisions);
+    const refused = await post('approve', { head: HEAD, login: 'janedoe' });
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toMatchObject({ error: '@janedoe approves pull request #46 on GitHub; the console signs off only for its author. Nothing was posted.' });
+    expect(start).not.toHaveBeenCalled();
+    expect(record).not.toHaveBeenCalled();
   });
 
   it('says so on a bridge that does not decide them', async () => {

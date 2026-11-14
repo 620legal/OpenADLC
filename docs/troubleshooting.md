@@ -2056,6 +2056,16 @@ the card's own buttons, and is never the main one.
   go back (no builder holds the branch, or the review loop stopped for a
   person), the card says why: your reason is already on the pull request, and
   you can Reject again once that is fixed, or request changes on GitHub.
+- **Sign off** takes Approve's place on your own pull request. GitHub takes
+  no approval from a pull request's author, so without it a pull request you
+  opened on a path named for you never passed `review-gate`. You approve a
+  one-time code as your linked account, as for Approve. OpenADLC then records
+  your sign-off of that head instead of posting a review; nothing appears on
+  the pull request. It needs Approves on for you in Settings → People.
+  `review-gate` passes at the next gate sweep, within minutes. A push with a
+  new diff asks you again. On a person's pull request that someone else
+  opened, the card has no Approve: the person named approves it on GitHub
+  ([ADR 0063](adr/0063-an-author-who-is-the-named-person-signs-off-in-the-console.md)).
 - **Discuss** opens a message box addressed to the lead reviewer, or to the
   builder if you pick it. The message goes on the pull request and starts that
   role's work to answer it. The decision stays open.
