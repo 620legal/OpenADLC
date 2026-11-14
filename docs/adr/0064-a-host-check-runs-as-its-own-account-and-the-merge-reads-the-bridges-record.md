@@ -31,8 +31,10 @@ like that; `ci` reruns.
   and `host_check_required` (default true) through `PATCH /v1/repos/:name`.
   The command is one line of at most 500 characters, and every change is
   audited. Nothing reads it from `config/repos.yaml` or from the pull request.
-- **When it runs.** The bridge asks for a run once the lead's approval counts
-  on a head (`crewApprovedHead`), beside `awaitPeople`: from the review webhook
+- **When it runs.** The bridge asks for a run once the crew's reviews approve
+  a head (`crewApprovedHead`): the lead and every other approver approve it, no
+  approver asks for changes on it, the security seat does not either, and the
+  lead is not due again. It asks beside `awaitPeople`, from the review webhook
   and from the gate sweep, including pull requests that close no issue. Never
   for a fork's pull request or a draft. A new head, a close or a merge cancels
   the run that is going.
@@ -55,8 +57,15 @@ like that; `ci` reruns.
   path is shared between the two users, and the account never holds a token.
 - **How runs are scheduled and stopped.** One run at a time per hostd. A start
   for a pull request replaces any start queued for it, and cancels its run
-  that is going. A cancel or the time limit sends TERM, then KILL after 30
-  seconds, to every process the account runs. The account runs nothing else.
+  that is going. Every run ends by sending TERM, then KILL, to every process
+  the account runs, a pass included; on a cancel or the time limit the KILL
+  waits up to 30 seconds for the command to exit. hostd does the same before
+  each run starts. The account runs nothing else.
+- **What git runs as the account.** The fetch and checkout run with
+  `GIT_CONFIG_GLOBAL=/dev/null`, `GIT_CONFIG_NOSYSTEM=1`,
+  `core.hooksPath=/dev/null` and `core.fsmonitor=false`, since an earlier run
+  can write the account's `~/.gitconfig` and the folder's `.git`. A result is
+  still only as trustworthy as every head that ran before it in the folder.
 - **Where the result is recorded.** hostd reports the result to
   `POST /internal/host-check` with the install's secret. The bridge writes it
   to `host_check_runs`, which only the bridge writes, and posts `host-check`

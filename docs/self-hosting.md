@@ -2090,7 +2090,9 @@ with Xcode, and no task container has Xcode. A repository like that can have a
 **host check**: a command, such as `make host-ci`, that hostd runs on this
 machine for each pull request, outside every container. It runs once the
 crew's reviews approve the head, and before the person who approves it is
-asked. The result is posted on the pull request as the `host-check` commit
+asked. To count as approved, the lead and every other approver must approve
+the head, and no seat may be asking for changes on it, the security seat
+included. The result is posted on the pull request as the `host-check` commit
 status, and is shown on the held approval's card in Needs you. No model runs
 it, so it spends nothing.
 
@@ -2125,6 +2127,22 @@ On **Linux**:
 sudo useradd -m -s /bin/sh openadlc-hostcheck
 chmod 700 ~
 ```
+
+On both systems, stop the account from scheduling anything. hostd kills a
+process a build leaves behind when its run ends, and again before the next run
+starts. A `cron` or `at` job, though, would start one again later, between runs
+or during another repository's build:
+
+```bash
+# Linux: cron.deny and at.deny take one account name per line.
+echo openadlc-hostcheck | sudo tee -a /etc/cron.deny /etc/at.deny
+# macOS:
+echo openadlc-hostcheck | sudo tee -a /usr/lib/cron/cron.deny /usr/lib/cron/at.deny
+```
+
+If the machine has a `cron.allow` or `at.allow` file, it overrides the
+`.deny` file, so leave the account out of it. Then check that
+`sudo -u openadlc-hostcheck crontab -l` says the account may not use cron.
 
 ### Let hostd run commands as it
 
@@ -2191,9 +2209,18 @@ check runs only after the crew approves the head.
 - **The environment is cleared.** The command gets only `PATH`, `HOME`, `USER`,
   `LOGNAME`, `LANG`, `CI=1` and `OPENADLC_HOST_CHECK=1`. It gets no task token
   and nothing from the secret store.
-- **A time limit or a cancel stops everything the account runs.** hostd sends
-  TERM, then KILL thirty seconds later, to every process of the account. The
-  account runs nothing else, so this also stops daemons the build left behind.
+- **Every run ends by stopping everything the account runs, a pass
+  included.** hostd sends TERM, then KILL, to every process of the account.
+  The account runs nothing else, so this also stops daemons the build left
+  behind, such as a `nohup … &` from a target that then exited 0. On a time
+  limit or a cancel, the KILL comes as soon as the command exits, or thirty
+  seconds after the TERM at the latest. hostd sends TERM and KILL to the
+  account once more before each run starts, before the new head reaches its
+  folder.
+- **Git runs nothing an earlier run left.** The fetch and checkout in the
+  working folder read neither the account's `~/.gitconfig` nor the system's
+  git config. They run no hook and no fsmonitor, whatever the folder's
+  `.git/config` says.
 - **A pass carries to a head with the same changes.** When the merge line
   brings a branch up to date with its base, the build doesn't run again. When
   a conflict was resolved, it does, because the code changed.
@@ -2209,6 +2236,17 @@ keep your home `0700`.
 It **can't** read `~/.openadlc`, the secret store, a task's token, or your
 files. It can't signal hostd or your processes, and it can't run anything as
 you.
+
+**A result is only as trustworthy as every head that ran before it in that
+folder.** The working folder is kept between runs so that builds can be
+incremental, and each run's build can write anything in it: build products,
+ignored files, even the folder's `.git`. Something an earlier head left there
+can make a later head pass or fail. So can a head of another repository,
+because every repository's folder belongs to the same account. When you need a
+result that depends only on the head, have your `host-ci` target start from a
+clean tree (`git clean -fdx`, plus a fresh derived-data folder for Xcode). Or
+delete the folder before the run that matters:
+`sudo -u openadlc-hostcheck rm -rf ~openadlc-hostcheck/openadlc/<install>/<owner>__<repo>`.
 
 One install per machine runs host checks. A second install on the same machine
 would need its own account, and `openadlc up` does not pass a second one yet.

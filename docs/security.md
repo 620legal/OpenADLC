@@ -965,8 +965,10 @@ an admin set (`make host-ci`, say), with network access
 Several things bound it.
 
 - **When it runs.** Only once the crew's reviews approve the head, so the code
-  has been read before it runs. Never on a fork's pull request, and never on a
-  draft.
+  has been read before it runs. The lead and every other approver must approve
+  that head, and no seat may be asking for changes on it, the security seat
+  included. The lead's approval alone is not enough. Never on a fork's pull
+  request, and never on a draft.
 - **What it runs.** The command comes only from the repository's row in the
   platform database. An admin writes it there through `PATCH /v1/repos/:name`,
   as one line of at most 500 characters, and the change is audited. A pull
@@ -979,9 +981,14 @@ Several things bound it.
   if it can, the run is refused. The account holds no credential. hostd
   fetches the head with the crew's token into a mirror of its own, then gives
   the account a git bundle on stdin. No path is shared between the two users.
-- **How long it runs.** It is limited by the repository's time limit, at most
-  a day. A cancel or the limit sends TERM, then KILL, to every process the
-  account runs.
+- **How long it runs, and what outlives it.** It is limited by the
+  repository's time limit, at most a day. Every run ends by sending TERM, then
+  KILL, to every process the account runs, a pass included, so nothing a build
+  started in the background lives on into the next run. hostd does the same
+  once more before each run starts.
+- **What git runs.** The account's fetch and checkout read neither its
+  `~/.gitconfig` nor the system's git config, and run no hook and no
+  fsmonitor. An earlier run could have planted any of them.
 - **How its result counts.** Only the bridge writes the result, to
   `host_check_runs`, from hostd's report sent with the install's secret. The
   merge reads that table. It never reads the `host-check` commit status, which
@@ -990,8 +997,11 @@ Several things bound it.
 What it can still do: anything that account can do. That includes reaching
 the network and `localhost`, and reading what the machine lets every user
 read. The `host-check-account` health check fails while the account can read
-the install's files. Keeping the rest of the machine closed (a home of `0700`)
-is the person's part.
+the install's files. Keeping the rest of the machine closed is the person's
+part: a home of `0700`, and no `cron` or `at` for the account. And it can
+write anything in its working folders, which are kept between runs for
+incremental builds. So a result is only as trustworthy as every head that ran
+before it in that folder, of any repository the account builds.
 
 ### The console
 
