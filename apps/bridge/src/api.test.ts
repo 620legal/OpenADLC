@@ -2582,12 +2582,14 @@ describe('choosing how a repository’s production ships', () => {
   let server: Server;
   let url: string;
   const forget = vi.fn();
+  const accountType = vi.fn();
 
   beforeEach(async () => {
     const { registerConsoleApi } = await import('./api.js');
     const { Router } = await import('./router.js');
     const { HostdClient } = await import('./hostd-client.js');
     forget.mockClear();
+    accountType.mockReset().mockResolvedValue('Organization');
     vi.mocked(audit).mockClear();
     vi.mocked(repos.setProductionChoice).mockClear();
     vi.mocked(repos.listRepos).mockResolvedValue([{ id: 'repo-1', name: 'app', fullName: 'exampleco/app' }] as never);
@@ -2606,6 +2608,7 @@ describe('choosing how a repository’s production ships', () => {
       webhookSetup: {} as never,
       repoSetup: {} as never,
       delivery: { get: vi.fn(), forget } as never,
+      appReach: { accountType } as never,
     });
     server = createServer((request, response) => void router.handle(request, response));
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -2649,6 +2652,43 @@ describe('choosing how a repository’s production ships', () => {
     expect(await said(org)).toContain('is the organization');
 
     expect(repos.setProductionChoice).not.toHaveBeenCalled();
+  });
+
+  it('accepts the owner when the owner is a person’s account', async () => {
+    // Step 11 of the walkthrough posts this body, the owner's login prefilled.
+    accountType.mockResolvedValue('User');
+    const response = await post({ repo: 'exampleco/app', approval: 'reviewers', reviewers: ['exampleco'] });
+    expect(response.status).toBe(200);
+    expect(accountType).toHaveBeenCalledWith('exampleco');
+    expect(repos.setProductionChoice).toHaveBeenCalledWith('repo-1', { approval: 'reviewers', soakMinutes: 0, reviewers: ['exampleco'] });
+  });
+
+  it('refuses the owner when GitHub says it is an organization, with today’s message', async () => {
+    accountType.mockResolvedValue('Organization');
+    const response = await post({ repo: 'exampleco/app', approval: 'reviewers', reviewers: ['ExampleCo'] });
+    expect(response.status).toBe(400);
+    expect(await said(response)).toBe('@ExampleCo is the organization, which cannot review a deployment. Name a person in it');
+    expect(repos.setProductionChoice).not.toHaveBeenCalled();
+  });
+
+  it('does not refuse the owner on the organization ground when its type cannot be read', async () => {
+    accountType.mockResolvedValue(null);
+    expect((await post({ repo: 'exampleco/app', approval: 'reviewers', reviewers: ['exampleco'] })).status).toBe(200);
+    accountType.mockRejectedValue(new Error('GitHub is down'));
+    expect((await post({ repo: 'exampleco/app', approval: 'reviewers', reviewers: ['exampleco'] })).status).toBe(200);
+    expect(repos.setProductionChoice).toHaveBeenCalledTimes(2);
+    expect(repos.setProductionChoice).toHaveBeenLastCalledWith('repo-1', { approval: 'reviewers', soakMinutes: 0, reviewers: ['exampleco'] });
+  });
+
+  it('refuses a crew account before asking GitHub, and asks nothing for a person who is not the owner', async () => {
+    accountType.mockResolvedValue('User');
+    const bot = await post({ repo: 'exampleco/app', approval: 'reviewers', reviewers: ['openadlc-sydney'] });
+    expect(bot.status).toBe(400);
+    expect(await said(bot)).toContain('a bot never approves a deploy');
+    expect(accountType).not.toHaveBeenCalled();
+
+    expect((await post({ repo: 'exampleco/app', approval: 'reviewers', reviewers: ['janedoe'] })).status).toBe(200);
+    expect(accountType).not.toHaveBeenCalled();
   });
 
   it('refuses a soak out of range, an approval it does not know, and a repository OpenADLC does not work in', async () => {

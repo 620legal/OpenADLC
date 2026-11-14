@@ -360,7 +360,13 @@ export class AppReach {
     });
   }
 
-  private accountType(login: string): Promise<AccountType | null> {
+  /**
+   * Whether a GitHub account is a person's or an organization, null when
+   * GitHub could not answer. Cached per login for `ACCOUNT_TYPE_MS`. The
+   * production choice reads it too: the install's owner can approve
+   * production only when the owner is a person's account.
+   */
+  accountType(login: string): Promise<AccountType | null> {
     return this.remember(`account:${login.toLowerCase()}`, ACCOUNT_TYPE_MS, () => this.deps.accountType(login));
   }
 
