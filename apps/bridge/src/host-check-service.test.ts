@@ -142,6 +142,36 @@ describe('recording what hostd reported', () => {
   });
 });
 
+describe('the reason a status carries (#335)', () => {
+  const token = `ghp_${'x'.repeat(36)}`;
+  /** The store's own redaction, as `finish` and `start` apply it. */
+  const kept = async (reason: string) => {
+    const actual = await vi.importActual<typeof import('@openadlc/db')>('@openadlc/db');
+    return actual.hostCheckRuns.keptReason(reason);
+  };
+
+  it('posts the stored reason of a failed run, with a token-like string masked and a long one capped', async () => {
+    vi.mocked(hostCheckRuns.finish).mockImplementation(async (_runId, outcome) => run({ state: outcome.state, reason: outcome.reason ? await kept(outcome.reason) : null }));
+    const { service: hostChecks, postStatus } = service();
+    await hostChecks.record({ runId: 'run-1', state: 'failed', reason: `a hook printed ${token} ${'z'.repeat(5_000)}` });
+    const description = (postStatus.mock.calls[0] as unknown[] | undefined)?.[2] as { description: string };
+    expect(description.description).toContain('a hook printed');
+    expect(description.description).not.toContain(token);
+    expect(description.description.length).toBeLessThanOrEqual(1_000);
+  });
+
+  it('posts a refused head’s stored reason, not the one it built', async () => {
+    vi.mocked(hostCheckRuns.start).mockImplementation(async (input) => run({ runId: input.runId, state: 'refused', reason: input.reason ? await kept(input.reason) : null, id: 'refused-id' }));
+    const { service: hostChecks, hostd, postStatus } = service();
+    hostd.hostCheckAccount.mockResolvedValue({ probe: { ok: false, account: 'openadlc-hostcheck', problem: 'can_sudo', detail: `openadlc-hostcheck can run sudo without a password (${token})` } } as never);
+    const line = await hostChecks.request(REPO, 7, HEAD, 'main');
+    const description = ((postStatus.mock.calls[0] as unknown[] | undefined)?.[2] as { description: string }).description;
+    expect(description).toMatch(/^not run: openadlc-hostcheck can run sudo without a password/);
+    expect(description).not.toContain(token);
+    expect(line).not.toContain(token);
+  });
+});
+
 describe('stopping and finding lost runs', () => {
   it('asks hostd to stop a pull request’s going run, and ends it here when hostd has none', async () => {
     vi.mocked(hostCheckRuns.forPull).mockResolvedValue([run()]);

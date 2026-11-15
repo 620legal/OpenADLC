@@ -134,6 +134,12 @@ A change that makes one of these possible is wrong even when its tests pass:
   its environment. Every run, a pass included, ends with nothing of the
   account left running
   (docs/adr/0064-a-host-check-runs-as-its-own-account-and-the-merge-reads-the-bridges-record.md).
+  The account reaches nothing the install guards: it cannot read or enter
+  `OPENADLC_HOME`, the work root or hostd's home, reach Docker, or run `sudo`
+  without a password, and the probe refuses the run when it can. A run's
+  reason is redacted before it is stored or posted, and the red rule skips
+  only the bridge's own `host-check` status
+  (docs/adr/0066-a-host-check-account-reaches-nothing-and-only-the-bridges-host-check-status-is-skipped.md).
 - A bot never approves a deploy; the repository's environment rules release
   it — a required reviewer, or a soak timer when it ships automatically — or,
   where GitHub's plan cannot hold a reviewer, a person releasing the promote

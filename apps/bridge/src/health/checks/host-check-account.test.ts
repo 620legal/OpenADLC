@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { HostCheckAccountProbe } from '../../hostd-client.js';
+import { accountFix } from '../../host-check-service.js';
 import { hostCheckAccountCheck } from './host-check-account.js';
 
 const ACCOUNT = 'openadlc-hostcheck';
@@ -43,6 +44,25 @@ describe('the account host checks run as (#327)', () => {
     const { run } = check({ ok: false, account: ACCOUNT, problem: 'can_read', path: '/Users/jane/.openadlc', detail: `${ACCOUNT} can read /Users/jane/.openadlc` });
     const [result] = await run();
     expect(result).toMatchObject({ ok: false, title: 'The host check account can read /Users/jane/.openadlc', action: { command: 'chmod 700 /Users/jane/.openadlc' } });
+  });
+
+  describe('reaches nothing the install guards (#335)', () => {
+    it('fails while it can enter a folder, with the command that stops it', async () => {
+      const probe = { ok: false, account: ACCOUNT, problem: 'can_enter', path: '/Users/jane', detail: `${ACCOUNT} can enter /Users/jane (a file in it whose name it knows can be opened)` } as const;
+      const [result] = await check(probe).run();
+      expect(result).toMatchObject({ ok: false, title: 'The host check account can enter /Users/jane', action: { command: 'chmod 700 /Users/jane' } });
+      expect(result).toMatchObject({ detail: expect.stringContaining(accountFix(probe)) });
+    });
+
+    it.each([
+      [{ ok: false, account: ACCOUNT, problem: 'docker', path: '/var/run/docker.sock', detail: `${ACCOUNT} can connect to /var/run/docker.sock, which controls Docker as root` }, 'The host check account can reach Docker', 'the group that owns /var/run/docker.sock'],
+      [{ ok: false, account: ACCOUNT, problem: 'docker', detail: `${ACCOUNT} is in the docker group` }, 'The host check account can reach Docker', `sudo gpasswd -d ${ACCOUNT} docker`],
+      [{ ok: false, account: ACCOUNT, problem: 'can_sudo', detail: `${ACCOUNT} can run sudo without a password` }, 'The host check account can run sudo without a password', 'NOPASSWD rule'],
+    ] as const)('fails for %#, saying what to change', async (probe, title, fix) => {
+      const [result] = await check(probe).run();
+      expect(result).toMatchObject({ ok: false, severity: 'warning', title, detail: expect.stringContaining(fix), action: { url: expect.stringContaining('#host-checks') } });
+      expect(result).toMatchObject({ detail: expect.stringContaining(accountFix(probe)) });
+    });
   });
 
   it('fails for root, or hostd’s own user, which are no account of its own', async () => {

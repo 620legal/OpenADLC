@@ -239,8 +239,11 @@ export class HostCheckService {
       });
       // Said once per head: the row was there already when this head was refused before.
       if (newest?.id === refused.id) return null;
-      await this.status(repo.fullName, head, 'error', `not run: ${reason}`, refused.id);
-      return `${ref}: host check of ${head.slice(0, 7)} not run: ${reason}`;
+      // The stored reason, redacted and capped (`keptReason`), never the one
+      // built here: every reason on GitHub is the one the table holds (#335).
+      const said = refused.reason ?? reason;
+      await this.status(repo.fullName, head, 'error', `not run: ${said}`, refused.id);
+      return `${ref}: host check of ${head.slice(0, 7)} not run: ${said}`;
     }
 
     // From the repository's row, and only from there.
@@ -335,5 +338,13 @@ export function accountFix(probe: HostCheckAccountProbe): string {
       return `${probe.detail}. Add the sudo rule in ${HOST_CHECK_DOCS}, then run openadlc doctor`;
     case 'can_read':
       return `${probe.detail}, so it could read the install's secrets. Run: chmod 700 ${probe.path ?? 'that folder'}`;
+    case 'can_enter':
+      return `${probe.detail}, so it could open a file there whose name it knows. Run: chmod 700 ${probe.path ?? 'that folder'}`;
+    case 'docker':
+      return probe.path
+        ? `${probe.detail}. Take the account out of the group that owns ${probe.path}, or make the socket unreachable to it (${HOST_CHECK_DOCS})`
+        : `${probe.detail}. Run: sudo gpasswd -d ${probe.account} docker`;
+    case 'can_sudo':
+      return `${probe.detail}. Remove the account's NOPASSWD rule from /etc/sudoers.d, and take it out of any group that has one (${HOST_CHECK_DOCS})`;
   }
 }

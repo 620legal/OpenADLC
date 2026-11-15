@@ -97,6 +97,27 @@ export function keptTail(text: string): string {
   return redactSecrets(withoutNul(text)).slice(-HOST_CHECK_LOG_TAIL_BYTES);
 }
 
+/** How much of a run's reason is kept and posted. */
+export const HOST_CHECK_REASON_CHARS = 1_000;
+
+/**
+ * A reason as it may be kept and posted on the `host-check` status: without
+ * NUL, with anything shaped like a credential masked, and at most
+ * `HOST_CHECK_REASON_CHARS`. Only the log tail was once redacted, and a
+ * reason can carry git's or the build's stderr from the account's folder,
+ * which a hook an earlier run planted writes, onto GitHub (#335). It keeps the
+ * start, unlike `keptTail`: a reason leads with what happened and what to do.
+ */
+export function keptReason(text: string): string {
+  const kept = redactSecrets(withoutNul(text));
+  return kept.length > HOST_CHECK_REASON_CHARS ? `${kept.slice(0, HOST_CHECK_REASON_CHARS - 1)}…` : kept;
+}
+
+/** A reason as stored: `keptReason`, or null for none. */
+function storedReason(reason: string | null | undefined): string | null {
+  return reason === undefined || reason === null ? null : keptReason(reason);
+}
+
 /** Records a run the bridge asked hostd for; the same `runId` again answers the row already there. */
 export async function start(input: {
   runId: string;
@@ -114,7 +135,7 @@ export async function start(input: {
     `insert into host_check_runs (run_id, repo_id, pr_number, head_sha, state, command, timeout_minutes, reason, finished_at)
      values ($1, $2, $3, $4, $5, $6, $7, $8, case when $5 = 'running' then null else now() end)
      on conflict (run_id) do nothing`,
-    [input.runId, input.repoId, input.prNumber, input.headSha, state, input.command, input.timeoutMinutes, input.reason ?? null],
+    [input.runId, input.repoId, input.prNumber, input.headSha, state, input.command, input.timeoutMinutes, storedReason(input.reason)],
   );
   const row = await byRunId(input.runId);
   if (!row) throw new Error(`the host check run ${input.runId} could not be recorded or read; try again`);
@@ -165,7 +186,7 @@ export async function finish(
       outcome.exitCode ?? null,
       outcome.durationMs ?? null,
       outcome.logTail === undefined || outcome.logTail === null ? null : keptTail(outcome.logTail),
-      outcome.reason ?? null,
+      storedReason(outcome.reason),
     ],
   );
   return row ? byId(row.id) : null;

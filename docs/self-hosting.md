@@ -2172,14 +2172,50 @@ the environment with `env -i` in any case.
 openadlc doctor
 ```
 
-The `host-check-account` check proves three things by their effect: the
-account exists, hostd can run a command as it, and that command cannot read
-`OPENADLC_HOME`, `install.json` or your home. The check runs only while some
-repository has a host check. While it fails, no host check runs, and Needs you
-shows a card saying what to do. The held approval's card says **Host check not
-run**, with the same fix. If the check says the account can read a folder, run
-`chmod 700` on that folder. hostd also refuses to use `root` or its own user as
-the account.
+The `host-check-account` check proves, by effect, that the account exists and
+hostd can run a command as it. It then proves the account reaches nothing the
+install guards:
+
+- it can't read or enter `OPENADLC_HOME`, hostd's work root
+  (`OPENADLC_WORK_ROOT`, checked separately when it is set outside
+  `OPENADLC_HOME`) or your home, and can't read `install.json`
+- it can't connect to a Docker socket, and isn't in the `docker` group
+- it can't run `sudo` without a password
+
+The check runs only while some repository has a host check. While it fails, no
+host check runs, and Needs you shows a card saying what to do. The held
+approval's card says **Host check not run**, with the same fix. hostd also
+refuses to use `root` or its own user as the account.
+
+What each failure means, and how to fix it:
+
+- **It can read a folder.** Run `chmod 700` on that folder.
+- **It can enter a folder.** Run `chmod 700` on that folder. A folder at `0711`
+  or `0751` doesn't let the account list it, but does let it through: any file
+  inside whose name it knows, such as `~/.openadlc/install.json`, opens. An
+  access list that grants it search counts too. Check with `ls -lde <folder>`
+  on macOS, or `getfacl <folder>` on Linux.
+- **It can reach Docker.** Anyone who can talk to Docker can start a container
+  as root with any folder mounted, so this is the same as reading everything.
+  - On **Linux**, take the account out of the group: `sudo gpasswd -d
+    openadlc-hostcheck docker`. If the card names a socket rather than the
+    group, take the account out of the group that owns that socket
+    (`ls -l <socket>`). Don't make the socket world-writable.
+  - On **macOS**, Docker Desktop's and OrbStack's sockets live in your home
+    (`~/.docker/run/docker.sock`, `~/.orbstack/run/docker.sock`). Keeping your
+    home at `700` keeps the account out of them. Don't widen
+    `/var/run/docker.sock`, which is a link to the one in your home.
+
+  hostd checks `DOCKER_HOST` when it names a unix socket,
+  `/var/run/docker.sock`, `/run/docker.sock`, the two sockets in your home
+  above, and `$XDG_RUNTIME_DIR/docker.sock` (rootless Docker).
+- **It can run sudo without a password.** Remove the account's `NOPASSWD`
+  rule from `/etc/sudoers.d`, and take the account out of any group that has
+  one (`sudo -l -U openadlc-hostcheck` lists what it may run). A rule limited to
+  one command counts, because that command runs as someone else. On a machine
+  with `Defaults listpw=never`, `sudo -n -l` succeeds without a password even
+  when every rule needs one, so the check refuses there too. The card quotes
+  what `sudo -l` listed.
 
 ### Turn it on for a repository
 
@@ -2252,7 +2288,26 @@ keep your home `0700`.
 
 It **can't** read `~/.openadlc`, the secret store, a task's token, or your
 files. It can't signal hostd or your processes, and it can't run anything as
-you.
+you. It can't reach Docker or run `sudo`, and the check above refuses the run if
+it can.
+
+**What the `host-check` status says is redacted.** The reason on the status,
+and on the run's page, can include output from git or the build. A hook an
+earlier run planted can write that output. It is stored the way the log tail
+is: anything shaped like a credential is masked, and it is cut to 1,000
+characters. GitHub shows the first 140.
+
+**Only the bridge's own `host-check` status is left to its record.** The merge
+decides the host check from the bridge's record, never from a status. It
+skips the `host-check` status only when the bridge posted it, as the app or
+the automation account. A status of that name posted by any other account,
+such as your own CI, counts like any other check: when it is red, it holds
+the merge. The bridge reads every status on the head, not GitHub's combined view,
+which keeps only the newest status of each name. Otherwise the bridge's own
+status could hide a red one. When GitHub won't return every status, a
+`host-check` on the head holds the merge, even a green one, until it does.
+The pull request's blockers say `who posted host-check on the head cannot be
+read`.
 
 **A result is only as trustworthy as every head that ran before it in that
 folder.** The working folder is kept between runs so that builds can be
