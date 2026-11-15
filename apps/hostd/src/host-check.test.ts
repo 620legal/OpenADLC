@@ -4,7 +4,8 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { HostChecks, RECEIVE, dockerSocketsOf, hostCheckRequestFrom, nodeProcesses, type HostCheckRun, type HostProcesses, type ProcessResult } from './host-check.js';
+import { createHash } from 'node:crypto';
+import { HostChecks, RECEIVE, dockerSocketsOf, receiveScript, hostCheckRequestFrom, nodeProcesses, type HostCheckRun, type HostProcesses, type ProcessResult } from './host-check.js';
 
 const HEAD = 'a'.repeat(40);
 const NEXT = 'b'.repeat(40);
@@ -676,3 +677,19 @@ function alive(pid: number): boolean {
     return false;
   }
 }
+
+describe('the receive script, shared with the release run (#343)', () => {
+  it('is the host check’s RECEIVE, byte for byte as it was before it was shared', () => {
+    expect(RECEIVE).toBe(receiveScript('host-check'));
+    // The sha256 of RECEIVE as it was written before `receiveScript`: a
+    // change to the host check's script has to change this test on purpose.
+    expect(createHash('sha256').update(RECEIVE).digest('hex')).toBe('fe7e32746094660b973079a3e3c7b44aa4f493e01b9e35188532f1d42f3a1db0');
+  });
+
+  it('fetches only the release refs for a release, and keeps the same .git cleaning', () => {
+    const release = receiveScript('release');
+    expect(release).toContain("'+refs/openadlc/release/*:refs/openadlc/release/*'");
+    expect(release).not.toContain('host-check');
+    expect(release.replaceAll('refs/openadlc/release/', 'refs/openadlc/host-check/')).toBe(RECEIVE);
+  });
+});

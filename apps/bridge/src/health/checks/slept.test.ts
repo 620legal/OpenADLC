@@ -12,7 +12,7 @@ const sleep = (wokeMinutesAgo: number, overrides: Partial<Slept> = {}): { at: st
       sleptAt: new Date(Date.parse(wokeAt) - 47 * 60_000).toISOString(),
       wokeAt,
       seconds: 47 * 60,
-      inFlight: { tasks: 2, merges: 1, deploys: 0 },
+      inFlight: { tasks: 2, merges: 1, deploys: 0, releases: 0 },
       keepAwake: 'holding',
       ...overrides,
     },
@@ -42,7 +42,7 @@ describe('the machine slept with work in flight', () => {
       severity: 'warning',
       title: 'This machine slept for 47 min with work in flight',
       action: { label: 'Open Settings', href: '/settings#keep-awake' },
-      facts: { occurrence: event.payload.wokeAt, seconds: 2820, inFlight: { tasks: 2, merges: 1, deploys: 0 } },
+      facts: { occurrence: event.payload.wokeAt, seconds: 2820, inFlight: { tasks: 2, merges: 1, deploys: 0, releases: 0 } },
     });
     const detail = result?.ok === false ? result.detail : '';
     expect(detail).toContain('2 tasks, 1 merge waiting on CI');

@@ -512,6 +512,66 @@ export async function anyHostCheck(): Promise<boolean> {
 }
 
 /**
+ * A repository's release recipe: the command hostd runs as the release
+ * account, the file it leaves, where the version is read at the pinned
+ * commit, where the release is published, and how long it may run
+ * (`migrations/0169_release_runs.sql`, docs/adr/0070). Null for none.
+ */
+export interface ReleaseSetting {
+  command: string;
+  /** The file the command leaves, relative to the working folder. */
+  artifact: string;
+  versionFile: string;
+  versionKey: string | null;
+  /** `owner/name` the release is published to; null is this repository. */
+  releaseRepo: string | null;
+  timeoutMinutes: number;
+}
+
+export async function getRelease(repoId: string): Promise<ReleaseSetting | null> {
+  const row = await queryOne<{
+    release_command: string | null;
+    release_artifact: string | null;
+    release_version_file: string | null;
+    release_version_key: string | null;
+    release_repo: string | null;
+    release_timeout_minutes: number;
+  }>('select release_command, release_artifact, release_version_file, release_version_key, release_repo, release_timeout_minutes from repos where id = $1', [repoId]);
+  if (!row?.release_command || !row.release_artifact || !row.release_version_file) return null;
+  return {
+    command: row.release_command,
+    artifact: row.release_artifact,
+    versionFile: row.release_version_file,
+    versionKey: row.release_version_key,
+    releaseRepo: row.release_repo,
+    timeoutMinutes: row.release_timeout_minutes,
+  };
+}
+
+/**
+ * Replaces it; null takes it away. Only the bridge's admin route writes it
+ * (`PATCH /v1/repos/:name`), after `releaseSettingFrom`: what runs as the
+ * release account comes from an admin, never a file a pull request can change.
+ */
+export async function setRelease(repoId: string, setting: ReleaseSetting | null): Promise<void> {
+  if (setting === null) {
+    await query('update repos set release_command = null, updated_at = now() where id = $1', [repoId]);
+    return;
+  }
+  await query(
+    `update repos set release_command = $2, release_artifact = $3, release_version_file = $4, release_version_key = $5,
+       release_repo = $6, release_timeout_minutes = $7, updated_at = now() where id = $1`,
+    [repoId, setting.command, setting.artifact, setting.versionFile, setting.versionKey, setting.releaseRepo, setting.timeoutMinutes],
+  );
+}
+
+/** Whether any repository OpenADLC works in is set to release: the `release-account` card asks for an account only then. */
+export async function anyRelease(): Promise<boolean> {
+  const row = await queryOne<{ any: boolean }>(`select exists (select 1 from repos where release_command is not null and ${ACTIVE}) as any`);
+  return Boolean(row?.any);
+}
+
+/**
  * How a repository's production ships, as recorded when it was set up; see
  * `migrations/0047_repo_production_choice.sql`. `approval` is null while
  * nobody has been asked. It fills what the delivery rules leave out.

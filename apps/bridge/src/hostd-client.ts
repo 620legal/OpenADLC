@@ -87,6 +87,51 @@ export type ReleaseAccountProbe =
       detail: string;
     };
 
+/** A release build as the bridge starts it on hostd; see hostd's `release-run.ts`. */
+export interface ReleaseRunStart {
+  runId: string;
+  /** `owner/name`. */
+  repo: string;
+  /** The commit pinned when the release was asked for. */
+  sha: string;
+  defaultBranch: string;
+  versionFile: string;
+  versionKey: string | null;
+  /** The last release's version, `v` taken off, or null for none. */
+  after: string | null;
+  /** The repository row's, never the repository's files. */
+  command: string;
+  artifact: string;
+  timeoutMinutes: number;
+  clean: boolean;
+  /** The crew account whose token fetches the default branch into hostd's own mirror. */
+  bot: string | null;
+}
+
+/** A release run as hostd holds it. */
+export interface ReleaseRunView extends ReleaseRunStart {
+  state: 'running' | 'built' | 'failed' | 'cancelled' | 'refused';
+  version: string | null;
+  sha256: string | null;
+  bytes: number | null;
+  artifactName: string | null;
+  exitCode: number | null;
+  durationMs: number | null;
+  logTail: string;
+  reason: string | null;
+  startedAt: string;
+  finishedAt: string | null;
+}
+
+/** A built release's artifact as hostd serves it from its own copy. */
+export interface ReleaseArtifact {
+  body: ReadableStream<Uint8Array>;
+  /** hostd's, of the bytes `cat` wrote as the account. */
+  sha256: string;
+  version: string;
+  bytes: number;
+}
+
 /** A start or a read of a host check is hostd queueing or looking up; the run itself is reported. */
 const HOST_CHECK_CALL_TIMEOUT_MS = 30_000;
 /** The probe runs a few commands through sudo. */
@@ -496,6 +541,55 @@ export class HostdClient {
   /** Whether the release account is fit to build one, proved by its effect; `null` when hostd names none (`ReleaseAccount.probe`). */
   async releaseAccount(): Promise<{ probe: ReleaseAccountProbe | null }> {
     return this.call('GET', '/release/account', { timeoutMs: HOST_CHECK_PROBE_TIMEOUT_MS });
+  }
+
+  /**
+   * Starts a release build of one pinned commit on hostd
+   * (`apps/hostd/src/release-run.ts`). The recipe is the repository row's,
+   * read by the caller; hostd reports the end to `/internal/release`. Only
+   * `ReleaseService.start` calls this.
+   */
+  async startRelease(input: ReleaseRunStart): Promise<{ run: ReleaseRunView }> {
+    return this.call('POST', '/release/runs', { body: input, timeoutMs: HOST_CHECK_CALL_TIMEOUT_MS });
+  }
+
+  /** A release run as hostd holds it; a 404 when hostd has no such run, as after a restart with nothing built. */
+  async releaseRun(runId: string): Promise<{ run: ReleaseRunView }> {
+    return this.call('GET', `/release/runs/${encodeURIComponent(runId)}`, { timeoutMs: HOST_CHECK_CALL_TIMEOUT_MS });
+  }
+
+  /** Stops a release run going on hostd. */
+  async cancelRelease(runId: string): Promise<{ cancelled: boolean }> {
+    return this.call('DELETE', `/release/runs/${encodeURIComponent(runId)}`, { timeoutMs: HOST_CHECK_CALL_TIMEOUT_MS });
+  }
+
+  /**
+   * A built release's artifact, streamed from hostd's own copy under its work
+   * root, with the sha256 and version hostd computed (for #344 to sign and
+   * upload). Refused in hostd's words and status, as every call is.
+   */
+  async releaseArtifact(runId: string): Promise<ReleaseArtifact> {
+    let response: Response;
+    try {
+      response = await fetch(`${this.baseUrl}/release/runs/${encodeURIComponent(runId)}/artifact`, { headers: this.headers() });
+    } catch {
+      throw Object.assign(new Error(HOSTD_NOT_ANSWERING), { status: 502 });
+    }
+    if (!response.ok || !response.body) {
+      const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+      throw Object.assign(new Error(String(body.error ?? `hostd refused with ${response.status}`)), { status: response.status });
+    }
+    return {
+      body: response.body,
+      sha256: response.headers.get('x-openadlc-sha256') ?? '',
+      version: response.headers.get('x-openadlc-version') ?? '',
+      bytes: Number(response.headers.get('content-length') ?? 0),
+    };
+  }
+
+  /** Removes a release's artifact from hostd once it is published. */
+  async deleteReleaseArtifact(runId: string): Promise<{ deleted: boolean }> {
+    return this.call('DELETE', `/release/runs/${encodeURIComponent(runId)}/artifact`, { timeoutMs: HOST_CHECK_CALL_TIMEOUT_MS });
   }
 
   /**
