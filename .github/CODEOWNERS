@@ -20,4 +20,9 @@
 /apps/hostd/src/host-check.ts         @orzelig
 /apps/bridge/src/host-check-service.ts @orzelig
 /packages/db/src/store/host-check-runs.ts @orzelig
+/apps/hostd/src/account-probe.ts      @orzelig
+/apps/hostd/src/release-account.ts    @orzelig
+/apps/hostd/src/release-run.ts        @orzelig
+/apps/hostd/src/release-sign.ts       @orzelig
+/apps/bridge/src/release-service.ts   @orzelig
 /crew/skills/*/tools.yaml             @orzelig

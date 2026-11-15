@@ -137,6 +137,18 @@ describe('the account a host check runs as', () => {
   });
 });
 
+describe('the account a release is built in', () => {
+  it('is none when nothing names one, or only blanks do, and the install’s own when it does', () => {
+    delete process.env.OPENADLC_RELEASE_ACCOUNT;
+    expect(loadHostdConfig().releaseAccount).toBeNull();
+    process.env.OPENADLC_RELEASE_ACCOUNT = '   ';
+    expect(loadHostdConfig().releaseAccount).toBeNull();
+    process.env.OPENADLC_RELEASE_ACCOUNT = ' openadlc-release ';
+    expect(loadHostdConfig().releaseAccount).toBe('openadlc-release');
+    delete process.env.OPENADLC_RELEASE_ACCOUNT;
+  });
+});
+
 describe('the install’s prices', () => {
   it('are read once from OPENADLC_CONFIG_ROOT, and a bad price stops hostd naming the file and the model', () => {
     const root = mkdtempSync(join(tmpdir(), 'openadlc-hostd-config-'));

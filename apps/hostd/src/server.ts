@@ -19,6 +19,7 @@ import { readEngineCredential } from './session-env.js';
 import { isWorktreeRefusal, readWorktree } from './worktree-files.js';
 import { LocalCiRefused, type LocalCi } from './local-ci.js';
 import { hostCheckRequestFrom, type HostChecks } from './host-check.js';
+import type { ReleaseAccount } from './release-account.js';
 import type { ImageRestart } from './restart-onto-image.js';
 import type { TaskDatabases } from './task-db.js';
 import { ATTACH_SUBPROTOCOL_PREFIX } from './terminal-gateway.js';
@@ -110,6 +111,8 @@ export function createHostdServer(input: {
   localCi?: Pick<LocalCi, 'start' | 'get'>;
   /** Runs a repository's host check as its own account, for the bridge (`host-check.ts`). Absent, its routes say so. */
   hostChecks?: Pick<HostChecks, 'start' | 'get' | 'cancel' | 'probe'>;
+  /** The account releases are built in (`release-account.ts`); null or absent when none is named, which `/release/account` answers as `null`. */
+  releaseAccount?: Pick<ReleaseAccount, 'probe'> | null;
   /** Moves this hostd onto a release's image on a cloud host (`restart-onto-image.ts`). Absent, its route says why. */
   restartOntoImage?: ImageRestart;
   /** Asks the egress proxy about a name, and puts Settings' names on it (`egress.ts`). Absent, its routes say so. */
@@ -619,6 +622,13 @@ export function createHostdServer(input: {
         const run = input.localCi.get(localCiMatch[1], localCiMatch[2]);
         return run ? send(response, 200, { run }) : send(response, 404, { error: `no local CI run ${localCiMatch[2]} for task ${localCiMatch[1]} on this host` });
       }
+    }
+
+    // Whether the release account is fit, for the bridge's health check.
+    // Served whether or not this hostd runs host checks: `null` says no
+    // account is named, so the card stays quiet (docs/adr/0068).
+    if (method === 'GET' && path === '/release/account') {
+      return send(response, 200, { probe: input.releaseAccount ? await input.releaseAccount.probe() : null });
     }
 
     // A repository's host check, started, read and stopped by the bridge

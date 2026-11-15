@@ -2325,6 +2325,83 @@ would need its own account, and `openadlc up` does not pass a second one yet.
 Host checks don't run on a cloud install, whose hostd has no account to run
 as. There, the check says so.
 
+## The release account
+
+A repository whose product is built on this machine, such as a macOS app,
+will be released from it: hostd builds one merged commit on the default
+branch, signs what was built, and publishes it. The build runs as a **second**
+OS account, made only for releases, and never as the host check's
+([ADR 0068](adr/0068-a-release-is-built-in-its-own-account-and-signed-from-fields-hostd-computes.md)).
+The release account keeps its build tree between releases. The host check
+account runs pull request code, so it must not be able to reach that tree.
+
+There is no default name. An install that does not set
+`OPENADLC_RELEASE_ACCOUNT` builds no releases and shows no card for it. Only
+set it up when you will cut releases from this machine.
+
+### Make it
+
+On **macOS**:
+
+```bash
+sudo sysadminctl -addUser openadlc-release -fullName "OpenADLC release" -password - -home /Users/openadlc-release
+sudo createhomedir -c -u openadlc-release
+# macOS makes a new home 0750 with group staff, and the host check account is in staff too:
+sudo chmod 700 /Users/openadlc-release
+```
+
+On **Linux**:
+
+```bash
+sudo useradd -m -s /bin/sh openadlc-release
+sudo chmod 700 ~openadlc-release
+```
+
+Keep your own home at `700`, as for the host check account. Deny the account
+`cron` and `at` the same way, with `openadlc-release` in place of
+`openadlc-hostcheck`.
+
+### Let hostd run commands as it
+
+```bash
+sudo visudo -f /etc/sudoers.d/openadlc-release
+```
+
+```
+jane ALL=(openadlc-release) NOPASSWD: ALL
+```
+
+Replace `jane` with the user `openadlc up` runs as. As for the host check
+account, never write `(ALL)` and never add `SETENV`.
+
+### Name it
+
+Set `OPENADLC_RELEASE_ACCOUNT=openadlc-release` in the environment of the
+shell that runs `openadlc up`, and restart it. Then run:
+
+```bash
+openadlc doctor
+```
+
+The `release-account` check proves, by effect, everything the
+`host-check-account` check proves of its account. Unlike that check, it runs
+whether or not any repository has a host check. It also proves:
+
+- the account is not the host check account, by name or by uid;
+- the host check account can neither read nor enter the release account's
+  home. This step is skipped when there is no host check account, or hostd
+  can't run commands as it, since then no pull request code runs there.
+
+While it fails, Needs you shows a card that says what to do, and no release
+can be cut. It clears itself once the account passes. The fixes are the ones
+in [Check it](#check-it), plus two of the release account's own:
+
+- **It is the host check account.** Set `OPENADLC_RELEASE_ACCOUNT` to an
+  account made only for releases. Two names that share a uid count as one
+  account.
+- **The host check account can reach its home.** Run
+  `sudo chmod 700 <the release account's home>`.
+
 ## 11. Operate it
 
 ```bash

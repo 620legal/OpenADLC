@@ -72,6 +72,21 @@ export type HostCheckAccountProbe =
   | { ok: true; account: string; uid: number; home: string }
   | { ok: false; account: string; problem: 'no_account' | 'not_dedicated' | 'no_sudo' | 'can_read' | 'can_enter' | 'docker' | 'can_sudo'; path?: string; detail: string };
 
+/**
+ * What hostd found about the release account (`ReleaseAccount.probe`): the
+ * host check's problems, and two of its own — it is the host check's account,
+ * by name or uid, or that account can reach its home (docs/adr/0068).
+ */
+export type ReleaseAccountProbe =
+  | { ok: true; account: string; uid: number; home: string }
+  | {
+      ok: false;
+      account: string;
+      problem: Exclude<HostCheckAccountProbe, { ok: true }>['problem'] | 'host_check_account' | 'host_check_reaches';
+      path?: string;
+      detail: string;
+    };
+
 /** A start or a read of a host check is hostd queueing or looking up; the run itself is reported. */
 const HOST_CHECK_CALL_TIMEOUT_MS = 30_000;
 /** The probe runs a few commands through sudo. */
@@ -476,6 +491,11 @@ export class HostdClient {
   /** Whether the host check's account is fit to run one, proved by its effect (`HostChecks.probe`). */
   async hostCheckAccount(): Promise<{ probe: HostCheckAccountProbe }> {
     return this.call('GET', '/host-check/account', { timeoutMs: HOST_CHECK_PROBE_TIMEOUT_MS });
+  }
+
+  /** Whether the release account is fit to build one, proved by its effect; `null` when hostd names none (`ReleaseAccount.probe`). */
+  async releaseAccount(): Promise<{ probe: ReleaseAccountProbe | null }> {
+    return this.call('GET', '/release/account', { timeoutMs: HOST_CHECK_PROBE_TIMEOUT_MS });
   }
 
   /**

@@ -364,6 +364,18 @@ describe('the bridge asking hostd for a host check', () => {
   });
 });
 
+describe('the bridge asking hostd about the release account', () => {
+  it('asks GET /release/account with the install secret, and reads null as none named', async () => {
+    answer = { status: 200, body: { probe: null } };
+    await expect(client.releaseAccount()).resolves.toEqual({ probe: null });
+    answer = { status: 200, body: { probe: { ok: false, account: 'openadlc-release', problem: 'host_check_reaches', path: '/Users/openadlc-release', detail: 'reachable' } } };
+    await expect(client.releaseAccount()).resolves.toMatchObject({ probe: { ok: false, problem: 'host_check_reaches' } });
+
+    expect(asked.map((one) => `${one.method} ${one.url}`)).toEqual(['GET /release/account', 'GET /release/account']);
+    expect(asked.every((one) => one.secret === SECRET)).toBe(true);
+  });
+});
+
 describe('starting an engine update on hostd', () => {
   it('sends how old a release must be, with the hold and the person asking', async () => {
     answer = { status: 202, body: { running: true, startedAt: '2026-10-04T10:00:00.000Z', joined: false, last: null } };

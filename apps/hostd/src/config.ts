@@ -60,6 +60,13 @@ export interface HostdConfig {
    */
   hostCheckAccount?: string;
   /**
+   * The OS account a release is built in (`release-account.ts`,
+   * docs/adr/0068): one a person made only for releases, never the host
+   * check's. `OPENADLC_RELEASE_ACCOUNT`, with no default: unnamed, this
+   * install builds no releases, and the bridge's card for it stays quiet.
+   */
+  releaseAccount?: string | null;
+  /**
    * Where the host's task database server is published: the Docker bridge's
    * gateway on Linux, loopback on Docker Desktop and OrbStack (see
    * `TaskDatabasesOptions.bindAddress`). `OPENADLC_TASKDB_BIND`; null to
@@ -188,6 +195,7 @@ export function loadHostdConfig(): HostdConfig {
     taskdbBind: process.env.OPENADLC_TASKDB_BIND || null,
     taskdbPort: envInt('OPENADLC_TASKDB_PORT', DEFAULT_PORTS.taskdb),
     hostCheckAccount: process.env.OPENADLC_HOST_CHECK_ACCOUNT?.trim() || DEFAULT_HOST_CHECK_ACCOUNT,
+    releaseAccount: process.env.OPENADLC_RELEASE_ACCOUNT?.trim() || null,
     warmPool: envBool('OPENADLC_WARM_POOL', false),
     warmPoolMax: Math.max(0, envInt('OPENADLC_WARM_POOL_MAX', 3)),
     tmuxBin: envOr('OPENADLC_TMUX_BIN', 'tmux'),
