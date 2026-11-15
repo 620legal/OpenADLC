@@ -34,10 +34,10 @@ order. Each value is checked before any bytes are built
 
 | Field | Rule |
 |---|---|
-| tag | 1–256 UTF-8 bytes, no control character (C0, DEL, C1), no leading or trailing space. Default `openadlc-release-manifest-1` |
+| tag | 1–256 UTF-8 bytes of valid Unicode (no lone surrogate), no control character (C0, DEL, C1), no leading or trailing space. Default `openadlc-release-manifest-1` |
 | version | `^[0-9A-Za-z.+-]{1,64}$` |
 | sha256 | `^[0-9a-f]{64}$`. Uppercase is refused, not lowercased |
-| url | Up to 2048 characters with no whitespace or control character. It must parse as `https:`, and its `href` must equal the input, so a URL the parser would rewrite is refused |
+| url | Up to 2048 characters with no whitespace or control character. It must parse as `https:` with no user name or password, and its `href` must equal the input, so a URL the parser would rewrite is refused |
 
 **The signature** is ed25519 (RFC 8032, pure) over those bytes, written as
 standard base64 with padding: 88 characters.

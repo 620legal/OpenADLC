@@ -53,6 +53,8 @@ describe('the signed message', () => {
     ['a url with a default port', { url: 'https://example.com:443/a.zip' }, 'url'],
     ['a relative url', { url: '/a.zip' }, 'url'],
     ['a url over 2048 characters', { url: `https://example.com/${'a'.repeat(2048)}` }, 'url'],
+    ['a url with a user name', { url: 'https://user@example.com/a.zip' }, 'url'],
+    ['a url with a password', { url: 'https://user:pw@example.com/a.zip' }, 'url'],
   ] as const)('refuses %s, naming the field', (_, change, field) => {
     const error = refusal(() => releaseMessage(DEFAULT_RELEASE_TAG, { ...FIELDS, ...change }));
     expect(error.field).toBe(field);
@@ -67,6 +69,7 @@ describe('the signed message', () => {
     ['a leading space', ' tag'],
     ['nothing', ''],
     ['more than 256 bytes', 'é'.repeat(129)],
+    ['a lone surrogate', 'tag\ud800'],
   ])('refuses a tag with %s', (_, tag) => {
     expect(releaseTagProblem(tag)).not.toBeNull();
     expect(refusal(() => releaseMessage(tag, FIELDS)).field).toBe('tag');

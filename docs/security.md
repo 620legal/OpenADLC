@@ -1480,13 +1480,14 @@ The signed message is exactly these bytes:
 - UTF-8, no BOM. Every line ends in one `0x0A`, the last included, and there
   is no CR and nothing else.
 - **tag**: the repository's domain-separation line, filed with the key;
-  `openadlc-release-manifest-1` unless `--tag` set another. 1–256 bytes, no
-  control character, no leading or trailing space.
+  `openadlc-release-manifest-1` unless `--tag` set another. 1–256 bytes of
+  valid Unicode (a lone surrogate is refused, since it would be signed as
+  U+FFFD), no control character, no leading or trailing space.
 - **version**: `[0-9A-Za-z.+-]{1,64}`.
 - **sha256**: 64 lowercase hex characters. Uppercase is refused.
 - **url**: absolute `https`, at most 2048 characters, no whitespace or control
-  character, and already in the form a URL parser gives back
-  (`https://example.com/a.zip`, not `https://Example.com/a.zip`).
+  character, no user name or password, and already in the form a URL parser
+  gives back (`https://example.com/a.zip`, not `https://Example.com/a.zip`).
 
 Any value that breaks its rule is refused before the key is read. The
 signature is ed25519 (RFC 8032) over those bytes, in standard base64 with

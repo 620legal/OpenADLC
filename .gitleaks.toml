@@ -59,6 +59,22 @@ regexes = [
   '''BEGIN RSA PRIVATE KEY-----'\]\.join''',
 ]
 
+# The release signing tests build RFC 8032 §7.1 test 1's published key on one
+# line, BEGIN, `${PEM_BODY}` and END. Its END comes within the private-key
+# rule's 64 characters, so gitleaks reads on to the next `KEY-----` in the
+# file (a `BEGIN PUBLIC KEY` assertion) and reports it all as one key; the
+# history keeps that commit, so changing the test cannot clear it. Only that
+# placeholder, and only in these two files: a real PEM pasted into either, or
+# the same template anywhere else, is still a finding.
+[[allowlists]]
+description = "The published RFC 8032 test key in the release signing tests"
+condition = "AND"
+paths = [
+  '''^apps/cli/src/commands/release-key\.test\.ts$''',
+  '''^apps/hostd/src/release-sign\.test\.ts$''',
+]
+regexes = ['''\$\{PEM_BODY\}''']
+
 # NodeSource's public signing key, which the bot image checks its packages
 # against: a fingerprint, published so that anyone can.
 [[allowlists]]
