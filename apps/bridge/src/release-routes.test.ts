@@ -328,6 +328,47 @@ describe('cutting a release', () => {
     expect(refusals(r.audits)).toEqual([expect.objectContaining({ reason: 'approves_off', stage: 'after_sign_in', login: 'jane', githubUserId: 101 })]);
   });
 
+  it('refuses after the sign-in when Approves cannot be read then, though it passed before', async () => {
+    let failing = false;
+    const r = rig({
+      approves: async (id) => {
+        if (failing) throw new Error('people store unreachable');
+        return id === 101;
+      },
+    });
+    const view = await r.cuts.view('app', JANE);
+    const { flow } = await r.cuts.cut('app', JANE, { viewId: view.viewId });
+    failing = true;
+    await r.approve({ login: 'jane', id: 101 });
+    expect(r.start).not.toHaveBeenCalled();
+    expect(await failedWith(r, flow.flowId)).toContain('Approves is off');
+    expect(refusals(r.audits)).toEqual([expect.objectContaining({ reason: 'approves_off', stage: 'after_sign_in', login: 'jane', githubUserId: 101 })]);
+    expect(r.audits.some((entry) => entry.action === RELEASE_CUT)).toBe(false);
+  });
+
+  it('refuses after the sign-in when whether the account is the crew’s cannot be read', async () => {
+    const r = rig({ isCrew: async () => Promise.reject(new Error('crew list unreadable')) });
+    const view = await r.cuts.view('app', JANE);
+    const { flow } = await r.cuts.cut('app', JANE, { viewId: view.viewId });
+    await r.approve({ login: 'jane', id: 101 });
+    expect(r.start).not.toHaveBeenCalled();
+    expect(await failedWith(r, flow.flowId)).toContain('a bot never cuts a release');
+    expect(refusals(r.audits)).toEqual([expect.objectContaining({ reason: 'crew_account', stage: 'after_sign_in', login: 'jane', githubUserId: 101 })]);
+    expect(r.audits.some((entry) => entry.action === RELEASE_CUT)).toBe(false);
+  });
+
+  it('refuses after the sign-in when the view expired while the code waited', async () => {
+    const r = rig();
+    const view = await r.cuts.view('app', JANE);
+    const { flow } = await r.cuts.cut('app', JANE, { viewId: view.viewId });
+    r.clock.now += VIEW_TTL_MS;
+    await r.approve({ login: 'jane', id: 101 });
+    expect(r.start).not.toHaveBeenCalled();
+    expect(await failedWith(r, flow.flowId)).toContain('expired');
+    expect(refusals(r.audits)).toEqual([expect.objectContaining({ reason: 'view_gone', stage: 'after_sign_in', viewSha: A, login: 'jane', githubUserId: 101 })]);
+    expect(r.audits.some((entry) => entry.action === RELEASE_CUT)).toBe(false);
+  });
+
   it('refuses a code approved by another account id, or another login (criterion 2)', async () => {
     for (const viewer of [
       { login: 'jane', id: 202 },
