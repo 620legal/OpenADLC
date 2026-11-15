@@ -1026,7 +1026,16 @@ exists ([ADR 0068](adr/0068-a-release-is-built-in-its-own-account-and-signed-fro
 - **Who.** Only the install's people with Approves on, each proved by a fresh
   device-code sign-in that matches their People row. A bot never cuts one.
 - **What.** One commit on the default branch, pinned at the click. The tag is
-  made only after the build and signing succeed.
+  made only after the build and signing succeed. hostd checks the commit is
+  an ancestor of the branch on its own fetch, and builds that commit even
+  when the branch has moved on. The command, the artifact's path and where
+  the version is read are on the repository's row, set only by an admin,
+  never by a file a pull request can change
+  ([ADR 0070](adr/0070-a-release-recipe-is-an-admins-and-its-artifact-stays-with-hostd.md)).
+- **The version.** Read by hostd from its own mirror at the pinned commit,
+  never from a tag or the account's tree, and refused before anything is
+  built unless it is strictly above the last published release, with that
+  release's label. A list of releases that cannot be read refuses the run.
 - **As whom.** `OPENADLC_RELEASE_ACCOUNT`, a second account that is never the
   host check's, by name or uid. Its probe is the host check account's
   (`probeAccount`, `apps/hostd/src/account-probe.ts`, one function for both),
@@ -1037,7 +1046,13 @@ exists ([ADR 0068](adr/0068-a-release-is-built-in-its-own-account-and-signed-fro
 - **What is signed.** Only fields hostd computes: the version from its own
   mirror, the sha256 of the artifact as hostd streams it out with `cat` as the
   account, and the asset's URL. hostd never opens a path the account controls,
-  and nothing the account prints is signed.
+  and nothing the account prints is signed. The artifact and `run.json`
+  (version, sha256, size) are kept under hostd's work root, which the account
+  cannot enter, until #344 signs and publishes them.
+- **Its environment.** The build gets `env -i` with only `PATH`, `HOME`,
+  `USER`, `LOGNAME`, `LANG`, `CI`, `OPENADLC_RELEASE`, `OPENADLC_RELEASE_SHA`
+  and `OPENADLC_RELEASE_VERSION`. The crew token fetches hostd's mirror and
+  nothing else, and the code reaches the account as a git bundle.
 - **The key.** A per-repository ed25519 key in the secret store, read only by
   the signing step. It never reaches the account, a log or GitHub. See
   [Release signing](#release-signing) for the bytes it signs.

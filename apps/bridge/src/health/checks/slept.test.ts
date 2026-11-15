@@ -82,6 +82,7 @@ describe('the machine slept with work in flight', () => {
     expect(sleptFor(45)).toBe('45 s');
     expect(sleptFor(2 * 3600 + 5 * 60)).toBe('2 h 5 min');
     expect(sleptFor(3600)).toBe('1 h');
-    expect(inFlightWords({ tasks: 1, merges: 0, deploys: 2 })).toBe('1 task, 2 deploys waiting or running');
+    expect(inFlightWords({ tasks: 1, merges: 0, deploys: 2, releases: 0 })).toBe('1 task, 2 deploys waiting or running');
+    expect(inFlightWords({ tasks: 0, merges: 0, deploys: 0, releases: 1 })).toBe('1 release building');
   });
 });

@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import { basename, join } from 'node:path';
 import { internalSecretRef, getSecretStore, type SecretStore } from '@openadlc/github';
-import { redactSecrets } from '@openadlc/shared';
+import { REPO_VERSION_FORMS, parseRepoVersion, redactSecrets, repoVersionFrom, repoVersionGate } from '@openadlc/shared';
 import { HOST_CHECK_PATH, accountEnv, asAccount, nodeProcesses, type HostProcesses } from './account-probe.js';
 import { KILL_AFTER_MS } from './drivers/types.js';
 import { LOG_TAIL_BYTES, receiveScript } from './host-check.js';
@@ -64,111 +64,6 @@ export const RELEASE_ACCOUNT_FIX = 'Make the account and its sudo rule as docs/s
 
 /** Git's own settings that could run something of the mirror's, off for hostd's git. */
 const GIT_ENV: Record<string, string> = { GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', GIT_TERMINAL_PROMPT: '0' };
-
-// ---------------------------------------------------------------------------
-// The version rule. Pure, so #345 moves it unchanged to
-// `packages/shared/src/release-version.ts`, and the bridge's early check and
-// hostd's authoritative one are the same.
-// ---------------------------------------------------------------------------
-
-/**
- * A release version: 1 to 4 numbers, optionally `-<label>.<n>`. `n` is 0 with
- * no suffix. `text` is the exact string read, so the tag is `v${text}`.
- */
-export interface ReleaseVersion {
-  text: string;
-  parts: number[];
-  label: string | null;
-  n: number;
-}
-
-/** The longest version: #342's manifest refuses a version over 64 characters (`releaseMessage`). */
-export const VERSION_MAX_CHARS = 64;
-
-const NUMBER = '(?:0|[1-9][0-9]*)';
-const VERSION_GRAMMAR = new RegExp(`^(${NUMBER}(?:\\.${NUMBER}){0,3})(?:-([a-z][a-z0-9]{0,31})\\.(${NUMBER}))?$`);
-
-const FORMS = '`<1 to 4 numbers>` or `<1 to 4 numbers>-<lowercase label>.<number>`';
-
-/** The version a string is, or why it is none. `where` names the file the reason tells to change. */
-export function versionFrom(text: string, where?: string): { ok: true; version: ReleaseVersion } | { ok: false; reason: string } {
-  const refuse = (why = '') => ({
-    ok: false as const,
-    reason: `\`${text.length > 80 ? `${text.slice(0, 80)}…` : text}\` is not a release version${why}: write ${FORMS}${where ? ` in ${where}` : ''}`,
-  });
-  if (text.length > VERSION_MAX_CHARS) return refuse(` (it is longer than ${VERSION_MAX_CHARS} characters)`);
-  const match = VERSION_GRAMMAR.exec(text);
-  if (!match) return refuse();
-  const parts = (match[1] ?? '').split('.').map(Number);
-  const n = match[3] === undefined ? 0 : Number(match[3]);
-  if ([...parts, n].some((value) => !Number.isSafeInteger(value))) return refuse(' (a number in it is too large)');
-  return { ok: true, version: { text, parts, label: match[2] ?? null, n } };
-}
-
-/**
- * Reads the version from a version file's text, by the repository's file and
- * key: with no key, the whole file, trimmed; for a `.json` file, `key` is a
- * dotted path, `version` by default; for any other file with a key, the value
- * of the first `KEY = value` or `KEY: value` line, quotes taken off — which
- * reads `.xcconfig`'s `MARKETING_VERSION = 1.4.0`. No regular expression an
- * admin writes is run.
- */
-export function parseVersion(text: string, file: string, key: string | null): { ok: true; version: ReleaseVersion } | { ok: false; reason: string } {
-  if (file.toLowerCase().endsWith('.json')) {
-    let value: unknown;
-    try {
-      value = JSON.parse(text);
-    } catch {
-      return { ok: false, reason: `${file} is not JSON, so its version cannot be read: fix it, or set the repository's version file` };
-    }
-    const path = key ?? 'version';
-    for (const step of path.split('.')) {
-      value = value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>)[step] : undefined;
-    }
-    if (typeof value !== 'string') return { ok: false, reason: `${file} has no string at ${path}: add the version there, or set the repository's version key` };
-    return versionFrom(value, file);
-  }
-  if (!key) return versionFrom(text.trim(), file);
-  for (const line of text.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed.startsWith(key)) continue;
-    const rest = trimmed.slice(key.length).trimStart();
-    if (!rest.startsWith('=') && !rest.startsWith(':')) continue;
-    let value = rest.slice(1).trim();
-    if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) value = value.slice(1, -1);
-    return versionFrom(value, file);
-  }
-  return { ok: false, reason: `${file} has no line \`${key} = <version>\`: add it, or set the repository's version key` };
-}
-
-/**
- * How two versions order: by their numbers, a missing trailing part being 0,
- * then by `n`, a bare version being `n = 0`. Not semver: a suffix ranks above
- * the bare version, as the shipped clients rank it. Null when both carry a
- * label and the labels differ: two labels are never ordered.
- */
-export function compareVersions(a: ReleaseVersion, b: ReleaseVersion): -1 | 0 | 1 | null {
-  if (a.label !== null && b.label !== null && a.label !== b.label) return null;
-  const length = Math.max(a.parts.length, b.parts.length);
-  for (let index = 0; index < length; index += 1) {
-    const x = a.parts[index] ?? 0;
-    const y = b.parts[index] ?? 0;
-    if (x !== y) return x < y ? -1 : 1;
-  }
-  if (a.n !== b.n) return a.n < b.n ? -1 : 1;
-  return 0;
-}
-
-/** Why `version` may not follow `after`, or null when it may. */
-export function versionGate(version: ReleaseVersion, after: ReleaseVersion | null, file: string): string | null {
-  if (!after) return null;
-  const order = compareVersions(version, after);
-  if (order === null) {
-    return `${version.text} has the label ${version.label}, and the last release, ${after.text}, has ${after.label}: use ${after.label} in ${file}`;
-  }
-  if (order <= 0) return `${version.text} is not above the last release, ${after.text}: raise it in ${file}`;
-  return null;
-}
 
 // ---------------------------------------------------------------------------
 // The run.
@@ -258,7 +153,7 @@ export function releaseRunRequestFrom(body: Record<string, unknown>): ReleaseRun
   if (versionKey !== undefined && versionKey !== null && (typeof versionKey !== 'string' || !/^[A-Za-z0-9_.-]{1,100}$/.test(versionKey))) {
     return 'versionKey must be letters, digits, _, . and -, at most 100';
   }
-  if (after !== undefined && after !== null && (typeof after !== 'string' || !versionFrom(after).ok)) return `after must be the last release's version, ${FORMS}, or null`;
+  if (after !== undefined && after !== null && (typeof after !== 'string' || !repoVersionFrom(after).ok)) return `after must be the last release's version, ${REPO_VERSION_FORMS}, or null`;
   if (typeof command !== 'string' || !command.trim() || command.length > 500 || /[\u0000\n\r]/.test(command)) return 'command must be one line of at most 500 characters';
   const artifactProblem = relativePathProblem(artifact, 'artifact');
   if (artifactProblem) return artifactProblem;
@@ -610,11 +505,11 @@ export class ReleaseRuns {
     const shown = await git(['-C', mirror, 'show', `${run.sha}:${run.versionFile}`]);
     if (shown.code !== 0) return { state: 'refused', reason: `${run.versionFile} is not in ${sha7}: add it, or set the repository's version file` };
     if (Buffer.byteLength(shown.stdout) > VERSION_FILE_BYTES) return { state: 'refused', reason: `${run.versionFile} is larger than ${VERSION_FILE_BYTES / 1024} KiB: point the repository's version file at a smaller one` };
-    const read = parseVersion(shown.stdout, run.versionFile, run.versionKey);
+    const read = parseRepoVersion(shown.stdout, run.versionFile, run.versionKey);
     if (!read.ok) return { state: 'refused', reason: read.reason };
-    const after = run.after === null ? null : versionFrom(run.after);
+    const after = run.after === null ? null : repoVersionFrom(run.after);
     if (after && !after.ok) return { state: 'refused', reason: `the last release's version, ${run.after}, cannot be read` };
-    const gate = versionGate(read.version, after ? (after as { ok: true; version: ReleaseVersion }).version : null, run.versionFile);
+    const gate = repoVersionGate(read.version, after?.ok ? after.version : null, run.versionFile);
     if (gate) return { state: 'refused', reason: gate };
     const version = read.version.text;
     run.version = version;

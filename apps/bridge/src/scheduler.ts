@@ -12,6 +12,7 @@ import { githubDidNotAnswer, type GitHubClient } from '@openadlc/github';
 import { ATTENTION_WINDOW_DAYS, GITHUB_RETRY_CLAIM_MS, githubRetry, triedAgain } from './attention.js';
 import { ALREADY_LANDED, alreadyLanded, subjectClosed, wasRefused } from './gates.js';
 import { crewApprovedHead, type HostCheckService } from './host-check-service.js';
+import type { ReleaseService } from './release-service.js';
 import { fastPathOf, pullAuthorOf, seatsWaitedOn, type Automation } from './automation.js';
 import { causeOfFailure, isPrerequisiteRow } from './health/checks/crew.js';
 import { DEPLOY_PATH_BRANCH_PREFIX, REVIEW_ROUND_OPENED, endedBySendingBack, headInRepository, issueForSubject, issueNumberFromBranch, parseRef, stageOfTask } from './work.js';
@@ -1010,6 +1011,9 @@ export class Scheduler {
     // A host check hostd no longer holds, as after its restart, is lost
     // first, so the pull requests below ask for it again.
     if (this.hostChecks) actions.push(...(await this.hostChecks.sweep().catch(() => [])));
+    // A release build hostd no longer holds is lost, and one whose report
+    // went missing is taken from hostd: either keeps the Mac awake otherwise.
+    if (this.releaseRuns) actions.push(...(await this.releaseRuns.sweep().catch(() => [])));
 
     for (const repo of await repos.listRepos()) {
       // GitHub's list, not the issues' own record of their pull requests: that
@@ -1254,6 +1258,13 @@ export class Scheduler {
   /** A repository's host check (`host-check-service.ts`): asked for on the review sweep, and its lost runs found. */
   useHostChecks(service: Pick<HostCheckService, 'request' | 'sweep'>): void {
     this.hostChecks = service;
+  }
+
+  private releaseRuns: Pick<ReleaseService, 'sweep'> | null = null;
+
+  /** Release builds (`release-service.ts`): their lost runs found on the review sweep. */
+  useReleaseRuns(service: Pick<ReleaseService, 'sweep'>): void {
+    this.releaseRuns = service;
   }
 
   private stacking: Pick<Stacking, 'sweep'> | null = null;

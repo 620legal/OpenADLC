@@ -5,12 +5,20 @@ import { RELEASE_ACCOUNT_CHECK, releaseAccountCheck } from './release-account.js
 const ACCOUNT = 'openadlc-release';
 const HOME = '/Users/openadlc-release';
 
-function check(probe: ReleaseAccountProbe | null | Error) {
+function check(probe: ReleaseAccountProbe | null | Error, wanted?: string | null | Error) {
   const reader = {
     probe: vi.fn(async () => {
       if (probe instanceof Error) throw probe;
       return probe;
     }),
+    ...(wanted === undefined
+      ? {}
+      : {
+          wanted: vi.fn(async () => {
+            if (wanted instanceof Error) throw wanted;
+            return wanted;
+          }),
+        }),
   };
   return releaseAccountCheck(reader).run(new Date('2026-11-15T10:00:00Z'));
 }
@@ -23,6 +31,22 @@ describe('the account releases are built in (#341)', () => {
 
   it('is quiet where hostd names no release account, as on an install that never releases', async () => {
     await expect(check(null)).resolves.toEqual([]);
+  });
+
+  it('warns, naming it, when a repository is set to release and hostd names no account (#343)', async () => {
+    const [result] = await check(null, 'acme/app');
+    expect(result).toMatchObject({
+      ok: false,
+      severity: 'warning',
+      detail:
+        'acme/app is set to release, but hostd names no release account. Set OPENADLC_RELEASE_ACCOUNT to the account you made for releases (docs/self-hosting.md#the-release-account)',
+      action: { label: 'Open the steps' },
+    });
+  });
+
+  it('stays quiet with no account named while nothing releases, or that cannot be read', async () => {
+    await expect(check(null, null)).resolves.toEqual([]);
+    await expect(check(null, new Error('database down'))).resolves.toEqual([]);
   });
 
   it('is quiet where hostd cannot be asked, which the host check already says', async () => {

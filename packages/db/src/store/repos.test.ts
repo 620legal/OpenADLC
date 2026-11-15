@@ -477,9 +477,11 @@ describe('a repository’s release recipe', () => {
     expect(String(vi.mocked(query).mock.calls[1]?.[0])).toContain('release_command = null');
   });
 
-  it('answers whether any repository OpenADLC works in releases', async () => {
-    vi.mocked(queryOne).mockResolvedValueOnce({ any: true });
-    await expect(anyRelease()).resolves.toBe(true);
+  it('names a repository OpenADLC works in that releases, or none', async () => {
+    vi.mocked(queryOne).mockResolvedValueOnce(null);
+    await expect(anyRelease()).resolves.toBeNull();
+    vi.mocked(queryOne).mockResolvedValueOnce({ full_name: 'acme/app' });
+    await expect(anyRelease()).resolves.toBe('acme/app');
     const sql = String(vi.mocked(queryOne).mock.calls.at(-1)?.[0]);
     expect(sql).toContain('release_command is not null');
     expect(sql).toContain('removed_at is null');

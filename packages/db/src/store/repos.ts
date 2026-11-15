@@ -565,10 +565,14 @@ export async function setRelease(repoId: string, setting: ReleaseSetting | null)
   );
 }
 
-/** Whether any repository OpenADLC works in is set to release: the `release-account` card asks for an account only then. */
-export async function anyRelease(): Promise<boolean> {
-  const row = await queryOne<{ any: boolean }>(`select exists (select 1 from repos where release_command is not null and ${ACTIVE}) as any`);
-  return Boolean(row?.any);
+/**
+ * The full name of a repository OpenADLC works in that is set to release, the
+ * first by name, or null for none: the `release-account` card asks for an
+ * account only then, and names it.
+ */
+export async function anyRelease(): Promise<string | null> {
+  const row = await queryOne<{ full_name: string }>(`select full_name from repos where release_command is not null and ${ACTIVE} order by full_name limit 1`);
+  return row?.full_name ?? null;
 }
 
 /**

@@ -35,6 +35,7 @@ import { identityFromConfig } from './identity.js';
 import { HostdClient } from './hostd-client.js';
 import { NO_CLIENT_ID, registerInternalApi } from './internal-api.js';
 import { HostCheckService } from './host-check-service.js';
+import { ReleaseService, lastVersionOnGitHub } from './release-service.js';
 import { PauseHolds } from './pause-holds.js';
 import { MergeLine } from './merge-line.js';
 import { Onboarding } from './onboarding.js';
@@ -409,6 +410,15 @@ async function main(): Promise<void> {
     consoleUrl: config.consoleUrl ?? null,
   });
   webhooks.useHostChecks(hostChecks);
+  // A release build of one pinned commit, run by hostd as the release account
+  // (docs/adr/0068, 0070). Nothing here starts one: #345's route, behind the
+  // Approves check and a device-code proof, is its only caller. The last
+  // release is read as the app where it can be.
+  const releaseRuns = new ReleaseService({
+    hostd,
+    lastVersion: lastVersionOnGitHub(deployClient),
+    fetchBot: () => automationBotName(config),
+  });
   // A head the merge line finds red is CI's handler's: run again once, then
   // back to build, whether or not a delivery of the run is still coming.
   mergeLine.useRedChecks((head) => webhooks.ciRedAt(head));
@@ -525,6 +535,7 @@ async function main(): Promise<void> {
   );
   scheduler.useDelivery(pipeline, delivery);
   scheduler.useHostChecks(hostChecks);
+  scheduler.useReleaseRuns(releaseRuns);
   scheduler.useStacking(stacking);
   // OpenADLC updating itself from the releases a person tags (`self-update.ts`):
   // its clock is the `releases` job; while it waits to restart, the gate holds
@@ -991,7 +1002,7 @@ async function main(): Promise<void> {
   // A builder round paused on a question holds its review seats for 15
   // minutes, and asks them here once if it is still waiting then (#287).
   const pauseHolds = new PauseHolds({ stages });
-  registerInternalApi(router, { ...deps, webhooks, scheduler, stages, internalSecret, alertsSecret, dispatchRuns, requestFiling, taskInbox, pauseHolds, hostChecks });
+  registerInternalApi(router, { ...deps, webhooks, scheduler, stages, internalSecret, alertsSecret, dispatchRuns, requestFiling, taskInbox, pauseHolds, hostChecks, releases: releaseRuns });
 
   const server = createServer((request, response) => {
     // A rejection here used to be unhandled, which under Node's default

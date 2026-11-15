@@ -60,7 +60,8 @@ describe('holding the host awake while work is in flight', () => {
   for (const [source, counts] of [
     ['a task queued or running', { tasks: 1, merges: 0, deploys: 0, releases: 0 }],
     ['a merge waiting on CI', { tasks: 0, merges: 1, deploys: 0, releases: 0 }],
-    ['a deploy waiting or running', { tasks: 0, merges: 0, deploys: 1 }],
+    ['a deploy waiting or running', { tasks: 0, merges: 0, deploys: 1, releases: 0 }],
+    ['a release building', { tasks: 0, merges: 0, deploys: 0, releases: 1 }],
   ] as const) {
     it(`holds one caffeinate -i, tied to the bridge, for ${source}`, async () => {
       const { world, spawn, keepAwake, pass } = rig();

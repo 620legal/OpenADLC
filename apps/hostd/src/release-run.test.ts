@@ -29,14 +29,10 @@ vi.mock('node:fs', async (importOriginal) => {
 import {
   ReleaseBusy,
   ReleaseRuns,
-  compareVersions,
-  parseVersion,
   releaseRunRequestFrom,
-  versionFrom,
   type ReleaseProcesses,
   type ReleaseRunRequest,
   type ReleaseRunView,
-  type ReleaseVersion,
 } from './release-run.js';
 import type { HostProcesses, ProcessResult } from './account-probe.js';
 import type { ReleaseAccountProbe } from './release-account.js';
@@ -241,58 +237,6 @@ beforeEach(() => {
 afterEach(() => {
   process.env = { ...saved };
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
-});
-
-describe('the version rule', () => {
-  const v = (text: string): ReleaseVersion => {
-    const read = versionFrom(text);
-    if (!read.ok) throw new Error(read.reason);
-    return read.version;
-  };
-
-  it.each(['1', '1.4.0', '156.0.8078.79', '1.2.3.4-x.0', '156.0.8078.79-abc.29'])('accepts %s', (text) => {
-    expect(versionFrom(text).ok).toBe(true);
-  });
-
-  it.each([
-    ['five parts', '1.2.3.4.5'],
-    ['a label with no .N', '1.4.0-rc'],
-    ['an uppercase label', '1.4.0-RC.1'],
-    ['a suffix with two numbers', '1.4.0-x.1.2'],
-    ['a leading zero', '01.2'],
-    ['a build suffix', '1.4.0+b5'],
-    ['a v in the file', 'v1.4.0'],
-    ['a part over MAX_SAFE_INTEGER', `1.${'9'.repeat(17)}`],
-    ['a 33-character label', `1.0-${'a'.repeat(33)}.1`],
-  ])('refuses %s, naming the forms', (_name, text) => {
-    const read = versionFrom(text, 'VERSION');
-    expect(read.ok).toBe(false);
-    if (!read.ok) expect(read.reason).toMatch(/is not a release version.*<1 to 4 numbers>-<lowercase label>\.<number>.* in VERSION/);
-  });
-
-  it('reads a plain file, JSON with a dotted key, and an xcconfig line', () => {
-    expect(parseVersion('1.4.0\n', 'VERSION', null)).toMatchObject({ ok: true, version: { text: '1.4.0' } });
-    expect(parseVersion('{"version":"2.0"}', 'package.json', null)).toMatchObject({ ok: true, version: { text: '2.0' } });
-    expect(parseVersion('{"app":{"release":"2.1-x.3"}}', 'meta.json', 'app.release')).toMatchObject({ ok: true, version: { text: '2.1-x.3', label: 'x', n: 3 } });
-    expect(parseVersion('// header\nMARKETING_VERSION = 156.0.8078.79-abc.29\n', 'Config/Version.xcconfig', 'MARKETING_VERSION')).toMatchObject({
-      ok: true,
-      version: { text: '156.0.8078.79-abc.29', parts: [156, 0, 8078, 79], label: 'abc', n: 29 },
-    });
-    expect(parseVersion('VERSION: "3.1"', 'release.yml', 'VERSION')).toMatchObject({ ok: true, version: { text: '3.1' } });
-    expect(parseVersion('OTHER = 1', 'a.xcconfig', 'MARKETING_VERSION')).toMatchObject({ ok: false });
-    expect(parseVersion('{"name":"x"}', 'package.json', null)).toMatchObject({ ok: false });
-  });
-
-  it('orders by the numbers, then N, with a bare version at N = 0, and never across labels', () => {
-    expect(compareVersions(v('1.2.3.4-x.10'), v('1.2.3.4-x.9'))).toBe(1);
-    expect(compareVersions(v('1.2.3.4-x.10'), v('1.2.3.4'))).toBe(1);
-    expect(compareVersions(v('1.2.3.5'), v('1.2.3.4-x.99'))).toBe(1);
-    expect(compareVersions(v('1.2.3.4-x.10'), v('1.2.3.4-x.10'))).toBe(0);
-    expect(compareVersions(v('1.2'), v('1.2.0'))).toBe(0);
-    expect(compareVersions(v('1.2.3.4'), v('1.2.3.4-x.0'))).toBe(0);
-    expect(compareVersions(v('1.2.3.4-y.11'), v('1.2.3.4-x.10'))).toBeNull();
-    expect(compareVersions(v('1.4'), v('1.10'))).toBe(-1);
-  });
 });
 
 describe('a start as the bridge sends it', () => {

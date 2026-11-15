@@ -136,6 +136,7 @@ const inboxTake = vi.fn(async (_taskId: string, _takeId: string) => [{ id: 'inbo
 const inboxSettle = vi.fn(async (_taskId?: string) => 0);
 const inboxRelease = vi.fn(async (_taskId: string, _takeId: string) => 1);
 const hostCheckRecord = vi.fn(async (_report: unknown) => true);
+const releaseRecord = vi.fn(async (_report: unknown) => true);
 
 
 let bridge: Server;
@@ -172,6 +173,7 @@ beforeEach(async () => {
     taskInbox: { take: inboxTake, release: inboxRelease, settle: inboxSettle },
     pauseHolds: { paused: pauseHeld, forget: pauseForget },
     hostChecks: { record: hostCheckRecord },
+    releases: { record: releaseRecord },
   });
   bridge = createServer((request, response) => void router.handle(request, response));
   await new Promise<void>((resolve) => bridge.listen(0, '127.0.0.1', resolve));
@@ -209,6 +211,51 @@ describe('a host check hostd reports (#327)', () => {
   it('refuses a report that does not say how the run ended', async () => {
     expect((await post('/internal/host-check', { runId: 'run-1', state: 'running' })).status).toBe(400);
     expect(hostCheckRecord).not.toHaveBeenCalled();
+  });
+});
+
+describe('a release build hostd reports (#343)', () => {
+  const report = {
+    runId: 'run-1',
+    state: 'built',
+    version: '1.4.0-x.4',
+    sha256: 'b'.repeat(64),
+    bytes: 1234,
+    artifactName: 'App.zip',
+    exitCode: 0,
+    durationMs: 60000.4,
+    logTail: 'BUILD SUCCEEDED',
+    reason: null,
+    repo: 'acme/other',
+    sha: 'f'.repeat(40),
+  };
+
+  it('is recorded from hostd with the install secret, and refused without it', async () => {
+    const without = await fetch(`${bridgeUrl}/internal/release`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(report) });
+    expect(without.status).toBe(401);
+    expect(releaseRecord).not.toHaveBeenCalled();
+
+    const recorded = await post('/internal/release', report);
+    expect(await recorded.json()).toEqual({ recorded: true });
+    // The run is the bridge's own row: what the report says of its repository or commit is not passed on.
+    expect(releaseRecord).toHaveBeenCalledWith({
+      runId: 'run-1',
+      state: 'built',
+      version: '1.4.0-x.4',
+      sha256: 'b'.repeat(64),
+      bytes: 1234,
+      artifactName: 'App.zip',
+      exitCode: 0,
+      durationMs: 60000,
+      logTail: 'BUILD SUCCEEDED',
+      reason: null,
+    });
+  });
+
+  it('refuses a report that does not say how the run ended', async () => {
+    expect((await post('/internal/release', { runId: 'run-1', state: 'running' })).status).toBe(400);
+    expect((await post('/internal/release', { state: 'built' })).status).toBe(400);
+    expect(releaseRecord).not.toHaveBeenCalled();
   });
 });
 
