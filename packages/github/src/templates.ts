@@ -84,7 +84,7 @@ export const EARLIER_CI_TEMPLATES: ReadonlyMap<string, CiTemplateUpdate> = new M
 ]);
 
 /** The SHA-256 of the CI template as it ships now. */
-export const CURRENT_CI_TEMPLATE = 'e3622653ea2dc5a81b740666bf30726f9f4376982a954c382e8b5cd3c6031820';
+export const CURRENT_CI_TEMPLATE = '7bdcbc8b265e75141f901d323a81d961b74e5c95072f39eaa92fbff07cb8221a';
 
 export function templateHash(body: string): string {
   return createHash('sha256').update(body).digest('hex');

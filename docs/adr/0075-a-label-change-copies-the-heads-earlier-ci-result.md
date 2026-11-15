@@ -48,8 +48,17 @@ result is made later than the run it copies.
 - **The newest `ci` decides.** An older success is never searched for behind
   a newer failure.
 - **A wait that times out never passes.** A run still going is waited for,
-  up to 35 minutes, and then `ci` is red with "re-run this workflow". Skipping
-  instead would recreate the "Expected" hold this removes.
+  up to 35 minutes, and then `ci` is red. Skipping instead would recreate the
+  "Expected" hold this removes. The *ci lookup* job fails too, not only `ci`:
+  "re-run failed jobs", which is the bridge's own retry of a first failure
+  and GitHub's button, re-runs the failed jobs alone and keeps a passed
+  job's outputs, so with only `ci` red it would read the same `timeout` and
+  fail again. With the lookup failed, a re-run looks again.
+- **A copy is never copied.** A run whose *ci lookup* ran is passed over: the
+  result it copied is still on the head, and its red may be a wait that
+  timed out, which tested nothing and would otherwise pass on, to every later
+  label change, as a failure. A copy still going is not waited on either: it
+  waits on the same runs.
 - **A GitHub error, or a fork's pull request, copies nothing,** and falls back
   to today's skip.
 - **The lookup is one script with two modes.** In the template, the step

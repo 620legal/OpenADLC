@@ -211,6 +211,9 @@ export function vouchedRun(ctx, tools, tree) {
   return null;
 }
 
+/** ci.yml's job that looks up the head's earlier `ci`; it runs only in a copy. */
+export const LOOKUP_JOB = 'ci lookup';
+
 /**
  * What a run of ci.yml that runs nothing (a label change, a title-only edit)
  * reports as `ci`: the newest earlier `ci` on the same head, as it ended.
@@ -238,7 +241,13 @@ export function earlierCi(ctx, tools) {
   // A run made before the pull request opened was for another one.
   const opened = Date.parse(ctx.openedAt ?? '');
   if (Number.isNaN(opened)) return { copy: '', run: null, why: 'the event names no time the pull request opened: nothing to copy' };
-  const ciJob = (runId) => (tools.api(`repos/${ctx.repo}/actions/runs/${runId}/jobs?per_page=100`).jobs ?? []).filter((job) => job.name === 'ci').at(-1);
+  // A run whose lookup ran is a copy, never a source: the result it copied
+  // is on the head already, and a copy's red may be a wait that timed out,
+  // which tested nothing and would pass on as a failure. One still going is
+  // waiting for the same runs this one is.
+  const jobsOf = (runId) => tools.api(`repos/${ctx.repo}/actions/runs/${runId}/jobs?per_page=100`).jobs ?? [];
+  const ciOf = (jobs) => jobs.filter((job) => job.name === 'ci').at(-1);
+  const copied = (jobs) => jobs.some((job) => job.name === LOOKUP_JOB && job.conclusion !== 'skipped');
   const runs = (tools.api(`repos/${ctx.repo}/actions/runs?event=pull_request&head_sha=${ctx.headSha}&per_page=100`).workflow_runs ?? [])
     .filter(
       (run) =>
@@ -251,16 +260,22 @@ export function earlierCi(ctx, tools) {
     )
     .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)) || b.id - a.id);
   for (let run of runs) {
-    let job = ciJob(run.id);
+    let jobs = jobsOf(run.id);
+    let job = ciOf(jobs);
     // Still going: its `ci` may yet appear, or finish.
-    while (job?.status !== 'completed' && !(job === undefined && run.status === 'completed')) {
+    while (!copied(jobs) && job?.status !== 'completed' && !(job === undefined && run.status === 'completed')) {
       if (tools.now() - started >= waitMs) {
-        return { copy: 'timeout', run: run.id, why: `run ${run.id} on this head had not finished after ${Math.round(waitMs / 60_000)} minutes: re-run this workflow` };
+        return { copy: 'timeout', run: run.id, why: `run ${run.id} on this head had not finished after ${Math.round(waitMs / 60_000)} minutes: re-run the failed jobs, which looks again` };
       }
       tools.say(`run ${run.id} on this head is still going; waiting for it`);
       tools.sleep(pollMs);
       run = tools.api(`repos/${ctx.repo}/actions/runs/${run.id}`);
-      job = ciJob(run.id);
+      jobs = jobsOf(run.id);
+      job = ciOf(jobs);
+    }
+    if (copied(jobs)) {
+      tools.say(`run ${run.id} copied an earlier result; passing over it`);
+      continue;
     }
     // No `ci` (a deferred `ci (after approval)`, a draft's `ci (draft)`, a
     // lookup alone), or a cancelled one, which a newer run superseded.
@@ -432,6 +447,11 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     }
     console.log(found.why);
     output(env, { copy: found.copy, run: found.run ?? '' });
+    // A wait that ran out tested nothing. Failing here, not only in `ci`,
+    // makes "re-run failed jobs" (the bridge's own retry, and GitHub's
+    // button) run this lookup again; `ci` alone would read the same
+    // `timeout` from this job's kept outputs and fail again.
+    if (found.copy === 'timeout') process.exit(1);
   } else {
     console.error('usage: release-check.mjs check | vouched | earlier');
     process.exit(2);

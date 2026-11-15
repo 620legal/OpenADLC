@@ -1,10 +1,11 @@
-import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 // @ts-expect-error — a plain script with no types; release-build.yml and ci.yml run it directly.
-import { checkRelease, earlierCi, releasersOf, vouchedRun } from '../.github/scripts/release-check.mjs';
+import { checkRelease, earlierCi, LOOKUP_JOB, releasersOf, vouchedRun } from '../.github/scripts/release-check.mjs';
 
 /**
  * Each thing release-build.yml refuses before it builds, run against a real
@@ -333,6 +334,8 @@ describe('what ci.yml copies on a label change or a title-only edit (earlierCi)'
     withHead: Pull[];
     fromBranch: Pull[];
     events: Record<number, { event: string }[]>;
+    /** A run's `ci lookup` job, when it has one: a copy ran it, any other run skipped it. */
+    lookup: Record<number, { status: string; conclusion: string | null }>;
   }
 
   /**
@@ -348,6 +351,7 @@ describe('what ci.yml copies on a label change or a title-only edit (earlierCi)'
       withHead: [pull(31)],
       fromBranch: [pull(31)],
       events: { 31: [{ event: 'labeled' }] },
+      lookup: { 900: { status: 'completed', conclusion: 'skipped' } },
     };
     change(found);
     const asked: Record<string, number> = {};
@@ -369,7 +373,13 @@ describe('what ci.yml copies on a label change or a title-only edit (earlierCi)'
         const jobs = /^repos\/acme\/openadlc\/actions\/runs\/(\d+)\/jobs\?per_page=100$/.exec(path);
         if (jobs) {
           const job = next(path, found.ci[Number(jobs[1])] ?? [null]);
-          return { jobs: job ? [{ name: 'ci', ...job }] : [{ name: 'ci (after approval)', status: 'completed', conclusion: 'skipped' }] };
+          const lookup = found.lookup[Number(jobs[1])];
+          return {
+            jobs: [
+              ...(lookup ? [{ name: LOOKUP_JOB, ...lookup }] : []),
+              ...(job ? [{ name: 'ci', ...job }] : lookup ? [] : [{ name: 'ci (after approval)', status: 'completed', conclusion: 'skipped' }]),
+            ],
+          };
         }
         const run = /^repos\/acme\/openadlc\/actions\/runs\/(\d+)$/.exec(path);
         if (run) {
@@ -448,7 +458,26 @@ describe('what ci.yml copies on a label change or a title-only edit (earlierCi)'
       found.ci[900] = [{ status: 'in_progress', conclusion: null }];
     });
     expect(found).toMatchObject({ copy: 'timeout', run: 900 });
-    expect(found.why).toMatch(/re-run this workflow/);
+    expect(found.why).toMatch(/re-run the failed jobs, which looks again/);
+  });
+
+  it('passes over a newer run that was itself a copy, so a timed-out copy is never passed on as a failure', () => {
+    const found = copied((found) => {
+      found.runs = [{ ...found.runs[0]!, id: 901, created_at: '2026-11-01T12:00:00Z' }, ...found.runs];
+      found.lookup[901] = { status: 'completed', conclusion: 'failure' };
+      found.ci[901] = [{ status: 'completed', conclusion: 'failure' }];
+    });
+    expect(found).toMatchObject({ copy: 'success', run: 900 });
+    expect(said).toContain('run 901 copied an earlier result; passing over it');
+  });
+
+  it('does not wait on a copy still going, which waits on the same runs', () => {
+    const found = copied((found) => {
+      found.runs = [{ ...found.runs[0]!, id: 901, status: 'in_progress', created_at: '2026-11-01T12:00:00Z' }, ...found.runs];
+      found.lookup[901] = { status: 'in_progress', conclusion: null };
+    });
+    expect(found).toMatchObject({ copy: 'success', run: 900 });
+    expect(said).not.toContain('run 901 on this head is still going; waiting for it');
   });
 
   it('lets the newest ci decide, and never looks for an older pass behind a newer failure', () => {
@@ -465,6 +494,58 @@ describe('what ci.yml copies on a label change or a title-only edit (earlierCi)'
       found.ci[901] = [null];
     });
     expect(found).toMatchObject({ copy: 'success', run: 900 });
+  });
+
+  it('fails the `earlier` command on a timeout, after writing it, so re-running the failed jobs looks again', () => {
+    // Were only `ci` red, the bridge's "re-run failed jobs" would re-run `ci`
+    // alone, which reads the same `timeout` from this job's kept outputs.
+    const stub = mkdtempSync(join(tmpdir(), 'openadlc-earlier-'));
+    try {
+      const going = { id: 900, path: '.github/workflows/ci.yml', head_sha: head, head_branch: 'x', head_repository: { id: 42 }, event: 'pull_request', status: 'in_progress', created_at: '2026-11-01T11:00:00Z' };
+      const answers: Record<string, unknown> = {
+        [`repos/${REPO}/actions/runs?event=pull_request&head_sha=${head}&per_page=100`]: { workflow_runs: [going] },
+        [`repos/${REPO}/actions/runs/900/jobs?per_page=100`]: { jobs: [{ name: 'ci', status: 'in_progress', conclusion: null }] },
+      };
+      writeFileSync(join(stub, 'answers.json'), JSON.stringify(answers));
+      writeFileSync(
+        join(stub, 'gh'),
+        `#!/usr/bin/env node\nconst answers = JSON.parse(require('node:fs').readFileSync(${JSON.stringify(join(stub, 'answers.json'))}, 'utf8'));\nconst path = process.argv.at(-1);\nif (!(path in answers)) { process.stderr.write('gh: Not Found (HTTP 404)\\n'); process.exit(1); }\nprocess.stdout.write(JSON.stringify(answers[path]));\n`,
+        { mode: 0o755 },
+      );
+      const output = join(stub, 'output');
+      writeFileSync(output, '');
+      const script = join(dirname(fileURLToPath(import.meta.url)), '..', '.github', 'scripts', 'release-check.mjs');
+      const run = (wait: string) =>
+        spawnSync(process.execPath, [script, 'earlier'], {
+          encoding: 'utf8',
+          env: {
+            PATH: `${stub}:${dirname(process.execPath)}:${process.env.PATH}`,
+            GITHUB_OUTPUT: output,
+            REPO,
+            REPO_ID,
+            HEAD_SHA: head,
+            HEAD_REF: 'x',
+            HEAD_REPO_ID: '42',
+            PR_NUMBER: '31',
+            PR_OPENED_AT: OPENED,
+            RUN_ID: '950',
+            EARLIER_WAIT_MS: wait,
+            EARLIER_POLL_MS: '1',
+          },
+        });
+      const late = run('0');
+      expect(late.stdout).toMatch(/had not finished after 0 minutes: re-run the failed jobs, which looks again/);
+      expect(readFileSync(output, 'utf8')).toBe('copy=timeout\nrun=900\n');
+      expect(late.status).toBe(1);
+      // Nothing to copy, or GitHub not answering, never fails it.
+      writeFileSync(join(stub, 'answers.json'), '{}');
+      writeFileSync(output, '');
+      const unanswered = run('0');
+      expect(unanswered.status).toBe(0);
+      expect(readFileSync(output, 'utf8')).toBe('copy=\nrun=\n');
+    } finally {
+      rmSync(stub, { recursive: true, force: true });
+    }
   });
 
   it('throws when GitHub does not answer, which the `earlier` command reports as nothing to copy', () => {

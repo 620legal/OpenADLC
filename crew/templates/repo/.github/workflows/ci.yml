@@ -28,8 +28,9 @@ name: ci
 # `needs-human` came off it. So such a run reports the head's earlier `ci`
 # result instead (job `earlier`): red when that one was red, green only when
 # that one passed for this pull request alone, and red when it has not
-# finished after 35 minutes. With nothing to copy it stays `ci (after
-# approval)`, as before.
+# finished after 35 minutes (re-run the failed jobs to look again). A run
+# that was itself a copy is never copied. With nothing to copy it stays `ci
+# (after approval)`, as before.
 #
 # Runner minutes are this repository's bill, so it runs only what a change needs:
 # - a change to docs alone (docs/, Markdown at the root or directly under
@@ -112,10 +113,13 @@ jobs:
       # ties above and with this the only pull request ever opened from its
       # branch (the merge line judges a `ci` by when its run was made, and a
       # copy is made later than what it copies). One still going is waited
-      # for, up to 35 minutes. Nothing found, a fork's pull request, or
-      # GitHub not answering copies nothing.
+      # for, up to 35 minutes. A run that was itself a copy (its `ci
+      # lookup` ran) is passed over: what it copied is on the head already,
+      # and its red may be a wait that timed out, which tested nothing.
+      # Nothing found, a fork's pull request, or GitHub not answering copies
+      # nothing.
       #
-      # This step never fails CI. It is the runner's own node and gh, not an
+      # This step never fails CI; a wait that ran out fails the next one. It is the runner's own node and gh, not an
       # action: the runner fetches every action a job names before its first
       # step, a skipped step's too, so one an organization has not allowed
       # fails every run.
@@ -143,10 +147,16 @@ jobs:
           // compared and printed, never run.
           const { MODE: mode, REPO: repo, REPO_ID: repoId, DEFAULT_BRANCH: base, HEAD_SHA: head } = process.env;
           const started = Date.now();
+          // A push's lookup is held to three minutes in all, a call to
+          // GitHub included, so a slow answer runs the tests rather than
+          // holding them up; each call is held to a minute.
+          const PUSH_BOUND = 3 * 60_000;
           function gh(args) {
+            const left = mode === 'push' ? started + PUSH_BOUND - Date.now() : 60_000;
+            if (left <= 0) throw new Error('it took more than three minutes');
             let out;
             try {
-              out = execFileSync('gh', ['api', ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 256 * 1024 * 1024, timeout: 60_000 });
+              out = execFileSync('gh', ['api', ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 256 * 1024 * 1024, timeout: Math.min(60_000, left) });
             } catch (error) {
               throw new Error(`gh api ${args.at(-1)}: ${String(error.stderr ?? '').trim().split('\n')[0] || error.message}`);
             }
@@ -160,7 +170,11 @@ jobs:
           const where = (pull) => (ours(pull.base?.repo?.id) ? pull.base?.ref : `${pull.base?.ref} of another repository`);
           const output = (values) => appendFileSync(process.env.GITHUB_OUTPUT, Object.entries(values).map(([key, value]) => `${key}=${value}\n`).join(''));
           const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-          const ciJob = (runId) => (api(`repos/${repo}/actions/runs/${runId}/jobs?per_page=100`).jobs ?? []).filter((job) => job.name === 'ci').at(-1);
+          const jobsOf = (runId) => api(`repos/${repo}/actions/runs/${runId}/jobs?per_page=100`).jobs ?? [];
+          const ciOf = (jobs) => jobs.filter((job) => job.name === 'ci').at(-1);
+          const ciJob = (runId) => ciOf(jobsOf(runId));
+          // A pull request's run whose lookup ran copied an earlier result.
+          const copied = (jobs) => jobs.some((job) => job.name === 'ci lookup' && job.conclusion !== 'skipped');
 
           // Why a pull request's run of this file is not tied to pull
           // requests into the default branch alone, or null when it is. With
@@ -221,7 +235,7 @@ jobs:
               if (!tree) throw new Error(`GitHub names no tree for ${head}`);
               const { artifacts = [] } = api(`repos/${repo}/actions/artifacts?name=tested-tree-${tree}&per_page=100`);
               for (const artifact of artifacts) {
-                if (Date.now() - started > 3 * 60_000) throw new Error('it took more than three minutes');
+                if (Date.now() - started > PUSH_BOUND) throw new Error('it took more than three minutes');
                 const why = refusal(artifact, tree);
                 if (why === null) {
                   console.log(`tree ${tree} passed in run ${artifact.workflow_run.id}, of a pull request into ${base}; nothing to run again`);
@@ -258,14 +272,20 @@ jobs:
               )
               .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)) || b.id - a.id);
             for (let run of runs) {
-              let job = ciJob(run.id);
+              let jobs = jobsOf(run.id);
+              let job = ciOf(jobs);
               // Still going: its `ci` may yet appear, or finish.
-              while (job?.status !== 'completed' && !(job === undefined && run.status === 'completed')) {
+              while (!copied(jobs) && job?.status !== 'completed' && !(job === undefined && run.status === 'completed')) {
                 if (Date.now() - started >= wait) return { copy: 'timeout', run: run.id, why: `run ${run.id} on this head had not finished after ${Math.round(wait / 60_000)} minutes` };
                 console.log(`run ${run.id} on this head is still going; waiting for it`);
                 sleep(poll);
                 run = api(`repos/${repo}/actions/runs/${run.id}`);
-                job = ciJob(run.id);
+                jobs = jobsOf(run.id);
+                job = ciOf(jobs);
+              }
+              if (copied(jobs)) {
+                console.log(`run ${run.id} copied an earlier result; passing over it`);
+                continue;
               }
               // No `ci` (a skipped `ci (after approval)`, or a lookup alone),
               // or a cancelled one, which a newer run superseded.
@@ -295,6 +315,16 @@ jobs:
           }
           JS
 
+      # A wait that ran out tested nothing, so this job fails as well as
+      # `ci`: "re-run failed jobs" (OpenADLC's own retry, and GitHub's
+      # button) then runs the lookup again. Were only `ci` red, its re-run
+      # would read the same `timeout` from this job's kept outputs.
+      - name: the earlier run had not finished
+        if: steps.vouched.outputs.copy == 'timeout'
+        run: |
+          echo "the earlier run on this head had not finished after 35 minutes: re-run the failed jobs to look again"
+          exit 1
+
   ci:
     name: ${{ ((github.event_name != 'pull_request' || ((github.event.action != 'labeled' && github.event.action != 'unlabeled') || github.event.label.name == 'adlc:ci') && (!startsWith(github.head_ref, 'agent/') || github.event.pull_request.head.repo.full_name != github.repository || contains(github.event.pull_request.labels.*.name, 'adlc:ci'))) || needs.earlier.outputs.copy != '') && 'ci' || 'ci (after approval)' }}
     needs: earlier
@@ -315,7 +345,7 @@ jobs:
         run: |
           case "$COPY" in
             success) echo "ci passed on this head in run $COPIED; copied, with nothing to run again" ;;
-            timeout) echo "the earlier run on this head had not finished after 35 minutes: re-run this workflow"; exit 1 ;;
+            timeout) echo "the earlier run on this head had not finished after 35 minutes: re-run the failed jobs to look again"; exit 1 ;;
             *) echo "ci did not pass on this head in run $COPIED; copied"; exit 1 ;;
           esac
 

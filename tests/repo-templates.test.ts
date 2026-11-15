@@ -558,7 +558,8 @@ describe('what the template tree carries', () => {
       expect(step?.['timeout-minutes']).toBe(38);
       expect(lookup?.['timeout-minutes']).toBe(40);
       expect(lookup?.name).toBe('ci lookup');
-      expect(lookup?.steps).toHaveLength(1);
+      // The lookup, and a step that fails the job when a wait ran out.
+      expect(lookup?.steps).toHaveLength(2);
       expect(lookup?.outputs).toEqual({
         vouched: '${{ steps.vouched.outputs.vouched }}',
         copy: '${{ steps.vouched.outputs.copy }}',
@@ -838,6 +839,44 @@ describe('what the template tree carries', () => {
         expect(copy).toBe('timeout');
       });
 
+      it('fails the lookup job itself on a timeout, so re-running the failed jobs looks again', () => {
+        // Were only `ci` red, "re-run failed jobs" (the bridge's retry, and
+        // GitHub's button) would re-run `ci` alone, which reads the same
+        // `timeout` from this job's kept outputs and fails again.
+        const late = lookup?.steps[1];
+        expect(late?.if).toBe("steps.vouched.outputs.copy == 'timeout'");
+        expect(late?.['continue-on-error']).toBeUndefined();
+        const exit = spawnSync('bash', ['-e', '-c', late?.run ?? 'true'], { env: { PATH: process.env.PATH }, encoding: 'utf8' });
+        expect(exit.status).toBe(1);
+        expect(exit.stdout).toMatch(/re-run the failed jobs to look again/);
+        // `ci` still runs and reports red after a failed lookup.
+        expect(holds(workflow.jobs[REQUIRED_CHECK]?.if, {
+          github: { event_name: 'pull_request', repository: REPO, head_ref: 'feature', event: { action: 'unlabeled', label: { name: 'needs-human' }, pull_request: { head: { repo: { full_name: REPO } }, labels: [] } } },
+          needs: { earlier: { outputs: { copy: 'timeout' } } },
+        })).toBe(true);
+      });
+
+      it('passes over a newer run that was itself a copy, so a timed-out copy is never passed on as a failure', () => {
+        const { copy, run, said } = copied((found) => {
+          found.runs = [{ ...found.runs[0]!, id: 901, created_at: '2026-11-01T12:00:00Z' }, ...found.runs];
+          found.jobs[901] = [[{ name: 'ci lookup', status: 'completed', conclusion: 'failure' }, ...ciJob('failure')]];
+          found.jobs[900] = [[{ name: 'ci lookup', status: 'completed', conclusion: 'skipped' }, ...ciJob('success')]];
+        });
+        expect(copy).toBe('success');
+        expect(run).toBe('900');
+        expect(said).toMatch(/run 901 copied an earlier result; passing over it/);
+      });
+
+      it('does not wait on a copy still going, which waits on the same runs', () => {
+        const { copy, run, said } = copied((found) => {
+          found.runs = [{ ...found.runs[0]!, id: 901, status: 'in_progress', created_at: '2026-11-01T12:00:00Z' }, ...found.runs];
+          found.jobs[901] = [[{ name: 'ci lookup', status: 'in_progress', conclusion: null }]];
+        });
+        expect(copy).toBe('success');
+        expect(run).toBe('900');
+        expect(said).not.toMatch(/run 901 on this head is still going/);
+      });
+
       it('lets the newest ci decide, and never looks for an older pass behind a newer failure', () => {
         const { copy, run } = copied((found) => {
           found.runs = [{ ...found.runs[0]!, id: 901, created_at: '2026-11-01T12:00:00Z' }, ...found.runs];
@@ -934,7 +973,7 @@ describe('what the template tree carries', () => {
         expect(exit('failure').status).toBe(1);
         const late = exit('timeout');
         expect(late.status).toBe(1);
-        expect(late.stdout).toMatch(/had not finished after 35 minutes: re-run this workflow/);
+        expect(late.stdout).toMatch(/had not finished after 35 minutes: re-run the failed jobs to look again/);
         const checkout = steps.find((candidate) => candidate.uses?.startsWith('actions/checkout@'));
         expect(checkout?.if).toBe("needs.earlier.outputs.copy == ''");
         expect(steps[index('tree')]?.if).toBe("needs.earlier.outputs.copy == ''");

@@ -981,8 +981,9 @@ template OpenADLC writes runs as little as the merge line needs:
   one is copied only under the push's ties above, and only when the pull
   request is the only one ever opened from its branch: the merge line judges
   a `ci` by when its run was made, and a copy is made later than what it
-  copies. A run still going is waited for, up to 35 minutes, and then `ci` is
-  red, saying to re-run the workflow. With nothing to copy (no run yet, a
+  copies. A run still going is waited for, up to 35 minutes, and then `ci`
+  and *ci lookup* are red; re-running the failed jobs looks again. A run that
+  was itself a copy is never copied. With nothing to copy (no run yet, a
   crew pull request before `adlc:ci`, a fork's pull request, or a question
   GitHub does not answer), the job is skipped as `ci (after approval)`, as
   before ([ADR 0075](adr/0075-a-label-change-copies-the-heads-earlier-ci-result.md)).
