@@ -3,6 +3,7 @@ import { githubDidNotAnswer } from '@openadlc/github';
 import { attachmentsForTask } from './attachment-routes.js';
 import { stoppedByTheBridge } from './bridge-stops.js';
 import { botAtStart, headerFor, leaseExpiryFrom, maxTasksOf, pathMatches, resolveBotRef, sameLogin, seatOf, withoutHeader, type ContextDocument, type HumanReviewRule, type Task, type TaskKind } from '@openadlc/shared';
+import type { Actors } from './actors.js';
 import type { BridgeConfig } from './config.js';
 import type { Context } from './context.js';
 import { effectiveConfig } from './effective-config.js';
@@ -497,6 +498,33 @@ export function leaseHoldUntil(now = new Date()): Date {
   return leaseExpiryFrom(now);
 }
 
+/** Whether a pull request is open on GitHub; null when it could not tell. */
+export type PullOpen = (repoId: string, prNumber: number) => Promise<boolean | null>;
+
+/**
+ * Reads whether a pull request is open, as the automation account, for
+ * settling a paused lease (`leases.settlePausedLeases`). The database records
+ * no pull request's state reliably, and OpenADLC#329's lease was parked on
+ * closed #334 by a settle that took the issue's number on trust. Null — the
+ * state unknown, which keeps the lease linked as before — when the repository
+ * or the account is missing or GitHub does not answer. Whether the issue is in
+ * Merged, where a merged pull request is the verification's hold, is the
+ * store's to judge.
+ */
+export function pullOpenReader(actors: Pick<Actors, 'asBot'>, config: Pick<BridgeConfig, 'automationBot'>): PullOpen {
+  return async (repoId, prNumber) => {
+    try {
+      const repo = (await repos.listRepos({ includeRemoved: true })).find((entry) => entry.id === repoId);
+      if (!repo) return null;
+      const client = await asAutomation(actors, config);
+      if (!client) return null;
+      return (await client.getPullRequest(repo.fullName, prNumber)).state === 'open';
+    } catch {
+      return null;
+    }
+  };
+}
+
 /**
  * What a task's end does to its lease. A lease a gate paused is let go once
  * nothing under it is unfinished, or put back in task when a pull request is
@@ -507,8 +535,11 @@ export function leaseHoldUntil(now = new Date()): Date {
  *
  * Never a reason for the caller to fail: the reconciler's sweep catches what
  * this misses.
+ *
+ * `pullOpen` says whether the pull request the lease would wait for is still
+ * open, so it is never parked on a closed one (ADR 0073).
  */
-export async function settleLeaseAfter(task: Pick<Task, 'leaseId' | 'state' | 'subjectRef'>): Promise<void> {
+export async function settleLeaseAfter(task: Pick<Task, 'leaseId' | 'state' | 'subjectRef'>, pullOpen?: PullOpen | null): Promise<void> {
   if (!task.leaseId || !['done', 'failed', 'stopped'].includes(task.state)) return;
   try {
     const { released, held } = await leases.settlePausedLeases({
@@ -516,6 +547,7 @@ export async function settleLeaseAfter(task: Pick<Task, 'leaseId' | 'state' | 's
       actor: 'bridge',
       reason: `its task on ${task.subjectRef} ${task.state === 'done' ? 'finished' : task.state}`,
       holdUntil: leaseHoldUntil(),
+      ...(pullOpen ? { pullOpen } : {}),
     });
     if (released.length > 0) console.log(`[bridge] released the paused lease on ${task.subjectRef}: its task ${task.state}`);
     if (held.length > 0) console.log(`[bridge] the lease on ${task.subjectRef} waits for its pull request again`);
@@ -1583,7 +1615,7 @@ export class TaskService {
       const reason = `not resumed: ${repo.fullName} was removed from OpenADLC`;
       await tasks.updateTaskState(task.id, 'stopped', { exitReason: reason });
       await this.hostd.cleanupTask(task.id, reason).catch(() => undefined);
-      await settleLeaseAfter({ ...task, state: 'stopped' });
+      await settleLeaseAfter({ ...task, state: 'stopped' }, pullOpenReader(this.context['actors'], this.config));
       return;
     }
 
@@ -1596,7 +1628,7 @@ export class TaskService {
       const reason = alreadyLanded(task.subjectRef);
       await tasks.updateTaskState(task.id, 'stopped', { exitReason: reason });
       await this.hostd.cleanupTask(task.id, reason).catch(() => undefined);
-      await settleLeaseAfter({ ...task, state: 'stopped' });
+      await settleLeaseAfter({ ...task, state: 'stopped' }, pullOpenReader(this.context['actors'], this.config));
       const thread = await threads.ensureThread({ botId: task.botId, repoId: task.repoId, subjectRef: task.subjectRef });
       await threads.addMessage({ threadId: thread.id, kind: 'sys', author: 'openadlc', text: `not resumed: ${reason}` });
       return;
@@ -1661,7 +1693,7 @@ export class TaskService {
       await this.hostd.cleanupTask(task.id, 'resume refused').catch(() => undefined);
       // It was paused on a question, so its lease was too, and a resume that
       // cannot start is the end of it.
-      await settleLeaseAfter({ ...task, state: 'failed' });
+      await settleLeaseAfter({ ...task, state: 'failed' }, pullOpenReader(this.context['actors'], this.config));
       const thread = await threads.ensureThread({
         botId: task.botId,
         repoId: task.repoId,

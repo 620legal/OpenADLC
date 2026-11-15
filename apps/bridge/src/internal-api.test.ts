@@ -467,6 +467,8 @@ describe('a task ending, which settles the lease a question paused', () => {
       actor: 'bridge',
       reason: `its task on openadlc#78 ${said}`,
       holdUntil: expect.any(Date),
+      // Read from GitHub, so it is never parked on a closed pull request (ADR 0073).
+      pullOpen: expect.any(Function),
     });
   });
 

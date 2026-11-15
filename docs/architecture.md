@@ -1094,7 +1094,30 @@ person moves a card anywhere from the console (back with a reason) or by its
 label on GitHub; the work of a later stage still running is stopped. A
 person's move from Review back to Build takes an open pull request out of the
 merge line and takes `adlc:ci` off it, and opens the builder's patch round with
-the person's reason, under the same `maxRounds`. The merge line lands an
+the person's reason, under the same `maxRounds`. When a move like that starts
+no round, the bridge records `review.stalled` with the reason, once for each
+head, and the card shows it.
+
+A lease is never held for a closed pull request
+([ADR 0073](adr/0073-a-lease-is-never-held-for-a-closed-pull-request.md)). A
+pull request counts as closed when it was closed unmerged, or merged while
+its issue is not in Merged. A merged one whose issue is in Merged is the hold
+for the verification, and is kept. Settling a paused lease treats a closed
+pull request as none. It knows the pull request is closed from
+`work_item_links`, from `merge_lines`, or from the bridge's read of GitHub
+(`pullOpenReader`). The lease is then held until its expiry with no link if
+its last task finished, and released otherwise. When none of those can say,
+it adopts the pull request as before. The reconciler names each lease's pull
+request in its read of GitHub. It releases an active lease that is linked to
+a pull request it read as closed, if the lease's issue is open and not in
+Merged or Done and no task is under the lease (`releaseForClosedPull`), and
+reports this as `lease_on_closed_pull`.
+
+When a person moves a card from Review back to Build and its pull request is
+closed, no patch round opens. The lease is let go
+(`releaseUnlessWorkedUnder`, audited as the person's), and the dispatcher
+starts a fresh build, briefed with the person's reason. A task still under
+the lease is the build, and keeps it. The merge line lands an
 issue's pull request only while the issue is in Review: one let in after such
 a move is dropped from the front, and a green review gate does not put it
 back. A crew account that moves a stage label back is put back.

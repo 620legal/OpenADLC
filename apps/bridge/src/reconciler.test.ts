@@ -65,6 +65,8 @@ vi.mock('@openadlc/db', () => ({
     setLeaseState: vi.fn(async () => null),
     settlePausedLeases: vi.fn(async () => SETTLED),
     releaseIfIdle: vi.fn(async () => true),
+    // Lets go as the store would with nothing working under it.
+    releaseForClosedPull: vi.fn(async (input: { leaseId: string; prNumber: number }) => ({ id: input.leaseId, state: 'released', prNumber: input.prNumber })),
     releaseIdleForIssue: vi.fn(async () => null),
     getActiveLease: vi.fn(async (_repoId: string, number: number) => ACTIVE_LEASES.find((lease) => lease.issueNumber === number) ?? null),
     getLease: vi.fn(async (id: string) => LEASES_BY_ID.get(id) ?? null),
@@ -1602,6 +1604,86 @@ describe('a running task whose host may have stopped', () => {
   });
 });
 
+/**
+ * OpenADLC#329: a lease parked on #334 after #334 closed unmerged, with no
+ * expiry, while reconcile said nothing had drifted (ADR 0073).
+ */
+describe('a lease left on a closed pull request', () => {
+  const REVIEW = ['adlc:review', 'priority:p2', 'area:infra', 'do:ai'];
+  const closedPull = () => issue({ number: 334, pullRequest: true, state: 'closed', labels: [], closedAt: '2026-11-14T12:00:00Z' });
+  const held = (stage: string) => {
+    CACHED = [{ number: 145, stage, declaredPaths: ['apps/bridge/src/x.ts'], prNumber: 334, body: BODY, labels: REVIEW }];
+    ACTIVE_LEASES = [{ id: 'lease-145', issueNumber: 145, prNumber: 334 }];
+  };
+  const ofKind = (drift: { kind: string }[]) => drift.filter((entry) => entry.kind === 'lease_on_closed_pull');
+
+  beforeEach(async () => {
+    const { leases } = await import('@openadlc/db');
+    vi.mocked(leases.releaseForClosedPull).mockClear();
+  });
+
+  it('is let go, audited by the store as the reconciler, and reported as drift', async () => {
+    const { leases } = await import('@openadlc/db');
+    held('review');
+    LIVE = [issue({ labels: REVIEW }), closedPull()];
+
+    const drift = await reconcileOnce();
+
+    // Closed long ago: read by itself, since no listing returns it.
+    expect(LOOKED_UP).toContain(334);
+    expect(vi.mocked(leases.releaseForClosedPull)).toHaveBeenCalledWith({ leaseId: 'lease-145', prNumber: 334, actor: 'reconciler', reason: '#334 is closed' });
+    expect(ofKind(drift)).toEqual([
+      { kind: 'lease_on_closed_pull', subject: 'openadlc#145', detail: 'the lease was held for #334, which is closed', repaired: true },
+    ]);
+  });
+
+  it('is left with a task still under it, which the store’s statement refuses', async () => {
+    const { leases } = await import('@openadlc/db');
+    vi.mocked(leases.releaseForClosedPull).mockResolvedValueOnce(null);
+    held('review');
+    LIVE = [issue({ labels: REVIEW }), closedPull()];
+
+    const drift = await reconcileOnce();
+
+    expect(vi.mocked(leases.releaseForClosedPull)).toHaveBeenCalledTimes(1);
+    expect(ofKind(drift)).toEqual([]);
+  });
+
+  it('is the verification’s hold when the issue is in Merged or Done, and is left alone', async () => {
+    const { leases } = await import('@openadlc/db');
+    for (const stage of ['merged', 'done']) {
+      held(stage);
+      LIVE = [issue({ labels: [`adlc:${stage}`] }), closedPull()];
+
+      expect(ofKind(await reconcileOnce())).toEqual([]);
+    }
+    expect(vi.mocked(leases.releaseForClosedPull)).not.toHaveBeenCalled();
+  });
+
+  it('is left alone when its pull request could not be read, or is open', async () => {
+    const { leases } = await import('@openadlc/db');
+    held('review');
+    LIVE = [issue({ labels: REVIEW })];
+    expect(ofKind(await reconcileOnce())).toEqual([]);
+
+    LIVE = [issue({ labels: REVIEW }), issue({ number: 334, pullRequest: true, state: 'open', labels: [] })];
+    expect(ofKind(await reconcileOnce())).toEqual([]);
+
+    expect(vi.mocked(leases.releaseForClosedPull)).not.toHaveBeenCalled();
+  });
+
+  it('is only reported when reconcile does not repair', async () => {
+    const { leases } = await import('@openadlc/db');
+    held('review');
+    LIVE = [issue({ labels: REVIEW }), closedPull()];
+
+    const drift = await (await reconciler()).run({ repair: false });
+
+    expect(vi.mocked(leases.releaseForClosedPull)).not.toHaveBeenCalled();
+    expect(ofKind(drift)).toEqual([expect.objectContaining({ subject: 'openadlc#145', repaired: false })]);
+  });
+});
+
 describe('a paused lease whose work has ended', () => {
   const lease = (issueNumber: number, state: string) => ({ id: `lease-${issueNumber}`, repoId: 'repo-1', issueNumber, state });
 
@@ -1616,6 +1698,8 @@ describe('a paused lease whose work has ended', () => {
       actor: 'reconciler',
       reason: 'its work had ended',
       holdUntil: expect.any(Date),
+      // Never parked on a pull request that has closed (ADR 0073).
+      pullOpen: expect.any(Function),
     });
     expect(drift.filter((entry) => entry.kind === 'paused_lease')).toEqual([
       { kind: 'paused_lease', subject: 'openadlc#78', detail: 'the lease was paused after its task had ended', repaired: true },

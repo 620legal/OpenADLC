@@ -218,6 +218,38 @@ export async function releaseForPullRequest(repoId: string, prNumber: number, wh
 }
 
 /**
+ * Lets go of a lease still linked to a pull request that has closed, for the
+ * reconciler, which read it closed on GitHub. OpenADLC#329's lease was parked
+ * on closed #334 with no expiry: the close that releases a lease
+ * (`releaseForPullRequest`) had already happened, so nothing ever let it go,
+ * and the dispatcher started nothing on the issue it held (ADR 0073).
+ *
+ * One statement, and only while it is still right: the lease is active, still
+ * linked to `prNumber`, and no task is queued, running or paused under it.
+ * Audited as the actor's `lease.released`, with `reason`. Null when nothing
+ * was let go.
+ */
+export async function releaseForClosedPull(input: { leaseId: string; prNumber: number; actor: string; reason: string }): Promise<Lease | null> {
+  const rows = await query<LeaseRow>(
+    `with released as (
+       update leases l set state = 'released', updated_at = now()
+        where l.id = $1 and l.pr_number = $2 and l.state = any($3)
+          and not exists (select 1 from tasks t where t.lease_id = l.id and t.state in ('queued', 'running', 'paused'))
+        returning l.id, l.repo_id, l.issue_number, l.bot_id, l.declared_paths, l.state, l.expires_at, l.pr_number, l.updated_at
+     ), logged as (
+       insert into audit (actor, action, target, payload)
+       select $4::text, 'lease.released',
+              coalesce((select r.name from repos r where r.id = released.repo_id), 'issue') || '#' || released.issue_number,
+              jsonb_build_object('leaseId', released.id, 'reason', $5::text, 'pullRequest', $2::int)
+         from released
+     )
+     select * from released`,
+    [input.leaseId, input.prNumber, ACTIVE, input.actor, input.reason],
+  );
+  return rows[0] ? toLease(rows[0]) : null;
+}
+
+/**
  * Lets go of an issue's lease once its card reached Done another way than the
  * bridge's own move: a person's `adlc:done`, heard in its delivery or found by
  * reconcile. OpenADLC#71 was moved there by its label after its pull request
@@ -374,36 +406,95 @@ export async function pauseIndefinitely(id: string): Promise<void> {
  *   in task with that pull request, whose closing or merge releases it
  *   (`releaseForPullRequest`). Releasing it would leave a patch round and QA
  *   with no lease to find. The issue's number is taken only while the issue is
- *   in review. That is not the same as its pull request being open — a pull
- *   request closed unmerged leaves the stage alone — so the close handler
- *   releases an unlinked lease on the issue itself (`webhooks.ts`), and
- *   nothing is left for this to attach it to. `issues.pr_number` is
- *   never cleared, so an issue whose pull request closed unmerged and went back
- *   to build still names it, and a lease linked to a closed pull request is let
- *   go by nothing — no close is coming, it has no expiry, and the idle check
- *   passes over a lease with a pull request. Past review, the issue's number is
- *   ignored and the rules below decide.
+ *   in review, and the close handler releases an unlinked lease on the issue
+ *   itself (`webhooks.ts`).
+ * - **The pull request is closed** — closed unmerged, or merged while the
+ *   issue is not in Merged — it is treated as none, below, and the audit says
+ *   which one was set aside (`closedPull`). `issues.pr_number` is never
+ *   cleared, so a card back in review after its pull request closed still
+ *   names it: OpenADLC#329's lease was parked on closed #334, with no expiry,
+ *   and nothing ever let it go (ADR 0073). A merged pull request whose issue is
+ *   in Merged is the hold for the verification after the merge, kept.
  * - **Its last task finished**: back in task with `holdUntil` as its expiry,
  *   because a finished build's pull request may not have been linked yet, and
  *   releasing would hand the issue out twice.
- * - **Its last task failed or stopped**, or it has none: released.
+ * - **Its last task failed or stopped**, or it has none: released, keeping the
+ *   lease's own pull request, if any, as history.
  *
  * The usual rules — the link, the idle check, the expiry — take it from there.
  *
- * One statement, so each lease is checked and written together and every
- * change is audited with `reason`. It is not a lock: under read committed, a
- * task inserted under the lease while the statement runs is not seen by its
- * checks. The window is that statement's length, and a task already started
- * is never missed.
+ * Closed is what `work_item_links` or `merge_lines` record, or else what
+ * `pullOpen` (the caller's read of GitHub) says; nothing in the database
+ * records every pull request's state. When neither can tell, the pull request
+ * is taken as open, as before: releasing a lease whose pull request is in fact
+ * open strands its patch round, and the reconciler lets go of one left on a
+ * closed pull request on its next pass (`releaseForClosedPull`).
+ *
+ * A read, the questions to GitHub, then one statement that checks each lease
+ * again and writes and audits it with `reason`. It is not a lock: under read
+ * committed, a task inserted under the lease while the statement runs is not
+ * seen by its checks. The window is that statement's length, and a task
+ * already started is never missed.
  */
 export async function settlePausedLeases(input: {
   leaseId?: string | null;
   actor: string;
   reason: string;
   holdUntil: Date;
+  /** Whether a pull request is open on GitHub; null when it could not tell. */
+  pullOpen?: ((repoId: string, prNumber: number) => Promise<boolean | null>) | null;
 }): Promise<{ released: Lease[]; held: Lease[] }> {
-  const rows = await query<LeaseRow>(
+  const candidates = await query<{ id: string; repo_id: string; pr: number | null; issue_merged: boolean; known_closed: boolean }>(
     `with ended as (
+       select l.id, l.repo_id,
+              coalesce(l.pr_number,
+                (select i.pr_number from issues i
+                  where i.repo_id = l.repo_id and i.number = l.issue_number and i.stage = 'review')) as pr,
+              coalesce((select i.stage = 'merged' from issues i
+                         where i.repo_id = l.repo_id and i.number = l.issue_number), false) as issue_merged
+         from leases l
+        where l.state = 'paused'
+          and ($1::uuid is null or l.id = $1)
+          and not exists (select 1 from tasks t where t.lease_id = l.id and t.state in ('queued', 'running', 'paused'))
+     )
+     select ended.id, ended.repo_id, ended.pr, ended.issue_merged,
+            (ended.pr is not null and not ended.issue_merged and (
+              exists (select 1 from merge_lines m where m.repo_id = ended.repo_id and m.pr_number = ended.pr and m.state = 'merged')
+              or exists (select 1 from work_item_links w where w.kind = 'pull' and w.repo_id = ended.repo_id and w.number = ended.pr and w.state in ('closed', 'merged'))
+            )) as known_closed
+       from ended`,
+    [input.leaseId ?? null],
+  );
+  if (candidates.length === 0) return { released: [], held: [] };
+
+  // Each pull request is asked about once, however many leases name it.
+  const asked = new Map<string, Promise<boolean | null>>();
+  const closedLeases: string[] = [];
+  const closedPulls: number[] = [];
+  const pullOpen = input.pullOpen ?? null;
+  for (const row of candidates) {
+    const pr = row.pr;
+    if (pr === null || row.issue_merged) continue;
+    let closed = row.known_closed === true;
+    if (!closed && pullOpen) {
+      const key = `${row.repo_id}#${pr}`;
+      let answer = asked.get(key);
+      if (!answer) {
+        answer = (async () => pullOpen(row.repo_id, pr))().catch(() => null);
+        asked.set(key, answer);
+      }
+      closed = (await answer) === false;
+    }
+    if (closed) {
+      closedLeases.push(row.id);
+      closedPulls.push(pr);
+    }
+  }
+
+  const rows = await query<LeaseRow>(
+    `with closed_pulls as (
+       select * from unnest($5::uuid[], $6::int[]) as c(lease_id, pr)
+     ), found as (
        select l.id,
               (select t.state from tasks t where t.lease_id = l.id
                 order by coalesce(t.ended_at, t.created_at) desc limit 1) as last_state,
@@ -414,6 +505,12 @@ export async function settlePausedLeases(input: {
         where l.state = 'paused'
           and ($1::uuid is null or l.id = $1)
           and not exists (select 1 from tasks t where t.lease_id = l.id and t.state in ('queued', 'running', 'paused'))
+     ), ended as (
+       select found.id, found.last_state,
+              case when c.lease_id is null then found.pr end as pr,
+              c.pr as closed_pr
+         from found
+         left join closed_pulls c on c.lease_id = found.id and c.pr = found.pr
      ), closed as (
        update gates g set state = 'expired', updated_at = now()
        from tasks t, ended
@@ -427,22 +524,26 @@ export async function settlePausedLeases(input: {
      ), settled as (
        update leases l set
          state = case when ended.pr is not null or ended.last_state = 'done' then 'in_task' else 'released' end,
-         pr_number = ended.pr,
+         pr_number = case when ended.closed_pr is null then ended.pr
+                          when ended.last_state = 'done' then null
+                          else l.pr_number end,
          expires_at = case when ended.pr is null and ended.last_state = 'done' then $2::timestamptz else l.expires_at end,
          updated_at = now()
        from ended
        where l.id = ended.id and l.state = 'paused'
-       returning l.id, l.repo_id, l.issue_number, l.bot_id, l.declared_paths, l.state, l.expires_at, l.pr_number, l.updated_at
+       returning l.id, l.repo_id, l.issue_number, l.bot_id, l.declared_paths, l.state, l.expires_at, l.pr_number, l.updated_at,
+                 ended.closed_pr as closed_pull
      ), logged as (
        insert into audit (actor, action, target, payload)
        select $3::text,
               case when settled.state = 'released' then 'lease.released' else 'lease.unpaused' end,
               coalesce((select r.name from repos r where r.id = settled.repo_id), 'issue') || '#' || settled.issue_number,
               jsonb_build_object('leaseId', settled.id, 'reason', $4::text, 'pullRequest', settled.pr_number)
+                || case when settled.closed_pull is not null then jsonb_build_object('closedPull', settled.closed_pull) else '{}'::jsonb end
          from settled
      )
      select * from settled`,
-    [input.leaseId ?? null, input.holdUntil, input.actor, input.reason],
+    [input.leaseId ?? null, input.holdUntil, input.actor, input.reason, closedLeases, closedPulls],
   );
   const settled = rows.map(toLease);
   return {

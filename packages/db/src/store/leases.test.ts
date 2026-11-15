@@ -19,6 +19,7 @@ import {
   planChangeOfGate,
   planChangesOfGates,
   reacquireForPullRequest,
+  releaseForClosedPull,
   releaseForPullRequest,
   releaseForRepo,
   releaseIdleForIssue,
@@ -200,87 +201,219 @@ describe('the plan change a gate asked for', () => {
 
 describe('settling a paused lease whose work has ended', () => {
   const HOLD = new Date('2026-09-29T11:00:00.000Z');
+  /** A lease the read found: paused, nothing unfinished under it. */
+  const candidate = (input: { id?: string; pr?: number | null; issueMerged?: boolean; knownClosed?: boolean } = {}) => ({
+    id: input.id ?? 'lease-1',
+    repo_id: 'repo-1',
+    pr: input.pr ?? null,
+    issue_merged: input.issueMerged ?? false,
+    known_closed: input.knownClosed ?? false,
+  });
+  const readSql = () => String(vi.mocked(query).mock.calls[0]?.[0]).replace(/\s+/g, ' ');
+  const writeSql = () => String(vi.mocked(query).mock.calls[1]?.[0]).replace(/\s+/g, ' ');
+  const writeParams = () => vi.mocked(query).mock.calls[1]?.[1];
 
-  it('looks, closes, writes and audits in one statement', async () => {
-    vi.mocked(query).mockResolvedValueOnce([]);
+  it('reads, then closes, writes and audits in one statement', async () => {
+    vi.mocked(query).mockResolvedValueOnce([candidate()]).mockResolvedValueOnce([]);
 
     await settlePausedLeases({ leaseId: 'lease-1', actor: 'bridge', reason: 'its task on openadlc#78 failed', holdUntil: HOLD });
 
-    expect(query).toHaveBeenCalledTimes(1);
-    const [sql, params] = vi.mocked(query).mock.calls[0] ?? [];
-    const text = String(sql).replace(/\s+/g, ' ');
-    expect(text).toMatch(/update leases l set/);
-    expect(text).toMatch(/insert into audit/);
-    expect(params).toEqual(['lease-1', HOLD, 'bridge', 'its task on openadlc#78 failed']);
+    expect(query).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(query).mock.calls[0]?.[1]).toEqual(['lease-1']);
+    expect(writeSql()).toMatch(/update leases l set/);
+    expect(writeSql()).toMatch(/insert into audit/);
+    expect(writeParams()).toEqual(['lease-1', HOLD, 'bridge', 'its task on openadlc#78 failed', [], []]);
   });
 
-  it('takes only a paused lease with no unfinished task, the sweep taking every one', async () => {
+  it('writes nothing when no paused lease has ended', async () => {
     vi.mocked(query).mockResolvedValueOnce([]);
+
+    await expect(settlePausedLeases({ actor: 'reconciler', reason: 'sweep', holdUntil: HOLD })).resolves.toEqual({ released: [], held: [] });
+    expect(query).toHaveBeenCalledTimes(1);
+  });
+
+  it('takes only a paused lease with no unfinished task, in the read and again in the write, the sweep taking every one', async () => {
+    vi.mocked(query).mockResolvedValueOnce([candidate()]).mockResolvedValueOnce([]);
 
     await settlePausedLeases({ actor: 'reconciler', reason: 'sweep', holdUntil: HOLD });
 
-    const [sql, params] = vi.mocked(query).mock.calls[0] ?? [];
-    const text = String(sql).replace(/\s+/g, ' ');
-    expect(text).toContain("l.state = 'paused'");
-    // A task paused on a person's answer is one of these, and holds the issue.
-    expect(text).toContain("t.state in ('queued', 'running', 'paused')");
+    for (const text of [readSql(), writeSql()]) {
+      expect(text).toContain("l.state = 'paused'");
+      // A task paused on a person's answer is one of these, and holds the issue.
+      expect(text).toContain("t.state in ('queued', 'running', 'paused')");
+    }
     // No id is every lease: the reconciler's sweep.
-    expect(params?.[0]).toBeNull();
+    expect(vi.mocked(query).mock.calls[0]?.[1]).toEqual([null]);
+    expect(writeParams()?.[0]).toBeNull();
   });
 
   it('counts a pull request the issue has as well as the lease’s own, and keeps the lease in task with it', async () => {
     // The lease's link is best-effort: a webhook that failed, or the
     // scheduler's recovery, writes only the issue. Released, a patch round
     // and QA would find no lease.
-    vi.mocked(query).mockResolvedValueOnce([{ ...ROW, state: 'in_task', pr_number: 77 }]);
+    vi.mocked(query).mockResolvedValueOnce([candidate({ pr: 77 })]).mockResolvedValueOnce([{ ...ROW, state: 'in_task', pr_number: 77 }]);
+    const pullOpen = vi.fn(async () => true);
 
-    const settled = await settlePausedLeases({ actor: 'reconciler', reason: 'sweep', holdUntil: HOLD });
+    const settled = await settlePausedLeases({ actor: 'reconciler', reason: 'sweep', holdUntil: HOLD, pullOpen });
 
-    const text = String(vi.mocked(query).mock.calls[0]?.[0]).replace(/\s+/g, ' ');
-    expect(text).toContain(
-      "coalesce(l.pr_number, (select i.pr_number from issues i where i.repo_id = l.repo_id and i.number = l.issue_number and i.stage = 'review')) as pr",
-    );
-    expect(text).toContain("state = case when ended.pr is not null or ended.last_state = 'done' then 'in_task' else 'released' end");
-    expect(text).toContain('pr_number = ended.pr');
+    const pr = "coalesce(l.pr_number, (select i.pr_number from issues i where i.repo_id = l.repo_id and i.number = l.issue_number and i.stage = 'review')) as pr";
+    expect(readSql()).toContain(pr);
+    expect(writeSql()).toContain(pr);
+    expect(writeSql()).toContain("state = case when ended.pr is not null or ended.last_state = 'done' then 'in_task' else 'released' end");
+    expect(writeSql()).toContain('pr_number = case when ended.closed_pr is null then ended.pr');
+    expect(pullOpen).toHaveBeenCalledWith('repo-1', 77);
+    expect(writeParams()?.slice(4)).toEqual([[], []]);
     expect(settled.held).toEqual([expect.objectContaining({ state: 'in_task', prNumber: 77 })]);
   });
 
-  it('ignores a pull request the issue names from an earlier round, which closed: only one in review is open', async () => {
-    // Closed unmerged, the issue went back to build still naming #77, was
-    // leased again, paused on a question, and its task failed. Linked to #77,
-    // the lease would be let go by nothing.
-    vi.mocked(query).mockResolvedValueOnce([{ ...ROW, state: 'released' }]);
-
-    const settled = await settlePausedLeases({ actor: 'reconciler', reason: 'sweep', holdUntil: HOLD });
-
-    expect(String(vi.mocked(query).mock.calls[0]?.[0]).replace(/\s+/g, ' ')).toContain("i.stage = 'review'");
-    expect(settled.released).toHaveLength(1);
-  });
-
-  it('closes a question still open on a task that has already ended, and says why', async () => {
-    // Answering it would resume nothing, and it held the lease for ever.
+  it('knows a pull request closed from its link or the merge line, but not one merged while its issue is in Merged', async () => {
     vi.mocked(query).mockResolvedValueOnce([]);
 
     await settlePausedLeases({ actor: 'reconciler', reason: 'sweep', holdUntil: HOLD });
 
-    const text = String(vi.mocked(query).mock.calls[0]?.[0]).replace(/\s+/g, ' ');
-    expect(text).toContain("update gates g set state = 'expired'");
-    expect(text).toContain("g.task_id = t.id and t.lease_id = ended.id and g.state = 'open'");
-    expect(text).toContain("'gate.expired'");
+    expect(readSql()).toContain("exists (select 1 from merge_lines m where m.repo_id = ended.repo_id and m.pr_number = ended.pr and m.state = 'merged')");
+    expect(readSql()).toContain(
+      "exists (select 1 from work_item_links w where w.kind = 'pull' and w.repo_id = ended.repo_id and w.number = ended.pr and w.state in ('closed', 'merged'))",
+    );
+    expect(readSql()).toContain('ended.pr is not null and not ended.issue_merged and');
+  });
+
+  describe('when the pull request the issue names is closed (OpenADLC#329)', () => {
+    it('releases a lease whose last task failed, and does not link it to the closed pull request', async () => {
+      vi.mocked(query).mockResolvedValueOnce([candidate({ pr: 334 })]).mockResolvedValueOnce([{ ...ROW, state: 'released', pr_number: null }]);
+      const pullOpen = vi.fn(async () => false);
+
+      const settled = await settlePausedLeases({ actor: 'bridge', reason: 'its task failed', holdUntil: HOLD, pullOpen });
+
+      // Set aside, by lease and pull request, so a write that finds another
+      // pull request on the issue by then judges that one afresh.
+      expect(writeParams()?.slice(4)).toEqual([['lease-1'], [334]]);
+      expect(writeSql()).toContain('unnest($5::uuid[], $6::int[]) as c(lease_id, pr)');
+      expect(writeSql()).toContain('left join closed_pulls c on c.lease_id = found.id and c.pr = found.pr');
+      expect(writeSql()).toContain('case when c.lease_id is null then found.pr end as pr');
+      // Released keeps the lease's own link, never the issue's.
+      expect(writeSql()).toContain("when ended.last_state = 'done' then null else l.pr_number end");
+      // The audit says which one was set aside.
+      expect(writeSql()).toContain("jsonb_build_object('closedPull', settled.closed_pull)");
+      expect(settled.released).toEqual([expect.objectContaining({ id: 'lease-1', state: 'released', prNumber: null })]);
+    });
+
+    it('holds a lease whose last task finished until the expiry, linked to nothing', async () => {
+      vi.mocked(query).mockResolvedValueOnce([candidate({ pr: 334 })]).mockResolvedValueOnce([{ ...ROW, state: 'in_task', pr_number: null, expires_at: HOLD }]);
+
+      const settled = await settlePausedLeases({ actor: 'bridge', reason: 'its task finished', holdUntil: HOLD, pullOpen: async () => false });
+
+      expect(writeSql()).toContain("expires_at = case when ended.pr is null and ended.last_state = 'done' then $2::timestamptz");
+      expect(writeParams()?.slice(4)).toEqual([['lease-1'], [334]]);
+      expect(settled.held).toEqual([expect.objectContaining({ state: 'in_task', prNumber: null, expiresAt: HOLD.toISOString() })]);
+    });
+
+    it('takes a closed link or merge line as closed without asking GitHub', async () => {
+      vi.mocked(query).mockResolvedValueOnce([candidate({ pr: 334, knownClosed: true })]).mockResolvedValueOnce([]);
+      const pullOpen = vi.fn(async () => true);
+
+      await settlePausedLeases({ actor: 'reconciler', reason: 'sweep', holdUntil: HOLD, pullOpen });
+
+      expect(pullOpen).not.toHaveBeenCalled();
+      expect(writeParams()?.slice(4)).toEqual([['lease-1'], [334]]);
+    });
+
+    it('releases a lease linked itself to a pull request closed unmerged', async () => {
+      // The read's pr is the lease's own first; the rule is the same.
+      vi.mocked(query).mockResolvedValueOnce([candidate({ pr: 12 })]).mockResolvedValueOnce([{ ...ROW, state: 'released', pr_number: 12 }]);
+
+      const settled = await settlePausedLeases({ actor: 'bridge', reason: 'its task failed', holdUntil: HOLD, pullOpen: async () => false });
+
+      expect(writeParams()?.slice(4)).toEqual([['lease-1'], [12]]);
+      expect(settled.released).toHaveLength(1);
+    });
+  });
+
+  it('adopts the pull request as before when its state is unknown: no reader, or GitHub could not tell', async () => {
+    // Released while its pull request is in fact open, a patch round would
+    // find no lease; the reconciler sweeps a closed one up (ADR 0073).
+    for (const pullOpen of [undefined, async () => null, async () => Promise.reject(new Error('rate limited'))]) {
+      vi.mocked(query).mockReset();
+      vi.mocked(query).mockResolvedValueOnce([candidate({ pr: 334 })]).mockResolvedValueOnce([{ ...ROW, state: 'in_task', pr_number: 334 }]);
+
+      const settled = await settlePausedLeases({ actor: 'reconciler', reason: 'sweep', holdUntil: HOLD, pullOpen });
+
+      expect(writeParams()?.slice(4)).toEqual([[], []]);
+      expect(settled.held).toEqual([expect.objectContaining({ state: 'in_task', prNumber: 334 })]);
+    }
+  });
+
+  it('keeps the verification hold: a merged pull request whose issue is in Merged is never asked about or set aside', async () => {
+    vi.mocked(query).mockResolvedValueOnce([candidate({ pr: 57, issueMerged: true })]).mockResolvedValueOnce([{ ...ROW, state: 'in_task', pr_number: 57 }]);
+    const pullOpen = vi.fn(async () => false);
+
+    const settled = await settlePausedLeases({ actor: 'reconciler', reason: 'sweep', holdUntil: HOLD, pullOpen });
+
+    expect(pullOpen).not.toHaveBeenCalled();
+    expect(writeParams()?.slice(4)).toEqual([[], []]);
+    expect(settled.held).toEqual([expect.objectContaining({ state: 'in_task', prNumber: 57 })]);
+  });
+
+  it('asks GitHub once for a pull request two leases name', async () => {
+    vi.mocked(query)
+      .mockResolvedValueOnce([candidate({ id: 'lease-1', pr: 40 }), candidate({ id: 'lease-2', pr: 40 })])
+      .mockResolvedValueOnce([]);
+    const pullOpen = vi.fn(async () => false);
+
+    await settlePausedLeases({ actor: 'reconciler', reason: 'sweep', holdUntil: HOLD, pullOpen });
+
+    expect(pullOpen).toHaveBeenCalledTimes(1);
+    expect(writeParams()?.slice(4)).toEqual([['lease-1', 'lease-2'], [40, 40]]);
+  });
+
+  it('closes a question still open on a task that has already ended, and says why', async () => {
+    // Answering it would resume nothing, and it held the lease for ever.
+    vi.mocked(query).mockResolvedValueOnce([candidate()]).mockResolvedValueOnce([]);
+
+    await settlePausedLeases({ actor: 'reconciler', reason: 'sweep', holdUntil: HOLD });
+
+    expect(writeSql()).toContain("update gates g set state = 'expired'");
+    expect(writeSql()).toContain("g.task_id = t.id and t.lease_id = ended.id and g.state = 'open'");
+    expect(writeSql()).toContain("'gate.expired'");
   });
 
   it('releases one whose last task failed or stopped, and puts one whose task finished back in task until the expiry', async () => {
-    vi.mocked(query).mockResolvedValueOnce([
-      { ...ROW, id: 'lease-78', state: 'released' },
-      { ...ROW, id: 'lease-79', issue_number: 79, state: 'in_task', expires_at: HOLD },
-    ]);
+    vi.mocked(query)
+      .mockResolvedValueOnce([candidate({ id: 'lease-78' }), candidate({ id: 'lease-79' })])
+      .mockResolvedValueOnce([
+        { ...ROW, id: 'lease-78', state: 'released' },
+        { ...ROW, id: 'lease-79', issue_number: 79, state: 'in_task', expires_at: HOLD },
+      ]);
 
     const settled = await settlePausedLeases({ actor: 'reconciler', reason: 'sweep', holdUntil: HOLD });
 
-    const text = String(vi.mocked(query).mock.calls[0]?.[0]).replace(/\s+/g, ' ');
-    expect(text).toContain("expires_at = case when ended.pr is null and ended.last_state = 'done' then $2::timestamptz");
+    expect(writeSql()).toContain("expires_at = case when ended.pr is null and ended.last_state = 'done' then $2::timestamptz");
     expect(settled.released.map((lease) => lease.id)).toEqual(['lease-78']);
     expect(settled.held).toEqual([expect.objectContaining({ id: 'lease-79', state: 'in_task', expiresAt: HOLD.toISOString() })]);
+  });
+});
+
+describe('a lease left on a closed pull request', () => {
+  it('is released and audited in one statement, only while still linked to it and with nothing working under it', async () => {
+    vi.mocked(query).mockResolvedValueOnce([{ ...ROW, state: 'released', pr_number: 334 }]);
+
+    const released = await releaseForClosedPull({ leaseId: 'lease-1', prNumber: 334, actor: 'reconciler', reason: '#334 is closed' });
+
+    expect(query).toHaveBeenCalledTimes(1);
+    const [sql, params] = vi.mocked(query).mock.calls[0] ?? [];
+    const text = String(sql).replace(/\s+/g, ' ');
+    expect(text).toContain('where l.id = $1 and l.pr_number = $2 and l.state = any($3)');
+    expect(text).toContain("not exists (select 1 from tasks t where t.lease_id = l.id and t.state in ('queued', 'running', 'paused'))");
+    expect(text).toContain("select $4::text, 'lease.released'");
+    expect(text).toContain("jsonb_build_object('leaseId', released.id, 'reason', $5::text, 'pullRequest', $2::int)");
+    expect(params).toEqual(['lease-1', 334, ['leased', 'in_task', 'paused'], 'reconciler', '#334 is closed']);
+    expect(released).toEqual(expect.objectContaining({ id: 'lease-1', state: 'released', prNumber: 334 }));
+  });
+
+  it('is nothing when the statement let nothing go: another link, a task under it, or no longer held', async () => {
+    vi.mocked(query).mockResolvedValueOnce([]);
+
+    await expect(releaseForClosedPull({ leaseId: 'lease-1', prNumber: 334, actor: 'reconciler', reason: 'r' })).resolves.toBeNull();
   });
 });
 

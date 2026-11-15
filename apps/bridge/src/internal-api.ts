@@ -45,7 +45,7 @@ import { NotOurRepository, worksIn } from './invitation-service.js';
 import { HttpFailure, readBytes, Router, WithStatus, type Handler, type RequestContext } from './router.js';
 import { Scheduler } from './scheduler.js';
 import { WEBHOOK_BODY_MAX } from './webhook-gateway.js';
-import { settleLeaseAfter, usageProblem } from './task-service.js';
+import { pullOpenReader, settleLeaseAfter, usageProblem } from './task-service.js';
 import type { StageHandoff } from './stage-handoff.js';
 import { sentBackReason } from './send-back.js';
 import { issueNumberFromBranch, parseRef, repoOfSubject } from './work.js';
@@ -533,7 +533,8 @@ export function registerInternalApi(
     if (['done', 'failed', 'stopped'].includes(state)) {
       await deps.hostd.cleanupTask(ended.id, reason ?? state).catch(() => undefined);
       // A lease a gate paused is not let go by anything else once its task ends.
-      await settleLeaseAfter(ended);
+      // Never parked on a pull request that has closed (ADR 0073).
+      await settleLeaseAfter(ended, pullOpenReader(deps.actors, deps.config));
       // A builder is free, or a build ended: either can let the next piece of work start.
       deps.dispatchRuns?.soon(`${ended.kind} task ${state}`);
     }
