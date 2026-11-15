@@ -3007,6 +3007,42 @@ describe('whether the bridge may merge a pull request', () => {
       expect(mergeDecision(facts({ mergeableState: 'blocked' }))).toMatchObject({ land: false, reason: `GitHub says it is blocked, and did not say why: ${LOOK}` });
     });
 
+    // A repository on OpenADLC's earlier template: `needs-human` came off a
+    // green pull request, the run that started skipped its job as `ci (after
+    // approval)`, GitHub counted it as the newest ci on the head, and the line
+    // said only that GitHub did not say why.
+    describe('names a label change’s skipped ci (after approval), newer than the ci that passed', () => {
+      const deferred = (id: number | undefined, conclusion = 'skipped') => ({ ...job('ci (after approval)', conclusion), ...(id === undefined ? {} : { id }) });
+      const DEFERRED_REASON =
+        "GitHub says it is blocked, most likely by the newest run of ci on the head: a skipped ci (after approval) that a label change started, which it counts in place of the ci that passed (the repository's ci.yml skips a label change, as OpenADLC's earlier template did): put adlc:ci on it (taking it off first if it is on), or push a new commit, so ci runs on the head again";
+
+      it('says what happened and what clears it, as a hold a person may merge over', () => {
+        const held = facts({ mergeableState: 'blocked', blocked: { rules: [], commits: null }, checkRuns: [job('check'), ciRun({ id: 10 }), deferred(11)] });
+        const decision = mergeDecision(held);
+        expect(decision).toMatchObject({ land: false, reason: DEFERRED_REASON });
+        expect(mergeBlockers(held)).toContainEqual({ kind: 'person', reason: DEFERRED_REASON });
+        expect(personMayMergeOver(decision.reason)).toBe(true);
+        expect(decision.reason).not.toContain('because ');
+        // Without rules read, too: GitHub's own check runs say it.
+        expect(blocked(null, null, { checkRuns: [ciRun({ id: 10 }), deferred(11)] }).reason).toBe(DEFERRED_REASON);
+      });
+
+      it.each<[string, MergeFacts['checkRuns']]>([
+        ['the skipped run is older than the ci that passed', [ciRun({ id: 12 }), deferred(11)]],
+        ['the ci check run has no id', [ciRun(), deferred(11)]],
+        ['the skipped run has no id', [ciRun({ id: 10 }), deferred(undefined)]],
+        ['the newer ci (after approval) did not skip', [ciRun({ id: 10 }), deferred(11, 'success')]],
+        ['the newest ci did not pass', [ciRun({ id: 10 }), ciRun({ id: 12, status: 'in_progress', conclusion: null }), deferred(13)]],
+      ])('says GitHub did not say why when %s', (_what, checkRuns) => {
+        expect(blocked([], null, { checkRuns }).reason).toMatch(/^GitHub says it is blocked, and did not say why/);
+      });
+
+      it('names a required check that has not reported first, as before', () => {
+        const required = { type: 'required_status_checks', parameters: { required_status_checks: [{ context: 'build' }] } };
+        expect(blocked([required], null, { checkRuns: [ciRun({ id: 10 }), deferred(11)] }).reason).toMatch(/^main requires build to pass, and it has not reported on the head/);
+      });
+    });
+
     it('says how many it checked when GitHub listed as many commits as it lists, not that it read them all', () => {
       // GitHub stops at 250 and says nothing of the rest.
       expect(COMMITS_LISTED).toBe(250);

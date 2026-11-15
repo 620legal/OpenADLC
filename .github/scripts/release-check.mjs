@@ -27,6 +27,10 @@
  * run, counts. A pull request into another branch runs that branch's ci.yml,
  * which anyone who can push could have written, and could vouch for anything.
  *
+ * `earlier`: ci.yml's run for a label change or a title-only edit runs
+ * nothing, and asks what the head's earlier `ci` said, to report it again
+ * (`earlierCi`), with the same ties to pull requests into main as `vouched`.
+ *
  * cut-release.yml's check (.github/scripts/cut-release-check.mjs) imports
  * `checkVersion` and `checkCi` and applies them to the commit it would tag, so
  * a tag the button pushes is one `check` here takes.
@@ -147,8 +151,9 @@ function ranTheTests(ctx, tools, runId) {
 }
 
 /**
- * A pull request's run of ci.yml that tested this tree, into main, with its
- * tests run; null when there is none.
+ * Why a pull request's run of ci.yml is not tied to pull requests of this
+ * repository into main alone, or null when it is. With `only`, that pull
+ * request must also be the only one ever opened from the run's branch.
  *
  * Nothing in a run names the pull request it ran for once that has merged (its
  * `pull_requests` is empty then), and a pull request into another branch runs
@@ -159,6 +164,37 @@ function ranTheTests(ctx, tools, runId) {
  * from that branch must be into main, and none of them may have had its base
  * changed: otherwise the run may have been the other one's.
  */
+export function tiedToPullsIntoMain(ctx, tools, run, only) {
+  if (run.event !== 'pull_request') return `it ran for a ${run.event}, not a pull request`;
+  if (run.path !== '.github/workflows/ci.yml') return `it ran ${run.path}, not .github/workflows/ci.yml`;
+  if (String(run.head_repository?.id) !== String(ctx.repoId)) return "it ran for a fork's branch";
+  if (!run.head_branch) return 'it names no branch';
+  const intoMain = (pull) => pull.base?.ref === 'main' && String(pull.base?.repo?.id) === String(ctx.repoId);
+  const ofThisRun = tools
+    .api(`repos/${ctx.repo}/commits/${run.head_sha}/pulls`)
+    .filter((pull) => pull.head?.sha === run.head_sha && pull.head?.ref === run.head_branch && String(pull.head?.repo?.id) === String(ctx.repoId));
+  if (ofThisRun.length === 0) return `no pull request from ${run.head_branch} has its head`;
+  const owner = ctx.repo.split('/')[0];
+  const fromBranch = tools.api(`repos/${ctx.repo}/pulls?state=all&head=${encodeURIComponent(`${owner}:${run.head_branch}`)}&per_page=100`, { paginate: true });
+  if (fromBranch.length === 0) return `GitHub lists no pull request from ${run.head_branch}`;
+  // Both lists: either can miss one the other has.
+  const pulls = [...ofThisRun, ...fromBranch];
+  const elsewhere = pulls.find((pull) => !intoMain(pull));
+  if (elsewhere) return `pull request #${elsewhere.number} from ${run.head_branch} is not into main`;
+  const numbers = [...new Set(pulls.map((pull) => pull.number))];
+  const other = only === undefined ? undefined : numbers.find((number) => String(number) !== String(only));
+  if (other !== undefined) return `pull request #${other} was opened from ${run.head_branch} too`;
+  const moved = numbers.find((number) =>
+    tools.api(`repos/${ctx.repo}/issues/${number}/events?per_page=100`, { paginate: true }).some((event) => event.event === 'base_ref_changed'),
+  );
+  if (moved !== undefined) return `pull request #${moved} from ${run.head_branch} had its base changed`;
+  return null;
+}
+
+/**
+ * A pull request's run of ci.yml that tested this tree, into main, with its
+ * tests run (`tiedToPullsIntoMain` says why the ties); null when there is none.
+ */
 export function vouchedRun(ctx, tools, tree) {
   const artifacts = tools.api(`repos/${ctx.repo}/actions/artifacts?name=tested-tree-${tree}&per_page=100`).artifacts ?? [];
   for (const artifact of artifacts) {
@@ -168,23 +204,77 @@ export function vouchedRun(ctx, tools, tree) {
     if (run.event !== 'pull_request' || run.conclusion !== 'success' || run.path !== '.github/workflows/ci.yml') continue;
     if (String(run.head_repository?.id) !== String(ctx.repoId)) continue;
     if (tools.api(`repos/${ctx.repo}/git/commits/${run.head_sha}`).tree?.sha !== tree) continue;
-    if (!run.head_branch) continue;
-    const intoMain = (pull) => pull.base?.ref === 'main' && String(pull.base?.repo?.id) === String(ctx.repoId);
-    const ofThisRun = tools
-      .api(`repos/${ctx.repo}/commits/${run.head_sha}/pulls`)
-      .filter((pull) => pull.head?.sha === run.head_sha && pull.head?.ref === run.head_branch && String(pull.head?.repo?.id) === String(ctx.repoId));
-    if (ofThisRun.length === 0 || !ofThisRun.every(intoMain)) continue;
-    const owner = ctx.repo.split('/')[0];
-    const fromBranch = tools.api(`repos/${ctx.repo}/pulls?state=all&head=${encodeURIComponent(`${owner}:${run.head_branch}`)}&per_page=100`, { paginate: true });
-    if (fromBranch.length === 0 || !fromBranch.every(intoMain)) continue;
-    const moved = fromBranch.some((pull) =>
-      tools.api(`repos/${ctx.repo}/issues/${pull.number}/events?per_page=100`, { paginate: true }).some((event) => event.event === 'base_ref_changed'),
-    );
-    if (moved) continue;
+    if (tiedToPullsIntoMain(ctx, tools, run) !== null) continue;
     if (ranTheTests(ctx, tools, runId) !== 'success') continue;
     return runId;
   }
   return null;
+}
+
+/**
+ * What a run of ci.yml that runs nothing (a label change, a title-only edit)
+ * reports as `ci`: the newest earlier `ci` on the same head, as it ended.
+ * Skipped instead, it would be the newest run of `ci` on the head, which
+ * GitHub counts in place of the one that passed.
+ *
+ * The newest run for the head whose `ci` job finished, not cancelled,
+ * decides; one still going is waited for, until `ctx.waitMs` (35 minutes)
+ * after this started, and then it is `timeout`, never a pass. A red `ci` is
+ * copied as it is. A green one only when `tiedToPullsIntoMain` holds with
+ * this the only pull request from its branch: the merge line judges a `ci`
+ * by when its run was made (`ciRunElsewhere`), and a copy is made later than
+ * what it copies, so a retargeted pull request's pass, or another pull
+ * request's, would otherwise step past it. `copy` is empty when there is
+ * nothing to copy, and the run then stays `ci (after approval)`.
+ *
+ * `ctx`: repo, repoId, headSha, headRef, headRepoId, pull (its number),
+ * openedAt, runId (this run, never copied), and waitMs and pollMs.
+ */
+export function earlierCi(ctx, tools) {
+  const started = tools.now();
+  const waitMs = ctx.waitMs ?? 35 * 60_000;
+  const pollMs = ctx.pollMs ?? 20_000;
+  if (String(ctx.headRepoId) !== String(ctx.repoId)) return { copy: '', run: null, why: "a fork's pull request: nothing to copy" };
+  // A run made before the pull request opened was for another one.
+  const opened = Date.parse(ctx.openedAt ?? '');
+  if (Number.isNaN(opened)) return { copy: '', run: null, why: 'the event names no time the pull request opened: nothing to copy' };
+  const ciJob = (runId) => (tools.api(`repos/${ctx.repo}/actions/runs/${runId}/jobs?per_page=100`).jobs ?? []).filter((job) => job.name === 'ci').at(-1);
+  const runs = (tools.api(`repos/${ctx.repo}/actions/runs?event=pull_request&head_sha=${ctx.headSha}&per_page=100`).workflow_runs ?? [])
+    .filter(
+      (run) =>
+        run.path === '.github/workflows/ci.yml' &&
+        run.head_sha === ctx.headSha &&
+        run.head_branch === ctx.headRef &&
+        String(run.head_repository?.id) === String(ctx.repoId) &&
+        String(run.id) !== String(ctx.runId) &&
+        !(Date.parse(run.created_at) < opened),
+    )
+    .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)) || b.id - a.id);
+  for (let run of runs) {
+    let job = ciJob(run.id);
+    // Still going: its `ci` may yet appear, or finish.
+    while (job?.status !== 'completed' && !(job === undefined && run.status === 'completed')) {
+      if (tools.now() - started >= waitMs) {
+        return { copy: 'timeout', run: run.id, why: `run ${run.id} on this head had not finished after ${Math.round(waitMs / 60_000)} minutes: re-run this workflow` };
+      }
+      tools.say(`run ${run.id} on this head is still going; waiting for it`);
+      tools.sleep(pollMs);
+      run = tools.api(`repos/${ctx.repo}/actions/runs/${run.id}`);
+      job = ciJob(run.id);
+    }
+    // No `ci` (a deferred `ci (after approval)`, a draft's `ci (draft)`, a
+    // lookup alone), or a cancelled one, which a newer run superseded.
+    if (!job || job.conclusion === 'cancelled') {
+      tools.say(`run ${run.id} has no ci that finished (${job?.conclusion ?? 'none'}); passing over it`);
+      continue;
+    }
+    // Copying red launders nothing, so its ties are not asked.
+    if (job.conclusion !== 'success') return { copy: 'failure', run: run.id, why: `ci ended ${job.conclusion} on this head in run ${run.id}` };
+    const tie = tiedToPullsIntoMain(ctx, tools, run, ctx.pull);
+    if (tie) return { copy: '', run: run.id, why: `ci passed on this head in run ${run.id}, which is not copied: ${tie}` };
+    return { copy: 'success', run: run.id, why: `ci passed on this head in run ${run.id}, for pull request #${ctx.pull} alone` };
+  }
+  return { copy: '', run: null, why: 'no earlier run of ci finished on this head: nothing to copy' };
 }
 
 /**
@@ -270,6 +360,7 @@ export function realTools(env = process.env, exec = (command, args) => execFileS
       }
     },
     sleep: (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms),
+    now: () => Date.now(),
     say: (line) => console.log(line),
   };
 }
@@ -316,8 +407,33 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
       console.log(`could not tell whether a pull request already tested ${env.TREE} (${error instanceof Error ? error.message : error}); running the tests`);
     }
     output(env, { tested });
+  } else if (command === 'earlier') {
+    // Never fails ci: a lookup that cannot be made copies nothing, and the run
+    // stays `ci (after approval)`, as it was.
+    let found;
+    try {
+      found = earlierCi(
+        {
+          repo: env.REPO,
+          repoId: env.REPO_ID,
+          headSha: env.HEAD_SHA,
+          headRef: env.HEAD_REF,
+          headRepoId: env.HEAD_REPO_ID,
+          pull: env.PR_NUMBER,
+          openedAt: env.PR_OPENED_AT,
+          runId: env.RUN_ID,
+          waitMs: env.EARLIER_WAIT_MS ? Number(env.EARLIER_WAIT_MS) : undefined,
+          pollMs: env.EARLIER_POLL_MS ? Number(env.EARLIER_POLL_MS) : undefined,
+        },
+        realTools(env),
+      );
+    } catch (error) {
+      found = { copy: '', run: null, why: `could not read the earlier runs on this head (${error instanceof Error ? error.message : error}): nothing to copy` };
+    }
+    console.log(found.why);
+    output(env, { copy: found.copy, run: found.run ?? '' });
   } else {
-    console.error('usage: release-check.mjs check | vouched');
+    console.error('usage: release-check.mjs check | vouched | earlier');
     process.exit(2);
   }
 }

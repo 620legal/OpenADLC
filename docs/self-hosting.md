@@ -972,6 +972,20 @@ template OpenADLC writes runs as little as the merge line needs:
   [unverified](unverified.md#open), U87). The template runs on a push to
   `main`, `master` or `trunk`; add your default branch to its `push:` filter
   if it is called something else.
+- **A label put on or taken off** a pull request, other than `adlc:ci`, runs
+  nothing again, and reports the head's earlier `ci` result instead: GitHub
+  counts the newest run of `ci` on the head, and a skipped one in its place
+  held a green pull request on a `ci` it said was expected. The same lookup,
+  in the job *ci lookup*, takes the newest run of the workflow on the head
+  whose `ci` finished, not cancelled. A red one is copied as it is. A green
+  one is copied only under the push's ties above, and only when the pull
+  request is the only one ever opened from its branch: the merge line judges
+  a `ci` by when its run was made, and a copy is made later than what it
+  copies. A run still going is waited for, up to 35 minutes, and then `ci` is
+  red, saying to re-run the workflow. With nothing to copy (no run yet, a
+  crew pull request before `adlc:ci`, a fork's pull request, or a question
+  GitHub does not answer), the job is skipped as `ci (after approval)`, as
+  before ([ADR 0075](adr/0075-a-label-change-copies-the-heads-earlier-ci-result.md)).
 - **A hung run** stops after 30 minutes rather than GitHub's six hours.
 - **A first failure** is run again once, as the app, before the work goes back
   to the builder: a rerun costs minutes, sending it back costs a model's round.
@@ -986,8 +1000,12 @@ again: Settings → Repositories offers the current one in place of an earlier
 template nobody changed, and leaves an edited one alone. An edited copy of an
 earlier template that skips the push's tests counts a pull request into any
 branch, so its default branch can pass a tree nothing tested: copy the
-template's steps from *the tree it tests* to *what this change needs*, and its
-`permissions`, into it.
+template's `earlier` job (*ci lookup*), the `needs`, `name` and `if` of its
+`ci` job, its steps from *the earlier result on this head* to *what this
+change needs*, and its `permissions`, into it. That also keeps a pull
+request's `ci` when a label changes, which an earlier template did not: until
+then the merge line names the case, and `adlc:ci` or a new push clears it
+([troubleshooting](troubleshooting.md)).
 
 The shipped copies are in `crew/templates/repo/`. This repository shares the
 issue forms and the pull request template with them, kept identical by a test

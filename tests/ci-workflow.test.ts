@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseYamlFile } from '@openadlc/shared';
 import { describe, expect, it } from 'vitest';
+import { evaluate, holds } from './actions-expression.ts';
 
 /**
  * The shape of ci.yml that its verdict, the merge line and release-check.mjs
@@ -51,6 +52,9 @@ function verdictOf(results: Record<string, string>): number | null {
     CODE: 'true',
     INFRA: 'false',
     TESTED: 'false',
+    EARLIER: 'skipped',
+    COPY: '',
+    COPIED: '',
     ...results,
   };
   return spawnSync('bash', ['-e', '-c', verdict.run!], { env, encoding: 'utf8' }).status;
@@ -112,6 +116,18 @@ describe("ci.yml's jobs", () => {
     expect(Object.keys(jobs.integration!.services ?? {})).toEqual(['postgres']);
   });
 
+  it('report the earlier ci on a run that copies it, before anything else they read', () => {
+    // Every other job is skipped on such a run: the verdict stands on the copy alone.
+    const skipped = { CHANGES: 'skipped', SECRETS: 'skipped', CHECK: 'skipped', INTEGRATION: 'skipped', DOCS: 'skipped', CLOUD: 'skipped', CODE: '', INFRA: '', TESTED: '', EARLIER: 'success' };
+    expect(verdictOf({ ...skipped, COPY: 'success' })).toBe(0);
+    expect(verdictOf({ ...skipped, COPY: 'failure' })).toBe(1);
+    expect(verdictOf({ ...skipped, COPY: 'timeout' })).toBe(1);
+    // Nothing copied is today's verdict, whatever the lookup did.
+    expect(verdictOf({ ...skipped, COPY: '' })).toBe(1);
+    expect(verdictOf({ CHECK: 'success', INTEGRATION: 'success', COPY: '', EARLIER: 'skipped' })).toBe(0);
+    expect(verdictOf({ CHECK: 'success', INTEGRATION: 'failure', COPY: '', EARLIER: 'skipped' })).toBe(1);
+  });
+
   it("install from pnpm's store, which setup-node keeps keyed by the lockfile", () => {
     for (const [name, job] of Object.entries(jobs)) {
       const installs = job.steps.filter((step) => step.run?.includes('pnpm install'));
@@ -120,5 +136,108 @@ describe("ci.yml's jobs", () => {
       const node = job.steps.find((step) => step.uses?.startsWith('actions/setup-node@'));
       expect(node?.with?.cache, name).toBe('pnpm');
     }
+  });
+});
+
+/** An event as the workflow's expressions read it: a pull request of acme/openadlc unless it says otherwise. */
+interface Event {
+  event?: string;
+  action?: string;
+  label?: string;
+  changes?: Record<string, unknown>;
+  draft?: boolean;
+  crew?: boolean;
+  labels?: string[];
+}
+
+function github(event: Event): Record<string, unknown> {
+  const repository = 'acme/openadlc';
+  const name = event.event ?? 'pull_request';
+  return {
+    event_name: name,
+    repository,
+    head_ref: name === 'pull_request' ? (event.crew ? 'agent/builder/7-x' : 'feature') : '',
+    event:
+      name === 'pull_request'
+        ? {
+            action: event.action ?? 'synchronize',
+            label: event.label ? { name: event.label } : null,
+            changes: event.changes ?? null,
+            pull_request: { draft: event.draft ?? false, head: { repo: { full_name: repository, id: 42 } }, labels: (event.labels ?? []).map((label) => ({ name: label })) },
+          }
+        : {},
+  };
+}
+
+const context = (event: Event, copy: string | null = '') => ({ github: github(event), needs: { earlier: { outputs: { copy } } } });
+
+describe('a run of ci.yml that runs nothing', () => {
+  // The bug: a green pull request had `needs-human` taken off. The run that
+  // label started skipped everything, its `ci (after approval)` became the
+  // newest run of ci on the head, and GitHub held the pull request on a `ci`
+  // it said was expected.
+  const copies: [string, Event][] = [
+    ['needs-human taken off a person’s pull request', { action: 'unlabeled', label: 'needs-human' }],
+    ['needs-human put on', { action: 'labeled', label: 'needs-human' }],
+    ['a title edited alone', { action: 'edited', changes: { title: { from: 'old' } } }],
+    ['a label taken off a crew pull request that carries adlc:ci', { action: 'unlabeled', label: 'needs-human', crew: true, labels: ['adlc:ci'] }],
+    ['a label taken off a crew pull request before adlc:ci', { action: 'unlabeled', label: 'needs-human', crew: true }],
+  ];
+  const runs: [string, Event][] = [
+    ['adlc:ci put on a crew pull request', { action: 'labeled', label: 'adlc:ci', crew: true, labels: ['adlc:ci'] }],
+    ['scope:cross-cutting put on', { action: 'labeled', label: 'scope:cross-cutting' }],
+    ['a body edited', { action: 'edited', changes: { body: { from: 'old' } } }],
+    ['a push to main', { event: 'push' }],
+    ['a new head', { action: 'synchronize' }],
+  ];
+
+  it.each(copies)('copies the head’s earlier ci on %s, and runs none of the checks', (_what, event) => {
+    expect(holds(jobs.earlier!.if, context(event))).toBe(true);
+    expect(holds(jobs.changes!.if, context(event))).toBe(false);
+    // `ci` is there, and named `ci`, only when there was something to copy.
+    expect(holds(jobs.ci!.if, context(event, 'success'))).toBe(true);
+    expect(evaluate(jobs.ci!.name!, context(event, 'success'))).toBe('ci');
+    expect(evaluate(jobs.ci!.name!, context(event, 'failure'))).toBe('ci');
+    for (const nothing of ['', null]) {
+      expect(holds(jobs.ci!.if, context(event, nothing))).toBe(false);
+      expect(evaluate(jobs.ci!.name!, context(event, nothing))).toBe('ci (after approval)');
+    }
+  });
+
+  it.each(runs)('runs the checks, and copies nothing, on %s', (_what, event) => {
+    expect(holds(jobs.earlier!.if, context(event))).toBe(false);
+    expect(holds(jobs.changes!.if, context(event))).toBe(true);
+    expect(holds(jobs.ci!.if, context(event))).toBe(true);
+    expect(evaluate(jobs.ci!.name!, context(event))).toBe('ci');
+  });
+
+  it('leaves a draft alone, whose last job is ci (draft), and a retarget, whose earlier ci was against another base', () => {
+    for (const event of [
+      { action: 'labeled', label: 'needs-human', draft: true },
+      { action: 'edited', changes: { title: { from: 'old' } }, draft: true },
+      { action: 'edited', changes: { base: { ref: { from: 'other' } } } },
+    ]) {
+      expect(holds(jobs.earlier!.if, context(event))).toBe(false);
+    }
+    expect(evaluate(jobs.ci!.name!, context({ draft: true }))).toBe('ci (draft)');
+  });
+
+  it('still defers a crew pull request’s ci until adlc:ci, when there is nothing to copy', () => {
+    const deferred = { action: 'synchronize', crew: true };
+    expect(holds(jobs.earlier!.if, context(deferred))).toBe(false);
+    expect(holds(jobs.ci!.if, context(deferred))).toBe(false);
+    expect(evaluate(jobs.ci!.name!, context(deferred))).toBe('ci (after approval)');
+  });
+
+  it('reports nothing from a cancelled run, a copy included', () => {
+    expect(holds(jobs.ci!.if, context({ action: 'labeled', label: 'needs-human' }, 'success'), { cancelled: true })).toBe(false);
+  });
+
+  it('reads the earlier result with this repository’s script, from a checkout of the scripts alone', () => {
+    const steps = jobs.earlier!.steps;
+    expect(steps[0]?.uses).toMatch(/^actions\/checkout@[0-9a-f]{40}$/);
+    expect(steps[0]?.with?.['sparse-checkout']).toBe('.github/scripts');
+    expect(steps.at(-1)?.run?.trim()).toBe('node .github/scripts/release-check.mjs earlier');
+    expect(readFileSync(join(ROOT, '.github', 'scripts', 'release-check.mjs'), 'utf8')).toContain("command === 'earlier'");
   });
 });

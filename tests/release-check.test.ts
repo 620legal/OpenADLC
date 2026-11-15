@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 // @ts-expect-error — a plain script with no types; release-build.yml and ci.yml run it directly.
-import { checkRelease, releasersOf, vouchedRun } from '../.github/scripts/release-check.mjs';
+import { checkRelease, earlierCi, releasersOf, vouchedRun } from '../.github/scripts/release-check.mjs';
 
 /**
  * Each thing release-build.yml refuses before it builds, run against a real
@@ -315,5 +315,159 @@ describe('what ci.yml’s push to main reads', () => {
       found.events[29] = [{ event: 'base_ref_changed' }];
     });
     expect(vouched()).toBeNull();
+  });
+});
+
+describe('what ci.yml copies on a label change or a title-only edit (earlierCi)', () => {
+  const head = 'f'.repeat(40);
+  const OPENED = '2026-11-01T10:00:00Z';
+  const pull = (number: number, base = 'main'): Pull => ({ number, head: { sha: head, ref: 'x', repo: { id: 42 } }, base: { ref: base, repo: { id: 42 } } });
+  type CiJob = { status: string; conclusion: string | null } | null;
+
+  interface Earlier {
+    runs: Record<string, unknown>[];
+    /** Each run's `ci` job, one answer each time it is asked, the last one standing; null for a run with none. */
+    ci: Record<number, CiJob[]>;
+    /** Each run's status when it is asked again after the list, the same way. */
+    status: Record<number, string[]>;
+    withHead: Pull[];
+    fromBranch: Pull[];
+    events: Record<number, { event: string }[]>;
+  }
+
+  /**
+   * What earlierCi makes of run 900 of ci.yml for #31, from x into main, whose
+   * ci passed, unless `change` says otherwise. Sleeping moves a clock rather
+   * than waiting, and `failing` makes the paths it matches fail as GitHub does.
+   */
+  function copied(change: (found: Earlier) => void = () => undefined, overrides: Record<string, unknown> = {}, failing?: RegExp) {
+    const found: Earlier = {
+      runs: [{ id: 900, path: '.github/workflows/ci.yml', head_sha: head, head_branch: 'x', head_repository: { id: 42 }, event: 'pull_request', status: 'completed', created_at: '2026-11-01T11:00:00Z' }],
+      ci: { 900: [{ status: 'completed', conclusion: 'success' }] },
+      status: {},
+      withHead: [pull(31)],
+      fromBranch: [pull(31)],
+      events: { 31: [{ event: 'labeled' }] },
+    };
+    change(found);
+    const asked: Record<string, number> = {};
+    const next = <T,>(key: string, answers: T[]): T => {
+      const n = asked[key] ?? 0;
+      asked[key] = n + 1;
+      return answers[Math.min(n, answers.length - 1)]!;
+    };
+    api[`repos/${REPO}/actions/runs?event=pull_request&head_sha=${head}&per_page=100`] = { workflow_runs: found.runs };
+    api[`repos/${REPO}/commits/${head}/pulls`] = found.withHead;
+    api[`repos/${REPO}/pulls?state=all&head=${encodeURIComponent('acme:x')}&per_page=100`] = found.fromBranch;
+    for (const [number, events] of Object.entries(found.events)) api[`repos/${REPO}/issues/${number}/events?per_page=100`] = events;
+    let clock = 0;
+    const base = tools();
+    const fake = {
+      ...base,
+      api: (path: string) => {
+        if (failing?.test(path)) throw new Error(`gh api ${path}: HTTP 403`);
+        const jobs = /^repos\/acme\/openadlc\/actions\/runs\/(\d+)\/jobs\?per_page=100$/.exec(path);
+        if (jobs) {
+          const job = next(path, found.ci[Number(jobs[1])] ?? [null]);
+          return { jobs: job ? [{ name: 'ci', ...job }] : [{ name: 'ci (after approval)', status: 'completed', conclusion: 'skipped' }] };
+        }
+        const run = /^repos\/acme\/openadlc\/actions\/runs\/(\d+)$/.exec(path);
+        if (run) {
+          const listed = found.runs.find((one) => one.id === Number(run[1]))!;
+          return { ...listed, status: next(path, found.status[Number(run[1])] ?? [String(listed.status)]) };
+        }
+        return base.api(path);
+      },
+      sleep: (ms: number) => void (clock += ms),
+      now: () => clock,
+    };
+    const context = { repo: REPO, repoId: REPO_ID, headSha: head, headRef: 'x', headRepoId: '42', pull: '31', openedAt: OPENED, runId: '950', waitMs: 60_000, pollMs: 20_000, ...overrides };
+    return earlierCi(context, fake) as { copy: string; run: number | null; why: string };
+  }
+
+  it('copies a green ci that ran for this pull request alone, into main, never retargeted', () => {
+    expect(copied()).toMatchObject({ copy: 'success', run: 900 });
+  });
+
+  it('copies a red ci whatever the ties say', () => {
+    const red = (found: Earlier) => void (found.ci[900] = [{ status: 'completed', conclusion: 'failure' }]);
+    expect(copied(red)).toMatchObject({ copy: 'failure', run: 900 });
+    const untied = copied((found) => {
+      red(found);
+      found.events[31] = [{ event: 'base_ref_changed' }];
+      found.fromBranch = [pull(30), pull(31)];
+    });
+    expect(untied.copy).toBe('failure');
+  });
+
+  it.each<[string, (found: Earlier) => void, RegExp]>([
+    ['its pull request had its base changed', (found) => void (found.events[31] = [{ event: 'base_ref_changed' }]), /#31 from x had its base changed/],
+    [
+      'another pull request was opened from its branch',
+      (found) => {
+        found.fromBranch = [pull(30), pull(31)];
+        found.events[30] = [];
+      },
+      /#30 was opened from x too/,
+    ],
+    ['a pull request from its branch is into another branch', (found) => void (found.withHead = [pull(31, 'foo')]), /#31 from x is not into main/],
+    ['the run was made before the pull request opened', (found) => void (found.runs[0]!.created_at = '2026-11-01T09:00:00Z'), /nothing to copy/],
+  ])('copies no green ci when %s', (_what, change, why) => {
+    const found = copied(change);
+    expect(found.copy).toBe('');
+    expect(found.why).toMatch(why);
+  });
+
+  it.each<[string, (found: Earlier) => void, Record<string, unknown>]>([
+    ['there is no run', (found) => void (found.runs = []), {}],
+    ['the only run deferred its ci', (found) => void (found.ci[900] = [null]), {}],
+    ['the only ci was cancelled', (found) => void (found.ci[900] = [{ status: 'completed', conclusion: 'cancelled' }]), {}],
+    ['the only run is this one', () => undefined, { runId: '900' }],
+    ['the pull request is from a fork', () => undefined, { headRepoId: '7' }],
+    ['the run is of another workflow', (found) => void (found.runs[0]!.path = '.github/workflows/other.yml'), {}],
+    ['the run is for another branch', (found) => void (found.runs[0]!.head_branch = 'y'), {}],
+    ['the event names no time the pull request opened', () => undefined, { openedAt: '' }],
+  ])('copies nothing when %s', (_what, change, overrides) => {
+    expect(copied(change, overrides).copy).toBe('');
+  });
+
+  it('waits for a run still going, and copies what it ends with', () => {
+    const found = copied((found) => {
+      found.runs[0]!.status = 'in_progress';
+      found.status[900] = ['in_progress', 'completed'];
+      found.ci[900] = [{ status: 'in_progress', conclusion: null }, { status: 'completed', conclusion: 'success' }];
+    });
+    expect(found).toMatchObject({ copy: 'success', run: 900 });
+    expect(said).toContain('run 900 on this head is still going; waiting for it');
+  });
+
+  it('says timeout, never success, for a run still going at the deadline', () => {
+    const found = copied((found) => {
+      found.runs[0]!.status = 'in_progress';
+      found.status[900] = ['in_progress'];
+      found.ci[900] = [{ status: 'in_progress', conclusion: null }];
+    });
+    expect(found).toMatchObject({ copy: 'timeout', run: 900 });
+    expect(found.why).toMatch(/re-run this workflow/);
+  });
+
+  it('lets the newest ci decide, and never looks for an older pass behind a newer failure', () => {
+    const found = copied((found) => {
+      found.runs = [{ ...found.runs[0]!, id: 901, created_at: '2026-11-01T12:00:00Z' }, ...found.runs];
+      found.ci[901] = [{ status: 'completed', conclusion: 'failure' }];
+    });
+    expect(found).toMatchObject({ copy: 'failure', run: 901 });
+  });
+
+  it('passes over a newer run with no ci of its own, to the one that has it', () => {
+    const found = copied((found) => {
+      found.runs = [{ ...found.runs[0]!, id: 901, created_at: '2026-11-01T12:00:00Z' }, ...found.runs];
+      found.ci[901] = [null];
+    });
+    expect(found).toMatchObject({ copy: 'success', run: 900 });
+  });
+
+  it('throws when GitHub does not answer, which the `earlier` command reports as nothing to copy', () => {
+    expect(() => copied(() => undefined, {}, /\/events/)).toThrow(/HTTP 403/);
   });
 });

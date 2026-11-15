@@ -33,10 +33,29 @@ export interface CiTemplateUpdate {
 const COUNTS_ONLY_THE_DEFAULT_BRANCH =
   'counts only a pull request into the default branch as having tested a tree, since one into another branch runs that branch’s copy of the workflow, which can pass anything, and reads pull requests and their events to tell (`pull-requests: read`, `issues: read`)';
 
-const ONLY_THE_DEFAULT_BRANCH_VOUCHES: CiTemplateUpdate = {
-  reason: `the OpenADLC workflow before this one, unchanged since it was written, whose push to the default branch skipped the tests for a tree a pull request into any branch had passed; the current one ${COUNTS_ONLY_THE_DEFAULT_BRANCH}`,
-  title: 'count only a pull request into the default branch as having tested a tree',
-  outcome: 'the current template, which counts only a pull request into the default branch as having tested a tree',
+/**
+ * What bringing a template from before #357 up to date changes for a label
+ * change. Its run skipped its job as `ci (after approval)`, GitHub counted
+ * that as the newest run of `ci` on the head, and a green pull request went
+ * back to waiting for `ci` when `needs-human` came off it.
+ */
+const KEEPS_CI_ON_A_LABEL =
+  'keeps a pull request’s ci when a label is put on or taken off, by reporting the head’s earlier ci result again rather than a skipped run GitHub counts in its place';
+
+const SKIPPED_ON_A_LABEL = 'its run for a label change skipped its job, which GitHub counted as the newest run of ci on the head, so a green pull request waited for ci again';
+
+const CI_KEPT_ON_A_LABEL: CiTemplateUpdate = {
+  reason: `the OpenADLC workflow before this one, unchanged since it was written: ${SKIPPED_ON_A_LABEL}; the current one ${KEEPS_CI_ON_A_LABEL}`,
+  title: 'keep a pull request’s ci when a label changes',
+  outcome: 'the current template, which keeps a pull request’s ci when a label is put on or taken off',
+};
+
+const ONLY_THE_DEFAULT_BRANCH_VOUCHES_AND_CI_KEPT: CiTemplateUpdate = {
+  reason:
+    'an OpenADLC workflow from two versions before this one, unchanged since it was written, whose push to the default branch skipped the tests for a tree a pull request into any branch had passed, and ' +
+    `${SKIPPED_ON_A_LABEL}; the current one ${COUNTS_ONLY_THE_DEFAULT_BRANCH}, and ${KEEPS_CI_ON_A_LABEL}`,
+  title: 'count only a pull request into the default branch as having tested a tree, and keep a pull request’s ci when a label changes',
+  outcome: 'the current template, which counts only a pull request into the default branch as having tested a tree, and keeps a pull request’s ci when a label is put on or taken off',
 };
 
 /**
@@ -56,12 +75,16 @@ const ONLY_THE_DEFAULT_BRANCH_VOUCHES: CiTemplateUpdate = {
  */
 export const EARLIER_CI_TEMPLATES: ReadonlyMap<string, CiTemplateUpdate> = new Map<string, CiTemplateUpdate>([
   // OpenADLC's first: a push to the default branch skipped its tests for a
-  // tree any pull request's run had passed, one into another branch included.
-  ['133faab3f26feb56293c136a5594df51a8ae9242b5a13dfd80a156a0a57539d7', ONLY_THE_DEFAULT_BRANCH_VOUCHES],
+  // tree any pull request's run had passed, one into another branch included;
+  // and a label change's skipped run stood as the head's newest ci.
+  ['133faab3f26feb56293c136a5594df51a8ae9242b5a13dfd80a156a0a57539d7', ONLY_THE_DEFAULT_BRANCH_VOUCHES_AND_CI_KEPT],
+  // OpenADLC's second: a label change's skipped run stood as the head's
+  // newest ci, and GitHub waited for a ci that had passed.
+  ['746578e36a684368e3a1f3375d2aefb22642f1993e7235bba0096f72ceb9644b', CI_KEPT_ON_A_LABEL],
 ]);
 
 /** The SHA-256 of the CI template as it ships now. */
-export const CURRENT_CI_TEMPLATE = '746578e36a684368e3a1f3375d2aefb22642f1993e7235bba0096f72ceb9644b';
+export const CURRENT_CI_TEMPLATE = 'e3622653ea2dc5a81b740666bf30726f9f4376982a954c382e8b5cd3c6031820';
 
 export function templateHash(body: string): string {
   return createHash('sha256').update(body).digest('hex');
