@@ -69,6 +69,26 @@ once the cause is fixed.
 | `--sign-ins`, `--no-sign-ins` | Whether sign-ins come along, both the crew's GitHub sign-ins and the model accounts' subscription sign-in folders: yes for a whole install, no for part of one |
 | `openadlc restore PATH [--dry-run] [--take-over-sign-ins]` | PATH is an `.openadlcbak` archive, a plain `.json` one, or a `.fleetbak` archive from a release before the format took OpenADLC's name (a release that old cannot open an `.openadlcbak` one). Shows what it would change and asks for `overwrite` before it does. `--dry-run` shows the plan and stops: nothing is written and no sign-in is used. Every sign-in in the archive is checked first, and an expired or refused one is never restored; a working key or sign-in this install lacks is restored. A GitHub or subscription sign-in can only be checked by using it, and using it takes it over from the install it came from, since GitHub rotates them. On a clean install those are taken over without asking; on one already set up, only with `--take-over-sign-ins`, and otherwise they are left as this install has them |
 
+An `--unencrypted` backup never holds a release signing key. It leaves every
+one out and names the repositories it left. A restore never writes over a
+release key the install already holds: it says it kept it, and creates one
+only where the install has none.
+
+## Release signing keys
+
+A repository's ed25519 key for signing its releases, which its clients pin
+([security](security.md#release-signing),
+[ADR 0069](adr/0069-a-release-manifest-is-four-lines-signed-with-a-key-imported-on-the-host.md)).
+It comes only from a file on the host. No console page or API route takes a
+key, and OpenADLC never generates, rotates or deletes one. `release-key`
+checks its own flags, as strictly as every other command: anything it doesn't
+take is refused with exit 2.
+
+| Command | What it does |
+|---|---|
+| `openadlc release-key import --repo OWNER/NAME --file PATH [--tag TAG] [--replace]` | Reads the key from `PATH` and files it in the secret store with its tag, which is `openadlc-release-manifest-1` unless `--tag` gives another. It takes a PKCS#8 PEM, as `openssl genpkey -algorithm ed25519 -out release-key.pem` writes it, or the 32-byte seed in standard base64. It refuses an encrypted PEM (decrypt it first with `openssl pkey`), a public key, a key that isn't ed25519, a seed of another length, anything else, a file over 16 KiB, and a path that isn't a regular file or is a symlink. The path is opened once, without following a link, and both checks and the read use that one open file, so nothing swapped in at the path between them is read. Each refusal says what to do, and none prints what the file holds. It prints the public key, as base64 of its 32 bytes and as a PEM, and the tag: pin both in the clients. Importing the same key and tag again says "already imported" and exits 0. A different key or tag is refused unless `--replace` is given, because every client that pins the old one stops accepting new releases. Exits 1 on a refusal |
+| `openadlc release-key show --repo OWNER/NAME` | Prints the public key and tag filed for the repository, or what to run when there is none. Never the private key |
+
 ## The cloud
 
 | Command | What it does |

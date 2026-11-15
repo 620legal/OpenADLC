@@ -45,8 +45,10 @@ import {
   readManifest,
   readPlain,
   readShape,
+  releaseSigningKeyRepos,
   runRestore,
   signInsByDefault,
+  withoutReleaseSigningKeys,
   writePlain,
   type BackupContents,
   type BackupManifest,
@@ -633,7 +635,15 @@ export async function backup(
       process.exitCode = 1;
       return;
     }
-    const { contents, leftOut } = buildBackup(found, resolved, deps.now());
+    const built = buildBackup(found, resolved, deps.now());
+    const { leftOut } = built;
+    // An unencrypted archive never holds a release signing key (ADR 0069):
+    // `writePlain` drops them itself, and what is shown and counted here is
+    // what it writes.
+    const releaseKeysLeftOut = unencrypted ? releaseSigningKeyRepos(built.contents.secrets) : [];
+    const contents: BackupContents = unencrypted
+      ? { ...built.contents, secrets: withoutReleaseSigningKeys(built.contents.secrets) }
+      : built.contents;
     const omitted = leftOut.filter((entry) => entry.reason === SIGN_INS_NOT_CHOSEN).map((entry) => entry.ref);
 
     if (holdsNothing(contents)) {
@@ -680,6 +690,12 @@ export async function backup(
       io.out.note(
         'Recovering from a leak means a new App key, webhook secret and commit-signing keys, a new key for signing posts (openadlc attribution rotate --drop-old), revoking each bot’s GitHub authorization, revoking any non-expiring bot token, rotating every API key and the registry token, and signing each model subscription out and in again.',
       );
+
+      if (releaseKeysLeftOut.length > 0) {
+        io.out.note(
+          `Left out: ${counted(releaseKeysLeftOut.length, 'release signing key')} (${releaseKeysLeftOut.join(', ')}) — an unencrypted backup never carries one. Take an encrypted backup to keep them.`,
+        );
+      }
 
       deps.write(target, deps.plain(contents));
 
@@ -929,6 +945,12 @@ export async function restore(
     const lines = describePlan(shown);
     if (lines.length === 0) io.out.plain('    nothing');
     for (const line of lines) io.out.plain(line ? `    ${line}` : '');
+    const keptReleaseKeys = shown.secrets.kept ?? [];
+    if (keptReleaseKeys.length > 0) {
+      io.out.note(
+        `Kept this install's own ${counted(keptReleaseKeys.length, 'release signing key')} (${keptReleaseKeys.join(', ')}): a restore never writes over one, since clients pin it. To change one: openadlc release-key import --replace.`,
+      );
+    }
 
     if (preview.signIns.length > 0) {
       io.out.heading(`Sign-ins in this archive (${preview.signIns.length})`);

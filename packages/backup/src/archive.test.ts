@@ -18,6 +18,7 @@ import {
   writePlain,
   type BackupContents,
 } from './index.js';
+import { releaseSigningKeyRef, serializeReleaseKeyRecord } from '@openadlc/github';
 import type { ArchivedWorkItem } from './archive.js';
 import { HISTORY, open, seal } from './test-fixtures.js';
 
@@ -810,5 +811,39 @@ describe('the work items in a history', () => {
     for (const [patch, link, says] of cases) {
       expect((await refusal(() => readPlain(odd(patch, link)))).message).toMatch(says);
     }
+  });
+});
+
+describe('a release signing key', () => {
+  // Made here, like the App key above, so no key-shaped text is in the repository.
+  const releasePem = String(generateKeyPairSync('ed25519').privateKey.export({ type: 'pkcs8', format: 'pem' }));
+  const ref = releaseSigningKeyRef('acme/widget.app');
+  const value = serializeReleaseKeyRecord({ v: 1, repo: 'acme/widget.app', tag: 'acme-updates', key: releasePem });
+  const withKey: BackupContents = { ...install, secrets: { ...install.secrets, [ref]: value } };
+  const body = releasePem.split('\n').filter((line) => line && !line.startsWith('-----'));
+
+  it('goes into an encrypted archive and comes back out', async () => {
+    const back = await open(await seal(withKey, PASSPHRASE), PASSPHRASE);
+    expect(back.secrets[ref]).toBe(value);
+    expect(back.manifest.counts.secrets).toBe(Object.keys(withKey.secrets).length);
+  });
+
+  it('is never in an unencrypted one, whoever writes it, and is not counted', () => {
+    const plain = writePlain(withKey);
+    const text = plain.toString('utf8');
+    expect(text).not.toContain(ref);
+    expect(text).not.toContain('acme-updates');
+    for (const line of body) expect(text).not.toContain(line);
+
+    const back = readPlain(plain);
+    expect(back.secrets).toEqual(install.secrets);
+    expect(back.manifest.counts.secrets).toBe(Object.keys(install.secrets).length);
+    // The rest of the secrets are still there, in the clear, as before.
+    expect(text).toContain(JSON.stringify(install.secrets['webhook-secret']).slice(1, -1));
+  });
+
+  it('is named in the plain file’s warning as never held', () => {
+    const warning = (JSON.parse(writePlain(withKey).toString('utf8')) as { WARNING: string }).WARNING;
+    expect(warning).toContain('It never holds a release signing key; take an encrypted backup to keep those.');
   });
 });

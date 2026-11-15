@@ -1039,7 +1039,8 @@ exists ([ADR 0068](adr/0068-a-release-is-built-in-its-own-account-and-signed-fro
   account, and the asset's URL. hostd never opens a path the account controls,
   and nothing the account prints is signed.
 - **The key.** A per-repository ed25519 key in the secret store, read only by
-  the signing step. It never reaches the account, a log or GitHub.
+  the signing step. It never reaches the account, a log or GitHub. See
+  [Release signing](#release-signing) for the bytes it signs.
 - **The run's end.** As for a host check: a time limit, and TERM then KILL to
   every process of the account, a pass included. The Mac is held awake while
   a run is in flight.
@@ -1441,6 +1442,7 @@ one bot, one session, one minute, one use.
 | Platform database password | `databaseUrl` in `install.json` (0600), which the first `openadlc up` gives a password of the install's own in place of the published `openadlc`; `POSTGRES_PASSWORD` under `infra/local/docker-compose.yml`; on Google Cloud, the `<prefix>-database-url` secret in Secret Manager and the Terraform state | until rotated: `ALTER ROLE … PASSWORD` on the server, then the new value where the install reads it; on Google Cloud, replace `random_password.database` and apply |
 | Webhook secret | The secret store (`github-webhook-secret`), where the app's creation, the webhook step, `PATCH /v1/install` and `openadlc init` write it and the bridge reads it on each delivery; also `install.json` (`0600`) for a local install, the `webhook-secret` volume under `infra/local/docker-compose.yml`, and the bridge's environment (`OPENADLC_WEBHOOK_SECRET`), which it falls back to. Never the database: an older install's settings row is moved into the store when the bridge starts | until rotated |
 | Each device's push subscription | Secret store (`push-device:<person id>:<device id>`). Never in a setting, a table, the event log or the audit log: Settings shows a device by its name and when it was added. The `push_devices` table holds a device's person, name, push service host and a hash of its endpoint ([ADR 0048](adr/0048-push-devices-keep-their-subscription-in-the-secret-store.md)). The retired ntfy, Slack and webhook targets are deleted at the bridge's start and left out of backups ([ADR 0049](adr/0049-push-is-the-only-notification-channel.md)) | until the person removes the device, or is removed, or its push service answers 404 or 410 |
+| A repository's release signing key, an ed25519 private key filed with the tag its clients pin | Secret store (`release-signing-key:<sha256 of the lowercased owner/name>`), written only by `openadlc release-key import` on the host from a file, and read only by hostd's signing step (`apps/hostd/src/release-sign.ts`). Never in an environment, a log, GitHub, or an unencrypted backup ([Release signing](#release-signing)) | for the life of the repository's clients: OpenADLC never rotates it, and a different one is filed only with `--replace` |
 | The install's VAPID key (`push-vapid-key`), which signs every Web Push the bridge sends | Secret store; made once, under a lock, the first time a push or Settings needs it. Only its public half leaves the bridge: in each push's `Authorization` header and as the browser's `applicationServerKey` | for the life of the install: a push service refuses a key other than the one a subscription was made with, so the bridge never rotates it |
 
 **Web Push.** A device's subscription is a URL a signed-in person gives the
@@ -1459,7 +1461,59 @@ Outside this table, a credential is on disk in one more place, and only when
 someone asks for it: a backup (`openadlc backup`) carries the App key, signing
 keys, the webhook secret, the registry token, bot tokens, API keys and
 subscription tokens, encrypted with its passphrase — or in plain text when it
-is written with `--unencrypted`. Keep one as you would the secret store.
+is written with `--unencrypted`. Keep one as you would the secret store. A
+release signing key goes only into an encrypted backup: `--unencrypted` leaves
+every one out and names the repositories it left, and a restore never writes
+over a release key the install already holds.
+
+### Release signing
+
+A repository whose clients update themselves checks each release against an
+ed25519 public key pinned in the client
+([ADR 0069](adr/0069-a-release-manifest-is-four-lines-signed-with-a-key-imported-on-the-host.md)).
+The signed message is exactly these bytes:
+
+```
+<tag> LF <version> LF <sha256> LF <url> LF
+```
+
+- UTF-8, no BOM. Every line ends in one `0x0A`, the last included, and there
+  is no CR and nothing else.
+- **tag**: the repository's domain-separation line, filed with the key;
+  `openadlc-release-manifest-1` unless `--tag` set another. 1–256 bytes of
+  valid Unicode (a lone surrogate is refused, since it would be signed as
+  U+FFFD), no control character, no leading or trailing space.
+- **version**: `[0-9A-Za-z.+-]{1,64}`.
+- **sha256**: 64 lowercase hex characters. Uppercase is refused.
+- **url**: absolute `https`, at most 2048 characters, no whitespace or control
+  character, no user name or password, and already in the form a URL parser
+  gives back (`https://example.com/a.zip`, not `https://Example.com/a.zip`).
+
+Any value that breaks its rule is refused before the key is read. The
+signature is ed25519 (RFC 8032) over those bytes, in standard base64 with
+padding. The published asset is the JSON object
+`{"version":…,"url":…,"sha256":…,"sig":…}` and an LF. Its formatting is not
+signed: a client reads the three values, rebuilds the message with its own
+pinned tag, and checks `sig`.
+
+A test vector: the RFC 8032 §7.1 test 1 key (seed
+`9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60`, public key
+`d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a`), tag
+`openadlc-release-manifest-1`, version `1.2.3`, sha256
+`e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` and url
+`https://example.com/releases/1.2.3/app.zip` sign to
+
+```
+DVMxXeRNqth5OaIRXlqbHJsOHeatH+Dw+waqyqAXVc8jTljdW66V928RNYKr2MwknT1xees4HQ3jhGei/djRDw==
+```
+
+**The public key and the tag are pinned in clients, and OpenADLC never rotates
+either.** The key comes only from a file on the host
+(`openadlc release-key import`). No browser or API route takes one. A
+different key or tag is filed only with `--replace`, and every client pinning
+the old one then refuses new releases. OpenADLC never generates, rotates or
+deletes a release key. Keep a copy of the key file somewhere safe and offline,
+or take an encrypted backup.
 
 **Rotating the attribution key.** `openadlc attribution rotate` asks the
 running bridge (`POST /v1/attribution/rotate`, an admin's) for a new key; the

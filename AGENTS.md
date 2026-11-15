@@ -147,6 +147,10 @@ A change that makes one of these possible is wrong even when its tests pass:
   home the host check account cannot read or enter. Every signed field is
   computed by hostd, and the key never reaches the account
   (docs/adr/0068-a-release-is-built-in-its-own-account-and-signed-from-fields-hostd-computes.md).
+  The key comes only from `openadlc release-key import` on the host, is read
+  only by `signRelease`, goes only into encrypted backups, and a restore never
+  overwrites one; the signed bytes are a fixed four-line layout clients pin
+  (docs/adr/0069-a-release-manifest-is-four-lines-signed-with-a-key-imported-on-the-host.md).
 - A bot never approves a deploy; the repository's environment rules release
   it — a required reviewer, or a soak timer when it ships automatically — or,
   where GitHub's plan cannot hold a reviewer, a person releasing the promote
