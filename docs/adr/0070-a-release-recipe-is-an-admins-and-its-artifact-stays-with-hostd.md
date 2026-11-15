@@ -82,9 +82,11 @@ awake while one builds.
 `<workRoot>/release/artifacts/<runId>/`, which the account cannot enter:
 
 - hostd runs `cat` as the account and hashes the stream as it writes it there,
-  in a folder made 0700 and a file created exclusively, 0600;
-- `run.json` beside it holds `version`, `sha256`, `bytes` and the artifact's
-  name.
+  in a folder made 0700 and a file created exclusively, 0600, under its own
+  `artifact/` subfolder, so an artifact of any name, `run.json` included,
+  never meets hostd's record;
+- `run.json` in the run's folder holds `version`, `sha256`, `bytes` and the
+  artifact's name.
 
 #344 signs and uploads from these. It never reads the account's tree, and
 never relies on the bridge's report alone.

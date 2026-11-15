@@ -286,7 +286,7 @@ describe('a release run', () => {
     expect(bundle?.from.argv.slice(-2)).toEqual(['-', 'refs/openadlc/release/build']);
     expect(bundle?.to.argv.slice(-2)).toEqual([join(home, 'openadlc', 'default', 'acme__app'), first]);
     expect(bundle?.to.argv.join(' ')).toContain("'+refs/openadlc/release/*:refs/openadlc/release/*'");
-    expect(readFileSync(join(workRoot, 'release', 'artifacts', 'run-1', 'App.zip'), 'utf8')).toBe('zip bytes');
+    expect(readFileSync(join(workRoot, 'release', 'artifacts', 'run-1', 'artifact', 'App.zip'), 'utf8')).toBe('zip bytes');
   });
 
   it('builds the pinned SHA when the default branch has moved past it', async () => {
@@ -314,6 +314,28 @@ describe('a release run', () => {
     await releaseRuns.settled();
 
     expect(reports.at(-1)).toMatchObject({ state: 'refused', reason: expect.stringContaining(`${elsewhere.slice(0, 7)} is not on main`) });
+    expect(world.piped).toEqual([]);
+    expect(world.started).toEqual([]);
+    expect(world.events.filter((event) => !event.startsWith('clear') && !event.startsWith('report'))).toEqual([]);
+  });
+
+  it('refuses a SHA its mirror still holds from an earlier fetch once the default branch was forced off it', async () => {
+    const dropped = remote.commit({ VERSION: '1.5.0\n' }, 'later forced off main');
+    const built = machine();
+    const { releaseRuns, workRoot } = runs(built, { home });
+    releaseRuns.start(request(dropped));
+    await releaseRuns.settled();
+    remote.git('reset', '--quiet', '--hard', first);
+
+    const world = machine();
+    const again = runs(world, { home, workRoot });
+    again.releaseRuns.start(request(dropped, { runId: 'run-2' }));
+    await again.releaseRuns.settled();
+
+    // The mirror has the commit, so only the ancestor check can refuse it.
+    const mirror = join(workRoot, 'release', 'mirrors', 'acme__app.git');
+    expect(spawnSync('git', ['-C', mirror, 'cat-file', '-e', `${dropped}^{commit}`]).status).toBe(0);
+    expect(again.reports.at(-1)).toMatchObject({ state: 'refused', reason: expect.stringContaining(`${dropped.slice(0, 7)} is not on main`) });
     expect(world.piped).toEqual([]);
     expect(world.started).toEqual([]);
     expect(world.events.filter((event) => !event.startsWith('clear') && !event.startsWith('report'))).toEqual([]);
@@ -390,7 +412,7 @@ describe('a release run', () => {
     await releaseRuns.settled();
 
     expect(reports.at(-1)).toMatchObject({ state: 'built', sha256: sha256('what cat as the account could read') });
-    expect(readFileSync(join(workRoot, 'release', 'artifacts', 'run-1', 'App.zip'), 'utf8')).toBe('what cat as the account could read');
+    expect(readFileSync(join(workRoot, 'release', 'artifacts', 'run-1', 'artifact', 'App.zip'), 'utf8')).toBe('what cat as the account could read');
     const read = world.asAccount.find((argv) => argv.includes('/bin/cat'));
     expect(read?.slice(-3)).toEqual(['/bin/cat', '--', `${tree}/build/App.zip`]);
     expect(fsCalls.paths.filter((path) => path.startsWith(home))).toEqual([]);
@@ -551,6 +573,20 @@ describe('a release run', () => {
       expect(artifact && readFileSync(artifact.path, 'utf8')).toBe('kept');
       expect(again.deleteArtifact('run-1')).toBe(true);
       expect(again.get('run-1')).toBeNull();
+    });
+
+    it('named run.json is kept apart from hostd’s record, which stays hostd’s', async () => {
+      const world = machine({ artifact: { bytes: Buffer.from('{"runId":"run-1","artifactName":"x","version":"9.9.9"}') } });
+      const { releaseRuns, reports, workRoot } = runs(world, { home });
+      releaseRuns.start(request(first, { artifact: 'dist/run.json' }));
+      await releaseRuns.settled();
+
+      expect(reports.at(-1)).toMatchObject({ state: 'built', version: '1.4.0', artifactName: 'run.json' });
+      const again = runs(machine(), { home, workRoot }).releaseRuns;
+      expect(again.get('run-1')).toMatchObject({ state: 'built', version: '1.4.0', artifactName: 'run.json' });
+      const artifact = again.artifact('run-1');
+      expect(artifact?.path).toBe(join(workRoot, 'release', 'artifacts', 'run-1', 'artifact', 'run.json'));
+      expect(artifact && readFileSync(artifact.path, 'utf8')).toContain('9.9.9');
     });
   });
 });

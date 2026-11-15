@@ -311,6 +311,15 @@ export class ReleaseRuns {
     return join(this.root, 'artifacts', runId);
   }
 
+  /**
+   * The artifact's own file, a folder below the run's: an artifact named
+   * `run.json` beside hostd's record would make the record's `wx` write fail,
+   * and `kept()` read the build's bytes as hostd's record.
+   */
+  private artifactFile(runId: string, name: string): string {
+    return join(this.artifactsDir(runId), 'artifact', name);
+  }
+
   /** Starts a run, or throws `ReleaseBusy` while one is going. */
   start(request: ReleaseRunRequest): ReleaseRunView {
     if (this.current) throw new ReleaseBusy(this.current.repo);
@@ -383,7 +392,7 @@ export class ReleaseRuns {
   artifact(runId: string): (KeptArtifact & { path: string }) | null {
     const kept = this.kept(runId);
     if (!kept) return null;
-    const path = join(this.artifactsDir(runId), kept.artifactName);
+    const path = this.artifactFile(runId, kept.artifactName);
     return fs.existsSync(path) ? { ...kept, path } : null;
   }
 
@@ -593,8 +602,16 @@ export class ReleaseRuns {
     const dir = this.artifactsDir(run.runId);
     fs.mkdirSync(join(this.root, 'artifacts'), { recursive: true, mode: 0o700 });
     fs.mkdirSync(dir, { mode: 0o700 });
-    const file = join(dir, name);
-    const fd = fs.openSync(file, 'wx', 0o600);
+    const file = this.artifactFile(run.runId, name);
+    let fd: number;
+    try {
+      fs.mkdirSync(join(dir, 'artifact'), { mode: 0o700 });
+      fd = fs.openSync(file, 'wx', 0o600);
+    } catch (error) {
+      // A full disk here would otherwise leave the run's folder for the 14-day sweep.
+      fs.rmSync(dir, { recursive: true, force: true });
+      throw error;
+    }
     const hash = createHash('sha256');
     const cap = this.deps.maxArtifactBytes ?? MAX_ARTIFACT_BYTES;
     let bytes = 0;
