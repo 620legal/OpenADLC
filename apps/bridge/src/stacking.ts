@@ -653,6 +653,9 @@ export class Stacking {
    * stacked commits alone applied cleanly. Null after a true merge or a
    * rebase-merge, which left the dependency's head in the base, and when it
    * could not be read: the update is then the plain merge it always was.
+   *
+   * Null, so the line updates it as any pull request, when the issue's stack
+   * was not what its branch was built on (`builtApartFrom`).
    */
   async updating(input: {
     repoName: string;
@@ -668,6 +671,13 @@ export class Stacking {
     const on = await this.stackedOn(input.repoName, input.issue);
     if (!on || (await this.waitingOn(input.repoName, input.issue))) return null;
     const client = await this.deps.client().catch(() => null);
+    const apart = client ? await this.builtApartFrom(client, { ...input, issue: input.issue }) : null;
+    if (apart) {
+      console.log(
+        `[bridge] ${input.repoName}#${input.prNumber}: not updated as stacked: its branch holds none of #${on}'s work (built from ${apart.slice(0, 7)}), so it is updated as any pull request`,
+      );
+      return null;
+    }
     const files = client ? await client.changedFilesBetween(input.repoFullName, input.baseRef, input.headSha).catch(() => null) : null;
     if (!client || !files) return null;
     const replayFrom = await this.replayFrom(client, { ...input, issue: input.issue }).catch(() => null);
@@ -699,7 +709,36 @@ export class Stacking {
     const base = await client.getPullRequest(input.repoFullName, dependency?.prNumber ?? stack.onPr);
     if (!base.merged || !base.headSha) return null;
     if ((await client.mergeBase(input.repoFullName, base.headSha, input.baseRef)) === base.headSha) return null;
-    return client.mergeBase(input.repoFullName, base.headSha, input.headSha);
+    const from = await client.mergeBase(input.repoFullName, base.headSha, input.headSha);
+    // A bridge to a commit the base already holds replays nothing: the branch
+    // has none of the dependency's commits the base lacks. #334, built from
+    // main, got one anyway, to the main commit #325 had branched from.
+    if (!from || (await client.mergeBase(input.repoFullName, from, input.baseRef)) === from) return null;
+    return from;
+  }
+
+  /**
+   * The dependency head this issue's stack was started from, when the pull
+   * request's head does not descend from it: its branch was not built on the
+   * stack. The row is kept per issue, so it outlived #330 and applied to
+   * #334, rebuilt from main for the same issue. Null when it was built on it,
+   * when the row records no head (one written before it did), and when it
+   * cannot be read, so a GitHub error never turns a real stacked update into
+   * one that carries nothing; `replayFrom` still writes no bridge there to a
+   * commit the base holds. A real stacked branch only grows from that head:
+   * the `agent/**` ruleset refuses a force-push.
+   */
+  private async builtApartFrom(client: Client, input: { repoName: string; issue: number; repoFullName: string; headSha: string }): Promise<string | null> {
+    try {
+      const repo = await repos.getRepoByName(input.repoName);
+      const stack = repo ? await stacks.stackOf(repo.id, input.issue) : null;
+      const onHead = stack?.onHeadSha;
+      if (!onHead) return null;
+      const common = await client.mergeBase(input.repoFullName, onHead, input.headSha);
+      return common === onHead ? null : onHead;
+    } catch {
+      return null;
+    }
   }
 
   /**

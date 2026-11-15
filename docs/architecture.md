@@ -846,7 +846,12 @@ asks you on the card, and the work waits for your answer. In detail:
      result is still a merge commit whose first parent is the head the line
      read. Own commits that really conflict with the base still open the
      resolution round, and a `replayFrom` that cannot be read, or a bridge
-     that cannot be written, falls back to the plain merge.
+     that cannot be written, falls back to the plain merge. The bridge is
+     written as the app (`Automation.createCommitAsApp`), since GitHub signs
+     an API commit only for an app's token; with no app client it is not
+     written at all. A stack applies only to a pull request whose head
+     descends from the stack's `onHeadSha`, and no bridge is written to a
+     `replayFrom` the base already holds (ADR 0065).
    - Across the update made at the dependency's merge, or the line's, the
      approvals stand only for a push to that exact SHA, whose first parent is
      the head the line read, and only once (`stack.updated`). Across one made
