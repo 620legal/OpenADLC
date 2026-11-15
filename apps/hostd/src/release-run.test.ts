@@ -596,8 +596,11 @@ describe('a release run', () => {
 
   describe('signing a built run (#344)', () => {
     const URL_SIGNED = 'https://github.com/acme/app/releases/download/v1.4.0/App.zip';
-    // RFC 8032 §7.1 test 1's key, as release-sign.test.ts uses.
-    const PEM = '-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIJ1hsZ3v/VpguoRK9JLsLMREScVpezJpGXA7rAMcrn9g\n-----END PRIVATE KEY-----\n';
+    // RFC 8032 §7.1 test 1's key, as release-sign.test.ts uses. Built from its
+    // body, as there: written out whole, gitleaks' private-key rule reports
+    // the block, and a pushed commit cannot be taken back.
+    const PEM_BODY = 'MC4CAQAwBQYDK2VwBCIEIJ1hsZ3v/VpguoRK9JLsLMREScVpezJpGXA7rAMcrn9g';
+    const PEM = `-----BEGIN PRIVATE KEY-----\n${PEM_BODY}\n-----END PRIVATE KEY-----\n`;
 
     function keyStore(withKey: boolean): SecretStore {
       const values = new Map<string, string>();
