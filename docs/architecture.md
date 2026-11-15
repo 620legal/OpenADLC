@@ -221,6 +221,11 @@ none yet, says its kind of work instead ("writing the change").
   account (the crew's, or the reviewers'), and a reviewer never shares the crew
   account, since GitHub won't let an account approve its own pull request; OpenADLC keeps a refresh token and mints a user token for each
   task. The GitHub App's installation token is used where only the app may act.
+  A release is one of those places. The bridge drafts it, uploads hostd's
+  copy of the artifact, has hostd sign the asset's URL, tags the pinned commit
+  and publishes, all with the app's token alone. No automation-account
+  fallback is used
+  ([ADR 0071](adr/0071-a-release-is-tagged-and-published-as-the-app-only-after-it-is-signed.md)).
 - **GitHub → OpenADLC.** A delivery is taken only when it is signed with the
   webhook secret, names a repository OpenADLC works in by owner and name, and was
   written by somebody with access to it, or by the crew

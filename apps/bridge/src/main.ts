@@ -36,6 +36,7 @@ import { HostdClient } from './hostd-client.js';
 import { NO_CLIENT_ID, registerInternalApi } from './internal-api.js';
 import { HostCheckService } from './host-check-service.js';
 import { ReleaseService, lastVersionOnGitHub } from './release-service.js';
+import { ReleasePublisher } from './release-publish.js';
 import { PauseHolds } from './pause-holds.js';
 import { MergeLine } from './merge-line.js';
 import { Onboarding } from './onboarding.js';
@@ -414,10 +415,21 @@ async function main(): Promise<void> {
   // (docs/adr/0068, 0070). Nothing here starts one: #345's route, behind the
   // Approves check and a device-code proof, is its only caller. The last
   // release is read as the app where it can be.
+  //
+  // A built run is signed by hostd, tagged on its pinned SHA and published
+  // as the app (#344, docs/adr/0071): with `appGate.client` only, never
+  // `deployClient`, whose automation-account fallback would publish under a
+  // second credential. The service is the publisher's only caller.
+  const releasePublisher = new ReleasePublisher({
+    app: (repoFullName) => appGate.client(repoFullName).catch(() => null),
+    hostd,
+    getRelease: (repoId) => repos.getRelease(repoId),
+  });
   const releaseRuns = new ReleaseService({
     hostd,
     lastVersion: lastVersionOnGitHub(deployClient),
     fetchBot: () => automationBotName(config),
+    publisher: releasePublisher,
   });
   // A head the merge line finds red is CI's handler's: run again once, then
   // back to build, whether or not a delivery of the run is still coming.

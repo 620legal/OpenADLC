@@ -1378,3 +1378,47 @@ describe('updateBranch', () => {
     expect(unknown).toMatchObject({ updated: false, conflict: false, message: expect.stringContaining('merge conflict') });
   });
 });
+
+describe('uploading a release asset (#344)', () => {
+  function recording(answer: () => Response) {
+    const seen: { url: string; init: RequestInit & { duplex?: string }; body: string }[] = [];
+    const fetchImpl = (async (url: string | URL, init: RequestInit & { duplex?: string }) => {
+      const body = init.body instanceof ReadableStream ? await new Response(init.body).text() : String(init.body);
+      seen.push({ url: String(url), init, body });
+      return answer();
+    }) as unknown as typeof fetch;
+    return { seen, fetchImpl };
+  }
+  const asset = { id: 7, name: 'My.App.zip', state: 'uploaded', size: 5, browser_download_url: 'https://github.com/acme/app/releases/download/untagged-1/My.App.zip' };
+
+  it('streams the body to the uploads host with its length, and answers GitHub’s asset', async () => {
+    const { seen, fetchImpl } = recording(() => new Response(JSON.stringify(asset), { status: 201 }));
+    const client = new GitHubClient({ token: 'ghs_app', actingAs: 'openadlc-app', fetchImpl });
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('he'));
+        controller.enqueue(new TextEncoder().encode('llo'));
+        controller.close();
+      },
+    });
+    await expect(client.uploadReleaseAsset('acme/app', 991, 'My App.zip', stream, 5, 'application/zip')).resolves.toEqual(asset);
+    expect(seen[0]?.url).toBe('https://uploads.github.com/repos/acme/app/releases/991/assets?name=My%20App.zip');
+    expect(seen[0]?.init.method).toBe('POST');
+    expect(seen[0]?.init.duplex).toBe('half');
+    expect(seen[0]?.init.headers).toMatchObject({ 'content-length': '5', 'content-type': 'application/zip', authorization: 'Bearer ghs_app' });
+    expect(seen[0]?.body).toBe('hello');
+  });
+
+  it('uploads to a GitHub Enterprise Server’s uploads base', () => {
+    const client = new GitHubClient({ token: 't', actingAs: 'openadlc-app', baseUrl: 'https://ghe.example.com/api/v3' });
+    expect(client.uploadsBase()).toBe('https://ghe.example.com/api/uploads');
+  });
+
+  it('throws GitHub’s answer on a refusal', async () => {
+    const { fetchImpl } = recording(() => new Response('{"message":"Validation Failed"}', { status: 422 }));
+    const client = new GitHubClient({ token: 't', actingAs: 'openadlc-app', fetchImpl });
+    const refused = client.uploadReleaseAsset('acme/app', 991, 'manifest.json', '{}\n', 3, 'application/json');
+    await expect(refused).rejects.toBeInstanceOf(GitHubApiError);
+    await expect(client.uploadReleaseAsset('acme/app', 991, 'manifest.json', '{}\n', 3, 'application/json')).rejects.toThrow(/→ 422/);
+  });
+});

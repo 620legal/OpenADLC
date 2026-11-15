@@ -2032,3 +2032,140 @@ export async function applyRepoRules(api: RuleApi, input: RepoRulesInput): Promi
 
   return outcomes;
 }
+
+// ---------------------------------------------------------------------------
+// Tag rulesets and a release's tag (#344, docs/adr/0071).
+// ---------------------------------------------------------------------------
+
+/** A ruleset's `conditions.ref_name`, as GitHub returns it. */
+export interface RefNameCondition {
+  include?: readonly string[];
+  exclude?: readonly string[];
+}
+
+/** One `fnmatch` pattern as GitHub reads a ruleset's: `*` within a path segment, `**` across them, `?` one character. */
+function patternMatches(pattern: string, ref: string): boolean {
+  if (pattern === '~ALL') return true;
+  // `~DEFAULT_BRANCH` is a branch, never a tag.
+  if (pattern.startsWith('~')) return false;
+  // GitHub stores a tag ruleset's patterns as full refs; one written short is a tag's.
+  const full = pattern.startsWith('refs/') ? pattern : `refs/tags/${pattern}`;
+  let source = '^';
+  for (let at = 0; at < full.length; at++) {
+    const char = full[at] as string;
+    if (char === '*' && full[at + 1] === '*') {
+      source += '.*';
+      at++;
+    } else if (char === '*') {
+      source += '[^/]*';
+    } else if (char === '?') {
+      source += '[^/]';
+    } else {
+      source += char.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+    }
+  }
+  return new RegExp(`${source}$`).test(ref);
+}
+
+/**
+ * Whether a ruleset's `ref_name` condition covers `ref`: an include matches
+ * it and no exclude does. Excludes win, as GitHub's do.
+ */
+export function refNameMatches(conditions: RefNameCondition | null | undefined, ref: string): boolean {
+  const include = conditions?.include ?? [];
+  const exclude = conditions?.exclude ?? [];
+  if (!include.some((pattern) => patternMatches(pattern, ref))) return false;
+  return !exclude.some((pattern) => patternMatches(pattern, ref));
+}
+
+/** A tag ruleset that keeps the reader from creating a tag, or may. */
+export interface TagRulesetBlock {
+  id: number;
+  name: string;
+  /** `Repository` or `Organization`: where the ruleset is set, and so its settings page. */
+  sourceType: string;
+  /** The repository's full name or the organization's login. */
+  source: string;
+  /**
+   * GitHub's `current_user_can_bypass` for the reader: `never` or
+   * `pull_requests_only` block, and a missing one is `unknown`, never "fine".
+   */
+  bypass: string;
+}
+
+interface TagRuleset {
+  id: number;
+  name: string;
+  target?: string;
+  enforcement?: string;
+  source_type?: string;
+  source?: string;
+  conditions?: { ref_name?: RefNameCondition } | null;
+  rules?: { type: string }[];
+  current_user_can_bypass?: string;
+}
+
+/**
+ * The tag rulesets that keep the reader — the app, read with its own
+ * installation token — from creating `tag` in a repository: each `active`
+ * tag ruleset with a `creation` rule whose `ref_name` covers `refs/tags/<tag>`
+ * and whose `current_user_can_bypass` is not `always` (or `exempt`).
+ *
+ * The list is read with `includes_parents`, so an organization's rulesets
+ * count, and each is read again by id: only the repository's read of one
+ * carries `current_user_can_bypass`, the reader's own standing. A ruleset
+ * whose read carries none is in `unknown`. A plan that holds no rulesets
+ * (`refusedByPlan`) blocks nothing; any other failed read throws.
+ */
+export async function tagCreationBlockers(api: RuleApi, repoFullName: string, tag: string): Promise<{ blocked: TagRulesetBlock[]; unknown: TagRulesetBlock[] }> {
+  const ref = `refs/tags/${tag}`;
+  const listed: TagRuleset[] = [];
+  try {
+    for (let page = 1; page <= 10; page++) {
+      const batch = await api.request<TagRuleset[]>('GET', `/repos/${repoFullName}/rulesets?includes_parents=true&targets=tag&per_page=100&page=${page}`);
+      if (!Array.isArray(batch)) throw new Error(`GitHub did not answer a list of the rulesets of ${repoFullName}`);
+      listed.push(...batch);
+      if (batch.length < 100) break;
+    }
+  } catch (cause) {
+    if (refusedByPlan(cause)) return { blocked: [], unknown: [] };
+    throw cause;
+  }
+  const blocked: TagRulesetBlock[] = [];
+  const unknown: TagRulesetBlock[] = [];
+  for (const entry of listed) {
+    if (entry.target !== undefined && entry.target !== 'tag') continue;
+    const ruleset = await api.request<TagRuleset>('GET', `/repos/${repoFullName}/rulesets/${entry.id}`);
+    if (ruleset.target !== 'tag' || ruleset.enforcement !== 'active') continue;
+    if (!(ruleset.rules ?? []).some((rule) => rule.type === 'creation')) continue;
+    if (!refNameMatches(ruleset.conditions?.ref_name, ref)) continue;
+    const bypass = ruleset.current_user_can_bypass;
+    if (bypass === 'always' || bypass === 'exempt') continue;
+    const block: TagRulesetBlock = {
+      id: ruleset.id,
+      name: ruleset.name,
+      sourceType: ruleset.source_type ?? entry.source_type ?? 'Repository',
+      source: ruleset.source ?? entry.source ?? repoFullName,
+      bypass: bypass ?? 'unknown',
+    };
+    (bypass === undefined ? unknown : blocked).push(block);
+  }
+  return { blocked, unknown };
+}
+
+/** The page a person adds the app's bypass on: the repository's ruleset, or its organization's. */
+export function rulesetSettingsUrl(block: Pick<TagRulesetBlock, 'id' | 'sourceType' | 'source'>, repoFullName: string): string {
+  if (block.sourceType === 'Organization') return `https://github.com/organizations/${block.source}/settings/rules/${block.id}`;
+  return `https://github.com/${repoFullName}/settings/rules/${block.id}`;
+}
+
+/**
+ * What the `release-tag-rules` card and the publish's preflight both say of
+ * a blocking ruleset: what stops the tag, and what a person does about it.
+ */
+export function tagBlockedDetail(block: Pick<TagRulesetBlock, 'name'>, tag: string, source: string): string {
+  return (
+    `The tag ruleset “${block.name}” lets only its bypass list create ${tag}, and OpenADLC's app is not on it. ` +
+    `Add the app as a bypass actor, set to Always. Until then a release of ${source} is built and signed, then stops at its tag and publishes nothing.`
+  );
+}

@@ -31,6 +31,9 @@ import { codeownersRepair,
   crewAccountsOf,
   crewStanding,
   judgeBypass,
+  refNameMatches,
+  rulesetSettingsUrl,
+  tagCreationBlockers,
   type BypassActor,
   type CrewStanding,
   type RepoRulesInput,
@@ -2598,5 +2601,86 @@ describe('what an apply is audited with', () => {
       outcomes: [`skipped ${MAIN_RULESET}`, 'skipped required status checks', 'created CODEOWNERS'],
       planRefused: [MAIN_RULESET],
     });
+  });
+});
+
+describe('a tag ruleset and a release tag (#344)', () => {
+  it('matches ~ALL, a segment wildcard, a cross-segment wildcard, and lets excludes win', () => {
+    expect(refNameMatches({ include: ['~ALL'] }, 'refs/tags/v1.2.4')).toBe(true);
+    expect(refNameMatches({ include: ['refs/tags/v*'] }, 'refs/tags/v1.2.4')).toBe(true);
+    expect(refNameMatches({ include: ['refs/tags/v*'] }, 'refs/tags/release/v1')).toBe(false);
+    expect(refNameMatches({ include: ['refs/tags/**'] }, 'refs/tags/release/v1')).toBe(true);
+    expect(refNameMatches({ include: ['refs/tags/v1.?.4'] }, 'refs/tags/v1.2.4')).toBe(true);
+    expect(refNameMatches({ include: ['refs/tags/v1.2.4'] }, 'refs/tags/v1x2.4')).toBe(false);
+    expect(refNameMatches({ include: ['~ALL'], exclude: ['refs/tags/v1.*'] }, 'refs/tags/v1.2.4')).toBe(false);
+    expect(refNameMatches({ include: ['~DEFAULT_BRANCH'] }, 'refs/tags/v1.2.4')).toBe(false);
+    expect(refNameMatches({ include: [] }, 'refs/tags/v1.2.4')).toBe(false);
+    expect(refNameMatches(undefined, 'refs/tags/v1.2.4')).toBe(false);
+  });
+
+  function rulesetsApi(rulesets: Record<string, unknown>[], options: { refuse?: Error } = {}) {
+    const asked: string[] = [];
+    const api: RuleApi = {
+      async request<T>(_method: string, path: string): Promise<T> {
+        asked.push(path);
+        if (path.includes('/rulesets?')) {
+          if (options.refuse) throw options.refuse;
+          return rulesets.map(({ current_user_can_bypass: _bypass, rules: _rules, conditions: _conditions, ...entry }) => entry) as T;
+        }
+        const id = Number(path.split('/').at(-1));
+        const found = rulesets.find((one) => one.id === id);
+        if (!found) throw new Error(`${path} → 404: {"message":"Not Found"}`);
+        return found as T;
+      },
+    };
+    return { api, asked };
+  }
+  const tagRuleset = (extra: Record<string, unknown> = {}) => ({
+    id: 5,
+    name: 'protect tags',
+    target: 'tag',
+    enforcement: 'active',
+    source_type: 'Repository',
+    source: 'acme/app',
+    conditions: { ref_name: { include: ['refs/tags/v*'], exclude: [] } },
+    rules: [{ type: 'creation' }],
+    current_user_can_bypass: 'never',
+    ...extra,
+  });
+
+  it('names an active creation rule over the tag the app cannot bypass, reading each ruleset as the repository', async () => {
+    const { api, asked } = rulesetsApi([tagRuleset()]);
+    const found = await tagCreationBlockers(api, 'acme/app', 'v1.2.4');
+    expect(found).toEqual({ blocked: [{ id: 5, name: 'protect tags', sourceType: 'Repository', source: 'acme/app', bypass: 'never' }], unknown: [] });
+    expect(asked).toEqual(['/repos/acme/app/rulesets?includes_parents=true&targets=tag&per_page=100&page=1', '/repos/acme/app/rulesets/5']);
+  });
+
+  it.each([
+    ['the app may always bypass it', { current_user_can_bypass: 'always' }],
+    ['it only evaluates', { enforcement: 'evaluate' }],
+    ['it has no creation rule', { rules: [{ type: 'deletion' }] }],
+    ['the tag is excluded', { conditions: { ref_name: { include: ['~ALL'], exclude: ['refs/tags/v1.*'] } } }],
+    ['it is a branch ruleset', { target: 'branch' }],
+  ])('blocks nothing when %s', async (_name, extra) => {
+    const { api } = rulesetsApi([tagRuleset(extra)]);
+    await expect(tagCreationBlockers(api, 'acme/app', 'v1.2.4')).resolves.toEqual({ blocked: [], unknown: [] });
+  });
+
+  it('calls a ruleset with no current_user_can_bypass unknown, never fine', async () => {
+    const { api } = rulesetsApi([tagRuleset({ current_user_can_bypass: undefined })]);
+    const found = await tagCreationBlockers(api, 'acme/app', 'v1.2.4');
+    expect(found.blocked).toEqual([]);
+    expect(found.unknown).toMatchObject([{ id: 5, bypass: 'unknown' }]);
+  });
+
+  it('blocks nothing on a plan that holds no rulesets, and throws any other failed read', async () => {
+    const plan = new Error('/repos/acme/app/rulesets → 403: {"message":"Upgrade to GitHub Pro or make this repository public to enable this feature."}');
+    await expect(tagCreationBlockers(rulesetsApi([], { refuse: plan }).api, 'acme/app', 'v1.2.4')).resolves.toEqual({ blocked: [], unknown: [] });
+    await expect(tagCreationBlockers(rulesetsApi([], { refuse: new Error('/repos/acme/app/rulesets → 500: boom') }).api, 'acme/app', 'v1.2.4')).rejects.toThrow(/500/);
+  });
+
+  it('points at the repository’s ruleset page, or its organization’s', () => {
+    expect(rulesetSettingsUrl({ id: 5, sourceType: 'Repository', source: 'acme/app' }, 'acme/app')).toBe('https://github.com/acme/app/settings/rules/5');
+    expect(rulesetSettingsUrl({ id: 9, sourceType: 'Organization', source: 'acme' }, 'acme/app')).toBe('https://github.com/organizations/acme/settings/rules/9');
   });
 });

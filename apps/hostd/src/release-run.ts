@@ -3,11 +3,12 @@ import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import { basename, join } from 'node:path';
 import { internalSecretRef, getSecretStore, type SecretStore } from '@openadlc/github';
-import { REPO_VERSION_FORMS, parseRepoVersion, redactSecrets, repoVersionFrom, repoVersionGate } from '@openadlc/shared';
+import { REPO_VERSION_FORMS, ReleaseManifestError, parseRepoVersion, redactSecrets, repoVersionFrom, repoVersionGate, type ReleaseFields } from '@openadlc/shared';
 import { HOST_CHECK_PATH, accountEnv, asAccount, nodeProcesses, type HostProcesses } from './account-probe.js';
 import { KILL_AFTER_MS } from './drivers/types.js';
 import { LOG_TAIL_BYTES, receiveScript } from './host-check.js';
 import type { ReleaseAccountProbe } from './release-account.js';
+import { signRelease, type SignedRelease } from './release-sign.js';
 
 /**
  * A release build: one commit on the default branch, pinned when a person
@@ -38,6 +39,9 @@ import type { ReleaseAccountProbe } from './release-account.js';
  * - Every field a release is signed with (#344) is hostd's: the version from
  *   its mirror and the sha256 and size of the stream. Nothing the account
  *   prints reaches them; its output is only the log tail and a reason.
+ * - Signing (#344, docs/adr/0071) is asked of hostd with only the asset's
+ *   URL: `sign` takes the rest from `run.json`, hashes the kept file again
+ *   first, and signs a run under one URL only, through `release-sign.ts`.
  * - One release run at a time on this hostd, apart from host checks, which
  *   run as another account.
  * - Every run that got past the probe ends, a pass included, with TERM and
@@ -251,6 +255,11 @@ export interface ReleaseRunDeps {
   msPerMinute?: number;
   /** Only a test lowers it. */
   maxArtifactBytes?: number;
+  /**
+   * Signs a release (`release-sign.ts`'s `signRelease`, the one reader of the
+   * key); a test gives one over a key held in memory.
+   */
+  signer?: (repo: string, fields: ReleaseFields) => Promise<SignedRelease>;
 }
 
 /** A second start while one release builds. */
@@ -285,6 +294,32 @@ export interface KeptArtifact {
   bytes: number;
   artifactName: string;
   finishedAt: string;
+  /** The one URL this run was signed under, and its signature (#344): a run is signed once. */
+  signed?: { url: string; sig: string };
+}
+
+/** What `sign` answers: the signature and asset, and the fields hostd signed them from, for the bridge to hold against its row. */
+export interface SignedRun {
+  sig: string;
+  /** The manifest asset, `{"version","url","sha256","sig"}` and one LF. */
+  asset: string;
+  publicKey: string;
+  repo: string;
+  sha: string;
+  version: string;
+  sha256: string;
+  bytes: number;
+}
+
+/** A sign refused, with the status the route answers and what to do. */
+export class ReleaseSignRefused extends Error {
+  constructor(
+    readonly status: 400 | 404 | 409,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'ReleaseSignRefused';
+  }
 }
 
 export class ReleaseRuns {
@@ -296,6 +331,8 @@ export class ReleaseRuns {
   private readonly reader: ReleaseProcesses;
   private readonly now: () => number;
   private idle: Promise<void> = Promise.resolve();
+  /** The sign call going for each run, so a second waits for it. */
+  private readonly signing = new Map<string, Promise<unknown>>();
 
   constructor(private readonly deps: ReleaseRunDeps) {
     this.processes = deps.processes ?? nodeProcesses();
@@ -394,6 +431,70 @@ export class ReleaseRuns {
     if (!kept) return null;
     const path = this.artifactFile(runId, kept.artifactName);
     return fs.existsSync(path) ? { ...kept, path } : null;
+  }
+
+  /**
+   * Signs a built run under `url`, the asset's download URL the bridge built
+   * from GitHub's answer (#344, docs/adr/0071). Everything else signed is
+   * hostd's own: the repository, version and sha256 come from `run.json`,
+   * never from the caller, and the kept file is hashed again first, so a
+   * file changed under the work root since the build is refused, not signed.
+   *
+   * A run is signed once: the same URL again answers the same signature
+   * (ed25519 is deterministic), and another URL is refused, so a version
+   * and sha256 can never be signed under a second URL. Calls for one run
+   * are taken one at a time, so two at once cannot both pass that check.
+   */
+  sign(runId: string, url: string): Promise<SignedRun> {
+    const previous = this.signing.get(runId) ?? Promise.resolve();
+    const next = previous.catch(() => undefined).then(() => this.signOnce(runId, url));
+    const held = next.catch(() => undefined);
+    this.signing.set(runId, held);
+    void held.then(() => {
+      if (this.signing.get(runId) === held) this.signing.delete(runId);
+    });
+    return next;
+  }
+
+  private async signOnce(runId: string, url: string): Promise<SignedRun> {
+    const kept = this.kept(runId);
+    if (!kept) throw new ReleaseSignRefused(404, `no built artifact for release run ${runId} on this host: cut the release again`);
+    if (typeof kept.repo !== 'string' || !kept.repo || typeof kept.sha !== 'string' || !kept.sha) {
+      throw new ReleaseSignRefused(409, `release run ${runId} was built before signing could be asked; cut the release again`);
+    }
+    if (kept.signed && kept.signed.url !== url) {
+      throw new ReleaseSignRefused(409, `release run ${runId} is already signed under ${kept.signed.url}; a run is signed under one URL only. Cut the release again`);
+    }
+    const file = this.artifactFile(runId, kept.artifactName);
+    const again = await hashFile(file).catch(() => null);
+    if (!again || again.sha256 !== kept.sha256 || again.bytes !== kept.bytes) {
+      throw new ReleaseSignRefused(409, `the kept artifact of release run ${runId} no longer matches its build; cut the release again`);
+    }
+    let signed: SignedRelease;
+    try {
+      signed = await (this.deps.signer ?? ((repo, fields) => signRelease(repo, fields)))(kept.repo, { version: kept.version, sha256: kept.sha256, url });
+    } catch (error) {
+      // `signRelease`'s errors never carry the key, and say what to run on the host.
+      const message = error instanceof Error ? error.message : String(error);
+      throw new ReleaseSignRefused(error instanceof ReleaseManifestError ? 400 : 409, message);
+    }
+    if (kept.signed && kept.signed.sig !== signed.sig) {
+      throw new ReleaseSignRefused(409, `release run ${runId} was signed under this URL with another key; cut the release again`);
+    }
+    if (!kept.signed) {
+      const record: KeptArtifact = { ...kept, signed: { url, sig: signed.sig } };
+      fs.writeFileSync(join(this.artifactsDir(runId), 'run.json'), `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
+    }
+    return {
+      sig: signed.sig,
+      asset: signed.asset,
+      publicKey: signed.publicKey,
+      repo: kept.repo,
+      sha: kept.sha,
+      version: kept.version,
+      sha256: kept.sha256,
+      bytes: kept.bytes,
+    };
   }
 
   /** Removes a run's artifact folder, once #344 has published it; false when there was none. */
@@ -720,6 +821,22 @@ export class ReleaseRuns {
       }
     }
   }
+}
+
+/** The sha256 and size of a file of hostd's own, read as a stream: an artifact is up to 2 GiB. */
+function hashFile(path: string): Promise<{ sha256: string; bytes: number }> {
+  return new Promise((resolve, reject) => {
+    const hash = createHash('sha256');
+    let bytes = 0;
+    const stream = fs.createReadStream(path);
+    stream.on('data', (chunk: Buffer | string) => {
+      const data = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
+      hash.update(data);
+      bytes += data.length;
+    });
+    stream.on('error', reject);
+    stream.on('end', () => resolve({ sha256: hash.digest('hex'), bytes }));
+  });
 }
 
 function view(run: ReleaseRunView): ReleaseRunView {

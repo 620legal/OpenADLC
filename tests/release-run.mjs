@@ -18,7 +18,7 @@
  *   tests/scratch.sh up && eval "$(tests/scratch.sh env)" && node tests/release-run.mjs
  */
 import { execFileSync } from 'node:child_process';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, createPublicKey, randomUUID, verify } from 'node:crypto';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -126,6 +126,28 @@ const artifact = await fetch(`${HOSTD}/release/runs/${runId}/artifact`, { header
 const bytes = Buffer.from(await artifact.arrayBuffer());
 check('hostd serves its own copy', artifact.status === 200 && bytes.toString() === pinned, `status ${artifact.status}`);
 check('the served copy hashes to the run’s sha256', createHash('sha256').update(bytes).digest('hex') === run?.sha256);
+
+// Signing (#344, docs/adr/0071): hostd is given only the URL, signs the
+// version and sha256 of its own record, and signs a run under one URL only.
+// The publish to GitHub that follows is the bridge's, with the app, and only a
+// run #345's route started reaches it; this suite checks hostd's half.
+const url = `https://github.com/acme/testbed/releases/download/v${version}/a.txt`;
+const signed = await hostd('POST', `/release/runs/${runId}/sign`, { url, version: '9.9.9', sha256: 'f'.repeat(64) });
+if (signed.status === 409 && /release-key import/.test(String(signed.body.error))) {
+  console.log(`  skip  signing — the scratch install has no key for acme/testbed: ${signed.body.error}`);
+} else {
+  check('hostd signs the run under the URL', signed.status === 200, `status ${signed.status} ${JSON.stringify(signed.body).slice(0, 200)}`);
+  check('it signs its own version and sha256, not the body’s', signed.body.version === version && signed.body.sha256 === run?.sha256);
+  const { releaseMessage } = await import('@openadlc/shared');
+  const { releaseSigningKeyRef, parseReleaseKeyRecord } = await import('@openadlc/github');
+  const record = parseReleaseKeyRecord(await getSecretStore().get(releaseSigningKeyRef('acme/testbed')));
+  const publicKey = createPublicKey({ key: Buffer.concat([Buffer.from('302a300506032b6570032100', 'hex'), Buffer.from(String(signed.body.publicKey), 'base64')]), format: 'der', type: 'spki' });
+  const message = releaseMessage(record?.tag ?? '', { version, sha256: run?.sha256 ?? '', url });
+  check('the signature verifies against the imported key’s public half', verify(null, message, publicKey, Buffer.from(String(signed.body.sig), 'base64')));
+  const again = await hostd('POST', `/release/runs/${runId}/sign`, { url: `${url}.other` });
+  check('a second URL for the run is refused', again.status === 409, `status ${again.status}`);
+}
+
 const removed = await hostd('DELETE', `/release/runs/${runId}/artifact`);
 check('the artifact is removed when asked', removed.status === 200 && removed.body.deleted === true, `status ${removed.status}`);
 

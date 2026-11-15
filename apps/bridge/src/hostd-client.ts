@@ -132,6 +132,19 @@ export interface ReleaseArtifact {
   bytes: number;
 }
 
+/** What hostd answers when it signs a built run: the signature and manifest asset, and the fields it signed them from. */
+export interface SignedReleaseRun {
+  sig: string;
+  /** The manifest asset, `{"version","url","sha256","sig"}` and one LF. */
+  asset: string;
+  publicKey: string;
+  repo: string;
+  sha: string;
+  version: string;
+  sha256: string;
+  bytes: number;
+}
+
 /** A start or a read of a host check is hostd queueing or looking up; the run itself is reported. */
 const HOST_CHECK_CALL_TIMEOUT_MS = 30_000;
 /** The probe runs a few commands through sudo. */
@@ -585,6 +598,19 @@ export class HostdClient {
       version: response.headers.get('x-openadlc-version') ?? '',
       bytes: Number(response.headers.get('content-length') ?? 0),
     };
+  }
+
+  /**
+   * Asks hostd to sign a built run under the asset's download URL (#344,
+   * docs/adr/0071). Only the URL is sent: hostd signs the version and
+   * sha256 its own `run.json` holds, after hashing its kept copy again, and
+   * signs a run under one URL only. Refused in hostd's words and status:
+   * `409` with what to run on the host when there is no key. Only
+   * `ReleasePublisher` calls this.
+   */
+  async signRelease(runId: string, url: string): Promise<SignedReleaseRun> {
+    // Re-hashing up to 2 GiB on the host takes a while.
+    return this.call('POST', `/release/runs/${encodeURIComponent(runId)}/sign`, { body: { url }, timeoutMs: 10 * 60_000 });
   }
 
   /** Removes a release's artifact from hostd once it is published. */

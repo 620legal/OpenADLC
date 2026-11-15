@@ -2458,6 +2458,9 @@ Until the console has a form for it, an admin sends it to the bridge as
 - `releaseRepo` is the `owner/name` the release is published to, if not this
   repository.
 - `timeoutMinutes` is 1 to 1440, 180 by default.
+- `manifestAsset` is the name of the signed manifest asset that the clients
+  fetch, `manifest.json` by default. It is letters, digits, `.`, `_` and `-`,
+  and must differ from the artifact's file name.
 
 `"release": null` takes the recipe away.
 
@@ -2473,6 +2476,47 @@ and the release is tagged `v<version>`.
 
 The release account keeps its build tree between releases, so later builds
 are incremental. A clean build removes it first.
+
+### How a built release is published
+
+Once a run is built, the bridge publishes it as OpenADLC's app, with no other
+credential, in this order
+([ADR 0071](adr/0071-a-release-is-tagged-and-published-as-the-app-only-after-it-is-signed.md)):
+
+1. a draft release;
+2. the artifact, uploaded from hostd's own copy;
+3. hostd signs the asset's download URL;
+4. the manifest asset;
+5. the tag `v<version>`, on the commit that was built;
+6. the release is published;
+7. the bridge checks that the download URL GitHub published is the one that
+   was signed.
+
+A failure at any step leaves no draft. The run's reason says what is left and
+what to do:
+- **Once the tag is made**, cutting the same commit again reuses the tag. To
+  build another commit, raise the version, or delete the tag.
+- **For a release that stayed public**, the reason names it and says to
+  delete it.
+
+The app must be installed on the release repository too, when that is
+another one.
+
+### Tag rulesets and releases
+
+A tag ruleset that restricts who may create tags stops the app at step 5:
+the release is built and signed, then publishes nothing. Where a ruleset
+covers `v*` tags, add OpenADLC's app to its bypass list, set to **Always**.
+The setting is in the repository's (or the organization's)
+**Settings → Rules → Rulesets**.
+
+The `release-tag-rules` check reads, as the app, each tag ruleset GitHub
+applies to every repository that releases, and to where it publishes. While
+one blocks the tag the next release would take, Needs you shows a card that
+names the ruleset and links its page. The card clears itself once the bypass
+is added. It also says when the app is not installed on a separate release
+repository. Like the release account's card, it shows only for a repository
+set to release, so it is not a walkthrough step.
 
 ## 11. Operate it
 

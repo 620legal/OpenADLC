@@ -58,8 +58,8 @@ describe('what the install has in flight', () => {
     expect(sql).toContain('promote_dispatched_at is not null and production_conclusion is null');
   });
 
-  it('counts release builds running, none started more than a day ago', async () => {
+  it('counts releases building, built and publishing, none started more than a day ago', async () => {
     const sql = await statement();
-    expect(sql).toContain("from release_runs where state = 'running' and started_at > now() - interval '24 hours') as releases");
+    expect(sql).toContain("from release_runs where state in ('running', 'built', 'publishing') and started_at > now() - interval '24 hours') as releases");
   });
 });

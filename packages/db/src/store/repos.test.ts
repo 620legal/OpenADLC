@@ -8,7 +8,9 @@ vi.mock('../client.js', () => ({
 
 import { query, queryOne } from '../client.js';
 import {
+  DEFAULT_MANIFEST_ASSET,
   RepoNameTaken,
+  releasing,
   addRepo,
   getProductionChoice,
   getRepoByName,
@@ -443,7 +445,46 @@ describe('a repository’s host check', () => {
 });
 
 describe('a repository’s release recipe', () => {
-  const RECIPE = { command: 'make release', artifact: 'build/App.zip', versionFile: 'VERSION', versionKey: null, releaseRepo: 'acme/app-releases', timeoutMinutes: 240 };
+  const RECIPE = {
+    command: 'make release',
+    artifact: 'build/App.zip',
+    versionFile: 'VERSION',
+    versionKey: null,
+    releaseRepo: 'acme/app-releases',
+    timeoutMinutes: 240,
+    manifestAsset: 'app-manifest.json',
+  };
+
+  it('reads the manifest asset’s name, null where the row has none', async () => {
+    const row = {
+      release_command: 'make release',
+      release_artifact: 'build/App.zip',
+      release_version_file: 'VERSION',
+      release_version_key: null,
+      release_repo: null,
+      release_timeout_minutes: 180,
+    };
+    vi.mocked(queryOne).mockResolvedValueOnce({ ...row, release_manifest_asset: null });
+    await expect(getRelease('repo-1')).resolves.toMatchObject({ manifestAsset: null });
+    vi.mocked(queryOne).mockResolvedValueOnce({ ...row, release_manifest_asset: 'app-manifest.json' });
+    await expect(getRelease('repo-1')).resolves.toMatchObject({ manifestAsset: 'app-manifest.json' });
+    expect(String(vi.mocked(queryOne).mock.calls.at(-1)?.[0])).toContain('release_manifest_asset');
+    expect(DEFAULT_MANIFEST_ASSET).toBe('manifest.json');
+  });
+
+  it('lists every repository set to release, with where it publishes', async () => {
+    vi.mocked(query).mockResolvedValueOnce([
+      { id: 'r1', full_name: 'acme/app', release_repo: 'acme/app-releases' },
+      { id: 'r2', full_name: 'acme/tool', release_repo: null },
+    ]);
+    await expect(releasing()).resolves.toEqual([
+      { id: 'r1', fullName: 'acme/app', releaseRepo: 'acme/app-releases' },
+      { id: 'r2', fullName: 'acme/tool', releaseRepo: null },
+    ]);
+    const sql = String(vi.mocked(query).mock.calls.at(-1)?.[0]);
+    expect(sql).toContain('release_command is not null');
+    expect(sql).toContain('removed_at is null');
+  });
 
   it('reads as none while no command is set, and as the row says once one is', async () => {
     vi.mocked(queryOne).mockResolvedValueOnce({
@@ -462,6 +503,7 @@ describe('a repository’s release recipe', () => {
       release_version_key: null,
       release_repo: 'acme/app-releases',
       release_timeout_minutes: 240,
+      release_manifest_asset: 'app-manifest.json',
     });
     await expect(getRelease('repo-1')).resolves.toEqual(RECIPE);
   });
@@ -471,7 +513,7 @@ describe('a repository’s release recipe', () => {
     await setRelease('repo-1', RECIPE);
     await setRelease('repo-1', null);
     expect(vi.mocked(query).mock.calls.map(([, params]) => params)).toEqual([
-      ['repo-1', 'make release', 'build/App.zip', 'VERSION', null, 'acme/app-releases', 240],
+      ['repo-1', 'make release', 'build/App.zip', 'VERSION', null, 'acme/app-releases', 240, 'app-manifest.json'],
       ['repo-1'],
     ]);
     expect(String(vi.mocked(query).mock.calls[1]?.[0])).toContain('release_command = null');

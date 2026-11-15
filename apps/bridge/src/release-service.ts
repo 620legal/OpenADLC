@@ -3,6 +3,7 @@ import { ReleaseAlreadyRunning, releaseRuns, repos, type ReleaseRun, type Releas
 import { compareRepoVersionsIgnoringLabel, repoVersionFrom, repoVersionFromTag, repoVersionGate, type RepoVersion } from '@openadlc/shared';
 import { releaseAccountFix } from './health/checks/release-account.js';
 import type { HostdClient, ReleaseAccountProbe, ReleaseRunView } from './hostd-client.js';
+import type { ReleasePublisher } from './release-publish.js';
 import { HttpFailure } from './router.js';
 
 /**
@@ -32,6 +33,13 @@ import { HttpFailure } from './router.js';
  *   whose version does not follow the last release, is stored `failed`.
  * - `sweep` ends a `running` row hostd no longer holds as `lost`, and takes the
  *   end of one hostd holds as ended from hostd, when its report went missing.
+ * - A `built` run is published (#344, `release-publish.ts`, docs/adr/0071):
+ *   `record` starts it when it stores the report, and `sweep` starts one no
+ *   publisher holds. One publisher per run in this bridge; the row's
+ *   conditional updates hold it across two. A `publishing` row no publisher
+ *   holds, as after a restart, is cleaned up and failed. This is the only
+ *   caller of `publish`, so a release is published only for a run started
+ *   here, by #345's route.
  */
 
 /** A GitHub release as `lastReleaseVersion` reads it. */
@@ -118,6 +126,11 @@ export interface ReleaseServiceDeps {
   lastVersion(repoFullName: string): Promise<string | null>;
   /** The crew account whose token hostd fetches the default branch with. */
   fetchBot(): Promise<string | null>;
+  /**
+   * Tags, signs and publishes a built run as the app (`release-publish.ts`,
+   * #344). This service is its only caller; absent, a built run waits.
+   */
+  publisher?: Pick<ReleasePublisher, 'publish' | 'abandon'> | null;
   newId?: () => string;
   warn?: (message: string) => void;
 }
@@ -126,10 +139,32 @@ const SHA = /^[0-9a-f]{40}$/;
 const SHA256 = /^[0-9a-f]{64}$/;
 
 export class ReleaseService {
+  /** Runs a publisher in this bridge holds, and the publish going for each. */
+  private readonly publishing = new Map<string, Promise<unknown>>();
+
   constructor(private readonly deps: ReleaseServiceDeps) {}
 
   private warn(message: string): void {
     (this.deps.warn ?? console.warn)(message);
+  }
+
+  /** Starts publishing a built run unless a publisher here holds it; false when none was started. */
+  private startPublish(runId: string): boolean {
+    const publisher = this.deps.publisher;
+    if (!publisher || this.publishing.has(runId)) return false;
+    const going = publisher
+      .publish(runId)
+      .catch((error: unknown) => {
+        this.warn(`[bridge] release ${runId} could not be published: ${error instanceof Error ? error.message : error}. The sweep tries again`);
+      })
+      .finally(() => this.publishing.delete(runId));
+    this.publishing.set(runId, going);
+    return true;
+  }
+
+  /** Waits for every publish going; for tests. */
+  async settled(): Promise<void> {
+    while (this.publishing.size > 0) await Promise.all([...this.publishing.values()]);
   }
 
   /**
@@ -145,7 +180,7 @@ export class ReleaseService {
       throw new HttpFailure(409, `${repo.name} is not set to release: an admin sets its release recipe first (PATCH /v1/repos/${repo.name} with release)`);
     }
     if (typeof sha !== 'string' || !SHA.test(sha)) throw new HttpFailure(400, 'a release builds one commit: give its full 40-character sha');
-    if (await releaseRuns.anyRunning(repo.id)) throw new HttpFailure(409, `a release of ${repo.name} is building; wait for it to end, or cancel it`);
+    if (await releaseRuns.anyInFlight(repo.id)) throw new HttpFailure(409, `a release of ${repo.name} is building or publishing; wait for it to end, or cancel it`);
     if (!this.deps.hostd) throw new HttpFailure(501, 'this bridge has no hostd to build releases on. Start hostd: openadlc up');
     let probe: ReleaseAccountProbe | null;
     try {
@@ -226,7 +261,7 @@ export class ReleaseService {
         reason: input.reason,
       });
     } catch (error) {
-      if (error instanceof ReleaseAlreadyRunning) throw new HttpFailure(409, `a release of ${input.repo.name} is building; wait for it to end, or cancel it`);
+      if (error instanceof ReleaseAlreadyRunning) throw new HttpFailure(409, `a release of ${input.repo.name} is building or publishing; wait for it to end, or cancel it`);
       throw error;
     }
   }
@@ -253,17 +288,17 @@ export class ReleaseService {
       this.warn(`[bridge] release ${run.runId} of ${run.repoName} at ${run.sha.slice(0, 7)}: ${problem}`);
       return Boolean(await releaseRuns.finish(run.runId, { state: 'failed', ...common, reason: problem }));
     }
-    return Boolean(
-      await releaseRuns.finish(run.runId, {
-        state: 'built',
-        ...common,
-        version: report.version ?? null,
-        sha256: report.sha256 ?? null,
-        bytes: report.bytes ?? null,
-        artifactName: report.artifactName ?? null,
-        reason: null,
-      }),
-    );
+    const built = await releaseRuns.finish(run.runId, {
+      state: 'built',
+      ...common,
+      version: report.version ?? null,
+      sha256: report.sha256 ?? null,
+      bytes: report.bytes ?? null,
+      artifactName: report.artifactName ?? null,
+      reason: null,
+    });
+    if (built) this.startPublish(run.runId);
+    return Boolean(built);
   }
 
   /** Stops a release building. A run hostd no longer knows of is ended here. False when it was not running. */
@@ -282,9 +317,9 @@ export class ReleaseService {
    * end of one hostd holds as ended whose report never arrived.
    */
   async sweep(): Promise<string[]> {
-    if (!this.deps.hostd) return [];
+    const lines = await this.sweepPublishing();
+    if (!this.deps.hostd) return lines;
     const hostd = this.deps.hostd;
-    const lines: string[] = [];
     for (const run of await releaseRuns.running()) {
       const held = await hostd.releaseRun(run.runId).then(
         (answer): ReleaseRunView | false | null => answer.run,
@@ -310,6 +345,25 @@ export class ReleaseService {
         reason: held.reason,
       });
       if (recorded) lines.push(`${run.repoName}: release of ${run.sha.slice(0, 7)} ${held.state}, as hostd holds it; its report had not arrived`);
+    }
+    return lines;
+  }
+
+  /**
+   * A `publishing` row no publisher here holds — the bridge restarted while
+   * it published — is cleaned up and failed, saying what it left; a `built`
+   * row no publisher holds is published.
+   */
+  private async sweepPublishing(): Promise<string[]> {
+    const publisher = this.deps.publisher;
+    if (!publisher) return [];
+    const lines: string[] = [];
+    for (const run of await releaseRuns.publishingUnheld([...this.publishing.keys()])) {
+      const ended = await publisher.abandon(run).catch(() => null);
+      if (ended) lines.push(`${run.repoName}: publishing ${run.tag ?? 'a release'} of ${run.sha.slice(0, 7)} was cut off by a restart, and failed`);
+    }
+    for (const run of await releaseRuns.builtUnheld([...this.publishing.keys()])) {
+      if (this.startPublish(run.runId)) lines.push(`${run.repoName}: publishing the release built from ${run.sha.slice(0, 7)}`);
     }
     return lines;
   }

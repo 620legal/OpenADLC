@@ -1048,7 +1048,17 @@ exists ([ADR 0068](adr/0068-a-release-is-built-in-its-own-account-and-signed-fro
   account, and the asset's URL. hostd never opens a path the account controls,
   and nothing the account prints is signed. The artifact and `run.json`
   (version, sha256, size) are kept under hostd's work root, which the account
-  cannot enter, until #344 signs and publishes them.
+  cannot enter, until they are signed and published.
+- **Signing and publishing.** The bridge asks hostd to sign with only the
+  asset's download URL. hostd takes the rest from its own `run.json`, after
+  hashing its kept file again, and signs a run under one URL only. The URL is
+  built from GitHub's own name for the uploaded asset, and is checked against
+  the URL GitHub publishes. A mismatch takes the release back to a draft. The
+  release is drafted, tagged on the pinned commit and published as the app
+  with its installation token, never the automation account. The tag is made
+  only after the signing. Nothing but the release service starts a publish,
+  and no route reaches it
+  ([ADR 0071](adr/0071-a-release-is-tagged-and-published-as-the-app-only-after-it-is-signed.md)).
 - **Its environment.** The build gets `env -i` with only `PATH`, `HOME`,
   `USER`, `LOGNAME`, `LANG`, `CI`, `OPENADLC_RELEASE`, `OPENADLC_RELEASE_SHA`
   and `OPENADLC_RELEASE_VERSION`. The crew token fetches hostd's mirror and
@@ -1060,10 +1070,11 @@ exists ([ADR 0068](adr/0068-a-release-is-built-in-its-own-account-and-signed-fro
   every process of the account, a pass included. The Mac is held awake while
   a run is in flight.
 
-The run, the signing step and the release service
+The run, the signing step, the release service and the publish
 (`apps/hostd/src/release-run.ts`, `apps/hostd/src/release-sign.ts`,
-`apps/bridge/src/release-service.ts`), with the shared probe and the release
-account's probe, are under Human review.
+`apps/bridge/src/release-service.ts`, `apps/bridge/src/release-publish.ts`),
+with the shared probe and the release account's probe, are under Human
+review.
 
 ### The console
 

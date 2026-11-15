@@ -1,3 +1,6 @@
+import { readdirSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ReleaseRun, ReleaseSetting } from '@openadlc/db';
 
@@ -5,7 +8,7 @@ vi.mock('@openadlc/db', () => {
   class ReleaseAlreadyRunning extends Error {}
   return {
     repos: { getRelease: vi.fn() },
-    releaseRuns: { start: vi.fn(), finish: vi.fn(), byRunId: vi.fn(), running: vi.fn(), anyRunning: vi.fn() },
+    releaseRuns: { start: vi.fn(), finish: vi.fn(), byRunId: vi.fn(), running: vi.fn(), anyInFlight: vi.fn(), builtUnheld: vi.fn(), publishingUnheld: vi.fn() },
     ReleaseAlreadyRunning,
   };
 });
@@ -17,7 +20,7 @@ import type { ReleaseRunView } from './hostd-client.js';
 const SHA = 'a'.repeat(40);
 const REPO = { id: 'repo-1', name: 'app', fullName: 'acme/app', defaultBranch: 'main' };
 const BY = { login: 'orzelig', githubUserId: 42 };
-const SETTING: ReleaseSetting = { command: 'make release', artifact: 'build/App.zip', versionFile: 'VERSION', versionKey: null, releaseRepo: null, timeoutMinutes: 180 };
+const SETTING: ReleaseSetting = { command: 'make release', artifact: 'build/App.zip', versionFile: 'VERSION', versionKey: null, releaseRepo: null, timeoutMinutes: 180, manifestAsset: null };
 
 function row(overrides: Partial<ReleaseRun> = {}): ReleaseRun {
   return {
@@ -48,6 +51,12 @@ function row(overrides: Partial<ReleaseRun> = {}): ReleaseRun {
     requestedById: BY.githubUserId,
     startedAt: '2026-11-15T10:00:00.000Z',
     finishedAt: null,
+    tag: null,
+    releaseId: null,
+    releaseUrl: null,
+    assetUrl: null,
+    tagged: false,
+    publishedAt: null,
     ...overrides,
   };
 }
@@ -80,7 +89,7 @@ function service(overrides: Partial<ReleaseServiceDeps> = {}) {
 beforeEach(() => {
   order.length = 0;
   vi.mocked(repos.getRelease).mockReset().mockResolvedValue(SETTING);
-  vi.mocked(releaseRuns.anyRunning).mockReset().mockResolvedValue(false);
+  vi.mocked(releaseRuns.anyInFlight).mockReset().mockResolvedValue(false);
   vi.mocked(releaseRuns.start).mockReset().mockImplementation(async (input) => {
     order.push(`row ${input.state ?? 'running'}`);
     return row({ runId: input.runId, state: input.state ?? 'running', reason: input.reason ?? null, previousVersion: input.previousVersion });
@@ -88,6 +97,72 @@ beforeEach(() => {
   vi.mocked(releaseRuns.finish).mockReset().mockImplementation(async (runId, outcome) => row({ runId, ...outcome } as Partial<ReleaseRun>));
   vi.mocked(releaseRuns.byRunId).mockReset().mockResolvedValue(row());
   vi.mocked(releaseRuns.running).mockReset().mockResolvedValue([]);
+  vi.mocked(releaseRuns.builtUnheld).mockReset().mockResolvedValue([]);
+  vi.mocked(releaseRuns.publishingUnheld).mockReset().mockResolvedValue([]);
+});
+
+describe('publishing a built run (#344)', () => {
+  const built = { runId: 'run-1', state: 'built' as const, version: '1.4.0-x.4', sha256: 'b'.repeat(64), bytes: 1234, artifactName: 'App.zip', exitCode: 0, durationMs: 60_000, logTail: 'ok', reason: null };
+
+  function publisher() {
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    return {
+      publish: vi.fn(async (_runId: string) => {
+        await gate;
+        return null;
+      }),
+      abandon: vi.fn(async (run: ReleaseRun) => row({ ...run, state: 'publish_failed' })),
+      release: () => release(),
+    };
+  }
+
+  it('starts the publish once when a built report is stored, and not for a report sent twice', async () => {
+    const publish = publisher();
+    const { releases } = service({ publisher: publish });
+    await releases.record(built);
+    vi.mocked(releaseRuns.byRunId).mockResolvedValueOnce(row({ state: 'built' }));
+    await releases.record(built);
+    // While it publishes, a sweep does not start a second publisher for it.
+    vi.mocked(releaseRuns.builtUnheld).mockImplementation(async (held) => (held?.includes('run-1') ? [] : [row({ state: 'built' })]));
+    await releases.sweep();
+    publish.release();
+    await releases.settled();
+    expect(publish.publish).toHaveBeenCalledTimes(1);
+    expect(publish.publish).toHaveBeenCalledWith('run-1');
+    expect(releaseRuns.builtUnheld).toHaveBeenCalledWith(['run-1']);
+  });
+
+  it('publishes nothing for a failed or refused report', async () => {
+    const publish = publisher();
+    const { releases } = service({ publisher: publish });
+    await releases.record({ ...built, state: 'failed', reason: 'make release exited 2' });
+    await releases.record({ ...built, sha256: null });
+    expect(publish.publish).not.toHaveBeenCalled();
+  });
+
+  it('publishes a built row no publisher holds, and fails a publishing row no publisher holds', async () => {
+    const publish = publisher();
+    publish.release();
+    const { releases } = service({ publisher: publish });
+    vi.mocked(releaseRuns.builtUnheld).mockResolvedValueOnce([row({ runId: 'run-2', state: 'built' })]);
+    vi.mocked(releaseRuns.publishingUnheld).mockResolvedValueOnce([row({ runId: 'run-3', state: 'publishing', tag: 'v1.4.0' })]);
+    const lines = await releases.sweep();
+    await releases.settled();
+    expect(publish.publish).toHaveBeenCalledWith('run-2');
+    expect(publish.abandon).toHaveBeenCalledWith(expect.objectContaining({ runId: 'run-3' }));
+    expect(lines).toEqual(['app: publishing v1.4.0 of aaaaaaa was cut off by a restart, and failed', 'app: publishing the release built from aaaaaaa']);
+  });
+
+  it('is the only caller of a publisher’s publish, and no route reaches one', () => {
+    const dir = dirname(fileURLToPath(import.meta.url));
+    const files = readdirSync(dir, { recursive: true, encoding: 'utf8' }).filter((name) => name.endsWith('.ts') && !name.endsWith('.test.ts') && !name.endsWith('.d.ts'));
+    const callers = files.filter((name) => /\bpublisher\??\s*\.\s*publish\s*\(|\.publish\(\s*run(Id)?\b/.test(readFileSync(join(dir, name), 'utf8')));
+    expect(callers).toEqual(['release-service.ts']);
+    // No route file names the publisher.
+    const routes = files.filter((name) => /router\.(get|post|put|patch|delete)\(/.test(readFileSync(join(dir, name), 'utf8')));
+    for (const name of routes) expect(readFileSync(join(dir, name), 'utf8')).not.toMatch(/ReleasePublisher|release-publish/);
+  });
 });
 
 describe('starting a release build (#343)', () => {
@@ -129,7 +204,7 @@ describe('starting a release build (#343)', () => {
     await expect(service().releases.start({ repo: REPO, sha: 'main', clean: false, by: BY })).rejects.toMatchObject({ status: 400 });
     await expect(service().releases.start({ repo: REPO, sha: 'A'.repeat(40), clean: false, by: BY })).rejects.toMatchObject({ status: 400 });
 
-    vi.mocked(releaseRuns.anyRunning).mockResolvedValueOnce(true);
+    vi.mocked(releaseRuns.anyInFlight).mockResolvedValueOnce(true);
     await expect(service().releases.start({ repo: REPO, sha: SHA, clean: false, by: BY })).rejects.toMatchObject({ status: 409, message: expect.stringContaining('is building') });
 
     await expect(service({ hostd: null }).releases.start({ repo: REPO, sha: SHA, clean: false, by: BY })).rejects.toMatchObject({ status: 501 });

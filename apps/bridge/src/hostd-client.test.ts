@@ -427,6 +427,18 @@ describe('the bridge asking hostd for a release build (#343)', () => {
     answer = { status: 404, body: { error: 'no built artifact for release run run-2 on this host' } };
     await expect(client.releaseArtifact('run-2')).rejects.toMatchObject({ status: 404 });
   });
+
+  it('asks hostd to sign a run with the URL alone, never a version or sha256 (#344)', async () => {
+    const signed = { sig: 'c2ln', asset: '{}\n', publicKey: 'cHVi', repo: 'acme/app', sha: 'a'.repeat(40), version: '1.4.0', sha256: 'e'.repeat(64), bytes: 9 };
+    answer = { status: 200, body: signed };
+    const url = 'https://github.com/acme/app/releases/download/v1.4.0/App.zip';
+    await expect(client.signRelease('run-1', url)).resolves.toEqual(signed);
+    expect(asked.at(-1)).toMatchObject({ method: 'POST', url: '/release/runs/run-1/sign', secret: SECRET });
+    expect(JSON.parse(asked.at(-1)?.body ?? '{}')).toEqual({ url });
+
+    answer = { status: 409, body: { error: 'no release signing key for acme/app. Run on the host: openadlc release-key import --repo acme/app --file <path>' } };
+    await expect(client.signRelease('run-1', url)).rejects.toMatchObject({ status: 409, message: expect.stringContaining('release-key import') });
+  });
 });
 
 describe('starting an engine update on hostd', () => {
