@@ -7,7 +7,7 @@ import type { Actors } from './actors.js';
 import { asAutomation, automationBotName } from './automation-bot.js';
 import type { BridgeConfig } from './config.js';
 import type { HostdClient } from './hostd-client.js';
-import { leaseHoldUntil } from './task-service.js';
+import { leaseHoldUntil, pullOpenReader } from './task-service.js';
 import { openedUnheard, recordUnheard, type UnheardFinding } from './unheard.js';
 import { chooseIssueText, editNotTaken } from './vouched-text.js';
 import { linkListed, numberedRepoIds } from './work-items.js';
@@ -21,6 +21,7 @@ export interface Drift {
     | 'unknown_issue'
     | 'lease_without_issue'
     | 'paused_lease'
+    | 'lease_on_closed_pull'
     | 'orphaned_task'
     | 'stale_host'
     | 'label_missing'
@@ -302,9 +303,13 @@ export class Reconciler {
         // dependency recorded closed: what changed while the bridge was down
         // is read once, and not every quarter hour after.
         dependencies = await (async () => issues.unresolvedDependencies(repo, { closed: since === undefined }))().catch((): number[] => []);
+        // A lease's pull request too, so one closed long ago is still read
+        // and the lease left on it let go (ADR 0073).
+        const held = await leases.listActiveLeases(repo.id);
         const named = [
           ...cached.filter((entry) => entry.stage !== 'merged' && entry.stage !== 'done').map((entry) => entry.number),
-          ...(await leases.listActiveLeases(repo.id)).map((lease) => lease.issueNumber),
+          ...held.map((lease) => lease.issueNumber),
+          ...held.flatMap((lease) => (lease.prNumber ? [lease.prNumber] : [])),
           ...dependencies,
         ];
         live = await everyIssue(client, repo.fullName, {
@@ -424,7 +429,37 @@ export class Reconciler {
                 : 'the issue no longer exists',
             repaired: repair,
           });
+          continue;
         }
+
+        // A lease on an open issue left linked to a pull request that has
+        // closed: the close that lets one go had already happened, it has no
+        // expiry, and the dispatcher starts nothing on an issue it holds.
+        // OpenADLC#329's sat on closed #334 while reconcile said nothing had
+        // drifted (ADR 0073). A merged one whose issue is in Merged or Done is
+        // the verification's hold, with its own release and backstop above.
+        if (!lease.prNumber) continue;
+        const stage = cached.find((entry) => entry.number === lease.issueNumber)?.stage;
+        if (stage === 'merged' || stage === 'done') continue;
+        const pull = live.find((entry) => entry.number === lease.prNumber && entry.pullRequest);
+        if (!pull || pull.state !== 'closed') continue;
+        const subject = `${repo.name}#${lease.issueNumber}`;
+        const detail = `the lease was held for #${lease.prNumber}, which is closed`;
+        if (!repair) {
+          drift.push({ kind: 'lease_on_closed_pull', subject, detail, repaired: false });
+          continue;
+        }
+        // Only with nothing working under it, checked in the statement that
+        // writes it: a build paused on a question holds the issue by design.
+        const released = await leases
+          .releaseForClosedPull({ leaseId: lease.id, prNumber: lease.prNumber, actor: 'reconciler', reason: `#${lease.prNumber} is closed` })
+          .catch((error: unknown) => {
+            console.warn(`[reconciler] ${subject}: the lease on closed #${lease.prNumber} was not let go: ${reasonOf(error)}`);
+            return null;
+          });
+        if (!released) continue;
+        letGo += 1;
+        drift.push({ kind: 'lease_on_closed_pull', subject, detail, repaired: true });
       }
     }
 
@@ -526,6 +561,7 @@ export class Reconciler {
         actor: 'reconciler',
         reason: 'its work had ended',
         holdUntil: leaseHoldUntil(),
+        pullOpen: pullOpenReader(this.actors, this.config),
       });
       letGo += settled.released.length;
       for (const lease of [...settled.released, ...settled.held]) {

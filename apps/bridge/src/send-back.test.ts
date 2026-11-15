@@ -56,6 +56,7 @@ vi.mock('@openadlc/db', () => ({
   leases: {
     getActiveLease: vi.fn(async () => world.lease),
     setLeaseState: vi.fn(async () => null),
+    releaseUnlessWorkedUnder: vi.fn(async () => true),
     lastForPullRequest: vi.fn(async () => world.lastForPr),
     listActiveLeases: vi.fn(async () => world.activeLeases),
     reacquireForPullRequest: vi.fn(async (input: { prNumber: number }) =>
@@ -145,6 +146,7 @@ beforeEach(() => {
   world.deployRuns = [];
   REPO.stageModes = { intake: 'autonomous', spec: 'conditional', build: 'autonomous', review: 'autonomous', merged: 'autonomous', done: 'autonomous' };
   vi.mocked(leases.setLeaseState).mockClear();
+  vi.mocked(leases.releaseUnlessWorkedUnder).mockClear();
   vi.mocked(leases.reacquireForPullRequest).mockClear();
   vi.mocked(threads.expireGatesOfTask).mockClear();
 });
@@ -970,6 +972,86 @@ describe('a person moving a card back', () => {
     expect(world.events).toContainEqual(expect.objectContaining({ type: 'review.stalled' }));
     // No request sent it back: the card keeps the wording it had.
     expect(world.events.find((event) => event.type === 'review.stalled')?.payload).not.toHaveProperty('request');
+  });
+
+  describe('from Review to Build when its pull request is closed (OpenADLC#329, ADR 0073)', () => {
+    beforeEach(() => {
+      world.issue = { number: 7, stage: 'review', prNumber: 31, labels: ['adlc:review'] };
+      world.lease = { id: 'lease-7', botId: 'bot-builder', declaredPaths: ['src/app.ts'], prNumber: 31 };
+    });
+
+    it('lets go of the lease and asks for a dispatch, instead of a patch round on a branch that is gone', async () => {
+      const { service, client, taskService, mergeLine, dispatchRuns } = sendBack();
+      client.getPullRequest.mockResolvedValue({ state: 'closed', headRef: 'agent/builder/7-issue-7', headSha: 'h1' });
+
+      const result = await service.fromPerson({ repoName: REPO.name, issueNumber: 7, to: 'build', actor: 'janedoe', reason: 'start over' });
+
+      expect(result).toMatchObject({ sent: true, from: 'review', to: 'build' });
+      expect(leases.releaseUnlessWorkedUnder).toHaveBeenCalledWith('lease-7');
+      expect(world.audits).toContainEqual(
+        expect.objectContaining({
+          actor: 'janedoe',
+          action: 'lease.released',
+          target: 'openadlc-testbed#7',
+          payload: expect.objectContaining({ leaseId: 'lease-7', pullRequest: 31, reason: '#31 is closed, so the move back to Build starts a fresh build' }),
+        }),
+      );
+      expect(dispatchRuns.soon).toHaveBeenCalledWith('openadlc-testbed#7 moved back to build');
+      // Read once, and no round opened on it.
+      expect(client.getPullRequest).toHaveBeenCalledTimes(1);
+      expect(taskService.open).not.toHaveBeenCalled();
+      expect(mergeLine.leave).not.toHaveBeenCalled();
+      expect(world.events.filter((event) => event.type === 'review.stalled')).toEqual([]);
+    });
+
+    it('leaves the lease with a task still working under it, which is the build', async () => {
+      vi.mocked(leases.releaseUnlessWorkedUnder).mockResolvedValueOnce(false);
+      const { service, client, taskService } = sendBack();
+      client.getPullRequest.mockResolvedValue({ state: 'closed', headRef: 'agent/builder/7-issue-7', headSha: 'h1' });
+
+      await service.fromPerson({ repoName: REPO.name, issueNumber: 7, to: 'build', actor: 'janedoe', reason: 'start over' });
+
+      expect(leases.releaseUnlessWorkedUnder).toHaveBeenCalledWith('lease-7');
+      expect(world.audits.filter((entry) => entry.action === 'lease.released')).toEqual([]);
+      expect(taskService.open).not.toHaveBeenCalled();
+    });
+
+    it('opens the patch round as before when it is open', async () => {
+      const { service, taskService } = sendBack();
+
+      await service.fromPerson({ repoName: REPO.name, issueNumber: 7, to: 'build', actor: 'janedoe', reason: 'handle the empty cart' });
+
+      expect(leases.releaseUnlessWorkedUnder).not.toHaveBeenCalled();
+      expect(taskService.open).toHaveBeenCalledWith(expect.objectContaining({ kind: 'patch', subjectRef: 'openadlc-testbed#31', leaseId: 'lease-7' }));
+    });
+  });
+
+  it('puts why on the card when a move back to Build starts no round, once for each head', async () => {
+    // The lease is for another pull request: the round is refused, which
+    // used to be said only in bridge.log.
+    world.issue = { number: 7, stage: 'review', prNumber: 31, labels: ['adlc:review'] };
+    world.lease = { id: 'lease-7', botId: 'bot-builder', declaredPaths: ['src/app.ts'], prNumber: 40 };
+    const { service, taskService } = sendBack();
+
+    await service.fromPerson({ repoName: REPO.name, issueNumber: 7, to: 'build', actor: 'janedoe', reason: 'again' });
+
+    expect(taskService.open).not.toHaveBeenCalled();
+    const stalls = () => world.events.filter((event) => event.type === 'review.stalled');
+    expect(stalls()).toEqual([
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          repo: 'openadlc-testbed',
+          pr: 31,
+          issue: 7,
+          head: 'h1',
+          reason: 'moved back to Build, and no builder round started: the lease on #7 is for #40',
+        }),
+      }),
+    ]);
+
+    world.issue = { number: 7, stage: 'review', prNumber: 31, labels: ['adlc:review'] };
+    await sendBack().service.fromPerson({ repoName: REPO.name, issueNumber: 7, to: 'build', actor: 'janedoe', reason: 'again' });
+    expect(stalls()).toHaveLength(1);
   });
 
   // Behind IAP the identity is the person's email, and a comment is public.
