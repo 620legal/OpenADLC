@@ -236,4 +236,5 @@ improving itself. `.github/CODEOWNERS` lists the same paths.
 - `apps/hostd/src/release-sign.ts` @orzelig
 - `apps/bridge/src/release-service.ts` @orzelig
 - `apps/bridge/src/release-publish.ts` @orzelig
+- `apps/bridge/src/release-routes.ts` @orzelig
 - `crew/skills/*/tools.yaml` @orzelig

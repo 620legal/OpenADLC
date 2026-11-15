@@ -1083,13 +1083,14 @@ exists ([ADR 0068](adr/0068-a-release-is-built-in-its-own-account-and-signed-fro
   every process of the account, a pass included. The Mac is held awake while
   a run is in flight.
 
-The run, the signing step, the release service and the publish
-(`apps/hostd/src/release-run.ts`, `apps/hostd/src/release-sign.ts`,
-`apps/bridge/src/release-service.ts`, `apps/bridge/src/release-publish.ts`),
-with the shared probe and the release account's probe, are under Human
-review. The cut's route (`apps/bridge/src/release-routes.ts`) is not. Its
-one effect is to call `start`, which is listed, and its test pins that call to
-the sign-in.
+The run, the signing step, the release service, the publish and the cut's
+route (`apps/hostd/src/release-run.ts`, `apps/hostd/src/release-sign.ts`,
+`apps/bridge/src/release-service.ts`, `apps/bridge/src/release-publish.ts`,
+`apps/bridge/src/release-routes.ts`), with the shared probe and the release
+account's probe, are under Human review. The route is listed because it alone
+decides who may cut a release: the Approves check before and after the
+device-code proof, the match with the linked account, the crew refusal, and
+the pinned view whose SHA is built.
 
 ### The console
 
