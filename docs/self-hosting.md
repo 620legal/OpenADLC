@@ -985,8 +985,9 @@ template OpenADLC writes runs as little as the merge line needs:
   and *ci lookup* are red; re-running the failed jobs looks again. A run that
   was itself a copy is never copied. With nothing to copy (no run yet, a
   crew pull request before `adlc:ci`, a fork's pull request, or a question
-  GitHub does not answer), the job is skipped as `ci (after approval)`, as
-  before ([ADR 0075](adr/0075-a-label-change-copies-the-heads-earlier-ci-result.md)).
+  GitHub does not answer), the job is skipped and not named `ci`, as before
+  (GitHub lists it under its name expression's raw text, ending in
+  `|| 'ci (after approval)'`) ([ADR 0075](adr/0075-a-label-change-copies-the-heads-earlier-ci-result.md)).
 - **A hung run** stops after 30 minutes rather than GitHub's six hours.
 - **A first failure** is run again once, as the app, before the work goes back
   to the builder: a rerun costs minutes, sending it back costs a model's round.

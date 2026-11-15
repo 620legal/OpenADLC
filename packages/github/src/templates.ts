@@ -35,9 +35,11 @@ const COUNTS_ONLY_THE_DEFAULT_BRANCH =
 
 /**
  * What bringing a template from before #357 up to date changes for a label
- * change. Its run skipped its job as `ci (after approval)`, GitHub counted
- * that as the newest run of `ci` on the head, and a green pull request went
- * back to waiting for `ci` when `needs-human` came off it.
+ * change. Its run skipped its job, which GitHub lists under the raw text of
+ * the job's name expression (`… && 'ci' || 'ci (after approval)'`, since it
+ * never evaluates a skipped job's name). GitHub counted that as the newest
+ * run of `ci` on the head, and a green pull request went back to waiting for
+ * `ci` when `needs-human` came off it.
  */
 const KEEPS_CI_ON_A_LABEL =
   'keeps a pull request’s ci when a label is put on or taken off, by reporting the head’s earlier ci result again rather than a skipped run GitHub counts in its place';
@@ -84,7 +86,7 @@ export const EARLIER_CI_TEMPLATES: ReadonlyMap<string, CiTemplateUpdate> = new M
 ]);
 
 /** The SHA-256 of the CI template as it ships now. */
-export const CURRENT_CI_TEMPLATE = '7bdcbc8b265e75141f901d323a81d961b74e5c95072f39eaa92fbff07cb8221a';
+export const CURRENT_CI_TEMPLATE = 'd3e7fb15ce0cbb7e2f1c7b3aaf9df7b1fcc5956c2a48b48bb0a7238ba5d0150c';
 
 export function templateHash(body: string): string {
   return createHash('sha256').update(body).digest('hex');

@@ -8,12 +8,17 @@
 The merge line lands a pull request only once GitHub Actions' `ci` has passed
 on its head. Rulesets count a skipped job named `ci` as a pass, so the
 workflow names its job `ci` only when it runs. A run that runs nothing gets
-another name: `ci (after approval)`. That covers a crew pull request before
-`adlc:ci`, and a label change that tests nothing new.
+another name, which this record calls `ci (after approval)`. That covers a
+crew pull request before `adlc:ci`, and a label change that tests nothing
+new. GitHub never evaluates a skipped job's `name:` expression, though: its
+check run carries the expression's raw text, such as `(github.event_name !=
+'pull_request' || …) && 'ci' || 'ci (after approval)'`. That is still not
+`ci`, which is all the naming needs, but nothing should match a skipped run
+by the evaluated name alone.
 
 GitHub counts the newest run of a workflow on a head. A label put on or taken
 off after `ci` passed (`needs-human`, say) started a run that skipped its job
-as `ci (after approval)`. GitHub then counted that run in place of the one
+under that name. GitHub then counted that run in place of the one
 that passed. A green pull request went back to "Expected" and stayed there.
 GitHub said `blocked` and named nothing, and the merge line said "did not say
 why" (#357). This repository's own workflow did the same on a label change
@@ -35,7 +40,7 @@ result is made later than the run it copies.
   on a draft. A job ahead of `ci` (*ci lookup*) finds the head's newest run
   of this workflow whose `ci` finished, not cancelled. `ci` then reports that
   result, and runs no `make setup` or `make ci` and uploads no `tested-tree`.
-  With nothing to copy, `ci` is skipped as `ci (after approval)`, as before.
+  With nothing to copy, `ci` is skipped, not named `ci`, as before.
 - **A failure is always copied.** Copying red launders nothing, so its ties
   are not asked.
 - **A success is copied only under the push path's ties, and with the pull
@@ -71,7 +76,10 @@ result is made later than the run it copies.
   and the newest `ci` passed, the merge line says so: "GitHub says it is
   blocked, most likely by the newest run of ci on the head". It also says
   that `adlc:ci` or a new push clears it, and a person may merge over it, as
-  over the unsaid case it narrows. `openadlc github apply` offers the current
+  over the unsaid case it narrows. It knows that check run by either name:
+  the evaluated `ci (after approval)`, or the raw expression ending in
+  `|| 'ci (after approval)'` that GitHub actually gives a skipped job.
+  `openadlc github apply` offers the current
   template in place of the earlier one.
 
 ## What this rules out
@@ -98,3 +106,5 @@ result is made later than the run it copies.
   only-pull-request tie is no longer needed.
 - Check-run ids stop growing over time, which the hold's wording reads to
   tell which run is newer.
+- GitHub starts evaluating a skipped job's `name:`, or names it some other
+  way than its raw expression: the hold then has to match that form too.

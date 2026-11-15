@@ -29,8 +29,9 @@ name: ci
 # result instead (job `earlier`): red when that one was red, green only when
 # that one passed for this pull request alone, and red when it has not
 # finished after 35 minutes (re-run the failed jobs to look again). A run
-# that was itself a copy is never copied. With nothing to copy it stays `ci
-# (after approval)`, as before.
+# that was itself a copy is never copied. With nothing to copy it is skipped,
+# as before, and not named `ci`: GitHub lists a skipped job under the raw text
+# of its name expression, which ends in `|| 'ci (after approval)'`.
 #
 # Runner minutes are this repository's bill, so it runs only what a change needs:
 # - a change to docs alone (docs/, Markdown at the root or directly under

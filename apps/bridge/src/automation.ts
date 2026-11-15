@@ -1012,19 +1012,33 @@ function notLandable(facts: MergeFacts): string {
   }
 }
 
-/** What the `ci` job is named when it is skipped: deferred until `adlc:ci`, or a label change's run that ran nothing. */
+/** What the `ci` job's name expression gives when the job is skipped: deferred until `adlc:ci`, or a label change's run that ran nothing. */
 const DEFERRED_CHECK = 'ci (after approval)';
+
+/**
+ * Whether a check run is the `ci` job skipped as `ci (after approval)`.
+ *
+ * GitHub never evaluates a skipped job's `name:` expression: its check run
+ * carries the expression's raw text, `${{ }}` taken off, such as
+ * `(github.event_name != 'pull_request' || …) && 'ci' || 'ci (after approval)'`.
+ * Matching the evaluated name alone, the hold below never fired on a real
+ * repository (#358, check run 132949306618). Both forms are matched: the raw
+ * text ends with the quoted name as the last `||` choice.
+ */
+function isDeferredCheck(name: string): boolean {
+  return name === DEFERRED_CHECK || /\|\|\s*'ci \(after approval\)'\s*$/.test(name);
+}
 
 /**
  * Whether the newest run of the `ci` workflow on the head is a skipped
  * `ci (after approval)` that came after a `ci` that passed.
  *
  * OpenADLC's templates before #357 skipped a label change's run under that
- * name, and GitHub counts a workflow's newest run on the head: once
- * `needs-human` came off a green pull request, GitHub said `blocked` and
- * named nothing, and the merge line said it did not know why. Check-run ids
- * only grow, so the deferred run is newer when its id is higher than every
- * `ci`'s; with an id missing, nothing here can tell, and this says no.
+ * name expression, and GitHub counts a workflow's newest run on the head:
+ * once `needs-human` came off a green pull request, GitHub said `blocked`
+ * and named nothing, and the merge line said it did not know why. Check-run
+ * ids only grow, so the deferred run is newer when its id is higher than
+ * every `ci`'s; with an id missing, nothing here can tell, and this says no.
  */
 function deferredAfterCi(checkRuns: MergeFacts['checkRuns']): boolean {
   const ci = checkRuns.filter((run) => run.name === REQUIRED_CHECK);
@@ -1032,7 +1046,7 @@ function deferredAfterCi(checkRuns: MergeFacts['checkRuns']): boolean {
   const newest = ci.reduce((one, other) => ((other.id ?? 0) > (one.id ?? 0) ? other : one));
   if (newest.status !== 'completed' || newest.conclusion !== 'success') return false;
   return checkRuns.some(
-    (run) => run.name === DEFERRED_CHECK && run.status === 'completed' && run.conclusion === 'skipped' && typeof run.id === 'number' && run.id > (newest.id ?? 0),
+    (run) => isDeferredCheck(run.name) && run.status === 'completed' && run.conclusion === 'skipped' && typeof run.id === 'number' && run.id > (newest.id ?? 0),
   );
 }
 

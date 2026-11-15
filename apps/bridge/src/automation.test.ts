@@ -3027,8 +3027,30 @@ describe('whether the bridge may merge a pull request', () => {
         expect(blocked(null, null, { checkRuns: [ciRun({ id: 10 }), deferred(11)] }).reason).toBe(DEFERRED_REASON);
       });
 
+      // GitHub never evaluates a skipped job's `name:`: its check run carries
+      // the expression's raw text, `${{ }}` taken off. These are the names
+      // GitHub gave: the first on the managed repository that started #357
+      // (OpenADLC's template before it), the second on #358's own head
+      // (check run 132949306618, this repository's ci.yml).
+      const RAW_TEMPLATE =
+        "(github.event_name != 'pull_request' || ((github.event.action != 'labeled' && github.event.action != 'unlabeled') || github.event.label.name == 'adlc:ci') && (!startsWith(github.head_ref, 'agent/') || github.event.pull_request.head.repo.full_name != github.repository || contains(github.event.pull_request.labels.*.name, 'adlc:ci'))) && 'ci' || 'ci (after approval)'";
+      const RAW_OWN =
+        "((github.event_name != 'pull_request' || ((github.event.action != 'labeled' && github.event.action != 'unlabeled' && (github.event.action != 'edited' || github.event.changes.body)) || github.event.label.name == 'adlc:ci' || github.event.label.name == 'scope:cross-cutting') && (!startsWith(github.head_ref, 'agent/') || github.event.pull_request.head.repo.full_name != github.repository || contains(github.event.pull_request.labels.*.name, 'adlc:ci'))) || needs.earlier.outputs.copy != '') && (github.event.pull_request.draft && 'ci (draft)' || 'ci') || 'ci (after approval)'";
+
+      it.each([
+        ['OpenADLC’s earlier template', RAW_TEMPLATE],
+        ['this repository’s workflow', RAW_OWN],
+      ])('knows the skipped run by the unevaluated name GitHub gives it, from %s', (_where, name) => {
+        const raw = { ...job(name, 'skipped'), id: 11 };
+        const held = facts({ mergeableState: 'blocked', blocked: { rules: [], commits: null }, checkRuns: [job('check'), ciRun({ id: 10 }), raw] });
+        expect(mergeDecision(held)).toMatchObject({ land: false, reason: DEFERRED_REASON });
+        expect(blocked([], null, { checkRuns: [ciRun({ id: 12 }), raw] }).reason).toMatch(/^GitHub says it is blocked, and did not say why/);
+      });
+
       it.each<[string, MergeFacts['checkRuns']]>([
         ['the skipped run is older than the ci that passed', [ciRun({ id: 12 }), deferred(11)]],
+        ['the skipped run’s raw name ends in another choice', [ciRun({ id: 10 }), { ...job("github.event_name == 'push' && 'ci (after approval)' || 'ci (draft)'", 'skipped'), id: 11 }]],
+        ['a check run only mentions ci (after approval)', [ciRun({ id: 10 }), { ...job('ci (after approval) notes', 'skipped'), id: 11 }]],
         ['the ci check run has no id', [ciRun(), deferred(11)]],
         ['the skipped run has no id', [ciRun({ id: 10 }), deferred(undefined)]],
         ['the newer ci (after approval) did not skip', [ciRun({ id: 10 }), deferred(11, 'success')]],

@@ -82,7 +82,8 @@ jobs:
   # job fails then too, so re-running the failed jobs looks again, rather
   # than `ci` reading the same `timeout` from this job's kept outputs). A
   # run that was itself a copy is never copied. With
-  # nothing to copy, `ci` is skipped as `ci (after approval)`, as it was. A
+  # nothing to copy, `ci` is skipped, not named `ci`, as it was (GitHub lists
+  # a skipped job under its name expression's raw text). A
   # draft is left out: its last job is `ci (draft)`, not `ci`. Its own job,
   # not a step of `ci`: a job's name is fixed before its steps run.
   earlier:
