@@ -1,4 +1,5 @@
 import { createCipheriv, createDecipheriv, randomBytes, scrypt, type ScryptOptions } from 'node:crypto';
+import { isReleaseSigningKeyRef } from '@openadlc/github';
 
 /**
  * What an archive says it holds, in numbers.
@@ -1552,11 +1553,26 @@ const PLAIN_WARNING =
   'Recovering from a leak means a new App key, signing keys and webhook secret, ' +
   'revoking each bot’s GitHub authorization, revoking any non-expiring bot token, ' +
   'rotating every API key and the registry token, and signing each model ' +
-  'subscription out and in again.';
+  'subscription out and in again. It never holds a release signing key; take an ' +
+  'encrypted backup to keep those.';
+
+/**
+ * A release signing key never goes in the clear (ADR 0069). Clients pin its
+ * public half, and OpenADLC never rotates it, so a leaked one cannot be
+ * recovered from the way the rest of this file's contents can: every shipped
+ * client trusts whatever it signs. Dropped here rather than by the caller, so
+ * no path that writes a plain archive can carry one.
+ */
+function plainPayload(payload: Payload): Payload {
+  const secrets: Record<string, string> = {};
+  for (const [ref, value] of Object.entries(payload.secrets)) if (!isReleaseSigningKeyRef(ref)) secrets[ref] = value;
+  return { ...payload, secrets };
+}
 
 export function writePlain(contents: BackupContents): Buffer {
   const version = versionOf(contents.manifest?.version);
-  const payload = payloadOf(contents, version);
+  // The counts are taken from what is written, so they leave the keys out too.
+  const payload = plainPayload(payloadOf(contents, version));
   const manifest = manifestFor(contents, payload, version);
 
   // The warning first, because a reader sees the top of a file.

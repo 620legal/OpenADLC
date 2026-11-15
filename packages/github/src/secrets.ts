@@ -1,4 +1,4 @@
-import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { chmodSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -215,6 +215,70 @@ export const PUSH_DEVICE_PREFIX = 'push-device:';
  */
 export function pushDeviceRef(personId: string, deviceId: string): string {
   return `${PUSH_DEVICE_PREFIX}${personId}:${deviceId}`;
+}
+
+/** Where every repository's release signing key is filed: `releaseSigningKeyRef(repo)` starts with it. */
+const RELEASE_SIGNING_KEY_PREFIX = 'release-signing-key:';
+
+/**
+ * One repository's release signing key (ADR 0069): an ed25519 private key and
+ * the tag its clients pin with the public half, as one JSON record.
+ *
+ * Filed by a hash of the lowercased `owner/name`, not the name itself: a `.`
+ * in a repository's name is no character Secret Manager allows in an id, and
+ * the name spelled out in hex could pass its length limit. GitHub's names are
+ * case-insensitive, so `Acme/App` and `acme/app` are one key.
+ *
+ * Only `release-key import` on the host writes it and only the signing step
+ * (`apps/hostd/src/release-sign.ts`) reads it; a test holds every other file
+ * to not naming this function.
+ */
+export function releaseSigningKeyRef(repo: string): string {
+  return `${RELEASE_SIGNING_KEY_PREFIX}${createHash('sha256').update(repo.toLowerCase(), 'utf8').digest('hex')}`;
+}
+
+/** Whether a ref is a repository's release signing key, so a backup can tell one without reading it. */
+export function isReleaseSigningKeyRef(ref: string): boolean {
+  return ref.startsWith(RELEASE_SIGNING_KEY_PREFIX) && /^[0-9a-f]{64}$/.test(ref.slice(RELEASE_SIGNING_KEY_PREFIX.length));
+}
+
+/**
+ * What a release signing key's ref holds. The tag is filed with the key, not
+ * on the repository's row: clients pin the two together, so a change to either
+ * breaks every shipped client alike, and only the one admin act on the host
+ * that sets the key (`release-key import --replace`) may set the tag.
+ */
+export interface ReleaseKeyRecord {
+  v: 1;
+  /** `owner/name` as it was given to import, which a backup names it by. */
+  repo: string;
+  tag: string;
+  /** The ed25519 private key, PKCS#8 PEM. */
+  key: string;
+}
+
+/** One line of JSON, the order fixed so two imports of one key read the same. */
+export function serializeReleaseKeyRecord(record: ReleaseKeyRecord): string {
+  return JSON.stringify({ v: 1, repo: record.repo, tag: record.tag, key: record.key });
+}
+
+/**
+ * The record, or null for a value that is not one. Never throws, and never
+ * says what the value held: it is a private key.
+ */
+export function parseReleaseKeyRecord(value: string | null): ReleaseKeyRecord | null {
+  if (value === null) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  const { v, repo, tag, key } = parsed as Record<string, unknown>;
+  if (v !== 1 || typeof repo !== 'string' || typeof tag !== 'string' || typeof key !== 'string') return null;
+  if (repo === '' || tag === '' || key === '') return null;
+  return { v: 1, repo, tag, key };
 }
 
 /**

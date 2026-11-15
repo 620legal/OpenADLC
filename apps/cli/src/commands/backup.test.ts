@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, sym
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { releaseSigningKeyRef, serializeReleaseKeyRecord } from '@openadlc/github';
 import {
   BackupError,
   EVERYTHING,
@@ -1150,6 +1151,28 @@ describe('a restore that changes which account a bot is', () => {
   });
 });
 
+describe('a restore over a release signing key this install holds', () => {
+  it('keeps this install’s key, says so, and writes the rest', async () => {
+    const ref = releaseSigningKeyRef('acme/widget.app');
+    const archived = serializeReleaseKeyRecord({ v: 1, repo: 'acme/widget.app', tag: 'acme-updates', key: 'archived-key' });
+    const install = fakeInstall({ shape: { secretRefs: ['github-app-private-key', ref] } });
+    const io = fakeIo(['a passphrase', 'y']);
+
+    await restore('/tmp/x.openadlcbak', { dryRun: false }, {
+      install: install.access,
+      io: io.io,
+      providers: fakeProviders().providers,
+      archive: () => fakeArchive(archiveOf({ secrets: { 'github-app-private-key': VALUES.appKey, [ref]: archived } })),
+    });
+
+    expect(io.text()).toContain(
+      `Kept this install's own 1 release signing key (${ref}): a restore never writes over one, since clients pin it. To change one: openadlc release-key import --replace.`,
+    );
+    expect(install.wrote.secrets).not.toContain(ref);
+    expect(install.store.get(ref)).toBe(`current-${ref}`);
+  });
+});
+
 describe('a dry run', () => {
   it('writes nothing', async () => {
     const install = fakeInstall({
@@ -1401,6 +1424,26 @@ describe('--unencrypted', () => {
     expect(form).toEqual(['plain']);
     expect(written).toHaveLength(1);
     expect(io.text()).not.toMatch(/Passphrase/i);
+  });
+
+  it('leaves out a release signing key, and names its repository, never the key', async () => {
+    const ref = releaseSigningKeyRef('acme/widget.app');
+    const value = serializeReleaseKeyRecord({ v: 1, repo: 'acme/widget.app', tag: 'acme-updates', key: 'the-private-key-itself' });
+    const io = fakeIo([]);
+    const { deps, packed } = backupDeps(
+      io.io,
+      fakeInstall({ contents: { ...SOMETHING_TO_SAVE, secrets: { ...SOMETHING_TO_SAVE.secrets, [ref]: value } } }).access,
+    );
+
+    await backup(scratch(), { out: join(scratch(), 'plain.json'), unencrypted: true }, deps);
+
+    expect(io.text()).toContain(
+      'Left out: 1 release signing key (acme/widget.app) — an unencrypted backup never carries one. Take an encrypted backup to keep them.',
+    );
+    expect(io.text()).not.toContain(ref);
+    expect(io.text()).not.toContain('the-private-key-itself');
+    expect(io.text()).toContain('In the clear: 1 secret,');
+    expect(packed[0]?.secrets).toEqual(SOMETHING_TO_SAVE.secrets);
   });
 
   it('says what it is doing, in the output, every time', async () => {

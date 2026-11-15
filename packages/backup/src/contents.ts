@@ -4,8 +4,10 @@ import {
   appPrivateKeyRef,
   engineKeyRef,
   internalSecretRef,
+  isReleaseSigningKeyRef,
   modelAccountRef,
   isRetiredNotifyTargetRef,
+  parseReleaseKeyRecord,
   refreshTokenRef,
   registryTokenRef,
   signingKeyRef,
@@ -321,6 +323,26 @@ export function withoutRefreshTokens(secrets: Record<string, string>): Record<st
   return kept;
 }
 
+/**
+ * The repositories whose release signing keys a secret map holds, by the name
+ * each record was imported under, and sorted. A record that does not read is
+ * named by its ref. Never the key: this is what the CLI prints when an
+ * unencrypted backup leaves them out.
+ */
+export function releaseSigningKeyRepos(secrets: Record<string, string>): string[] {
+  return Object.keys(secrets)
+    .filter(isReleaseSigningKeyRef)
+    .map((ref) => parseReleaseKeyRecord(secrets[ref] ?? null)?.repo ?? ref)
+    .sort();
+}
+
+/** The secrets without a release signing key: what an unencrypted archive holds of them. */
+export function withoutReleaseSigningKeys(secrets: Record<string, string>): Record<string, string> {
+  const kept: Record<string, string> = {};
+  for (const [ref, value] of Object.entries(secrets)) if (!isReleaseSigningKeyRef(ref)) kept[ref] = value;
+  return kept;
+}
+
 /** What one secret ref is, and so which choice takes it. */
 export type SecretKind =
   | { group: 'install' }
@@ -369,6 +391,9 @@ export function classifySecret(
   if (ref === appPrivateKeyRef() || ref === webhookSecretRef() || ref === registryTokenRef() || ref === ATTRIBUTION_KEY_REF) {
     return { group: 'install' };
   }
+  // A repository's release signing key goes with the install, like the App's
+  // key; `writePlain` drops it from any unencrypted archive (ADR 0069).
+  if (isReleaseSigningKeyRef(ref)) return { group: 'install' };
   if (ref === internalSecretRef()) return { group: 'never', reason: 'each install makes its own' };
   // Opens the backup an undo of the last restore puts back: this install's own, for a day.
   if (ref === 'restore-undo-key') return { group: 'never', reason: 'it opens this install’s own undo of its last restore' };

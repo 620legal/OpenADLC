@@ -14,6 +14,7 @@ import { doctor, status } from './commands/doctor.js';
 import { githubApply, githubCheck, syncLabels } from './commands/github.js';
 import { init } from './commands/init.js';
 import { ls } from './commands/ls.js';
+import { releaseKey } from './commands/release-key.js';
 import { applyRelease, runForApply, writeResult } from './commands/self-update.js';
 import { down, up } from './commands/up.js';
 import { watch } from './commands/watch.js';
@@ -97,6 +98,15 @@ openadlc — a crew of agents that takes a request to a reviewed, deployed chang
                                     clean install that is done; on one that is set
                                     up, only with --take-over-sign-ins. It names the
                                     bots that need to connect again
+  openadlc release-key import --repo OWNER/NAME --file PATH [--tag TAG] [--replace]
+                                    file a repository's ed25519 release signing key in
+                                    the secret store, from a PKCS#8 PEM (openssl genpkey
+                                    -algorithm ed25519) or a base64 32-byte seed; prints
+                                    the public key and tag to pin in clients. A different
+                                    key or tag over one filed needs --replace. Never
+                                    rotated by OpenADLC (docs/security.md#release-signing)
+  openadlc release-key show --repo OWNER/NAME
+                                    the public key and tag filed for a repository
   openadlc attach BOT SESSION      take over a running session in the terminal
   openadlc logs [SERVICE]          where a service writes its log (the bridge's when none is named)
   openadlc seed                    reload config/bots.yaml and config/repos.yaml
@@ -450,6 +460,11 @@ async function main(): Promise<void> {
       }
       return backup(root, { ...(out ? { out } : {}), unencrypted: has('unencrypted'), selection });
     }
+
+    // Its flags are checked by release-key.ts itself, as strictly as FLAGS does.
+    case 'release-key':
+      process.exitCode = await releaseKey(process.argv.slice(3));
+      return;
 
     case 'restore': {
       // The path is whichever argument is not a flag, so `--dry-run` may come first.

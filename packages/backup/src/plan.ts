@@ -1,5 +1,13 @@
 import { settings, type SettingKey } from '@openadlc/db';
-import { accessTokenRef, engineKeyRef, internalSecretRef, isRetiredNotifyTargetRef, refreshTokenRef, signingKeyRef } from '@openadlc/github';
+import {
+  accessTokenRef,
+  engineKeyRef,
+  internalSecretRef,
+  isReleaseSigningKeyRef,
+  isRetiredNotifyTargetRef,
+  refreshTokenRef,
+  signingKeyRef,
+} from '@openadlc/github';
 import { ENGINES, isAvatar, isCrewColor, nameForLogin, sameLogin, seatForPersona } from '@openadlc/shared';
 import { BackupError, type ArchivedBot, type BackupContents, type BackupManifest } from './archive.js';
 import {
@@ -321,6 +329,12 @@ export interface RestorePlan {
     stale: string[];
     /** Refs never written back: the internal API secret, which each install makes for itself. */
     skipped: string[];
+    /**
+     * Release signing keys this install already holds, kept rather than
+     * overwritten from the archive (ADR 0069). Optional, as a plan from before
+     * there were any has none.
+     */
+    kept?: string[];
   };
   settings: { overwrite: SettingKey[]; create: SettingKey[]; unknown: string[] };
   bots: {
@@ -597,6 +611,14 @@ export function planRestore(contents: BackupContents, current: InstallShape): Re
     }
     if (verdict === 'never') {
       plan.secrets.skipped.push(ref);
+      continue;
+    }
+    // Clients pin a release key's public half and tag, so the one this install
+    // holds is never written over from an archive, which may hold an older or
+    // another install's key. Replacing it is `release-key import --replace`,
+    // asked for by name. One this install lacks is created, as any other.
+    if (isReleaseSigningKeyRef(ref) && haveRef.has(ref)) {
+      (plan.secrets.kept ??= []).push(ref);
       continue;
     }
     const target = movedTo.get(ref) ?? ref;

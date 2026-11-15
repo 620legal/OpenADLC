@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { releaseSigningKeyRef, serializeReleaseKeyRecord } from '@openadlc/github';
 import { BackupError, readPlain, writePlain, type BackupContents } from './archive.js';
 import { NOT_CLEAN, cleanliness } from './clean.js';
 import { compareInstall, itemsOf } from './compare.js';
@@ -622,5 +623,49 @@ describe('a history backup restored into the install it came from', () => {
     expect(added).toMatchObject({ audit: 0, ledger: 0 });
     expect(install.state().history.audit).toHaveLength(1);
     expect(install.state().history.ledger).toHaveLength(1);
+  });
+});
+
+describe('a release signing key in an archive', () => {
+  const ref = releaseSigningKeyRef('acme/widget.app');
+  const record = (key: string) => serializeReleaseKeyRecord({ v: 1, repo: 'acme/widget.app', tag: 'acme-updates', key });
+  const archived = record('archived-key');
+  const live = record('live-key');
+
+  function withReleaseKey(): BackupContents {
+    const found = sourceInstall();
+    return buildBackup({ ...found, secrets: { ...found.secrets, [ref]: archived } }, EVERYTHING, NOW).contents;
+  }
+
+  it('is taken with the install', () => {
+    expect(withReleaseKey().secrets[ref]).toBe(archived);
+    expect(buildBackup({ ...sourceInstall(), secrets: { [ref]: archived } }, { ...EVERYTHING, install: false }, NOW).leftOut).toContainEqual({
+      ref,
+      reason: 'the install was not chosen',
+    });
+  });
+
+  it('never overwrites the key this install holds, which is kept and reported', async () => {
+    const contents = withReleaseKey();
+    const shape = { ...cleanShape(), secretRefs: [...cleanShape().secretRefs, ref] };
+    const plan = planRestore(contents, shape);
+    expect(plan.secrets.kept).toEqual([ref]);
+    expect(plan.secrets.overwrite).not.toContain(ref);
+    expect(plan.secrets.create).not.toContain(ref);
+
+    const { target, recorded } = fakeTarget({ existing: { 'internal-api-secret': VALUES.internal, [ref]: live } });
+    await applyRestore(contents, plan, target);
+    expect(recorded.secrets.get(ref)).toBe(live);
+  });
+
+  it('is created on an install that has none', async () => {
+    const contents = withReleaseKey();
+    const plan = planRestore(contents, cleanShape());
+    expect(plan.secrets.create).toContain(ref);
+    expect(plan.secrets.kept).toBeUndefined();
+
+    const { target, recorded } = fakeTarget();
+    await applyRestore(contents, plan, target);
+    expect(recorded.secrets.get(ref)).toBe(archived);
   });
 });

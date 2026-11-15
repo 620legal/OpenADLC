@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -25,13 +26,47 @@ import {
   ensureInternalSecret,
   FileSecretStore,
   internalSecretRef,
+  isReleaseSigningKeyRef,
   isRetiredNotifyTargetRef,
   modelAccountRef,
   PUSH_DEVICE_PREFIX,
   pushDeviceRef,
   pushVapidKeyRef,
+  releaseSigningKeyRef,
   webhookSecretRef,
 } from './secrets.js';
+
+describe('a release signing key ref', () => {
+  it('is the hash of the lowercased owner/name, the same in any capitals', () => {
+    const ref = releaseSigningKeyRef('Acme/Widget.App');
+    expect(ref).toBe(releaseSigningKeyRef('acme/widget.app'));
+    expect(ref).toBe(`release-signing-key:${createHash('sha256').update('acme/widget.app').digest('hex')}`);
+    expect(ref).toHaveLength(84);
+    expect(releaseSigningKeyRef('acme/other')).not.toBe(ref);
+  });
+
+  it('is a legal name in both stores, a `.` in the repository included', async () => {
+    const ref = releaseSigningKeyRef('acme/widget.app');
+    // Secret Manager's rule, as gcp-secrets.ts checks it: no `.`.
+    expect(ref).toMatch(/^[a-zA-Z0-9_:-]+$/);
+    const root = mkdtempSync(join(tmpdir(), 'release-ref-'));
+    try {
+      const store = new FileSecretStore(root);
+      await store.set(ref, '{"v":1}');
+      expect(await store.list('release-signing-key:')).toEqual([ref]);
+      expect(await store.get(ref)).toBe('{"v":1}');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('is told from every other ref', () => {
+    expect(isReleaseSigningKeyRef(releaseSigningKeyRef('acme/app'))).toBe(true);
+    expect(isReleaseSigningKeyRef('release-signing-key:')).toBe(false);
+    expect(isReleaseSigningKeyRef('release-signing-key:acme')).toBe(false);
+    expect(isReleaseSigningKeyRef(appPrivateKeyRef())).toBe(false);
+  });
+});
 
 describe('a model account ref', () => {
   it('is one ref per account, and a uuid is a legal secret name', async () => {

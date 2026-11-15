@@ -2402,6 +2402,31 @@ in [Check it](#check-it), plus two of the release account's own:
 - **The host check account can reach its home.** Run
   `sudo chmod 700 <the release account's home>`.
 
+### Import the repository's signing key
+
+Each repository that releases has its own ed25519 key. Its clients pin the
+public half and the tag
+([security](security.md#release-signing)). Import it from a file, on this
+machine:
+
+```bash
+# A new key, if the repository has none yet:
+openssl genpkey -algorithm ed25519 -out release-key.pem
+openadlc release-key import --repo acme/widget --file release-key.pem
+# With the tag its clients already pin, if it is not the default:
+openadlc release-key import --repo acme/widget --file release-key.pem --tag 'acme-widget-updates-1'
+```
+
+The command prints the public key and the tag. Pin those in the clients, then
+move the key file somewhere safe and offline. OpenADLC never rotates the key.
+Importing a different key or tag over it needs `--replace`, and every client
+pinning the old one then stops accepting releases. `openadlc release-key show
+--repo acme/widget` prints what is filed.
+
+Only an encrypted backup (`openadlc backup`) carries the key. An
+`--unencrypted` one leaves it out and says so. A restore never writes over a
+key this install already holds.
+
 ## 11. Operate it
 
 ```bash
