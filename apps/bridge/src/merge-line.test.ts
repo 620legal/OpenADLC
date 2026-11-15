@@ -177,6 +177,7 @@ describe('the front of the line, green and up to date', () => {
       mergeFacts: vi.fn(async () => facts),
       mergeAsApp: vi.fn(async () => (options.app === false ? null : { sha: 'merged00merged00' })),
       setCiLabel: vi.fn(async () => 'app' as const),
+      createCommitAsApp: vi.fn(async (): Promise<string | null> => (options.app === false ? null : 'bridge00')),
     };
     const config = { automationBot: null, organization: 'janedoe', gitHubClientId: '', webhookSecret: '', humans: [], publicUrl: '' };
     const clock = { now: 1_000_000 };
@@ -508,17 +509,20 @@ describe('the front of the line, green and up to date', () => {
 
       it('merges a commit that marks the squashed work as in the base, so only the branch’s own changes apply', async () => {
         quiet();
-        const { line: merge, github, stacks, start, backToBuild } = replay();
+        const { line: merge, github, automation, stacks, start, backToBuild } = replay();
 
         expect(await merge.updateStacked({ repoName: 'openadlc', prNumber: 31, carry: true, why: '#30 merged' })).toBe('updated');
 
         expect(github.commitOf).toHaveBeenCalledWith('janedoe/openadlc', 'main');
-        // The base's content exactly, recording that the base holds the dependency's head.
-        expect(github.createCommit).toHaveBeenCalledWith('janedoe/openadlc', {
+        // The base's content exactly, recording that the base holds the
+        // dependency's head. Written as the app, so GitHub signs it: written
+        // with the crew's token it was unsigned, and #330 could never land.
+        expect(automation.createCommitAsApp).toHaveBeenCalledWith('janedoe/openadlc', {
           message: "Mark #30's squashed work (dep0000) as in main, for #31's update (OpenADLC)",
           tree: 'tree0000',
           parents: ['main0000', DEP],
         });
+        expect(github.createCommit).not.toHaveBeenCalled();
         expect(github.mergeIntoBranch).toHaveBeenCalledWith('janedoe/openadlc', 'agent/openadlc-atlas-janedoe/11-issue-11', 'bridge00');
         // A merge whose first parent is the head read: the approvals carry as before.
         expect(stacks.made).toHaveBeenCalledWith({ repoName: 'openadlc', prNumber: 31, from: HEAD, to: MADE });
@@ -545,24 +549,59 @@ describe('the front of the line, green and up to date', () => {
         const plain = stackedLine();
         await plain.line.updateStacked({ repoName: 'openadlc', prNumber: 31, carry: true, why: '#30 merged' });
         expect(plain.github.createCommit).not.toHaveBeenCalled();
+        expect(plain.automation.createCommitAsApp).not.toHaveBeenCalled();
         expect(plain.github.mergeIntoBranch).toHaveBeenCalledWith('janedoe/openadlc', 'agent/openadlc-atlas-janedoe/11-issue-11', 'main');
 
         vi.spyOn(console, 'warn').mockImplementation(() => undefined);
         const refused = replay();
-        refused.github.createCommit.mockRejectedValue(new Error('GitHub answered 403'));
+        refused.automation.createCommitAsApp.mockRejectedValue(new Error('GitHub answered 403'));
         expect(await refused.line.updateStacked({ repoName: 'openadlc', prNumber: 31, carry: true, why: '#30 merged' })).toBe('updated');
+        expect(refused.github.createCommit).not.toHaveBeenCalled();
         expect(refused.github.mergeIntoBranch).toHaveBeenCalledWith('janedoe/openadlc', 'agent/openadlc-atlas-janedoe/11-issue-11', 'main');
       });
 
+      it('writes no bridge as the crew where no app client can write it, and merges the base plainly, saying why', async () => {
+        quiet();
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+        const { line: merge, github, automation, stacks } = replay();
+        automation.createCommitAsApp.mockResolvedValue(null);
+
+        expect(await merge.updateStacked({ repoName: 'openadlc', prNumber: 31, carry: true, why: '#30 merged' })).toBe('updated');
+
+        expect(automation.createCommitAsApp).toHaveBeenCalledTimes(1);
+        expect(github.createCommit).not.toHaveBeenCalled();
+        expect(github.mergeIntoBranch).toHaveBeenCalledWith('janedoe/openadlc', 'agent/openadlc-atlas-janedoe/11-issue-11', 'main');
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('no GitHub App client'));
+        expect(stacks.made).toHaveBeenCalledWith({ repoName: 'openadlc', prNumber: 31, from: HEAD, to: MADE });
+      });
+
       it('replays the same way when the line brings it up to date at the front', async () => {
-        const { line: merge, github } = line();
+        const { line: merge, github, automation } = line();
         github.behindBy.mockResolvedValue(1);
         merge.useStacking({ waitingOn: vi.fn(async () => null), updating: vi.fn(async () => ({ on: 30, replayFrom: DEP })), made: vi.fn(async () => undefined) });
 
         expect(await merge.advance('openadlc')).toMatchObject({ state: 'updating' });
 
-        expect(github.createCommit).toHaveBeenCalledWith('janedoe/openadlc', expect.objectContaining({ parents: ['main0000', DEP] }));
+        expect(automation.createCommitAsApp).toHaveBeenCalledWith('janedoe/openadlc', expect.objectContaining({ parents: ['main0000', DEP] }));
+        expect(github.createCommit).not.toHaveBeenCalled();
         expect(github.mergeIntoBranch).toHaveBeenCalledWith('janedoe/openadlc', 'agent/openadlc-atlas-janedoe/11-issue-11', 'bridge00');
+      });
+
+      it('updates plainly at the front, with no bridge, a pull request its issue’s stack was not what it was built on', async () => {
+        // #334, rebuilt from main for an issue whose earlier pull request was
+        // stacked: the stack answers it is not stacked (`Stacking.updating`).
+        const { line: merge, github, automation } = line();
+        github.behindBy.mockResolvedValue(1);
+        const updating = vi.fn(async () => null);
+        merge.useStacking({ waitingOn: vi.fn(async () => null), updating, made: vi.fn(async () => undefined) });
+
+        expect(await merge.advance('openadlc')).toMatchObject({ state: 'updating' });
+
+        expect(updating).toHaveBeenCalledWith(expect.objectContaining({ prNumber: 31, issue: 11, headSha: HEAD }));
+        expect(github.updateBranch).toHaveBeenCalledWith('janedoe/openadlc', 31, HEAD);
+        expect(github.mergeIntoBranch).not.toHaveBeenCalled();
+        expect(github.createCommit).not.toHaveBeenCalled();
+        expect(automation.createCommitAsApp).not.toHaveBeenCalled();
       });
     });
 

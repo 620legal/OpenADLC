@@ -2929,13 +2929,13 @@ describe('whether the bridge may merge a pull request', () => {
 
       expect(decision).toMatchObject({ land: false, approvals: [] });
       expect(decision.reason).toBe(
-        "its commits are not signed (abc1234, def5678), and main requires signed commits: sign them and push again (a commit made in GitHub's web editor or through its API is signed by GitHub), or have the crew build it",
+        "its commits are not signed (abc1234, def5678), and main requires signed commits: sign them and push again (GitHub signs a commit made in its web editor, or through its API as a GitHub App; not one made through its API with a person's or a bot account's token), or have the crew build it",
       );
     });
 
     it('says which of several commits, with GitHub’s reason when one is signed with a key it cannot verify', () => {
       expect(blocked([SIGNATURES], [commit(SIGNED, 'valid'), commit(UNSIGNED, 'unknown_key')]).reason).toBe(
-        "1 of its 2 commits is not verified as signed (abc1234: unknown key), and main requires signed commits: sign it and push again (a commit made in GitHub's web editor or through its API is signed by GitHub), or have the crew build it",
+        "1 of its 2 commits is not verified as signed (abc1234: unknown key), and main requires signed commits: sign it and push again (GitHub signs a commit made in its web editor, or through its API as a GitHub App; not one made through its API with a person's or a bot account's token), or have the crew build it",
       );
       // Signed and verified, they are not what holds it.
       expect(blocked([SIGNATURES], [commit(SIGNED, 'valid')]).reason).not.toContain('signed (');
@@ -3135,6 +3135,34 @@ describe('merging as the app', () => {
   it('is not done at all where the app cannot be asked', async () => {
     const automation = new Automation({} as never, {} as never, { client: vi.fn(async () => null) } as never);
     expect(await automation.mergeAsApp('janedoe/openadlc', 31, 'c0ffee00')).toBeNull();
+  });
+});
+
+describe('writing a commit as the app', () => {
+  const COMMIT = { message: 'Mark #30 as in main', tree: 'tree0000', parents: ['main0000', 'dep00000'] };
+
+  it('is done with the app’s client, which GitHub signs the commit for, never a crew account’s', async () => {
+    const app = { createCommit: vi.fn(async () => 'bridge00') };
+    const crew = { createCommit: vi.fn(async () => 'unsigned') };
+    const automation = new Automation({} as never, { asBot: vi.fn(async () => crew) } as never, { client: vi.fn(async () => app) } as never);
+
+    expect(await automation.createCommitAsApp('janedoe/openadlc', COMMIT)).toBe('bridge00');
+    expect(app.createCommit).toHaveBeenCalledWith('janedoe/openadlc', COMMIT);
+    expect(crew.createCommit).not.toHaveBeenCalled();
+  });
+
+  it('is not done at all where the app cannot be asked', async () => {
+    const crew = { createCommit: vi.fn(async () => 'unsigned') };
+    const actors = { asBot: vi.fn(async () => crew) } as never;
+    expect(await new Automation({} as never, actors, { client: vi.fn(async () => null) } as never).createCommitAsApp('janedoe/openadlc', COMMIT)).toBeNull();
+    expect(await new Automation({} as never, actors).createCommitAsApp('janedoe/openadlc', COMMIT)).toBeNull();
+    expect(crew.createCommit).not.toHaveBeenCalled();
+  });
+
+  it('throws what GitHub answered, so the line can say why it merged plainly', async () => {
+    const app = { createCommit: vi.fn(async () => Promise.reject(new Error('GitHub answered 422'))) };
+    const automation = new Automation({} as never, {} as never, { client: vi.fn(async () => app) } as never);
+    await expect(automation.createCommitAsApp('janedoe/openadlc', COMMIT)).rejects.toThrow('GitHub answered 422');
   });
 });
 
