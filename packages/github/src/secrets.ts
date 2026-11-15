@@ -1,4 +1,4 @@
-import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, createPublicKey, randomBytes, timingSafeEqual, type KeyObject } from 'node:crypto';
 import { chmodSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -235,6 +235,16 @@ const RELEASE_SIGNING_KEY_PREFIX = 'release-signing-key:';
  */
 export function releaseSigningKeyRef(repo: string): string {
   return `${RELEASE_SIGNING_KEY_PREFIX}${createHash('sha256').update(repo.toLowerCase(), 'utf8').digest('hex')}`;
+}
+
+/**
+ * The raw 32-byte public key of an ed25519 key, from its SPKI DER (12 bytes of
+ * header, then the key): what a client pins. One copy, for the import and the
+ * signer, so the two can never print different keys for one record.
+ */
+export function rawPublicKey(key: KeyObject): Buffer {
+  const der = createPublicKey(key).export({ type: 'spki', format: 'der' });
+  return der.subarray(der.length - 32);
 }
 
 /** Whether a ref is a repository's release signing key, so a backup can tell one without reading it. */

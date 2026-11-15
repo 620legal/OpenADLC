@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, createPrivateKey } from 'node:crypto';
 import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -32,9 +32,22 @@ import {
   PUSH_DEVICE_PREFIX,
   pushDeviceRef,
   pushVapidKeyRef,
+  rawPublicKey,
   releaseSigningKeyRef,
   webhookSecretRef,
 } from './secrets.js';
+
+describe('the raw public key a client pins', () => {
+  it('is the 32 bytes RFC 8032 gives for its test 1 seed', () => {
+    const seed = Buffer.from('9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60', 'hex');
+    const key = createPrivateKey({
+      key: Buffer.concat([Buffer.from('302e020100300506032b657004220420', 'hex'), seed]),
+      format: 'der',
+      type: 'pkcs8',
+    });
+    expect(rawPublicKey(key).toString('hex')).toBe('d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a');
+  });
+});
 
 describe('a release signing key ref', () => {
   it('is the hash of the lowercased owner/name, the same in any capitals', () => {

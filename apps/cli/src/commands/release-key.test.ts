@@ -1,8 +1,11 @@
 import { createPrivateKey, generateKeyPairSync } from 'node:crypto';
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { parseReleaseKeyRecord, releaseSigningKeyRef, type SecretStore } from '@openadlc/github';
 import { DEFAULT_RELEASE_TAG } from '@openadlc/shared';
-import { releaseKey, releaseKeyArgs, readReleaseKey, type ReleaseKeyDeps } from './release-key.js';
+import { openKeyFile, releaseKey, releaseKeyArgs, readReleaseKey, type ReleaseKeyDeps } from './release-key.js';
 
 /** RFC 8032 §7.1 test 1's seed, as a PEM and as base64: one key in both forms. */
 const SEED_HEX = '9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60';
@@ -42,15 +45,17 @@ let files: Map<string, Buffer | 'directory'>;
 function deps(): ReleaseKeyDeps {
   return {
     store,
-    lstat: async (path) => {
+    open: async (path) => {
       const file = files.get(path);
       if (file === undefined) throw Object.assign(new Error(`ENOENT: ${path}`), { code: 'ENOENT' });
-      return { isFile: () => file !== 'directory', size: file === 'directory' ? 0 : file.length };
-    },
-    readFile: async (path) => {
-      const file = files.get(path);
-      if (!(file instanceof Buffer)) throw new Error('EISDIR');
-      return file;
+      return {
+        stat: async () => ({ isFile: () => file !== 'directory', size: file === 'directory' ? 0 : file.length }),
+        read: async (max) => {
+          if (!(file instanceof Buffer)) throw new Error('EISDIR');
+          return file.subarray(0, max);
+        },
+        close: async () => undefined,
+      };
     },
   };
 }
@@ -116,7 +121,11 @@ describe('importing a release key', () => {
   it('refuses an over-size file before reading it, a directory and a missing file', async () => {
     const read = vi.fn();
     files.set('/big', Buffer.alloc(16 * 1024 + 1, 0x41));
-    expect(await releaseKey(['import', '--repo', REPO, '--file', '/big'], { ...deps(), readFile: read })).toBe(1);
+    const sized: ReleaseKeyDeps = {
+      store,
+      open: async () => ({ stat: async () => ({ isFile: () => true, size: 16 * 1024 + 1 }), read, close: async () => undefined }),
+    };
+    expect(await releaseKey(['import', '--repo', REPO, '--file', '/big'], sized)).toBe(1);
     expect(read).not.toHaveBeenCalled();
     expect(printed.join('\n')).toContain('too big to be an ed25519 key');
 
@@ -126,6 +135,27 @@ describe('importing a release key', () => {
 
     expect(await run('import', '--repo', REPO, '--file', '/nowhere')).toBe(1);
     expect(printed.join('\n')).toContain('there is no file at /nowhere');
+    expect(store.values.size).toBe(0);
+  });
+
+  it('checks and reads one open descriptor, and refuses a file that grew past the cap after its stat', async () => {
+    const opened = vi.fn();
+    const close = vi.fn(async () => undefined);
+    const grown: ReleaseKeyDeps = {
+      store,
+      open: async (path) => {
+        opened(path);
+        return {
+          stat: async () => ({ isFile: () => true, size: 10 }),
+          read: async (max) => Buffer.alloc(max, 0x41),
+          close,
+        };
+      },
+    };
+    expect(await releaseKey(['import', '--repo', REPO, '--file', '/grown'], grown)).toBe(1);
+    expect(opened).toHaveBeenCalledTimes(1);
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(printed.join('\n')).toContain('too big to be an ed25519 key');
     expect(store.values.size).toBe(0);
   });
 
@@ -153,6 +183,38 @@ describe('importing a release key', () => {
       replace: true,
     });
     expect(await run('import', '--repo', REPO, '--file', file('/k', PEM), '--tagg', 'x')).toBe(2);
+    expect(store.values.size).toBe(0);
+  });
+});
+
+describe('the key file on disk', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'release-key-'));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('imports a real file, and refuses a link to it without following the link', async () => {
+    const real = join(dir, 'k.pem');
+    writeFileSync(real, PEM);
+    const link = join(dir, 'link.pem');
+    symlinkSync(real, link);
+
+    expect(await releaseKey(['import', '--repo', REPO, '--file', link], { store, open: openKeyFile })).toBe(1);
+    expect(printed.join('\n')).toContain(`${link} is a link; give the key file itself`);
+    expect(store.values.size).toBe(0);
+
+    expect(await releaseKey(['import', '--repo', REPO, '--file', real], { store, open: openKeyFile })).toBe(0);
+    expect(stored()).toMatchObject({ repo: REPO });
+  });
+
+  it('refuses a directory and a missing path', async () => {
+    expect(await releaseKey(['import', '--repo', REPO, '--file', dir], { store, open: openKeyFile })).toBe(1);
+    expect(printed.join('\n')).toContain('not a regular file');
+    expect(await releaseKey(['import', '--repo', REPO, '--file', join(dir, 'nope')], { store, open: openKeyFile })).toBe(1);
+    expect(printed.join('\n')).toContain('there is no file at');
     expect(store.values.size).toBe(0);
   });
 });

@@ -54,7 +54,13 @@ function shown(value: string): string {
 /** Why a tag cannot be a release tag, or null when it can. */
 export function releaseTagProblem(tag: string): string | null {
   if (typeof tag !== 'string' || tag.length === 0) return 'the release tag is empty; give one, or leave it out for the default';
-  const bytes = new TextEncoder().encode(tag).length;
+  const encoded = new TextEncoder().encode(tag);
+  // A lone surrogate encodes as U+FFFD, so the bytes signed would not be the
+  // tag a person typed and a client pins: refuse it rather than sign those.
+  if (new TextDecoder().decode(encoded) !== tag) {
+    return 'the release tag is not valid Unicode text (it holds a lone surrogate); type it again';
+  }
+  const bytes = encoded.length;
   if (bytes > MAX_TAG_BYTES) return `the release tag is ${bytes} bytes; it may be at most ${MAX_TAG_BYTES}`;
   if (CONTROL.test(tag)) return 'the release tag holds a control character (a line break, a tab or the like); it must be one line of printable text';
   if (tag !== tag.trim()) return 'the release tag starts or ends with a space; take the space out';
@@ -92,6 +98,11 @@ function check(tag: string, fields: ReleaseFields): void {
   }
   if (parsed.protocol !== 'https:') {
     throw new ReleaseManifestError('url', `the url ${shown(url)} is not https`);
+  }
+  // A published download URL has no reason to carry a login, and one signed
+  // into the manifest would be public in every release asset. Not echoed.
+  if (parsed.username !== '' || parsed.password !== '') {
+    throw new ReleaseManifestError('url', 'the url holds a user name or password; give the download URL without them');
   }
   // A URL the parser would rewrite (a capital in the host, a default port, a
   // `..` segment) is refused rather than normalised: the bytes signed have to

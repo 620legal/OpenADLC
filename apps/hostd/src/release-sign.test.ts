@@ -108,19 +108,38 @@ describe('signing a release', () => {
 });
 
 /**
- * The signature as a client outside OpenADLC checks it: OpenSSL 3's
- * `pkeyutl -rawin`, over the exact bytes. LibreSSL (macOS's `openssl`) and
- * OpenSSL 1.1 have no `-rawin` for ed25519, so there it is skipped by name;
- * CI's ubuntu runner has OpenSSL 3.
+ * The signature as a client outside OpenADLC checks it: `pkeyutl -rawin`,
+ * which OpenSSL has from 3.0 on, over the exact bytes. LibreSSL (macOS's
+ * `openssl`) and OpenSSL 1.1 have no `-rawin` for ed25519, so there it is
+ * skipped by name. Gated on the major version rather than on "OpenSSL 3", which
+ * skipped it on a host with Homebrew's OpenSSL 4.
  */
 const opensslVersion = (() => {
   const run = spawnSync('openssl', ['version'], { encoding: 'utf8' });
   return run.status === 0 ? run.stdout.trim() : '';
 })();
 
+/** Whether `openssl version` names OpenSSL 3 or later: the ones with `pkeyutl -rawin`. */
+function hasRawin(version: string): boolean {
+  const major = /^OpenSSL (\d+)\./.exec(version);
+  return major !== null && Number(major[1]) >= 3;
+}
+
+describe('which openssl runs the independent check', () => {
+  it.each([
+    ['OpenSSL 3.0.13 30 Jan 2024', true],
+    ['OpenSSL 4.0.3 1 Oct 2026', true],
+    ['OpenSSL 1.1.1w  11 Sep 2023', false],
+    ['LibreSSL 3.3.6', false],
+    ['', false],
+  ])('%s: %s', (version, runs) => {
+    expect(hasRawin(version)).toBe(runs);
+  });
+});
+
 describe('the signature, checked by OpenSSL', () => {
-  it.skipIf(!opensslVersion.startsWith('OpenSSL 3'))(
-    `verifies with openssl pkeyutl -verify -rawin (skipped without OpenSSL 3; this host has ${opensslVersion || 'no openssl'})`,
+  it.skipIf(!hasRawin(opensslVersion))(
+    `verifies with openssl pkeyutl -verify -rawin (skipped without OpenSSL 3 or later; this host has ${opensslVersion || 'no openssl'})`,
     async () => {
       const signed = await signRelease(REPO, FIELDS, storeWith());
       const dir = mkdtempSync(join(tmpdir(), 'release-sign-'));

@@ -326,13 +326,13 @@ export function withoutRefreshTokens(secrets: Record<string, string>): Record<st
 /**
  * The repositories whose release signing keys a secret map holds, by the name
  * each record was imported under, and sorted. A record that does not read is
- * named by its ref. Never the key: this is what the CLI prints when an
- * unencrypted backup leaves them out.
+ * named "an unreadable record", never by its ref. Never the key: this is what
+ * the CLI prints when an unencrypted backup leaves them out.
  */
 export function releaseSigningKeyRepos(secrets: Record<string, string>): string[] {
   return Object.keys(secrets)
     .filter(isReleaseSigningKeyRef)
-    .map((ref) => parseReleaseKeyRecord(secrets[ref] ?? null)?.repo ?? ref)
+    .map((ref) => parseReleaseKeyRecord(secrets[ref] ?? null)?.repo ?? 'an unreadable record')
     .sort();
 }
 

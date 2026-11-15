@@ -1,8 +1,10 @@
 import { createPrivateKey, createPublicKey, type KeyObject } from 'node:crypto';
-import { lstat, readFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { open } from 'node:fs/promises';
 import {
   getSecretStore,
   parseReleaseKeyRecord,
+  rawPublicKey,
   releaseSigningKeyRef,
   serializeReleaseKeyRecord,
   type ReleaseKeyRecord,
@@ -101,12 +103,6 @@ export function releaseKeyArgs(argv: readonly string[]): ReleaseKeyArgs | { refu
   };
 }
 
-/** The raw 32-byte public key, from the SPKI DER: a fixed 12-byte header, then the key. */
-function rawPublicKey(key: KeyObject): Buffer {
-  const der = createPublicKey(key).export({ type: 'spki', format: 'der' });
-  return der.subarray(der.length - 32);
-}
-
 /** The public facts of a key, which are what a client pins. */
 function publicFacts(key: KeyObject): { raw: string; pem: string } {
   return {
@@ -166,33 +162,85 @@ export function readReleaseKey(contents: Buffer): { key: KeyObject } | { refusal
   return { refusal: `the key file is not a PKCS#8 PEM or a base64 32-byte ed25519 seed; make one with: ${GENERATE}` };
 }
 
+/** An open key file: what it is, then its bytes, both from the one descriptor. */
+export interface KeyFileHandle {
+  stat(): Promise<{ isFile(): boolean; size: number }>;
+  /** At most `max` bytes from the start of the file. */
+  read(max: number): Promise<Buffer>;
+  close(): Promise<void>;
+}
+
 export interface ReleaseKeyDeps {
   store: SecretStore;
-  lstat: (path: string) => Promise<{ isFile(): boolean; size: number }>;
-  readFile: (path: string) => Promise<Buffer>;
+  /** Opens the path itself, never a link at it: a link is refused with `ELOOP`. */
+  open: (path: string) => Promise<KeyFileHandle>;
+}
+
+/**
+ * The path is opened once, without following a link (`O_NOFOLLOW`), and what
+ * it is and what it holds are both read from that descriptor. Checking the
+ * path with `lstat` and then reading it by name let a swap between the two
+ * calls put a link, or another file, behind a check that had already passed
+ * (review of #349). `O_NONBLOCK` keeps a FIFO at the path from holding the
+ * open until something writes to it; it changes nothing for a regular file.
+ */
+export async function openKeyFile(path: string): Promise<KeyFileHandle> {
+  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  return {
+    stat: () => handle.stat(),
+    read: async (max) => {
+      const buffer = Buffer.alloc(max);
+      let filled = 0;
+      while (filled < max) {
+        const { bytesRead } = await handle.read(buffer, filled, max - filled, filled);
+        if (bytesRead === 0) break;
+        filled += bytesRead;
+      }
+      return buffer.subarray(0, filled);
+    },
+    close: () => handle.close(),
+  };
 }
 
 function liveDeps(): ReleaseKeyDeps {
-  return { store: getSecretStore(), lstat, readFile: (path) => readFile(path) };
+  return { store: getSecretStore(), open: openKeyFile };
+}
+
+function tooBig(path: string, size: number): { refusal: string } {
+  return { refusal: `${path} is ${size} bytes, too big to be an ed25519 key (at most ${MAX_KEY_FILE_BYTES}); check the path` };
 }
 
 /** The key file's bytes, or why it is not read. */
 async function keyFile(path: string, deps: ReleaseKeyDeps): Promise<{ bytes: Buffer } | { refusal: string }> {
-  let stat: { isFile(): boolean; size: number };
+  let handle: KeyFileHandle;
   try {
-    stat = await deps.lstat(path);
-  } catch {
-    return { refusal: `there is no file at ${path}; give the path of the key file` };
-  }
-  // lstat, so a symlink is refused too: the file imported is the file named.
-  if (!stat.isFile()) return { refusal: `${path} is not a regular file (a directory, a link or a device); give the key file itself` };
-  if (stat.size > MAX_KEY_FILE_BYTES) {
-    return { refusal: `${path} is ${stat.size} bytes, too big to be an ed25519 key (at most ${MAX_KEY_FILE_BYTES}); check the path` };
+    handle = await deps.open(path);
+  } catch (error) {
+    const code = (error as { code?: unknown }).code;
+    if (code === 'ELOOP') return { refusal: `${path} is a link; give the key file itself` };
+    if (code === 'ENOENT' || code === 'ENOTDIR') return { refusal: `there is no file at ${path}; give the path of the key file` };
+    return { refusal: `${path} could not be opened; check that this account may read it` };
   }
   try {
-    return { bytes: await deps.readFile(path) };
-  } catch {
-    return { refusal: `${path} could not be read; check that this account may read it` };
+    let stat: { isFile(): boolean; size: number };
+    try {
+      stat = await handle.stat();
+    } catch {
+      return { refusal: `${path} could not be read; check that this account may read it` };
+    }
+    if (!stat.isFile()) return { refusal: `${path} is not a regular file (a directory, a link or a device); give the key file itself` };
+    if (stat.size > MAX_KEY_FILE_BYTES) return tooBig(path, stat.size);
+    let bytes: Buffer;
+    try {
+      // One byte past the cap, so a file that grew after the stat is still caught.
+      bytes = await handle.read(MAX_KEY_FILE_BYTES + 1);
+    } catch {
+      return { refusal: `${path} could not be read; check that this account may read it` };
+    }
+    if (bytes.length > MAX_KEY_FILE_BYTES) return tooBig(path, bytes.length);
+    return { bytes };
+  } finally {
+    await handle.close().catch(() => undefined);
   }
 }
 
@@ -240,6 +288,9 @@ async function importKey(args: ReleaseKeyArgs & { file: string }, deps: ReleaseK
   };
 
   const ref = releaseSigningKeyRef(args.repo);
+  // Read, compare, then write: not atomic, so two imports at once for one
+  // repository could each pass the check. It is a command a person runs on
+  // the host, one at a time, and the store has no compare-and-set to hold it to.
   const existing = await deps.store.get(ref);
   if (existing !== null) {
     const stored = parseReleaseKeyRecord(existing);

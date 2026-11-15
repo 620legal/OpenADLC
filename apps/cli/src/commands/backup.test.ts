@@ -1446,6 +1446,21 @@ describe('--unencrypted', () => {
     expect(packed[0]?.secrets).toEqual(SOMETHING_TO_SAVE.secrets);
   });
 
+  it('names a release key record that does not read as unreadable, never by its ref', async () => {
+    const ref = releaseSigningKeyRef('acme/widget.app');
+    const io = fakeIo([]);
+    const { deps } = backupDeps(
+      io.io,
+      fakeInstall({ contents: { ...SOMETHING_TO_SAVE, secrets: { ...SOMETHING_TO_SAVE.secrets, [ref]: 'not a record' } } }).access,
+    );
+
+    await backup(scratch(), { out: join(scratch(), 'plain.json'), unencrypted: true }, deps);
+
+    expect(io.text()).toContain('Left out: 1 release signing key (an unreadable record)');
+    expect(io.text()).not.toContain(ref);
+    expect(io.text()).not.toContain('not a record');
+  });
+
   it('says what it is doing, in the output, every time', async () => {
     const io = fakeIo([]);
     const { deps } = backupDeps(io.io, fakeInstall({ contents: SOMETHING_TO_SAVE }).access);

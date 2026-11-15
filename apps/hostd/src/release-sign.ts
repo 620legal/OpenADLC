@@ -1,5 +1,5 @@
 import { createPrivateKey, createPublicKey, sign, verify, type KeyObject } from 'node:crypto';
-import { getSecretStore, parseReleaseKeyRecord, releaseSigningKeyRef, type SecretStore } from '@openadlc/github';
+import { getSecretStore, parseReleaseKeyRecord, rawPublicKey, releaseSigningKeyRef, type SecretStore } from '@openadlc/github';
 import { releaseManifestAsset, releaseMessage, type ReleaseFields } from '@openadlc/shared';
 
 /**
@@ -29,12 +29,6 @@ export interface SignedRelease {
 /** What to run on the host when there is no usable key for a repository. */
 function importAdvice(repo: string, replace: boolean): string {
   return `Run on the host: openadlc release-key import --repo ${repo} --file <path>${replace ? ' --replace' : ''}`;
-}
-
-/** The raw 32-byte public key of an ed25519 key, from its SPKI DER (12 bytes of header, then the key). */
-export function rawPublicKey(key: KeyObject): Buffer {
-  const der = createPublicKey(key).export({ type: 'spki', format: 'der' });
-  return der.subarray(der.length - 32);
 }
 
 export async function signRelease(
