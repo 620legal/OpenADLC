@@ -4,7 +4,7 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { HostChecks, RECEIVE, hostCheckRequestFrom, nodeProcesses, type HostCheckRun, type HostProcesses, type ProcessResult } from './host-check.js';
+import { HostChecks, RECEIVE, dockerSocketsOf, hostCheckRequestFrom, nodeProcesses, type HostCheckRun, type HostProcesses, type ProcessResult } from './host-check.js';
 
 const HEAD = 'a'.repeat(40);
 const NEXT = 'b'.repeat(40);
@@ -20,7 +20,9 @@ const OK: ProcessResult = { code: 0, stdout: '', stderr: '' };
  * and the account is as `fit` says. The long command runs until `finish` is
  * called for it, or it is signalled.
  */
-function machine(fit: { uid?: string; sudo?: boolean; readable?: string[]; ignoresTerm?: boolean } = {}) {
+function machine(
+  fit: { uid?: string; sudo?: boolean; readable?: readonly string[]; enterable?: readonly string[]; sockets?: readonly string[]; groups?: string; nopasswd?: string; ignoresTerm?: boolean } = {},
+) {
   /** Starts and signals in the order they happened; a signal goes to the whole account, like `kill -1` as it. */
   const events: string[] = [];
   const ran: { argv: string[]; env?: Record<string, string> }[] = [];
@@ -29,6 +31,7 @@ function machine(fit: { uid?: string; sudo?: boolean; readable?: string[]; ignor
   const processes: HostProcesses = {
     async run(argv, options = {}) {
       ran.push({ argv, ...(options.env ? { env: options.env } : {}) });
+      if (argv[0] === 'id' && argv[1] === '-Gn') return { code: 0, stdout: `${fit.groups ?? 'staff'}\n`, stderr: '' };
       if (argv[0] === 'id') return fit.uid === undefined ? { code: 0, stdout: '502\n', stderr: '' } : fit.uid === '' ? { code: 1, stdout: '', stderr: 'no such user' } : { code: 0, stdout: `${fit.uid}\n`, stderr: '' };
       if (argv[0] === '/bin/sh' && argv[2]?.includes('eval')) return { code: 0, stdout: `${HOME}\n`, stderr: '' };
       if (argv[0] === 'sudo') {
@@ -37,6 +40,11 @@ function machine(fit: { uid?: string; sudo?: boolean; readable?: string[]; ignor
         if (kill >= 0 && argv[kill + 2] === '-1') events.push(`clear ${argv[kill + 1]?.slice(1)}`);
         const path = argv[argv.length - 1] ?? '';
         if (argv.includes('test -r "$1" || ls "$1" >/dev/null 2>&1')) return { code: (fit.readable ?? []).includes(path) ? 0 : 1, stdout: '', stderr: '' };
+        if (argv.includes('test -d "$1" && test -x "$1"')) return { code: (fit.enterable ?? []).includes(path) ? 0 : 1, stdout: '', stderr: '' };
+        if (argv.includes('[ -S "$1" ] && [ -w "$1" ]')) return { code: (fit.sockets ?? []).includes(path) ? 0 : 1, stdout: '', stderr: '' };
+        if (argv.slice(-3).join(' ') === 'sudo -n -l') {
+          return fit.nopasswd === undefined ? { code: 1, stdout: '', stderr: 'sudo: a password is required' } : { code: 0, stdout: fit.nopasswd, stderr: '' };
+        }
         return OK;
       }
       if (argv[0] === 'git' && argv.includes('rev-parse')) {
@@ -87,6 +95,9 @@ function checks(world: ReturnType<typeof machine>, extra: Partial<ConstructorPar
     installId: 'default',
     openadlcHome: OPENADLC_HOME,
     hostdHome: '/Users/jane',
+    // Inside OPENADLC_HOME, so it adds no folder to the probe unless a test moves it.
+    workRoot: OPENADLC_HOME,
+    dockerSockets: [],
     mirrorRoot: join(work, 'mirrors'),
     remote: (repo) => `https://github.com/${repo}.git`,
     fetchAuth: async () => ({ GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'http.https://github.com.extraheader', GIT_CONFIG_VALUE_0: `Authorization: Basic ${TOKEN}` }),
@@ -337,6 +348,90 @@ describe('the account, proved before every run', () => {
   it.each([OPENADLC_HOME, `${OPENADLC_HOME}/install.json`, '/Users/jane'])('fails while the account can read %s', async (path) => {
     const { hostChecks } = checks(machine({ readable: [path] }));
     await expect(hostChecks.probe()).resolves.toMatchObject({ ok: false, problem: 'can_read', path });
+  });
+
+  describe('reaches nothing the install guards (#335)', () => {
+    const WORK_ROOT = '/Volumes/work/openadlc';
+
+    it('fails while it can enter a folder it cannot list, as a home at 0711', async () => {
+      const { hostChecks } = checks(machine({ enterable: ['/Users/jane'] }));
+      await expect(hostChecks.probe()).resolves.toMatchObject({ ok: false, problem: 'can_enter', path: '/Users/jane', detail: expect.stringContaining('can enter /Users/jane') });
+    });
+
+    it('fails while it can enter OPENADLC_HOME', async () => {
+      const { hostChecks } = checks(machine({ enterable: [OPENADLC_HOME] }));
+      await expect(hostChecks.probe()).resolves.toMatchObject({ ok: false, problem: 'can_enter', path: OPENADLC_HOME });
+    });
+
+    it('fails while it can enter or read a work root set outside OPENADLC_HOME', async () => {
+      const entered = checks(machine({ enterable: [WORK_ROOT] }), { workRoot: WORK_ROOT }).hostChecks;
+      await expect(entered.probe()).resolves.toMatchObject({ ok: false, problem: 'can_enter', path: WORK_ROOT });
+      const read = checks(machine({ readable: [WORK_ROOT] }), { workRoot: WORK_ROOT }).hostChecks;
+      await expect(read.probe()).resolves.toMatchObject({ ok: false, problem: 'can_read', path: WORK_ROOT });
+    });
+
+    it('fails while it can connect to a Docker socket', async () => {
+      const { hostChecks } = checks(machine({ sockets: ['/var/run/docker.sock'] }), { dockerSockets: ['/var/run/docker.sock', '/run/docker.sock'] });
+      await expect(hostChecks.probe()).resolves.toMatchObject({ ok: false, problem: 'docker', path: '/var/run/docker.sock', detail: expect.stringContaining('controls Docker as root') });
+    });
+
+    it('fails while it is in the docker group, asked as hostd', async () => {
+      const world = machine({ groups: 'staff docker' });
+      const { hostChecks } = checks(world);
+      const probe = await hostChecks.probe();
+      expect(probe).toMatchObject({ ok: false, problem: 'docker', detail: `${ACCOUNT} is in the docker group` });
+      expect(probe).not.toHaveProperty('path');
+      expect(world.ran.find((call) => call.argv[1] === '-Gn')?.argv).toEqual(['id', '-Gn', ACCOUNT]);
+    });
+
+    it('fails while it can run sudo without a password, one command’s NOPASSWD rule included, and quotes the rule', async () => {
+      const { hostChecks } = checks(machine({ nopasswd: 'User openadlc-hostcheck may run the following commands:\n    (root) NOPASSWD: /usr/bin/xcodebuild\n' }));
+      await expect(hostChecks.probe()).resolves.toMatchObject({ ok: false, problem: 'can_sudo', detail: expect.stringContaining('NOPASSWD: /usr/bin/xcodebuild') });
+    });
+
+    it('asks each one as the account, of every folder and socket it is given', async () => {
+      const world = machine();
+      const { hostChecks } = checks(world, { workRoot: WORK_ROOT, dockerSockets: ['/var/run/docker.sock'] });
+      await expect(hostChecks.probe()).resolves.toMatchObject({ ok: true });
+      const asked = (script: string) => world.ran.filter((call) => call.argv.includes(script)).map((call) => [call.argv.slice(0, 4), call.argv.at(-1)]);
+      const as = ['sudo', '-n', '-u', ACCOUNT];
+      expect(asked('test -d "$1" && test -x "$1"')).toEqual([OPENADLC_HOME, WORK_ROOT, '/Users/jane'].map((path) => [as, path]));
+      expect(asked('[ -S "$1" ] && [ -w "$1" ]')).toEqual([[as, '/var/run/docker.sock']]);
+      expect(world.ran.filter((call) => call.argv.slice(-3).join(' ') === 'sudo -n -l').map((call) => call.argv.slice(0, 4))).toEqual([as]);
+    });
+
+    it.each([
+      ['entering hostd’s home', { enterable: ['/Users/jane'] }],
+      ['the Docker socket', { sockets: ['/var/run/docker.sock'] }],
+      ['the docker group', { groups: 'docker' }],
+      ['passwordless sudo', { nopasswd: '(ALL) NOPASSWD: ALL' }],
+    ] as const)('refuses the run, and never runs the command, for %s', async (_name, fit) => {
+      const world = machine(fit);
+      const { hostChecks, reports } = checks(world, { dockerSockets: ['/var/run/docker.sock'] });
+      hostChecks.start(START);
+      await hostChecks.settled();
+      expect(world.started).toHaveLength(0);
+      expect(world.piped).toHaveLength(0);
+      expect(reports.at(-1)).toMatchObject({ state: 'refused' });
+    });
+
+    it('lists the Docker sockets the account must not reach', () => {
+      expect(dockerSocketsOf({ DOCKER_HOST: 'unix:///x.sock', XDG_RUNTIME_DIR: '/run/user/501' }, '/Users/jane')).toEqual([
+        '/x.sock',
+        '/var/run/docker.sock',
+        '/run/docker.sock',
+        '/Users/jane/.docker/run/docker.sock',
+        '/Users/jane/.orbstack/run/docker.sock',
+        '/run/user/501/docker.sock',
+      ]);
+      expect(dockerSocketsOf({ DOCKER_HOST: 'tcp://127.0.0.1:2375' }, '/Users/jane')).toEqual([
+        '/var/run/docker.sock',
+        '/run/docker.sock',
+        '/Users/jane/.docker/run/docker.sock',
+        '/Users/jane/.orbstack/run/docker.sock',
+      ]);
+      expect(dockerSocketsOf({ DOCKER_HOST: 'unix:///var/run/docker.sock' }, '/Users/jane')).toHaveLength(4);
+    });
   });
 
   it('refuses the run, with the fix, and never runs the command, when the probe fails', async () => {

@@ -9,7 +9,7 @@ vi.mock('../client.js', () => ({
 }));
 
 import { query, queryOne } from '../client.js';
-import { HOST_CHECK_LOG_TAIL_BYTES, byId, carry, finish, keptTail, passesFor, running, start } from './host-check-runs.js';
+import { HOST_CHECK_LOG_TAIL_BYTES, HOST_CHECK_REASON_CHARS, byId, carry, finish, keptReason, keptTail, passesFor, running, start } from './host-check-runs.js';
 
 const HEAD = 'a'.repeat(40);
 const ID = '0b6f1d1c-6c55-4c1c-9a59-1f4a4b8f2a10';
@@ -68,6 +68,46 @@ describe('a host check run, as the bridge records it', () => {
     expect(tail).not.toContain('\u0000');
     expect(tail).not.toContain(token);
     expect(tail.endsWith('printed ')).toBe(false);
+  });
+
+  describe('its reason, which is posted on the host-check status (#335)', () => {
+    const token = `ghp_${'x'.repeat(36)}`;
+
+    it('is stored with credentials masked when the run finishes', async () => {
+      vi.mocked(queryOne).mockResolvedValueOnce({ id: ID }).mockResolvedValueOnce({ ...ROW, state: 'failed' });
+      await finish('run-1', { state: 'failed', reason: `hostd could not fetch: hook said ${token}\u0000` });
+      const [, params] = vi.mocked(queryOne).mock.calls[0] ?? [];
+      const reason = String((params as unknown[])[5]);
+      expect(reason).toContain('hostd could not fetch: hook said');
+      expect(reason).not.toContain(token);
+      expect(reason).not.toContain('\u0000');
+    });
+
+    it('is capped to its first HOST_CHECK_REASON_CHARS characters, ending in an ellipsis', async () => {
+      vi.mocked(queryOne).mockResolvedValueOnce({ id: ID }).mockResolvedValueOnce({ ...ROW, state: 'failed' });
+      await finish('run-1', { state: 'failed', reason: `what happened ${'z'.repeat(5_000)}` });
+      const reason = String(((vi.mocked(queryOne).mock.calls[0] ?? [])[1] as unknown[])[5]);
+      expect(HOST_CHECK_REASON_CHARS).toBe(1_000);
+      expect(reason).toHaveLength(1_000);
+      expect(reason.startsWith('what happened ')).toBe(true);
+      expect(reason.endsWith('…')).toBe(true);
+      expect(keptReason('short')).toBe('short');
+    });
+
+    it('is redacted the same way for a run that starts refused', async () => {
+      vi.mocked(query).mockResolvedValueOnce([]);
+      vi.mocked(queryOne).mockResolvedValueOnce({ ...ROW, state: 'refused' });
+      await start({ runId: 'refused:1', repoId: 'repo-1', prNumber: 46, headSha: HEAD, command: 'make host-ci', timeoutMinutes: 90, state: 'refused', reason: `not fit: ${token}` });
+      const reason = String(((vi.mocked(query).mock.calls[0] ?? [])[1] as unknown[])[7]);
+      expect(reason).toContain('not fit:');
+      expect(reason).not.toContain(token);
+    });
+
+    it('stays null when none is given', async () => {
+      vi.mocked(queryOne).mockResolvedValueOnce({ id: ID }).mockResolvedValueOnce({ ...ROW, state: 'passed' });
+      await finish('run-1', { state: 'passed' });
+      expect(((vi.mocked(queryOne).mock.calls[0] ?? [])[1] as unknown[])[5]).toBeNull();
+    });
   });
 
   it('answers the heads a run passed on, which is what the merge reads', async () => {

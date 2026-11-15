@@ -1,4 +1,4 @@
-import { availableParallelism, totalmem } from 'node:os';
+import { availableParallelism, homedir, totalmem } from 'node:os';
 import { join } from 'node:path';
 import { bots, closePool, hosts, modelAccounts, repos, settings, tasks, waitForDatabase } from '@openadlc/db';
 import { getSecretStore, internalSecretRef, openadlcHome } from '@openadlc/github';
@@ -21,7 +21,7 @@ import { WarmPool } from './warm-pool.js';
 import { repoKeyOf } from './drivers/base-env.js';
 import { TaskRunner } from './task-runner.js';
 import { LocalCi, bridgeReporter } from './local-ci.js';
-import { HostChecks, hostCheckReporter } from './host-check.js';
+import { HostChecks, dockerSocketsOf, hostCheckReporter } from './host-check.js';
 import { gitAuthEnv } from './worktree.js';
 import { TokenClient } from './token-client.js';
 
@@ -255,6 +255,9 @@ async function main(): Promise<void> {
     account: config.hostCheckAccount ?? DEFAULT_HOST_CHECK_ACCOUNT,
     installId: config.installId ?? 'default',
     openadlcHome: openadlcHome(),
+    // Checked apart from OPENADLC_HOME: `OPENADLC_WORK_ROOT` can put it elsewhere.
+    workRoot: config.workRoot,
+    dockerSockets: dockerSocketsOf(process.env, homedir()),
     mirrorRoot: join(config.workRoot, 'host-check'),
     remote: (repoFullName) =>
       process.env[`OPENADLC_REMOTE_${repoFullName.replace(/[^A-Za-z0-9]/g, '_').toUpperCase()}`] ||

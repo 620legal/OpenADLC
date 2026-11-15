@@ -19,7 +19,10 @@ import { KILL_AFTER_MS } from './drivers/types.js';
  *
  * - `probe` proves before every run that the account exists, is neither root
  *   nor hostd's own user, that hostd may run a command as it, and that the
- *   command cannot read `OPENADLC_HOME`, `install.json` or hostd's home. A
+ *   command reaches nothing the install guards: it cannot read
+ *   `OPENADLC_HOME`, `install.json`, the work root or hostd's home, nor enter
+ *   any of those folders, nor connect to a Docker socket, is not in the
+ *   `docker` group, and cannot run `sudo` without a password (#335). A
  *   failed probe refuses the run with the fix as its reason.
  * - The code reaches the account without a credential: hostd fetches the head
  *   into a mirror of its own with the token, then writes it as a git bundle to
@@ -127,7 +130,7 @@ export function hostCheckRequestFrom(body: Record<string, unknown>): HostCheckRe
 /** What the probe found: `ok`, or the first thing wrong and what to do about it. */
 export type AccountProbe =
   | { ok: true; account: string; uid: number; home: string }
-  | { ok: false; account: string; problem: 'no_account' | 'not_dedicated' | 'no_sudo' | 'can_read'; path?: string; detail: string };
+  | { ok: false; account: string; problem: 'no_account' | 'not_dedicated' | 'no_sudo' | 'can_read' | 'can_enter' | 'docker' | 'can_sudo'; path?: string; detail: string };
 
 export interface ProcessResult {
   code: number;
@@ -156,6 +159,16 @@ export interface HostCheckDeps {
   openadlcHome: string;
   /** hostd's own home, which the account must not read either. */
   hostdHome?: string;
+  /**
+   * Where hostd keeps worktrees and mirrors (`OPENADLC_WORK_ROOT`), which the
+   * account must not enter: it can be set outside `OPENADLC_HOME`. Required,
+   * like `dockerSockets`, because the probe passes on what it is not given:
+   * a caller that left either out would let a work root elsewhere, or a
+   * reachable Docker socket, through without a word.
+   */
+  workRoot: string;
+  /** The Docker sockets the account must not connect to; see `dockerSocketsOf`. */
+  dockerSockets: string[];
   /** Where hostd keeps its mirrors for host checks. */
   mirrorRoot: string;
   /** The clone URL for a repository. */
@@ -285,9 +298,32 @@ export class HostChecks {
     const can = await this.processes.run(this.asAccount(['/usr/bin/true'], home), { timeoutMs: 30_000 });
     if (can.code !== 0) return fail('no_sudo', `hostd cannot run a command as ${account} without a password: ${(can.stderr || can.stdout).trim().slice(0, 200) || `sudo exited ${can.code}`}`);
     const hostdHome = this.deps.hostdHome ?? homedir();
-    for (const path of [this.deps.openadlcHome, join(this.deps.openadlcHome, 'install.json'), hostdHome]) {
-      const read = await this.processes.run(this.asAccount(['/bin/sh', '-c', 'test -r "$1" || ls "$1" >/dev/null 2>&1', 'sh', path], home), { timeoutMs: 30_000 });
-      if (read.code === 0) return fail('can_read', `${account} can read ${path}`, path);
+    const folders = [...new Set([this.deps.openadlcHome, this.deps.workRoot, hostdHome])];
+    const asIt = (script: string, path: string) => this.processes.run(this.asAccount(['/bin/sh', '-c', script, 'sh', path], home), { timeoutMs: 30_000 });
+    for (const path of [this.deps.openadlcHome, join(this.deps.openadlcHome, 'install.json'), ...folders.slice(1)]) {
+      if ((await asIt(READABLE, path)).code === 0) return fail('can_read', `${account} can read ${path}`, path);
+    }
+    // A folder it cannot list but may pass through, as a home at 0711, still
+    // opens every file in it whose name is known — `install.json` is one.
+    // `test -x` asks access(2), so an ACL that lets it through counts too.
+    for (const path of folders) {
+      if ((await asIt(ENTERABLE, path)).code === 0) return fail('can_enter', `${account} can enter ${path} (a file in it whose name it knows can be opened)`, path);
+    }
+    // The Docker socket is root on the machine: any container, with any of
+    // its folders mounted. Connecting to a unix socket takes write on it.
+    for (const path of this.deps.dockerSockets) {
+      if ((await asIt(CONNECTABLE, path)).code === 0) return fail('docker', `${account} can connect to ${path}, which controls Docker as root`, path);
+    }
+    // Asked as hostd, of the account's groups: a socket not listed above, as
+    // one a group opens on Linux, is reached through the group.
+    const groups = await this.processes.run(['id', '-Gn', account], { timeoutMs: 30_000 });
+    if (groups.code === 0 && groups.stdout.trim().split(/\s+/).includes('docker')) return fail('docker', `${account} is in the docker group`);
+    // `-l` without a password passes when any rule is NOPASSWD, one limited
+    // to a single command included, which `sudo -n true` would miss.
+    const sudo = await this.processes.run(this.asAccount(['sudo', '-n', '-l'], home), { timeoutMs: 30_000 });
+    if (sudo.code === 0) {
+      const listed = sudo.stdout.trim().replace(/\s+/g, ' ').slice(0, 200);
+      return fail('can_sudo', `${account} can run sudo without a password${listed ? ` (${listed})` : ''}`);
     }
     return { ok: true, account, uid, home };
   }
@@ -477,6 +513,28 @@ export class HostChecks {
       if (run.finishedAt && Date.parse(run.finishedAt) < cutoff) this.runs.delete(id);
     }
   }
+}
+
+/** Whether the account can read a path, or list a folder. */
+const READABLE = 'test -r "$1" || ls "$1" >/dev/null 2>&1';
+/** Whether the account can pass through a folder. */
+const ENTERABLE = 'test -d "$1" && test -x "$1"';
+/** Whether the account can connect to a socket: one there, and writable to it. */
+const CONNECTABLE = '[ -S "$1" ] && [ -w "$1" ]';
+
+/**
+ * The Docker sockets on this machine the account must not reach: `DOCKER_HOST`'s
+ * when it is a unix socket, the system's, Docker Desktop's and OrbStack's in
+ * hostd's home, and rootless Docker's. One that is not there passes. A list
+ * rather than `docker context`, which hostd runs without a `HOME`.
+ */
+export function dockerSocketsOf(env: Record<string, string | undefined>, home: string): string[] {
+  const sockets: string[] = [];
+  const host = env.DOCKER_HOST ?? '';
+  if (host.startsWith('unix://')) sockets.push(host.slice('unix://'.length));
+  sockets.push('/var/run/docker.sock', '/run/docker.sock', join(home, '.docker', 'run', 'docker.sock'), join(home, '.orbstack', 'run', 'docker.sock'));
+  if (env.XDG_RUNTIME_DIR) sockets.push(join(env.XDG_RUNTIME_DIR, 'docker.sock'));
+  return [...new Set(sockets.filter(Boolean))];
 }
 
 /** What to do when the probe fails; the health check's card says the same. */

@@ -2197,13 +2197,30 @@ describe('whether the bridge may merge a pull request', () => {
       expect(mergeDecision(forged)).toMatchObject({ land: false, reason: 'host-check has not passed on this head (not run)' });
     });
 
-    it('lands with a failed host check and a red status where the repository does not require it', () => {
+    it('lands with a failed host check and the bridge’s red status where the repository does not require it', () => {
       const optional = facts({
         hostCheck: { required: false, passed: [], latest: { state: 'failed', reason: null } },
-        statuses: [{ context: 'review-gate', state: 'success' }, { context: 'host-check', state: 'failure' }],
+        statuses: [{ context: 'review-gate', state: 'success' }, { context: 'host-check', state: 'failure', byBridge: true }],
       });
       expect(mergeDecision(optional).land).toBe(true);
       expect(mergeBlockers(optional)).toEqual([]);
+    });
+
+    it('holds for a red host-check status another account posted, as for any red check (#335)', () => {
+      for (const theirs of [{ context: 'host-check', state: 'failure', byBridge: false }, { context: 'host-check', state: 'error' }]) {
+        const red = facts({ statuses: [{ context: 'review-gate', state: 'success' }, { context: 'host-check', state: 'success', byBridge: true }, theirs] });
+        expect(mergeDecision(red)).toMatchObject({ land: false, reason: 'host-check failed on the head' });
+        expect(mergeBlockers(red)).toContainEqual({ kind: 'check', reason: 'host-check failed on the head' });
+      }
+    });
+
+    it('holds for a green host-check status whose poster cannot be read, since it may hide another account’s red (#338)', () => {
+      const unknown = facts({
+        statuses: [{ context: 'review-gate', state: 'success' }, { context: 'host-check', state: 'success', byBridge: false, creatorUnknown: true }],
+      });
+      const reason = 'who posted host-check on the head cannot be read, so a red one another account set may be hidden';
+      expect(mergeDecision(unknown)).toMatchObject({ land: false, reason });
+      expect(mergeBlockers(unknown)).toContainEqual({ kind: 'unknown', reason });
     });
 
     it('is a check a person never merges over', () => {
@@ -4721,6 +4738,46 @@ describe('an author named for their own paths signs off in the console (#322)', 
     changed.signOff(A);
     changed.github.head = B;
     expect((await changed.standing({ login: 'janedoe', id: JANE })).gate).toEqual({ state: 'pending', description: 'waiting on @janedoe' });
+  });
+
+  it('holds for another account’s red host-check status that the bridge’s own newer one hides in the combined status (#335)', async () => {
+    const theirs = { context: 'host-check', state: 'failure', creator: 'acme-ci' };
+    const ours = (state: string) => ({ context: 'host-check', state, creator: 'exampleco-automation' });
+    const read = (perCreator: (() => Promise<unknown>) | null, combined = [ours('success')]) => {
+      const run = replay();
+      run.signOff(A);
+      Object.assign(run.github, {
+        // GitHub's combined status: the newest of each name, whoever posted it.
+        statusesFor: vi.fn(async () => combined),
+        latestStatusesByCreator: vi.fn(perCreator ?? (async () => [])),
+        viewer: vi.fn(async () => ({ login: 'exampleco-automation' })),
+      });
+      return run;
+    };
+
+    const hidden = read(async () => [ours('success'), theirs]);
+    expect(await hidden.decide()).toMatchObject({ land: false, reason: 'host-check failed on the head' });
+
+    // The bridge's own red, on a repository that does not require a host check, holds nothing.
+    expect(await read(async () => [ours('failure')], [ours('failure')]).decide()).toMatchObject({ land: true });
+
+    // The full list unreadable: the combined status's host-check is taken as nobody's, and its red holds.
+    const unreadable = async () => {
+      throw new Error('GitHub answered 502');
+    };
+    const unread = read(unreadable, [ours('failure')]);
+    expect(await unread.decide()).toMatchObject({ land: false, reason: 'host-check failed on the head' });
+
+    // Still unreadable, with the bridge's newer green the only one the combined status shows: it may be hiding
+    // another account's red, so who posted it being unknown holds the merge (#338).
+    const hiddenUnread = read(unreadable, [ours('success')]);
+    expect(await hiddenUnread.decide()).toMatchObject({
+      land: false,
+      reason: 'who posted host-check on the head cannot be read, so a red one another account set may be hidden',
+    });
+
+    // No host-check on the head at all: the combined status would show one if any account had posted it.
+    expect(await read(unreadable, []).decide()).toMatchObject({ land: true });
   });
 
   it('reads a required host check from the record, and carries its pass to a head with the same diff (#327)', async () => {

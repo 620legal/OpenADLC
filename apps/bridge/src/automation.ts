@@ -144,8 +144,34 @@ function signedOffOn(facts: Pick<MergeFacts, 'signOffs' | 'headSha' | 'sameDiffA
   return onDiff ? { of: 'same diff', head: onDiff.head } : null;
 }
 
-/** The host check's commit status, which the red rule leaves to `hostCheckHold` (docs/adr/0064). */
+/**
+ * The host check's commit status. The red rule leaves the bridge's own to
+ * `hostCheckHold` (docs/adr/0064); one any other account posts is a check
+ * like any other (`skippedForHostCheck`, docs/adr/0066).
+ */
 export const HOST_CHECK_CONTEXT = 'host-check';
+
+/**
+ * Whether the red rule leaves a status to `hostCheckHold`: the bridge's own
+ * `host-check`, and nothing else. Every status of that name was once skipped,
+ * and a repository whose own CI posts one lost the hold its red was (#335).
+ */
+function skippedForHostCheck(status: { context: string; byBridge?: boolean }): boolean {
+  return status.context === HOST_CHECK_CONTEXT && status.byBridge === true;
+}
+
+/**
+ * Why the head's `host-check` statuses can't be judged, or null. The
+ * combined status keeps only the newest of a name, so when the full list
+ * can't be read, a green it shows (the bridge's, say) can hide an older red
+ * that another account posted. Counting that one entry as nobody's red let
+ * the hidden red through, so an unknown creator holds the merge (#338).
+ */
+function hostCheckCreatorsUnknown(facts: Pick<MergeFacts, 'statuses'>): string | null {
+  return facts.statuses.some((status) => status.context === HOST_CHECK_CONTEXT && status.creatorUnknown === true)
+    ? `who posted ${nameInReason(HOST_CHECK_CONTEXT)} on the head cannot be read, so a red one another account set may be hidden`
+    : null;
+}
 
 /**
  * Why a required host check holds the merge, or null when it does not: a
@@ -286,7 +312,24 @@ export interface MergeFacts {
    */
   ciContext: CiContext | null;
   /** The commit statuses on the head, which any token that may write statuses can set. */
-  statuses: readonly { context: string; state: string }[];
+  statuses: readonly {
+    context: string;
+    state: string;
+    /**
+     * Set on a `host-check` status the bridge posted, as the app or the
+     * automation account; one per account that posted one, from the full
+     * list (`latestStatusesByCreator`), since the combined status keeps only
+     * the newest of a name. False when who posted it cannot be told.
+     */
+    byBridge?: boolean;
+    /**
+     * Set on the combined status's `host-check` when the full list could not
+     * be read. Who posted it is unknown, and a newer post can hide another
+     * account's red, whatever this one's state. It holds the merge until the
+     * list can be read (`hostCheckCreatorsUnknown`).
+     */
+    creatorUnknown?: boolean;
+  }[];
   /** `review-gate` as OpenADLC published it on the head, or null when it cannot be read. */
   gate: 'pending' | 'success' | 'failure' | null;
   /**
@@ -1373,14 +1416,17 @@ export function mergeDecision(facts: MergeFacts): {
     if (!elsewhere.again) return refuse(reason);
     return { ...refuse(`${reason}; CI has to run on it again: push a commit to it, or close and reopen it`), ciAgain: { after: elsewhere.after } };
   }
-  // `host-check` is judged from the bridge's record below, whatever its
-  // status says: red on a repository that does not require it holds nothing,
-  // and green from any token proves nothing (docs/adr/0064).
+  // The bridge's own `host-check` is judged from its record below, whatever
+  // the status says: red on a repository that does not require it holds
+  // nothing, and green from any token proves nothing (docs/adr/0064). One
+  // another account posted is any other check, and its red holds (0066).
   const red = [
     ...runs.filter((run) => run.status === 'completed' && RED.has(run.conclusion ?? '')).map((run) => run.name),
-    ...facts.statuses.filter((status) => RED.has(status.state) && status.context !== HOST_CHECK_CONTEXT).map((status) => status.context),
+    ...facts.statuses.filter((status) => RED.has(status.state) && !skippedForHostCheck(status)).map((status) => status.context),
   ];
   if (red.length > 0) return refuse(`${[...new Set(red)].map(nameInReason).join(', ')} failed on the head`);
+  const creatorsUnknown = hostCheckCreatorsUnknown(facts);
+  if (creatorsUnknown) return refuse(creatorsUnknown);
   if (verdictFor([...ci], [REQUIRED_CHECK]) !== 'green') return refuse(`${REQUIRED_CHECK} has not passed on the head`);
   const hostHold = hostCheckHold(facts);
   if (hostHold) return refuse(hostHold);
@@ -1607,9 +1653,11 @@ export function mergeBlockers(facts: MergeFacts): MergeBlocker[] {
   }
   const red = [
     ...runs.filter((run) => run.status === 'completed' && RED.has(run.conclusion ?? '')).map((run) => run.name),
-    ...facts.statuses.filter((status) => RED.has(status.state) && status.context !== HOST_CHECK_CONTEXT).map((status) => status.context),
+    ...facts.statuses.filter((status) => RED.has(status.state) && !skippedForHostCheck(status)).map((status) => status.context),
   ];
   if (red.length > 0) add('check', `${[...new Set(red)].map(nameInReason).join(', ')} failed on the head`);
+  const creatorsUnknown = hostCheckCreatorsUnknown(facts);
+  if (creatorsUnknown) add('unknown', creatorsUnknown);
   if (verdictFor([...ci], [REQUIRED_CHECK]) !== 'green') add('check', `${REQUIRED_CHECK} has not passed on the head`);
   // As `mergeDecision`: a required host check, from the bridge's record, is a check a person never merges over.
   const hostHold = hostCheckHold(facts);
@@ -2865,7 +2913,7 @@ export class Automation {
       client.listEveryPullFile(repoFullName, pull.number),
       client.listReviews(repoFullName, pull.number),
       client.checkRunsFor(repoFullName, pull.headSha),
-      client.statusesFor(repoFullName, pull.headSha),
+      this.headStatuses(client, repoFullName, pull.headSha),
       bots.listBots(),
       this.publishedGate(repoFullName, pull.headSha),
       // Unreadable, it is not `enforce`, which is the reading that refuses.
@@ -3182,16 +3230,14 @@ export class Automation {
     if (standing) readings.push(standing.state);
     const client = await this.automationClient();
     if (client) {
-      const [statuses, account, appLogin] = await Promise.all([
+      const [statuses, ours] = await Promise.all([
         (async () =>
           client.request<{ statuses: { context: string; state: string; creator?: { login?: string } | null }[] }>(
             'GET',
             `/repos/${repoFullName}/commits/${sha}/status`,
           ))().catch(() => null),
-        (async () => client.viewer())().catch(() => null),
-        (async () => (this.appGate ? this.appGate.botLogin() : null))().catch(() => null),
+        this.bridgeStatusLogins(client),
       ]);
-      const ours = (login: string | undefined) => sameLogin(login, account?.login) || sameLogin(login, appLogin);
       for (const status of statuses?.statuses ?? []) {
         if (status.context !== REVIEW_GATE_CHECK || !ours(status.creator?.login)) continue;
         readings.push(status.state === 'success' ? 'success' : status.state === 'pending' ? 'pending' : 'failure');
@@ -3199,6 +3245,46 @@ export class Automation {
     }
     if (readings.length === 0) return null;
     return readings.includes('failure') ? 'failure' : readings.includes('pending') ? 'pending' : 'success';
+  }
+
+  /**
+   * Whether a status was posted by the bridge: as the app, or as the
+   * automation account. A login that cannot be read matches nothing, so a
+   * status whose poster cannot be told is never taken for the bridge's.
+   */
+  private async bridgeStatusLogins(client: GitHubClient): Promise<(login: string | null | undefined) => boolean> {
+    const [account, appLogin] = await Promise.all([
+      (async () => client.viewer())().catch(() => null),
+      (async () => (this.appGate ? this.appGate.botLogin() : null))().catch(() => null),
+    ]);
+    return (login) => sameLogin(login, account?.login) || sameLogin(login, appLogin);
+  }
+
+  /**
+   * The head's commit statuses for the merge: the combined status, with
+   * `host-check` read instead from every status on the head, the newest from
+   * each account, marked `byBridge` where the bridge posted it. The combined
+   * status keeps one per name, so the bridge's own post hid a red
+   * `host-check` the repository's CI had set (#335). When the full list
+   * cannot be read, the combined status's `host-check` stands, taken as
+   * nobody's and marked `creatorUnknown`. That holds the merge whatever its
+   * state, because its green may be hiding another account's red.
+   */
+  private async headStatuses(
+    client: GitHubClient,
+    repoFullName: string,
+    sha: string,
+  ): Promise<MergeFacts['statuses']> {
+    const [combined, perCreator, ours] = await Promise.all([
+      client.statusesFor(repoFullName, sha),
+      (async () => client.latestStatusesByCreator(repoFullName, sha, HOST_CHECK_CONTEXT))().catch(() => null),
+      this.bridgeStatusLogins(client),
+    ]);
+    const others = combined.filter((status) => status.context !== HOST_CHECK_CONTEXT).map(({ context, state }) => ({ context, state }));
+    const hostChecks = perCreator
+      ? perCreator.map((status) => ({ context: status.context, state: status.state, byBridge: ours(status.creator) }))
+      : combined.filter((status) => status.context === HOST_CHECK_CONTEXT).map(({ context, state }) => ({ context, state, byBridge: false, creatorUnknown: true }));
+    return [...others, ...hostChecks];
   }
 
   /**
