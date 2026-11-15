@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { DEFAULT_DELIVERY_RULES, deliveryRulesSchema, type DeliveryRules } from '@openadlc/shared';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MAX_RELEASE_PAGES, ReleaseShipping, releaseOf, shipsWith, type GitHubRelease } from './release-shipping.js';
@@ -370,5 +373,43 @@ describe('the deploy sweep, for a release whose delivery never came', () => {
       '/repos/620legal/OpenADLC/compare/aaaa4440000...v0.2.0?per_page=1',
       '/repos/620legal/OpenADLC/compare/aaaa4440000...v0.2.1?per_page=1',
     ]);
+  });
+});
+
+/**
+ * #344 publishes a release as OpenADLC's app, so the `release` delivery's
+ * sender and the release's author are the app's `[bot]` login. Shipping by
+ * release reads the release, never who published it: the cards go to Done
+ * exactly as for a release a person published.
+ */
+describe('a release OpenADLC’s app published (#344)', () => {
+  const APP = { login: 'openadlc-janedoe[bot]', type: 'Bot' };
+  const byTheApp = (tag: string, at: string) => ({ ...listed(tag, at), author: APP }) as GitHubRelease;
+
+  beforeEach(() => {
+    world.board = [MERGED(44, 144)];
+    world.runs = [{ sha: 'aaaa4440000', prNumber: 144, createdAt: '2026-11-14T08:00:00Z' }];
+  });
+
+  it('moves a merged card it contains to Done, as the delivery hands it over', async () => {
+    const { client } = github({ contains: { 'v1.2.4': ['aaaa4440000'] } });
+    const { releases, moves } = shipping(client, BY_RELEASE, '2026-11-15T12:00:00Z');
+    // What the delivery carries: published, sent by the app.
+    const delivery = { action: 'published', sender: APP, release: byTheApp('v1.2.4', '2026-11-15T10:00:00Z') };
+    await releases.onPublished(REPO, releaseOf(delivery.release));
+    expect(moves).toEqual([{ repoName: 'openadlc', issueNumber: 44, to: 'done', actor: 'bridge', reason: 'released in v1.2.4', prNumber: 144 }]);
+  });
+
+  it('moves it from the listed releases on the sweep, too', async () => {
+    const { client } = github({ releases: [byTheApp('v1.2.4', '2026-11-15T10:00:00Z')], contains: { 'v1.2.4': ['aaaa4440000'] } });
+    const { releases, moves } = shipping(client, BY_RELEASE, '2026-11-15T12:00:00Z');
+    const { moved } = await releases.sweep([{ repo: 'openadlc', number: 44, prNumber: 144 }]);
+    expect(moves).toEqual([expect.objectContaining({ issueNumber: 44, reason: 'released in v1.2.4' })]);
+    expect(moved).toHaveLength(1);
+  });
+
+  it('reads nothing of who published a release', () => {
+    const source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'release-shipping.ts'), 'utf8');
+    expect(source).not.toMatch(/\.sender\b|\.author\b|\[bot\]/);
   });
 });

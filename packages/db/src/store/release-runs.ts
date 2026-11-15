@@ -9,12 +9,27 @@ import { keptReason, keptTail } from './host-check-runs.js';
  * Only the bridge writes it (`release-service.ts`): `start` when it asks hostd
  * for a run, `finish` from hostd's report with the install's secret. The
  * version, sha256, bytes and artifact name are hostd's, never the account's.
- * One row per repository may be `running`; the database holds that with a
- * partial unique index, so two starts at once cannot both build.
+ * One row per repository may be in flight (`running`, `built` or
+ * `publishing`); the database holds that with a partial unique index, so two
+ * starts at once cannot both build, and two cuts cannot race for one tag.
+ *
+ * After `built`, the publish (#344, `release-publish.ts`,
+ * docs/adr/0071-a-release-is-tagged-and-published-as-the-app-only-after-it-is-signed.md)
+ * moves it with conditional updates on the state each step expects, so a
+ * second publisher of the same run changes nothing: `toPublishing`,
+ * `setReleaseId`, `markTagged`, then `published` or `publishFailed`.
  */
-export type ReleaseRunState = 'running' | 'built' | 'failed' | 'cancelled' | 'refused' | 'lost';
+export type ReleaseRunState = 'running' | 'built' | 'failed' | 'cancelled' | 'refused' | 'lost' | 'publishing' | 'published' | 'publish_failed';
 
-export const RELEASE_RUN_STATES: readonly ReleaseRunState[] = ['running', 'built', 'failed', 'cancelled', 'refused', 'lost'];
+export const RELEASE_RUN_STATES: readonly ReleaseRunState[] = ['running', 'built', 'failed', 'cancelled', 'refused', 'lost', 'publishing', 'published', 'publish_failed'];
+
+/**
+ * The states a release is in flight in: building, built and waiting to be
+ * published, or publishing. One per repository (`release_runs_one_in_flight`,
+ * migration 0170), so two cuts cannot race for one tag, and the host is held
+ * awake through each (`in-flight.ts`).
+ */
+export const RELEASE_IN_FLIGHT: readonly ReleaseRunState[] = ['running', 'built', 'publishing'];
 
 export interface ReleaseRun {
   id: string;
@@ -45,6 +60,17 @@ export interface ReleaseRun {
   requestedById: number;
   startedAt: string;
   finishedAt: string | null;
+  /** `v<version>`, set when publishing starts (#344, docs/adr/0071). */
+  tag: string | null;
+  /** The GitHub release's id, draft or published. */
+  releaseId: number | null;
+  /** The published release's page. */
+  releaseUrl: string | null;
+  /** The artifact's download URL: the one the manifest signs. */
+  assetUrl: string | null;
+  /** Whether the tag was made, or found, on the pinned commit. */
+  tagged: boolean;
+  publishedAt: string | null;
 }
 
 interface Row {
@@ -75,11 +101,18 @@ interface Row {
   requested_by_id: string | number;
   started_at: Date;
   finished_at: Date | null;
+  tag?: string | null;
+  release_id?: string | number | null;
+  release_url?: string | null;
+  asset_url?: string | null;
+  tagged?: boolean | null;
+  published_at?: Date | null;
 }
 
 const COLUMNS = `x.id, x.run_id, x.repo_id, r.name as repo_name, r.full_name as repo_full_name, x.sha, x.clean, x.command, x.artifact,
   x.version_file, x.version_key, x.release_repo, x.timeout_minutes, x.previous_version, x.state, x.version, x.sha256, x.bytes,
-  x.artifact_name, x.exit_code, x.duration_ms, x.log_tail, x.reason, x.requested_by_login, x.requested_by_id, x.started_at, x.finished_at`;
+  x.artifact_name, x.exit_code, x.duration_ms, x.log_tail, x.reason, x.requested_by_login, x.requested_by_id, x.started_at, x.finished_at,
+  x.tag, x.release_id, x.release_url, x.asset_url, x.tagged, x.published_at`;
 const FROM = 'release_runs x join repos r on r.id = x.repo_id';
 
 // `bigint` comes back as a string.
@@ -114,6 +147,12 @@ function toRun(row: Row): ReleaseRun {
     requestedById: Number(row.requested_by_id),
     startedAt: row.started_at.toISOString(),
     finishedAt: row.finished_at ? row.finished_at.toISOString() : null,
+    tag: row.tag ?? null,
+    releaseId: num(row.release_id ?? null),
+    releaseUrl: row.release_url ?? null,
+    assetUrl: row.asset_url ?? null,
+    tagged: row.tagged === true,
+    publishedAt: row.published_at ? row.published_at.toISOString() : null,
   };
 }
 
@@ -127,10 +166,10 @@ function storedTail(tail: string | null | undefined): string | null {
   return tail === undefined || tail === null ? null : keptTail(tail);
 }
 
-/** A second `running` row for a repository, which the partial unique index refused. */
+/** A second release in flight for a repository, which the partial unique index refused. */
 export class ReleaseAlreadyRunning extends Error {
   constructor(readonly repoId: string) {
-    super('a release of this repository is building already; wait for it to end, or cancel it');
+    super('a release of this repository is building or publishing already; wait for it to end, or cancel it');
   }
 }
 
@@ -185,7 +224,7 @@ export async function start(input: {
       ],
     );
   } catch (error) {
-    if ((error as { code?: string }).code === '23505' && /release_runs_one_running/.test(String((error as { constraint?: string }).constraint ?? (error as Error).message))) {
+    if ((error as { code?: string }).code === '23505' && /release_runs_one_(running|in_flight)/.test(String((error as { constraint?: string }).constraint ?? (error as Error).message))) {
       throw new ReleaseAlreadyRunning(input.repoId);
     }
     throw error;
@@ -264,4 +303,75 @@ export async function running(): Promise<ReleaseRun[]> {
 export async function anyRunning(repoId: string): Promise<boolean> {
   const row = await queryOne<{ any: boolean }>(`select exists (select 1 from release_runs where repo_id = $1 and state = 'running') as any`, [repoId]);
   return Boolean(row?.any);
+}
+
+/**
+ * Whether a repository has a release in flight: building, built and not yet
+ * published, or publishing. A second cut waits for it to end.
+ */
+export async function anyInFlight(repoId: string): Promise<boolean> {
+  const row = await queryOne<{ any: boolean }>(`select exists (select 1 from release_runs where repo_id = $1 and state = any($2::text[])) as any`, [
+    repoId,
+    [...RELEASE_IN_FLIGHT],
+  ]);
+  return Boolean(row?.any);
+}
+
+// ---------------------------------------------------------------------------
+// Publishing (#344). Each moves only from the state it expects and answers the
+// row it changed, or null when it changed nothing: another publisher got there
+// first, or the row had already ended.
+// ---------------------------------------------------------------------------
+
+async function moved(sql: string, params: unknown[]): Promise<ReleaseRun | null> {
+  const row = await queryOne<{ id: string }>(sql, params);
+  return row ? get(row.id) : null;
+}
+
+/** `built` → `publishing`, with the tag it will take. */
+export async function toPublishing(runId: string, tag: string): Promise<ReleaseRun | null> {
+  return moved(`update release_runs set state = 'publishing', tag = $2, reason = null where run_id = $1 and state = 'built' returning id`, [runId, tag]);
+}
+
+/** The draft's id, while publishing, so a failure can delete it. */
+export async function setReleaseId(runId: string, releaseId: number): Promise<ReleaseRun | null> {
+  return moved(`update release_runs set release_id = $2 where run_id = $1 and state = 'publishing' returning id`, [runId, releaseId]);
+}
+
+/** The tag is on the pinned commit, while publishing. */
+export async function markTagged(runId: string): Promise<ReleaseRun | null> {
+  return moved(`update release_runs set tagged = true where run_id = $1 and state = 'publishing' returning id`, [runId]);
+}
+
+/** `publishing` → `published`, with its page and the signed asset's URL. */
+export async function published(runId: string, input: { releaseUrl: string; assetUrl: string }): Promise<ReleaseRun | null> {
+  return moved(
+    `update release_runs set state = 'published', release_url = $2, asset_url = $3, published_at = now(), reason = null
+     where run_id = $1 and state = 'publishing' returning id`,
+    [runId, input.releaseUrl, input.assetUrl],
+  );
+}
+
+/**
+ * `built` or `publishing` → `publish_failed`, with a reason that says what
+ * was left — a draft, a tag, a public release — and what to do. It is
+ * redacted and capped, as every reason is.
+ */
+export async function publishFailed(runId: string, reason: string): Promise<ReleaseRun | null> {
+  return moved(`update release_runs set state = 'publish_failed', reason = $2 where run_id = $1 and state in ('built', 'publishing') returning id`, [
+    runId,
+    storedReason(reason),
+  ]);
+}
+
+/** `built` rows that no publisher in this bridge holds (`held`), oldest first: the sweep publishes them. */
+export async function builtUnheld(held: readonly string[] = []): Promise<ReleaseRun[]> {
+  const rows = await query<Row>(`select ${COLUMNS} from ${FROM} where x.state = 'built' and not (x.run_id = any($1::text[])) order by x.started_at, x.id`, [[...held]]);
+  return rows.map(toRun);
+}
+
+/** `publishing` rows that no publisher in this bridge holds, as after a restart: the sweep cleans them up and fails them. */
+export async function publishingUnheld(held: readonly string[] = []): Promise<ReleaseRun[]> {
+  const rows = await query<Row>(`select ${COLUMNS} from ${FROM} where x.state = 'publishing' and not (x.run_id = any($1::text[])) order by x.started_at, x.id`, [[...held]]);
+  return rows.map(toRun);
 }

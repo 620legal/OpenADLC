@@ -108,6 +108,7 @@ vi.mock('@openadlc/db', () => ({
   mergeLines: {},
   recordEvent: vi.fn(),
   repos: {
+    DEFAULT_MANIFEST_ASSET: 'manifest.json',
     addRepo: vi.fn(async (input: Record<string, unknown>) => ({ repo: { ...input, color: 'blue' }, outcome: 'added' })),
     listRepos: vi.fn(async () => [{ id: 'repo-1', name: 'openadlc-testbed' }]),
     getRepoByName: vi.fn(async (name: string) => ({ id: 'repo-1', name })),
@@ -3803,7 +3804,9 @@ describe('a repository’s release recipe, as an admin sets it (#343)', () => {
 
   it('reads a recipe, with the defaults filled in, and null or an empty command as none', async () => {
     const { releaseSettingFrom } = await import('./api.js');
-    expect(releaseSettingFrom(recipe)).toEqual({ ...recipe, releaseRepo: null, timeoutMinutes: 180 });
+    expect(releaseSettingFrom(recipe)).toEqual({ ...recipe, releaseRepo: null, timeoutMinutes: 180, manifestAsset: null });
+    expect(releaseSettingFrom({ ...recipe, manifestAsset: 'app-manifest.json' })).toMatchObject({ manifestAsset: 'app-manifest.json' });
+    expect(releaseSettingFrom({ ...recipe, manifestAsset: '' })).toMatchObject({ manifestAsset: null });
     expect(releaseSettingFrom({ ...recipe, releaseRepo: 'acme/app-releases', timeoutMinutes: 1440 })).toMatchObject({ releaseRepo: 'acme/app-releases', timeoutMinutes: 1440 });
     expect(releaseSettingFrom(null)).toBeNull();
     expect(releaseSettingFrom({ ...recipe, command: '  ' })).toBeNull();
@@ -3820,6 +3823,10 @@ describe('a repository’s release recipe, as an admin sets it (#343)', () => {
     ['a timeout of 1441', { timeoutMinutes: 1441 }, /1 to 1440/],
     ['a bad release repository', { releaseRepo: 'not a repo' }, /owner\/name/],
     ['a key with a space', { versionKey: 'MARKETING VERSION' }, /versionKey/],
+    ['a manifest asset with a slash (#344)', { manifestAsset: 'dir/manifest.json' }, /release\.manifestAsset is the name of the signed manifest asset/],
+    ['a manifest asset with a space (#344)', { manifestAsset: 'my manifest.json' }, /release\.manifestAsset is the name/],
+    ['a manifest asset named as the artifact (#344)', { manifestAsset: 'App.zip' }, /must differ from the artifact's name, App\.zip/],
+    ['an artifact named as the default manifest (#344)', { artifact: 'dist/manifest.json' }, /must differ from the artifact's name, manifest\.json/],
   ])('refuses %s, saying what to write', async (_name, change, said) => {
     const { releaseSettingFrom } = await import('./api.js');
     expect(() => releaseSettingFrom({ ...recipe, ...change })).toThrow(said);

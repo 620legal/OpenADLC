@@ -684,8 +684,37 @@ describe('a release build, through hostd (#343)', () => {
           : null,
       ),
       deleteArtifact: vi.fn(() => true),
+      sign: vi.fn(async (runId: string, url: string) => {
+        const { ReleaseSignRefused } = await import('./release-run.js');
+        if (runId !== 'run-1') throw new ReleaseSignRefused(404, `no built artifact for release run ${runId} on this host: cut the release again`);
+        if (url.includes('other')) throw new ReleaseSignRefused(409, 'release run run-1 is already signed under another URL');
+        return { sig: 'c2ln', asset: '{}\n', publicKey: 'cHVi', repo: 'acme/app', sha: SHA, version: '1.4.0', sha256: 'e'.repeat(64), bytes: 9 };
+      }),
     };
   }
+
+  it('signs a built run given only its URL, ignoring any other field, behind the secret (#344)', async () => {
+    const runs = await releaseRuns();
+    server = await start(undefined, { releaseRuns: runs });
+    const url = 'https://github.com/acme/app/releases/download/v1.4.0/App.zip';
+    expect((await server.call('POST', '/release/runs/run-1/sign', {}, { url })).status).toBe(401);
+    expect(runs.sign).not.toHaveBeenCalled();
+
+    const signed = await server.call('POST', '/release/runs/run-1/sign', PLATFORM, { url, version: '9.9.9', sha256: 'f'.repeat(64), repo: 'evil/repo' });
+    expect(signed).toMatchObject({ status: 200, body: { sig: 'c2ln', version: '1.4.0', sha256: 'e'.repeat(64), sha: SHA } });
+    expect(runs.sign).toHaveBeenCalledWith('run-1', url);
+    expect(runs.sign.mock.calls[0]).toHaveLength(2);
+
+    expect((await server.call('POST', '/release/runs/run-1/sign', PLATFORM, { url: 'https://github.com/other' })).status).toBe(409);
+    expect((await server.call('POST', '/release/runs/run-9/sign', PLATFORM, { url })).status).toBe(404);
+    expect((await server.call('POST', '/release/runs/run-1/sign', PLATFORM, {})).status).toBe(400);
+    rmSync(runs.folder, { recursive: true, force: true });
+  });
+
+  it('answers 501 to a sign where no release account is named', async () => {
+    server = await start(undefined, { releaseRuns: null });
+    expect((await server.call('POST', '/release/runs/run-1/sign', PLATFORM, { url: 'https://github.com/a' })).status).toBe(501);
+  });
 
   it('is refused to a caller without the install’s secret, and starts nothing', async () => {
     const runs = await releaseRuns();

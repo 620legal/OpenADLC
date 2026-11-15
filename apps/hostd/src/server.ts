@@ -21,7 +21,7 @@ import { isWorktreeRefusal, readWorktree } from './worktree-files.js';
 import { LocalCiRefused, type LocalCi } from './local-ci.js';
 import { hostCheckRequestFrom, type HostChecks } from './host-check.js';
 import type { ReleaseAccount } from './release-account.js';
-import { ReleaseBusy, releaseRunRequestFrom, type ReleaseRuns } from './release-run.js';
+import { ReleaseBusy, ReleaseSignRefused, releaseRunRequestFrom, type ReleaseRuns } from './release-run.js';
 import type { ImageRestart } from './restart-onto-image.js';
 import type { TaskDatabases } from './task-db.js';
 import { ATTACH_SUBPROTOCOL_PREFIX } from './terminal-gateway.js';
@@ -120,7 +120,7 @@ export function createHostdServer(input: {
    * bridge only (`release-run.ts`); null or absent when no release account is
    * named, which its routes answer with 501.
    */
-  releaseRuns?: Pick<ReleaseRuns, 'start' | 'get' | 'cancel' | 'artifact' | 'deleteArtifact'> | null;
+  releaseRuns?: Pick<ReleaseRuns, 'start' | 'get' | 'cancel' | 'artifact' | 'deleteArtifact' | 'sign'> | null;
   /** Moves this hostd onto a release's image on a cloud host (`restart-onto-image.ts`). Absent, its route says why. */
   restartOntoImage?: ImageRestart;
   /** Asks the egress proxy about a name, and puts Settings' names on it (`egress.ts`). Absent, its routes say so. */
@@ -653,6 +653,20 @@ export function createHostdServer(input: {
           return send(response, 202, { run: input.releaseRuns.start(request_) });
         } catch (error) {
           if (error instanceof ReleaseBusy) return send(response, 409, { error: error.message });
+          throw error;
+        }
+      }
+      // Signing a built run (#344): the body's `url` is the only thing taken
+      // from the bridge; the version, sha256 and repository are hostd's own
+      // record's, so a field sent beside it is never read.
+      const signMatch = /^\/release\/runs\/([^/]+)\/sign$/.exec(path);
+      if (signMatch?.[1] && method === 'POST') {
+        const body = await readBody(request);
+        if (typeof body.url !== 'string' || !body.url) return send(response, 400, { error: 'url must be the asset’s download URL' });
+        try {
+          return send(response, 200, await input.releaseRuns.sign(decodeURIComponent(signMatch[1]), body.url));
+        } catch (error) {
+          if (error instanceof ReleaseSignRefused) return send(response, error.status, { error: error.message });
           throw error;
         }
       }

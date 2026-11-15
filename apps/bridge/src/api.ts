@@ -747,9 +747,9 @@ function releasePath(value: unknown, name: string, example: string): string {
 export function releaseSettingFrom(value: unknown): ReleaseSetting | null {
   if (value === null) return null;
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new HttpFailure(400, 'release is { command, artifact, versionFile, versionKey?, releaseRepo?, timeoutMinutes? }, or null to take it away');
+    throw new HttpFailure(400, 'release is { command, artifact, versionFile, versionKey?, releaseRepo?, timeoutMinutes?, manifestAsset? }, or null to take it away');
   }
-  const { command, artifact, versionFile, versionKey, releaseRepo, timeoutMinutes } = value as Record<string, unknown>;
+  const { command, artifact, versionFile, versionKey, releaseRepo, timeoutMinutes, manifestAsset } = value as Record<string, unknown>;
   if (typeof command !== 'string') throw new HttpFailure(400, 'release.command is the command that builds the release, such as make release');
   const said = command.trim();
   if (!said) return null;
@@ -767,13 +767,26 @@ export function releaseSettingFrom(value: unknown): ReleaseSetting | null {
   if (typeof minutes !== 'number' || !Number.isInteger(minutes) || minutes < 1 || minutes > 1440) {
     throw new HttpFailure(400, 'release.timeoutMinutes is a whole number of minutes from 1 to 1440');
   }
+  const artifactPath = releasePath(artifact, 'artifact', 'build/App.zip');
+  // The asset name shipped clients fetch the signed manifest by (#344,
+  // docs/adr/0071): an admin's, never a run's, and never the artifact's own
+  // name, or the manifest's upload would collide with the artifact's.
+  const manifest = manifestAsset === undefined || manifestAsset === null || manifestAsset === '' ? null : manifestAsset;
+  if (manifest !== null && (typeof manifest !== 'string' || !/^[A-Za-z0-9._-]{1,100}$/.test(manifest))) {
+    throw new HttpFailure(400, 'release.manifestAsset is the name of the signed manifest asset, such as manifest.json: letters, digits, ., _ and -, at most 100, or empty for manifest.json');
+  }
+  const artifactName = artifactPath.split('/').at(-1) ?? artifactPath;
+  if ((manifest ?? repos.DEFAULT_MANIFEST_ASSET) === artifactName) {
+    throw new HttpFailure(400, `release.manifestAsset must differ from the artifact's name, ${artifactName}: name one of them otherwise`);
+  }
   return {
     command: said,
-    artifact: releasePath(artifact, 'artifact', 'build/App.zip'),
+    artifact: artifactPath,
     versionFile: releasePath(versionFile, 'versionFile', 'VERSION'),
     versionKey: key as string | null,
     releaseRepo: repo as string | null,
     timeoutMinutes: minutes,
+    manifestAsset: manifest as string | null,
   };
 }
 

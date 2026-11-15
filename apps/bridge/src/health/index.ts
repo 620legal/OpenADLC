@@ -69,6 +69,9 @@ import { taskDatabaseCheck } from './checks/task-database.js';
 import { defaultLoginItemReader, loginItemCheck, type LoginItemReader } from './checks/login-item.js';
 import { hostCheckAccountCheck } from './checks/host-check-account.js';
 import { releaseAccountCheck } from './checks/release-account.js';
+import { releaseTagRulesCheck } from './checks/release-tag-rules.js';
+import { AppGate } from '../app-gate.js';
+import { lastVersionOnGitHub } from '../release-service.js';
 import { SLEPT_EVENT, type KeepAwake } from '../keep-awake.js';
 import { effectiveDelivery, type DeliveryKnowledge } from '../delivery-rules.js';
 import type { HealthCheck } from './types.js';
@@ -126,6 +129,8 @@ export function defaultChecks(wiring: HealthWiring): HealthCheck[] {
   };
   const repositories = async (): Promise<RepoRef[]> =>
     (await repos.listRepos()).map((repo) => ({ name: repo.name, fullName: repo.fullName, defaultBranch: repo.defaultBranch || 'main' }));
+  // The app acting as itself on one repository, as the release publish does (`release-publish.ts`).
+  const releaseApp = new AppGate({ credentials: appCredentials, api: APP_API });
 
   const app = appChecks({
     clientId,
@@ -451,6 +456,14 @@ export function defaultChecks(wiring: HealthWiring): HealthCheck[] {
     releaseAccountCheck({
       probe: async () => (await hostd.releaseAccount()).probe,
       wanted: () => repos.anyRelease(),
+    }),
+    // Whether a tag ruleset stops the app creating a release's tag (#344,
+    // docs/adr/0071), read with the app's own token: the publish is the
+    // app's alone, so its standing is the one that counts.
+    releaseTagRulesCheck({
+      releasing: () => repos.releasing(),
+      app: (repoFullName) => releaseApp.client(repoFullName).catch(() => null),
+      lastVersion: lastVersionOnGitHub((repoFullName) => releaseApp.client(repoFullName).catch(() => null)),
     }),
   ];
 }

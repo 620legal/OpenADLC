@@ -10,7 +10,23 @@ vi.mock('../client.js', () => ({
 
 import { query, queryOne } from '../client.js';
 import { HOST_CHECK_LOG_TAIL_BYTES, HOST_CHECK_REASON_CHARS } from './host-check-runs.js';
-import { ReleaseAlreadyRunning, anyRunning, finish, get, running, start } from './release-runs.js';
+import {
+  RELEASE_IN_FLIGHT,
+  ReleaseAlreadyRunning,
+  anyInFlight,
+  anyRunning,
+  builtUnheld,
+  finish,
+  get,
+  markTagged,
+  publishFailed,
+  published,
+  publishingUnheld,
+  running,
+  setReleaseId,
+  start,
+  toPublishing,
+} from './release-runs.js';
 
 const SHA = 'a'.repeat(40);
 const ID = '0b6f1d1c-6c55-4c1c-9a59-1f4a4b8f2a10';
@@ -133,6 +149,88 @@ describe('a release run, as the bridge records it', () => {
     expect((await running()).map((run) => run.runId)).toEqual(['run-1']);
     vi.mocked(queryOne).mockResolvedValueOnce({ any: true });
     await expect(anyRunning('repo-1')).resolves.toBe(true);
+  });
+});
+
+describe('publishing a built release (#344)', () => {
+  it('says a second release in flight is refused by the new index too', async () => {
+    vi.mocked(query).mockRejectedValueOnce(
+      Object.assign(new Error('duplicate key value violates unique constraint "release_runs_one_in_flight"'), { code: '23505', constraint: 'release_runs_one_in_flight' }),
+    );
+    await expect(start({ ...START, runId: 'run-2' })).rejects.toBeInstanceOf(ReleaseAlreadyRunning);
+  });
+
+  it('reads the publish columns', async () => {
+    vi.mocked(queryOne).mockResolvedValueOnce({
+      ...ROW,
+      state: 'published',
+      tag: 'v1.4.0',
+      release_id: '991',
+      release_url: 'https://github.com/acme/app/releases/tag/v1.4.0',
+      asset_url: 'https://github.com/acme/app/releases/download/v1.4.0/App.zip',
+      tagged: true,
+      published_at: new Date('2026-11-15T11:00:00.000Z'),
+    });
+    await expect(get(ID)).resolves.toMatchObject({ state: 'published', tag: 'v1.4.0', releaseId: 991, tagged: true, publishedAt: '2026-11-15T11:00:00.000Z' });
+    vi.mocked(queryOne).mockResolvedValueOnce(ROW);
+    await expect(get(ID)).resolves.toMatchObject({ tag: null, releaseId: null, tagged: false, publishedAt: null });
+  });
+
+  it.each([
+    ['toPublishing', () => toPublishing('run-1', 'v1.4.0'), "state = 'built'"],
+    ['setReleaseId', () => setReleaseId('run-1', 991), "state = 'publishing'"],
+    ['markTagged', () => markTagged('run-1'), "state = 'publishing'"],
+    ['published', () => published('run-1', { releaseUrl: 'u', assetUrl: 'a' }), "state = 'publishing'"],
+    ['publishFailed', () => publishFailed('run-1', 'why'), "state in ('built', 'publishing')"],
+  ] as const)('%s moves only from the state it expects, and changes nothing from another', async (_name, call, from) => {
+    vi.mocked(queryOne).mockResolvedValueOnce(null);
+    await expect(call()).resolves.toBeNull();
+    const sql = String(vi.mocked(queryOne).mock.calls[0]?.[0]);
+    expect(sql).toContain(`where run_id = $1 and ${from}`);
+    expect(queryOne).toHaveBeenCalledTimes(1);
+  });
+
+  it('answers the row it moved', async () => {
+    vi.mocked(queryOne).mockResolvedValueOnce({ id: ID }).mockResolvedValueOnce({ ...ROW, state: 'publishing', tag: 'v1.4.0' });
+    await expect(toPublishing('run-1', 'v1.4.0')).resolves.toMatchObject({ state: 'publishing', tag: 'v1.4.0' });
+  });
+
+  it('redacts and caps a publish failure’s reason', async () => {
+    vi.mocked(queryOne).mockResolvedValueOnce({ id: ID }).mockResolvedValueOnce({ ...ROW, state: 'publish_failed' });
+    await publishFailed('run-1', `GitHub said ${TOKEN} ${'r'.repeat(5_000)}`);
+    const reason = String((vi.mocked(queryOne).mock.calls[0]?.[1] as unknown[])[1]);
+    expect(reason).not.toContain(TOKEN);
+    expect(reason.length).toBeLessThanOrEqual(HOST_CHECK_REASON_CHARS);
+  });
+
+  it('lists built and publishing rows no publisher here holds, and answers whether one is in flight', async () => {
+    vi.mocked(query).mockResolvedValueOnce([{ ...ROW, state: 'built' }]).mockResolvedValueOnce([]);
+    expect((await builtUnheld(['run-9'])).map((run) => run.runId)).toEqual(['run-1']);
+    await publishingUnheld();
+    expect(String(vi.mocked(query).mock.calls[0]?.[0])).toContain("x.state = 'built' and not (x.run_id = any($1::text[]))");
+    expect(vi.mocked(query).mock.calls[0]?.[1]).toEqual([['run-9']]);
+    expect(String(vi.mocked(query).mock.calls[1]?.[0])).toContain("x.state = 'publishing'");
+    vi.mocked(queryOne).mockResolvedValueOnce({ any: true });
+    await expect(anyInFlight('repo-1')).resolves.toBe(true);
+    expect(vi.mocked(queryOne).mock.calls.at(-1)?.[1]).toEqual(['repo-1', ['running', 'built', 'publishing']]);
+    expect(RELEASE_IN_FLIGHT).toEqual(['running', 'built', 'publishing']);
+  });
+});
+
+describe('0170, publishing', () => {
+  const sql = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'migrations', '0170_release_publish.sql'), 'utf8')
+    .replace(/--.*$/gm, '')
+    .replace(/\s+/g, ' ');
+
+  it('holds one release in flight per repository, building, built or publishing', () => {
+    expect(sql).toContain('drop index if exists release_runs_one_running;');
+    expect(sql).toMatch(/create unique index if not exists release_runs_one_in_flight on release_runs \(repo_id\) where state in \('running', 'built', 'publishing'\)/);
+  });
+
+  it('widens the state check with the three publish states and adds only nullable or defaulted columns', () => {
+    expect(sql).toMatch(/check \(state in \('running', 'built', 'failed', 'cancelled', 'refused', 'lost', 'publishing', 'published', 'publish_failed'\)\)/);
+    expect(sql).toContain('add column if not exists tagged boolean not null default false;');
+    expect(sql).toContain('alter table repos add column if not exists release_manifest_asset text;');
   });
 });
 

@@ -1560,4 +1560,66 @@ export class GitHubClient {
   async deleteSshSigningKey(id: number): Promise<void> {
     await this.request<void>('DELETE', `/user/ssh_signing_keys/${id}`);
   }
+
+  /**
+   * Where release assets are uploaded: GitHub's `uploads.github.com`, or a
+   * GitHub Enterprise Server's `/api/uploads` beside its `/api/v3`. Any other
+   * base (a test's) is used as it is.
+   */
+  uploadsBase(): string {
+    if (this.baseUrl === API) return 'https://uploads.github.com';
+    if (/\/api\/v3\/?$/.test(this.baseUrl)) return this.baseUrl.replace(/\/api\/v3\/?$/, '/api/uploads');
+    return this.baseUrl;
+  }
+
+  /**
+   * Uploads one release asset (#344, docs/adr/0071), streamed: an artifact is
+   * up to 2 GiB, and buffering it would hold that in the bridge's memory.
+   * `bytes` is sent as `content-length`, which GitHub requires; the time
+   * limit grows with the size, a minute plus a second per MiB, since a 30
+   * second limit would cut off any artifact of size. Answers GitHub's asset,
+   * whose `name` may differ from the one sent: GitHub rewrites some
+   * characters, and the download URL is built from its name, not ours.
+   */
+  async uploadReleaseAsset(
+    repo: string,
+    releaseId: number,
+    name: string,
+    body: ReadableStream<Uint8Array> | Uint8Array | string,
+    bytes: number,
+    contentType: string,
+  ): Promise<ReleaseAsset> {
+    const path = `/repos/${repo}/releases/${releaseId}/assets?name=${encodeURIComponent(name)}`;
+    const response = await this.fetchImpl(`${this.uploadsBase()}${path}`, {
+      method: 'POST',
+      signal: AbortSignal.timeout(60_000 + Math.ceil(bytes / 1024 ** 2) * 1_000),
+      headers: {
+        accept: 'application/vnd.github+json',
+        authorization: `Bearer ${this.options.token}`,
+        'x-github-api-version': '2022-11-28',
+        'user-agent': `openadlc (acting as ${this.options.actingAs})`,
+        'content-type': contentType,
+        'content-length': String(bytes),
+      },
+      body: body as RequestInit['body'],
+      // A stream body needs it in node's fetch.
+      duplex: 'half',
+    } as RequestInit & { duplex: 'half' });
+    const text = await response.text();
+    if (!response.ok) throw new GitHubApiError(response.status, path, text.slice(0, 400), acceptedPermissionsOf(response));
+    return JSON.parse(text) as ReleaseAsset;
+  }
+}
+
+/** A release asset as GitHub answers it. */
+export interface ReleaseAsset {
+  id: number;
+  /** GitHub's name for it, which may differ from the one sent. */
+  name: string;
+  state: string;
+  size: number;
+  /** `sha256:<hex>`, where GitHub computed one. */
+  digest?: string | null;
+  browser_download_url: string;
+  content_type?: string;
 }

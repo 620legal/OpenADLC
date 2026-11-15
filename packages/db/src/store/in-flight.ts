@@ -10,7 +10,11 @@ export interface InFlight {
   tasks: number;
   merges: number;
   deploys: number;
-  /** Release builds `running` (`release_runs`, docs/adr/0070): one can take hours, and a sleep stops it. */
+  /**
+   * Releases in flight (`release_runs`, docs/adr/0070, 0071): building,
+   * built and waiting to publish, or publishing. A build or an upload of a
+   * large artifact can take hours, and a sleep stops either.
+   */
   releases: number;
 }
 
@@ -58,7 +62,7 @@ export async function inFlight(): Promise<InFlight> {
               or (promote_dispatched_at is not null and production_conclusion is null)
             )) as deploys,
        (select count(*) from release_runs
-          where state = 'running' and started_at > now() - interval '${STALE_AFTER}') as releases`,
+          where state in ('running', 'built', 'publishing') and started_at > now() - interval '${STALE_AFTER}') as releases`,
   );
   return {
     tasks: Number(row?.tasks ?? 0),

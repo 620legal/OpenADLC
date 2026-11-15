@@ -526,7 +526,16 @@ export interface ReleaseSetting {
   /** `owner/name` the release is published to; null is this repository. */
   releaseRepo: string | null;
   timeoutMinutes: number;
+  /**
+   * The name of the signed manifest asset that shipped clients fetch
+   * (`migrations/0170_release_publish.sql`, docs/adr/0071). Null is
+   * `manifest.json` (`DEFAULT_MANIFEST_ASSET`).
+   */
+  manifestAsset: string | null;
 }
+
+/** The manifest asset's name when the repository row names none. */
+export const DEFAULT_MANIFEST_ASSET = 'manifest.json';
 
 export async function getRelease(repoId: string): Promise<ReleaseSetting | null> {
   const row = await queryOne<{
@@ -536,7 +545,11 @@ export async function getRelease(repoId: string): Promise<ReleaseSetting | null>
     release_version_key: string | null;
     release_repo: string | null;
     release_timeout_minutes: number;
-  }>('select release_command, release_artifact, release_version_file, release_version_key, release_repo, release_timeout_minutes from repos where id = $1', [repoId]);
+    release_manifest_asset?: string | null;
+  }>(
+    'select release_command, release_artifact, release_version_file, release_version_key, release_repo, release_timeout_minutes, release_manifest_asset from repos where id = $1',
+    [repoId],
+  );
   if (!row?.release_command || !row.release_artifact || !row.release_version_file) return null;
   return {
     command: row.release_command,
@@ -545,6 +558,7 @@ export async function getRelease(repoId: string): Promise<ReleaseSetting | null>
     versionKey: row.release_version_key,
     releaseRepo: row.release_repo,
     timeoutMinutes: row.release_timeout_minutes,
+    manifestAsset: row.release_manifest_asset ?? null,
   };
 }
 
@@ -560,9 +574,21 @@ export async function setRelease(repoId: string, setting: ReleaseSetting | null)
   }
   await query(
     `update repos set release_command = $2, release_artifact = $3, release_version_file = $4, release_version_key = $5,
-       release_repo = $6, release_timeout_minutes = $7, updated_at = now() where id = $1`,
-    [repoId, setting.command, setting.artifact, setting.versionFile, setting.versionKey, setting.releaseRepo, setting.timeoutMinutes],
+       release_repo = $6, release_timeout_minutes = $7, release_manifest_asset = $8, updated_at = now() where id = $1`,
+    [repoId, setting.command, setting.artifact, setting.versionFile, setting.versionKey, setting.releaseRepo, setting.timeoutMinutes, setting.manifestAsset],
   );
+}
+
+/**
+ * Every repository OpenADLC works in that is set to release, by name, with
+ * where it publishes: the `release-tag-rules` card checks the source and the
+ * release repository of each (docs/adr/0071).
+ */
+export async function releasing(): Promise<{ id: string; fullName: string; releaseRepo: string | null }[]> {
+  const rows = await query<{ id: string; full_name: string; release_repo: string | null }>(
+    `select id, full_name, release_repo from repos where release_command is not null and ${ACTIVE} order by full_name`,
+  );
+  return rows.map((row) => ({ id: row.id, fullName: row.full_name, releaseRepo: row.release_repo }));
 }
 
 /**

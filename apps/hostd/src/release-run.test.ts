@@ -34,8 +34,12 @@ import {
   type ReleaseRunRequest,
   type ReleaseRunView,
 } from './release-run.js';
+import { createPublicKey, verify } from 'node:crypto';
+import { releaseSigningKeyRef, serializeReleaseKeyRecord, type SecretStore } from '@openadlc/github';
+import { DEFAULT_RELEASE_TAG, releaseMessage } from '@openadlc/shared';
 import type { HostProcesses, ProcessResult } from './account-probe.js';
 import type { ReleaseAccountProbe } from './release-account.js';
+import { signRelease } from './release-sign.js';
 
 const ACCOUNT = 'openadlc-release';
 const KEY = `-----BEGIN PRIVATE KEY-----planted-release-key-${'k'.repeat(20)}`;
@@ -587,6 +591,85 @@ describe('a release run', () => {
       const artifact = again.artifact('run-1');
       expect(artifact?.path).toBe(join(workRoot, 'release', 'artifacts', 'run-1', 'artifact', 'run.json'));
       expect(artifact && readFileSync(artifact.path, 'utf8')).toContain('9.9.9');
+    });
+  });
+
+  describe('signing a built run (#344)', () => {
+    const URL_SIGNED = 'https://github.com/acme/app/releases/download/v1.4.0/App.zip';
+    // RFC 8032 §7.1 test 1's key, as release-sign.test.ts uses.
+    const PEM = '-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIJ1hsZ3v/VpguoRK9JLsLMREScVpezJpGXA7rAMcrn9g\n-----END PRIVATE KEY-----\n';
+
+    function keyStore(withKey: boolean): SecretStore {
+      const values = new Map<string, string>();
+      if (withKey) values.set(releaseSigningKeyRef('acme/app'), serializeReleaseKeyRecord({ v: 1, repo: 'acme/app', tag: DEFAULT_RELEASE_TAG, key: PEM }));
+      return {
+        get: async (ref) => values.get(ref) ?? null,
+        set: async (ref, value) => void values.set(ref, value),
+        delete: async (ref) => void values.delete(ref),
+        list: async () => [...values.keys()],
+      };
+    }
+
+    async function built(withKey = true) {
+      const world = machine({ artifact: { bytes: Buffer.from('real bytes') } });
+      const store = keyStore(withKey);
+      const made = runs(world, { home, extra: { signer: (repo, fields) => signRelease(repo, fields, store) } });
+      made.releaseRuns.start(request(first));
+      await made.releaseRuns.settled();
+      return made;
+    }
+
+    it('signs the version and sha256 from run.json under the given URL, and the signature verifies', async () => {
+      const { releaseRuns, workRoot } = await built();
+      const signed = await releaseRuns.sign('run-1', URL_SIGNED);
+      expect(signed).toMatchObject({ repo: 'acme/app', sha: first, version: '1.4.0', sha256: sha256('real bytes'), bytes: 10 });
+      const message = releaseMessage(DEFAULT_RELEASE_TAG, { version: '1.4.0', sha256: sha256('real bytes'), url: URL_SIGNED });
+      const publicKey = createPublicKey({ key: Buffer.concat([Buffer.from('302a300506032b6570032100', 'hex'), Buffer.from(signed.publicKey, 'base64')]), format: 'der', type: 'spki' });
+      expect(verify(null, message, publicKey, Buffer.from(signed.sig, 'base64'))).toBe(true);
+      expect(JSON.parse(signed.asset)).toEqual({ version: '1.4.0', url: URL_SIGNED, sha256: sha256('real bytes'), sig: signed.sig });
+      const kept = JSON.parse(readFileSync(join(workRoot, 'release', 'artifacts', 'run-1', 'run.json'), 'utf8'));
+      expect(kept.signed).toEqual({ url: URL_SIGNED, sig: signed.sig });
+    });
+
+    it('answers the same signature for the same URL, and refuses a second URL', async () => {
+      const { releaseRuns } = await built();
+      const once = await releaseRuns.sign('run-1', URL_SIGNED);
+      await expect(releaseRuns.sign('run-1', URL_SIGNED)).resolves.toMatchObject({ sig: once.sig });
+      await expect(releaseRuns.sign('run-1', `${URL_SIGNED}.other`)).rejects.toMatchObject({ status: 409, message: expect.stringContaining('signed under one URL only') });
+    });
+
+    it('refuses two URLs asked at once: only the first is signed', async () => {
+      const { releaseRuns } = await built();
+      const [a, b] = await Promise.allSettled([releaseRuns.sign('run-1', URL_SIGNED), releaseRuns.sign('run-1', `${URL_SIGNED}.other`)]);
+      expect(a.status).toBe('fulfilled');
+      expect(b.status).toBe('rejected');
+    });
+
+    it('refuses a kept artifact changed since its build', async () => {
+      const { releaseRuns } = await built();
+      const artifact = releaseRuns.artifact('run-1');
+      writeFileSync(artifact?.path ?? '', 'other bytes');
+      await expect(releaseRuns.sign('run-1', URL_SIGNED)).rejects.toMatchObject({ status: 409, message: expect.stringContaining('no longer matches its build') });
+    });
+
+    it('refuses a run.json without its repository, and a run it has none of', async () => {
+      const { releaseRuns, workRoot } = await built();
+      const file = join(workRoot, 'release', 'artifacts', 'run-1', 'run.json');
+      const { repo: _repo, ...rest } = JSON.parse(readFileSync(file, 'utf8'));
+      writeFileSync(file, JSON.stringify(rest));
+      await expect(releaseRuns.sign('run-1', URL_SIGNED)).rejects.toMatchObject({ status: 409, message: expect.stringContaining('built before signing could be asked') });
+      await expect(releaseRuns.sign('run-9', URL_SIGNED)).rejects.toMatchObject({ status: 404 });
+    });
+
+    it('gives the import advice when the repository has no key, and keeps nothing signed', async () => {
+      const { releaseRuns, workRoot } = await built(false);
+      await expect(releaseRuns.sign('run-1', URL_SIGNED)).rejects.toMatchObject({ status: 409, message: expect.stringContaining('openadlc release-key import --repo acme/app') });
+      expect(JSON.parse(readFileSync(join(workRoot, 'release', 'artifacts', 'run-1', 'run.json'), 'utf8')).signed).toBeUndefined();
+    });
+
+    it('refuses a URL that is not one with 400', async () => {
+      const { releaseRuns } = await built();
+      await expect(releaseRuns.sign('run-1', 'http://github.com/x')).rejects.toMatchObject({ status: 400 });
     });
   });
 });
