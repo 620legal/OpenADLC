@@ -1,9 +1,13 @@
-import { spawn as spawnChild, type ChildProcess, type SpawnOptions } from 'node:child_process';
 import { existsSync, mkdirSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { internalSecretRef, getSecretStore, type SecretStore } from '@openadlc/github';
+import { accountEnv, asAccount, nodeProcesses, probeAccount, type AccountProbe, type HostProcesses } from './account-probe.js';
 import { KILL_AFTER_MS } from './drivers/types.js';
+
+// The probe and the processes it runs moved to `account-probe.ts`, shared
+// with the release account (docs/adr/0068); re-exported for the callers and
+// tests that imported them from here.
+export { HOST_CHECK_PATH, dockerSocketsOf, nodeProcesses, type AccountProbe, type HostProcesses, type ProcessResult } from './account-probe.js';
 
 /**
  * A repository's host check: a command an admin set on the repository's row,
@@ -64,20 +68,10 @@ const PREPARE_TIMEOUT_MS = 30 * 60_000;
 /** How long a finished run is kept here for the bridge to read. */
 const KEPT_MS = 60 * 60 * 1000;
 
-/** A name `useradd` and `sysadminctl` would make, so it is safe as an argument and in `~name`. */
-const ACCOUNT_NAME = /^[a-z_][a-z0-9_-]{0,31}$/i;
-
-/** Where the build finds its tools: the system's, then Homebrew's on Apple silicon and Intel. */
-export const HOST_CHECK_PATH = '/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin';
-
 /** Every variable the command is given; `env -i` clears the rest. */
 export function hostCheckEnv(account: string, home: string): Record<string, string> {
   return {
-    PATH: HOST_CHECK_PATH,
-    HOME: home,
-    USER: account,
-    LOGNAME: account,
-    LANG: 'en_US.UTF-8',
+    ...accountEnv(account, home),
     CI: '1',
     OPENADLC_HOST_CHECK: '1',
   };
@@ -125,29 +119,6 @@ export function hostCheckRequestFrom(body: Record<string, unknown>): HostCheckRe
   if (typeof timeoutMinutes !== 'number' || !Number.isInteger(timeoutMinutes) || timeoutMinutes < 1 || timeoutMinutes > 1440) return 'timeoutMinutes must be 1 to 1440';
   if (bot !== undefined && bot !== null && (typeof bot !== 'string' || !/^[A-Za-z0-9_.-]{1,64}$/.test(bot))) return 'bot must be a bot name';
   return { runId, repo, pr, head, command, timeoutMinutes, bot: typeof bot === 'string' ? bot : null };
-}
-
-/** What the probe found: `ok`, or the first thing wrong and what to do about it. */
-export type AccountProbe =
-  | { ok: true; account: string; uid: number; home: string }
-  | { ok: false; account: string; problem: 'no_account' | 'not_dedicated' | 'no_sudo' | 'can_read' | 'can_enter' | 'docker' | 'can_sudo'; path?: string; detail: string };
-
-export interface ProcessResult {
-  code: number;
-  stdout: string;
-  stderr: string;
-  timedOut?: boolean;
-}
-
-/**
- * How hostd runs things on the machine: a command to its end, one command's
- * output piped into another's input, and the long one, whose output is
- * streamed. Injected so the tests can see every argv and environment.
- */
-export interface HostProcesses {
-  run(argv: string[], options?: { env?: Record<string, string>; timeoutMs?: number }): Promise<ProcessResult>;
-  pipe(from: { argv: string[]; env?: Record<string, string> }, to: { argv: string[] }, timeoutMs: number): Promise<ProcessResult>;
-  start(argv: string[], onOutput: (chunk: string) => void): { exited: Promise<number>; signalAll(signal: 'TERM' | 'KILL'): Promise<void> };
 }
 
 export interface HostCheckDeps {
@@ -275,63 +246,16 @@ export class HostChecks {
   /**
    * Whether the account is fit to run a host check, proved by its effect:
    * see the header. Run before every run, and answered to the bridge's health
-   * check (`GET /host-check/account`).
+   * check (`GET /host-check/account`). The checks are `probeAccount`'s,
+   * shared with the release account (`account-probe.ts`).
    */
   async probe(): Promise<AccountProbe> {
-    const account = this.deps.account;
-    const fail = (problem: Exclude<AccountProbe, { ok: true }>['problem'], detail: string, path?: string): AccountProbe => ({
-      ok: false,
-      account,
-      problem,
-      detail,
-      ...(path ? { path } : {}),
-    });
-    if (!ACCOUNT_NAME.test(account)) return fail('no_account', `${account} is not an account name; set OPENADLC_HOST_CHECK_ACCOUNT to the account you made`);
-    const id = await this.processes.run(['id', '-u', account]);
-    const uid = Number.parseInt(id.stdout.trim(), 10);
-    if (id.code !== 0 || !Number.isInteger(uid)) return fail('no_account', `there is no account named ${account} on this machine`);
-    if (uid === 0) return fail('not_dedicated', `${account} is root, which can read everything; make an account of its own`);
-    const own = this.deps.uid ?? process.getuid?.();
-    if (own !== undefined && uid === own) return fail('not_dedicated', `${account} is the account hostd runs as, which can read OPENADLC_HOME; make an account of its own`);
-    const home = (await this.processes.run(['/bin/sh', '-c', 'eval "echo ~$1"', 'sh', account])).stdout.trim();
-    if (!home || home.startsWith('~')) return fail('no_account', `${account} has no home folder to keep its working folders in`);
-    const can = await this.processes.run(this.asAccount(['/usr/bin/true'], home), { timeoutMs: 30_000 });
-    if (can.code !== 0) return fail('no_sudo', `hostd cannot run a command as ${account} without a password: ${(can.stderr || can.stdout).trim().slice(0, 200) || `sudo exited ${can.code}`}`);
-    const hostdHome = this.deps.hostdHome ?? homedir();
-    const folders = [...new Set([this.deps.openadlcHome, this.deps.workRoot, hostdHome])];
-    const asIt = (script: string, path: string) => this.processes.run(this.asAccount(['/bin/sh', '-c', script, 'sh', path], home), { timeoutMs: 30_000 });
-    for (const path of [this.deps.openadlcHome, join(this.deps.openadlcHome, 'install.json'), ...folders.slice(1)]) {
-      if ((await asIt(READABLE, path)).code === 0) return fail('can_read', `${account} can read ${path}`, path);
-    }
-    // A folder it cannot list but may pass through, as a home at 0711, still
-    // opens every file in it whose name is known — `install.json` is one.
-    // `test -x` asks access(2), so an ACL that lets it through counts too.
-    for (const path of folders) {
-      if ((await asIt(ENTERABLE, path)).code === 0) return fail('can_enter', `${account} can enter ${path} (a file in it whose name it knows can be opened)`, path);
-    }
-    // The Docker socket is root on the machine: any container, with any of
-    // its folders mounted. Connecting to a unix socket takes write on it.
-    for (const path of this.deps.dockerSockets) {
-      if ((await asIt(CONNECTABLE, path)).code === 0) return fail('docker', `${account} can connect to ${path}, which controls Docker as root`, path);
-    }
-    // Asked as hostd, of the account's groups: a socket not listed above, as
-    // one a group opens on Linux, is reached through the group.
-    const groups = await this.processes.run(['id', '-Gn', account], { timeoutMs: 30_000 });
-    if (groups.code === 0 && groups.stdout.trim().split(/\s+/).includes('docker')) return fail('docker', `${account} is in the docker group`);
-    // `-l` without a password passes when any rule is NOPASSWD, one limited
-    // to a single command included, which `sudo -n true` would miss.
-    const sudo = await this.processes.run(this.asAccount(['sudo', '-n', '-l'], home), { timeoutMs: 30_000 });
-    if (sudo.code === 0) {
-      const listed = sudo.stdout.trim().replace(/\s+/g, ' ').slice(0, 200);
-      return fail('can_sudo', `${account} can run sudo without a password${listed ? ` (${listed})` : ''}`);
-    }
-    return { ok: true, account, uid, home };
+    return probeAccount(this.deps.account, 'OPENADLC_HOST_CHECK_ACCOUNT', this.deps, this.processes, (home) => hostCheckEnv(this.deps.account, home));
   }
 
   /** `argv` as the account, with nothing of hostd's environment but `hostCheckEnv`. */
   asAccount(argv: string[], home: string): string[] {
-    const env = Object.entries(hostCheckEnv(this.deps.account, home)).map(([key, value]) => `${key}=${value}`);
-    return ['sudo', '-n', '-u', this.deps.account, '--', '/usr/bin/env', '-i', ...env, ...argv];
+    return asAccount(this.deps.account, hostCheckEnv(this.deps.account, home), argv);
   }
 
   private next(): void {
@@ -515,28 +439,6 @@ export class HostChecks {
   }
 }
 
-/** Whether the account can read a path, or list a folder. */
-const READABLE = 'test -r "$1" || ls "$1" >/dev/null 2>&1';
-/** Whether the account can pass through a folder. */
-const ENTERABLE = 'test -d "$1" && test -x "$1"';
-/** Whether the account can connect to a socket: one there, and writable to it. */
-const CONNECTABLE = '[ -S "$1" ] && [ -w "$1" ]';
-
-/**
- * The Docker sockets on this machine the account must not reach: `DOCKER_HOST`'s
- * when it is a unix socket, the system's, Docker Desktop's and OrbStack's in
- * hostd's home, and rootless Docker's. One that is not there passes. A list
- * rather than `docker context`, which hostd runs without a `HOME`.
- */
-export function dockerSocketsOf(env: Record<string, string | undefined>, home: string): string[] {
-  const sockets: string[] = [];
-  const host = env.DOCKER_HOST ?? '';
-  if (host.startsWith('unix://')) sockets.push(host.slice('unix://'.length));
-  sockets.push('/var/run/docker.sock', '/run/docker.sock', join(home, '.docker', 'run', 'docker.sock'), join(home, '.orbstack', 'run', 'docker.sock'));
-  if (env.XDG_RUNTIME_DIR) sockets.push(join(env.XDG_RUNTIME_DIR, 'docker.sock'));
-  return [...new Set(sockets.filter(Boolean))];
-}
-
 /** What to do when the probe fails; the health check's card says the same. */
 export const ACCOUNT_FIX = 'Make the account and its sudo rule as docs/self-hosting.md#host-checks says, then run openadlc doctor';
 
@@ -594,98 +496,6 @@ export const RECEIVE = [
 function view(run: HostCheckRun): HostCheckRun {
   const { stop: _stop, ...rest } = run as Held;
   return { ...rest };
-}
-
-/** `HostProcesses` on this machine, with node's `child_process`. */
-export function nodeProcesses(spawn: (command: string, args: string[], options: SpawnOptions) => ChildProcess = spawnChild): HostProcesses {
-  const collect = (child: ChildProcess, timeoutMs: number | undefined): Promise<ProcessResult> =>
-    new Promise((resolve) => {
-      let stdout = '';
-      let stderr = '';
-      let timedOut = false;
-      child.stdout?.on('data', (chunk: Buffer) => {
-        stdout = `${stdout}${chunk.toString('utf8')}`.slice(-1_000_000);
-      });
-      child.stderr?.on('data', (chunk: Buffer) => {
-        stderr = `${stderr}${chunk.toString('utf8')}`.slice(-100_000);
-      });
-      const timer = timeoutMs
-        ? setTimeout(() => {
-            timedOut = true;
-            child.kill('SIGKILL');
-          }, timeoutMs)
-        : null;
-      child.on('error', (error) => {
-        if (timer) clearTimeout(timer);
-        resolve({ code: 127, stdout, stderr: `${stderr}${error.message}`, timedOut });
-      });
-      child.on('close', (code) => {
-        if (timer) clearTimeout(timer);
-        resolve({ code: code ?? 1, stdout, stderr, timedOut });
-      });
-    });
-  return {
-    run(argv, options = {}) {
-      const [command = '', ...args] = argv;
-      const child = spawn(command, args, { env: { ...minimalEnv(), ...options.env }, stdio: ['ignore', 'pipe', 'pipe'] });
-      return collect(child, options.timeoutMs);
-    },
-    async pipe(from, to, timeoutMs) {
-      const [fromCommand = '', ...fromArgs] = from.argv;
-      const [toCommand = '', ...toArgs] = to.argv;
-      const source = spawn(fromCommand, fromArgs, { env: { ...minimalEnv(), ...from.env }, stdio: ['ignore', 'pipe', 'pipe'] });
-      const sink = spawn(toCommand, toArgs, { env: minimalEnv(), stdio: ['pipe', 'pipe', 'pipe'] });
-      if (source.stdout && sink.stdin) source.stdout.pipe(sink.stdin);
-      sink.stdin?.on('error', () => undefined);
-      const [made, taken] = await Promise.all([collect(source, timeoutMs), collect(sink, timeoutMs)]);
-      return made.code !== 0 ? { ...made, stderr: `the bundle could not be made: ${made.stderr}` } : taken;
-    },
-    start(argv, onOutput) {
-      const [command = '', ...args] = argv;
-      // A process group of its own, which hostd may signal: `sudo` keeps
-      // hostd's user as its real one. What the command starts runs as the
-      // account, so `signalAll` also reaches it as the account.
-      const child = spawn(command, args, { env: minimalEnv(), stdio: ['ignore', 'pipe', 'pipe'], detached: true });
-      child.stdout?.on('data', (chunk: Buffer) => onOutput(chunk.toString('utf8')));
-      child.stderr?.on('data', (chunk: Buffer) => onOutput(chunk.toString('utf8')));
-      const exited = new Promise<number>((resolve) => {
-        child.on('error', (error) => {
-          onOutput(`\n${error.message}\n`);
-          resolve(127);
-        });
-        child.on('close', (code, signal) => resolve(code ?? (signal ? 128 + 15 : 1)));
-      });
-      return {
-        exited,
-        async signalAll(signal) {
-          try {
-            if (child.pid) process.kill(-child.pid, `SIG${signal}`);
-          } catch {
-            // Gone already, or not ours to signal.
-          }
-          const asAccount = argv.slice(0, argv.indexOf('/usr/bin/env'));
-          if (asAccount[0] === 'sudo') {
-            // Every process the account runs, the build's background ones and
-            // any that left the group included: the account runs nothing else.
-            await new Promise<void>((resolve) => {
-              const killer = spawn(asAccount[0] as string, [...asAccount.slice(1), '/bin/kill', `-${signal}`, '-1'], { env: minimalEnv(), stdio: 'ignore' });
-              killer.on('close', () => resolve());
-              killer.on('error', () => resolve());
-            });
-          }
-        },
-      };
-    },
-  };
-}
-
-/**
- * The environment hostd's own `sudo` and `git` run with: a path and a locale,
- * and nothing of hostd's — no task token, no `GH_TOKEN`, no `DATABASE_URL`.
- * The command itself gets `hostCheckEnv` through `env -i`.
- */
-function minimalEnv(): Record<string, string> {
-  return { PATH: HOST_CHECK_PATH, LANG: 'en_US.UTF-8' };
 }
 
 /**

@@ -140,6 +140,13 @@ A change that makes one of these possible is wrong even when its tests pass:
   reason is redacted before it is stored or posted, and the red rule skips
   only the bridge's own `host-check` status
   (docs/adr/0066-a-host-check-account-reaches-nothing-and-only-the-bridges-host-check-status-is-skipped.md).
+- A release is cut only by one of the install's people with Approves on, never
+  a bot, and builds one commit on the default branch, pinned at the click, as
+  `OPENADLC_RELEASE_ACCOUNT`: never the host check's account by name or uid,
+  held to the same probe (`probeAccount`, one function for both), and with a
+  home the host check account cannot read or enter. Every signed field is
+  computed by hostd, and the key never reaches the account
+  (docs/adr/0068-a-release-is-built-in-its-own-account-and-signed-from-fields-hostd-computes.md).
 - A bot never approves a deploy; the repository's environment rules release
   it — a required reviewer, or a soak timer when it ships automatically — or,
   where GitHub's plan cannot hold a reviewer, a person releasing the promote
@@ -181,8 +188,10 @@ does not change what that pull request is subject to.
 They are the files that define how the crew is held in check: the merge
 decision and gates, the access, authorship, human-review and scope rules, the
 workflows and the scripts they run, who GitHub asks to review each path, what
-each skill may run, and the host check's boundary — when a pull request's code
-runs on the machine, as whom and with what, and the record the merge reads. Everything else, skill prose, roles and
+each skill may run, the host check's boundary — when a pull request's code
+runs on the machine, as whom and with what, and the record the merge reads —
+and the release's boundary — who cuts a release, as whom it builds, what is
+signed and with which key. Everything else, skill prose, roles and
 templates included, is left to the crew's review, so the crew can keep
 improving itself. `.github/CODEOWNERS` lists the same paths.
 
@@ -202,4 +211,9 @@ improving itself. `.github/CODEOWNERS` lists the same paths.
 - `apps/hostd/src/host-check.ts` @orzelig
 - `apps/bridge/src/host-check-service.ts` @orzelig
 - `packages/db/src/store/host-check-runs.ts` @orzelig
+- `apps/hostd/src/account-probe.ts` @orzelig
+- `apps/hostd/src/release-account.ts` @orzelig
+- `apps/hostd/src/release-run.ts` @orzelig
+- `apps/hostd/src/release-sign.ts` @orzelig
+- `apps/bridge/src/release-service.ts` @orzelig
 - `crew/skills/*/tools.yaml` @orzelig

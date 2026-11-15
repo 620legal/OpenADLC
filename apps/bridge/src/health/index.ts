@@ -68,6 +68,7 @@ import { sleptCheck } from './checks/slept.js';
 import { taskDatabaseCheck } from './checks/task-database.js';
 import { defaultLoginItemReader, loginItemCheck, type LoginItemReader } from './checks/login-item.js';
 import { hostCheckAccountCheck } from './checks/host-check-account.js';
+import { releaseAccountCheck } from './checks/release-account.js';
 import { SLEPT_EVENT, type KeepAwake } from '../keep-awake.js';
 import { effectiveDelivery, type DeliveryKnowledge } from '../delivery-rules.js';
 import type { HealthCheck } from './types.js';
@@ -443,6 +444,11 @@ export function defaultChecks(wiring: HealthWiring): HealthCheck[] {
     hostCheckAccountCheck({
       wanted: () => repos.anyHostCheck(),
       probe: async () => (await hostd.hostCheckAccount()).probe,
+    }),
+    // The account a release is built in, asked of hostd only while it names
+    // one (`OPENADLC_RELEASE_ACCOUNT`, #341, docs/adr/0068).
+    releaseAccountCheck({
+      probe: async () => (await hostd.releaseAccount()).probe,
     }),
   ];
 }

@@ -1016,6 +1016,39 @@ write anything in its working folders, which are kept between runs for
 incremental builds. So a result is only as trustworthy as every head that ran
 before it in that folder, of any repository the account builds.
 
+### The release boundary
+
+A release is built on the install's machine, signed, and published to clients
+that pin the public key, so the boundary is fixed before any release code
+exists ([ADR 0068](adr/0068-a-release-is-built-in-its-own-account-and-signed-from-fields-hostd-computes.md),
+[self-hosting](self-hosting.md#the-release-account)).
+
+- **Who.** Only the install's people with Approves on, each proved by a fresh
+  device-code sign-in that matches their People row. A bot never cuts one.
+- **What.** One commit on the default branch, pinned at the click. The tag is
+  made only after the build and signing succeed.
+- **As whom.** `OPENADLC_RELEASE_ACCOUNT`, a second account that is never the
+  host check's, by name or uid. Its probe is the host check account's
+  (`probeAccount`, `apps/hostd/src/account-probe.ts`, one function for both),
+  and it adds one check: the host check account can neither read nor enter the
+  release account's home. The release account keeps its build tree between
+  releases, and only merged code runs in it. Pull request code, which runs as
+  the host check account, must not be able to leave a step in that tree.
+- **What is signed.** Only fields hostd computes: the version from its own
+  mirror, the sha256 of the artifact as hostd streams it out with `cat` as the
+  account, and the asset's URL. hostd never opens a path the account controls,
+  and nothing the account prints is signed.
+- **The key.** A per-repository ed25519 key in the secret store, read only by
+  the signing step. It never reaches the account, a log or GitHub.
+- **The run's end.** As for a host check: a time limit, and TERM then KILL to
+  every process of the account, a pass included. The Mac is held awake while
+  a run is in flight.
+
+The run, the signing step and the release service
+(`apps/hostd/src/release-run.ts`, `apps/hostd/src/release-sign.ts`,
+`apps/bridge/src/release-service.ts`), with the shared probe and the release
+account's probe, are under Human review.
+
 ### The console
 
 Identity is load-bearing: it decides who may answer a gate, move a card and

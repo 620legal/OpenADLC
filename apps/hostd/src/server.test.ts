@@ -89,7 +89,7 @@ function logins() {
 
 async function start(
   service: ReturnType<typeof logins> | undefined,
-  parts: { runner?: object; driver?: object; taskDatabases?: object; hostChecks?: object } = {},
+  parts: { runner?: object; driver?: object; taskDatabases?: object; hostChecks?: object; releaseAccount?: object | null } = {},
 ) {
   const { createHostdServer } = await import('./server.js');
   const { RegistryCredentials } = await import('./registry.js');
@@ -106,6 +106,7 @@ async function start(
     logins: service as never,
     ...(parts.taskDatabases ? { taskDatabases: parts.taskDatabases as never } : {}),
     ...(parts.hostChecks ? { hostChecks: parts.hostChecks as never } : {}),
+    ...(parts.releaseAccount !== undefined ? { releaseAccount: parts.releaseAccount as never } : {}),
   });
 
   await new Promise<void>((resolve) => http.listen(0, '127.0.0.1', resolve));
@@ -609,6 +610,34 @@ describe('a host check, through hostd', () => {
   it('says this hostd runs none when it has no host checks', async () => {
     server = await start(undefined);
     expect((await server.call('GET', '/host-check/account')).status).toBe(501);
+  });
+});
+
+describe('the release account, through hostd', () => {
+  const FIT = { ok: true, account: 'openadlc-release', uid: 503, home: '/Users/openadlc-release' };
+
+  it('is refused to a caller without the install’s secret, and asks nothing of the machine', async () => {
+    const releaseAccount = { probe: vi.fn(async () => FIT) };
+    server = await start(undefined, { releaseAccount });
+    expect((await server.call('GET', '/release/account', {})).status).toBe(401);
+    expect(releaseAccount.probe).not.toHaveBeenCalled();
+  });
+
+  it('answers null where no release account is named, with or without host checks', async () => {
+    server = await start(undefined);
+    expect(await server.call('GET', '/release/account')).toMatchObject({ status: 200, body: { probe: null } });
+    await server.close();
+    server = await start(undefined, { releaseAccount: null });
+    expect(await server.call('GET', '/release/account')).toMatchObject({ status: 200, body: { probe: null } });
+  });
+
+  it('answers what the probe found where one is named', async () => {
+    const releaseAccount = { probe: vi.fn(async () => ({ ok: false, account: 'openadlc-hostcheck', problem: 'host_check_account', detail: 'the same account' })) };
+    server = await start(undefined, { releaseAccount });
+    expect((await server.call('GET', '/release/account')).body).toEqual({
+      probe: { ok: false, account: 'openadlc-hostcheck', problem: 'host_check_account', detail: 'the same account' },
+    });
+    expect(releaseAccount.probe).toHaveBeenCalledTimes(1);
   });
 });
 

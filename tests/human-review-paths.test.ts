@@ -36,6 +36,10 @@ const GUARDED = [
   'apps/hostd/src/host-check.ts',
   'apps/bridge/src/host-check-service.ts',
   'packages/db/src/store/host-check-runs.ts',
+  // The probe the host check's boundary moved into, shared with the release
+  // account, and the release account's own (docs/adr/0068).
+  'apps/hostd/src/account-probe.ts',
+  'apps/hostd/src/release-account.ts',
 ];
 
 const skillTools = readdirSync(join(ROOT, 'crew', 'skills'))
@@ -60,6 +64,16 @@ describe('the Human review section of this repository', () => {
     // lead's approval alone.
     expect(humanReviewersFor(['.github/scripts/release-check.mjs'], rules)).toEqual(maintainer);
   });
+
+  it.each(['apps/hostd/src/release-run.ts', 'apps/hostd/src/release-sign.ts', 'apps/bridge/src/release-service.ts'])(
+    'waits on the maintainer for %s, the release boundary, before the file is written',
+    (file) => {
+      // Listed before any release code exists (#341, docs/adr/0068), so the
+      // pull request that first writes the run, the signing step or the
+      // service is held for a person, not left to the lead's approval.
+      expect(humanReviewersFor([file], rules)).toEqual(maintainer);
+    },
+  );
 
   it('covers every skill’s tools.yaml there is', () => {
     expect(skillTools.length).toBeGreaterThan(0);

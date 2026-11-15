@@ -22,6 +22,7 @@ import { repoKeyOf } from './drivers/base-env.js';
 import { TaskRunner } from './task-runner.js';
 import { LocalCi, bridgeReporter } from './local-ci.js';
 import { HostChecks, dockerSocketsOf, hostCheckReporter } from './host-check.js';
+import { ReleaseAccount } from './release-account.js';
 import { gitAuthEnv } from './worktree.js';
 import { TokenClient } from './token-client.js';
 
@@ -251,13 +252,19 @@ async function main(): Promise<void> {
   // A repository's host check, as an account of its own and outside every
   // container (`host-check.ts`). The token only fetches the head into hostd's
   // own mirror; the account is given the code as a bundle, never the token.
-  const hostChecks = new HostChecks({
-    account: config.hostCheckAccount ?? DEFAULT_HOST_CHECK_ACCOUNT,
-    installId: config.installId ?? 'default',
+  // What neither the host check's account nor the release account may reach,
+  // built once so the two are held to the same list.
+  const guarded = {
     openadlcHome: openadlcHome(),
     // Checked apart from OPENADLC_HOME: `OPENADLC_WORK_ROOT` can put it elsewhere.
     workRoot: config.workRoot,
     dockerSockets: dockerSocketsOf(process.env, homedir()),
+  };
+  const hostCheckAccount = config.hostCheckAccount ?? DEFAULT_HOST_CHECK_ACCOUNT;
+  const hostChecks = new HostChecks({
+    account: hostCheckAccount,
+    installId: config.installId ?? 'default',
+    ...guarded,
     mirrorRoot: join(config.workRoot, 'host-check'),
     remote: (repoFullName) =>
       process.env[`OPENADLC_REMOTE_${repoFullName.replace(/[^A-Za-z0-9]/g, '_').toUpperCase()}`] ||
@@ -266,6 +273,9 @@ async function main(): Promise<void> {
     fetchAuth: async (bot, repoFullName, remote) => (bot ? gitAuthEnv(remote, (await tokens.tokenForTask(bot, repoFullName)).token) : {}),
     report: hostCheckReporter(config.bridgeUrl, secretStore),
   });
+  // The account releases are built in, only where one is named: unnamed,
+  // this install builds none (docs/adr/0068).
+  const releaseAccount = config.releaseAccount ? new ReleaseAccount({ account: config.releaseAccount, hostCheckAccount, places: guarded }) : null;
 
   const attachTokens = new AttachTokens();
   // The file a cloud host's unit starts hostd's image from, which the
@@ -319,6 +329,7 @@ async function main(): Promise<void> {
     engineUpdates,
     localCi,
     hostChecks,
+    releaseAccount,
     ...(restartOntoImage ? { restartOntoImage } : {}),
     egress: { probe: new EgressProbe(egressProxyToAsk()), list: egressList },
     ...(databases ? { taskDatabases: databases } : {}),
