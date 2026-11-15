@@ -2091,8 +2091,10 @@ with Xcode, and no task container has Xcode. A repository like that can have a
 machine for each pull request, outside every container. It runs once the
 crew's reviews approve the head, and before the person who approves it is
 asked. To count as approved, the lead and every other approver must approve
-the head, and no seat may be asking for changes on it, the security seat
-included. The result is posted on the pull request as the `host-check` commit
+the head, and no approver may be asking for changes on it. The security seat
+holds it too when it asks for changes on a change to how CI runs, a Makefile
+included, and so does the lead being asked to decide again. A request for
+changes from a seat that is not an approver doesn't hold it. The result is posted on the pull request as the `host-check` commit
 status, and is shown on the held approval's card in Needs you. No model runs
 it, so it spends nothing.
 
@@ -2217,10 +2219,25 @@ check runs only after the crew approves the head.
   seconds after the TERM at the latest. hostd sends TERM and KILL to the
   account once more before each run starts, before the new head reaches its
   folder.
-- **Git runs nothing an earlier run left.** The fetch and checkout in the
-  working folder read neither the account's `~/.gitconfig` nor the system's
-  git config. They run no hook and no fsmonitor, whatever the folder's
-  `.git/config` says.
+- **Git reads only what the run gives it.** Before each fetch, hostd's script
+  empties the working folder's `.git` down to git's objects, refs and index
+  (`objects`, `refs`, `packed-refs`, `HEAD`, `index`, `sharedindex.*`,
+  `shallow`). The folder's `config`, `info/` (with `info/attributes`) and
+  `hooks/` go, and so do `commondir`, `worktrees/`, `modules/` and
+  `objects/info/alternates`. A `.git` that is a file or a symlink is removed,
+  and the folder starts a fresh repository. Then `git init --template=` writes
+  a new config with no hooks. The fetch and checkout read:
+  - that fresh config and their own `-c` flags;
+  - the head's own tracked `.gitattributes`, which can name a filter but not
+    define one.
+
+  They read no system or global git config (`~/.gitconfig`,
+  `~/.config/git/config`), no `~/.config/git/attributes`, no hook and no
+  fsmonitor. An earlier run, of any repository, could have written any of
+  these, and git would have run what they named. The working tree, with its
+  untracked and ignored files, is kept, and the index is kept with it, so files
+  the new head doesn't change keep their timestamps and `make` stays
+  incremental. The account's git needs version 2.29 or later.
 - **A pass carries to a head with the same changes.** When the merge line
   brings a branch up to date with its base, the build doesn't run again. When
   a conflict was resolved, it does, because the code changed.

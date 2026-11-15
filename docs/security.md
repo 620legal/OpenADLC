@@ -966,9 +966,13 @@ Several things bound it.
 
 - **When it runs.** Only once the crew's reviews approve the head, so the code
   has been read before it runs. The lead and every other approver must approve
-  that head, and no seat may be asking for changes on it, the security seat
-  included. The lead's approval alone is not enough. Never on a fork's pull
-  request, and never on a draft.
+  that head, and no approver may be asking for changes on it. The security
+  seat holds it too when it asks for changes on a change to how CI runs, a
+  Makefile included (`securityAsks`). So does the lead being asked to decide
+  again (`leadDue`). A seat that is not an approver doesn't hold it
+  (`crewApprovedHead`, `apps/bridge/src/host-check-service.ts`). The lead's
+  approval alone is not enough. Never on a fork's pull request, and never on a
+  draft.
 - **What it runs.** The command comes only from the repository's row in the
   platform database. An admin writes it there through `PATCH /v1/repos/:name`,
   as one line of at most 500 characters, and the change is audited. A pull
@@ -986,9 +990,18 @@ Several things bound it.
   KILL, to every process the account runs, a pass included, so nothing a build
   started in the background lives on into the next run. hostd does the same
   once more before each run starts.
-- **What git runs.** The account's fetch and checkout read neither its
-  `~/.gitconfig` nor the system's git config, and run no hook and no
-  fsmonitor. An earlier run could have planted any of them.
+- **What git runs.** The account's fetch and checkout read no system or
+  global git config, no `~/.config/git/attributes`, no hook and no fsmonitor.
+  Before each run, the folder's own `.git` is emptied to git's objects, refs
+  and index. Its `config`, `info/attributes`, `hooks/`, `commondir` and
+  `objects/info/alternates` go, as does a `.git` that is a gitfile or symlink.
+  Then `git init --template=` writes a fresh config. An earlier run, of any
+  repository, could have planted any of these: a `filter.<name>.smudge` in
+  the folder's config runs at checkout. Git cannot be told to ignore a
+  repository's own config, so the config is removed rather than overridden.
+  What is left to read is that fresh config, the `-c` flags, and the head's
+  tracked `.gitattributes`, which can name a filter but not define one
+  ([ADR 0067](adr/0067-a-host-checks-working-folder-keeps-only-gits-objects-refs-and-index.md)).
 - **How its result counts.** Only the bridge writes the result, to
   `host_check_runs`, from hostd's report sent with the install's secret. The
   merge reads that table. It never reads the `host-check` commit status, which

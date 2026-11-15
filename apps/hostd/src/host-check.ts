@@ -41,10 +41,11 @@ import { KILL_AFTER_MS } from './drivers/types.js';
  *   after it: a KILL still waiting when the next run began reached that
  *   run's build too, being sent to the whole account, and failed a head that
  *   never failed.
- * - The git steps the account runs read neither the system's git config nor
- *   the account's `~/.gitconfig`, and run no hook and no fsmonitor whatever
- *   the folder's `.git/config` says: an earlier run, of any repository, could
- *   have written any of them, and git ran what they named.
+ * - The git steps the account runs read no system or global git config and
+ *   no `~/.config/git/attributes`, run no hook and no fsmonitor, and start
+ *   from the folder's `.git` emptied to its objects, refs and index, with a
+ *   fresh config: an earlier run, of any repository, could have written any
+ *   of them, and git ran what they named (`RECEIVE`).
  *
  * No model runs it, so it spends nothing. What it printed reaches hostd
  * through a pipe, and its last `LOG_TAIL_BYTES` are reported to the bridge,
@@ -485,29 +486,50 @@ export const ACCOUNT_FIX = 'Make the account and its sudo rule as docs/self-host
 const GIT_ENV: Record<string, string> = { GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', GIT_TERMINAL_PROMPT: '0' };
 
 /**
+ * What of the folder's `.git` RECEIVE keeps between runs: the objects, so the
+ * thin bundle hostd sends still has its prerequisites, the refs, and the index,
+ * whose stat data lets `checkout --force` leave unchanged files and their
+ * mtimes alone, so `make` stays incremental. Nothing here can name a program.
+ */
+export const RECEIVE_KEEPS = ['objects', 'refs', 'packed-refs', 'HEAD', 'index', 'sharedindex.*', 'shallow'] as const;
+
+/**
  * Run as the account, with the bundle on stdin: the folder made once and kept,
  * the bundle written inside it, fetched, the head checked out detached and
  * forced over what a build changed in tracked files, and the bundle removed.
  * Untracked and ignored files stay, so the next build is incremental; the
  * repository's own `host-ci` target decides what a clean build is.
  *
- * Every git here is `g`: no system or global config, and no hook or
- * fsmonitor, which an earlier run could have set in `~/.gitconfig`, the
- * folder's `.git/config` or `.git/hooks` to run its own code at this fetch
- * and checkout, in the next repository's folder too.
+ * An earlier run, of any repository, wrote this folder as the same account,
+ * and git ran what it left: a `filter.<name>.smudge` in `.git/config` with
+ * `* filter=<name>` in `.git/info/attributes` ran at checkout, and so did one
+ * reached through a `.git` that is a gitfile or symlink, or a
+ * `.git/commondir`. Git has no switch that stops it reading a repository's
+ * own config, so it is removed rather than overridden: `.git` that is not a
+ * plain directory goes, everything under it but `RECEIVE_KEEPS` goes, and
+ * `init --template=` writes a fresh config with no hooks. Every git here is
+ * `g`, which then reads only that config, its own `-c` flags and the head's
+ * tracked `.gitattributes`, which can name a filter but not define one: no
+ * system or global config, no `~/.config/git/attributes`, no hook and no
+ * fsmonitor. The fetch writes no `FETCH_HEAD` and git no reflog, so the run
+ * leaves `.git` with only what it keeps and what `init` wrote
+ * (docs/adr/0067-a-host-checks-working-folder-keeps-only-gits-objects-refs-and-index.md).
  */
 export const RECEIVE = [
   'set -e',
   'export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1',
-  'g() { git -c core.hooksPath=/dev/null -c core.fsmonitor=false "$@"; }',
+  'g() { git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c core.attributesFile=/dev/null -c core.logAllRefUpdates=false "$@"; }',
   'dir="$1"; head="$2"',
   'mkdir -p "$dir"',
   'cd "$dir"',
-  '[ -d .git ] || g init --quiet .',
+  'if [ -L .git ] || { [ -e .git ] && [ ! -d .git ]; }; then rm -rf .git; fi',
+  `if [ -d .git ]; then find .git -mindepth 1 -maxdepth 1 ${RECEIVE_KEEPS.map((name) => `! -name '${name}'`).join(' ')} -exec rm -rf {} +; fi`,
+  'rm -f .git/objects/info/alternates .git/objects/info/http-alternates',
+  'g init --quiet --template= .',
   'bundle=.git/openadlc-incoming.bundle',
   'cat > "$bundle"',
   'trap \'rm -f "$bundle"\' EXIT',
-  "g fetch --quiet \"$bundle\" '+refs/openadlc/host-check/*:refs/openadlc/host-check/*'",
+  "g fetch --quiet --no-write-fetch-head \"$bundle\" '+refs/openadlc/host-check/*:refs/openadlc/host-check/*'",
   'g -c advice.detachedHead=false checkout --quiet --force --detach "$head"',
 ].join('\n');
 

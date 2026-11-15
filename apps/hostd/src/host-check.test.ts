@@ -1,6 +1,6 @@
 import type { ChildProcess, SpawnOptions } from 'node:child_process';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -350,63 +350,196 @@ describe('the account, proved before every run', () => {
 });
 
 describe('the git steps the account runs', () => {
-  it('runs no hook, fsmonitor or global config an earlier run left, and checks the head out', () => {
+  const clean = { PATH: process.env.PATH ?? '/usr/bin:/bin', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
+  const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, env: clean, encoding: 'utf8' }).trim();
+
+  /**
+   * A pull request's repository, the account's home with its kept working
+   * folder, and a planted program that leaves a mark in `marks` when it runs.
+   */
+  function fixture() {
     const root = mkdtempSync(join(tmpdir(), 'openadlc-host-check-receive-'));
     dirs.push(root);
     const marks = join(root, 'marks');
     mkdirSync(marks);
-    const clean = { PATH: process.env.PATH ?? '/usr/bin:/bin', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
-    const git = (cwd: string, ...args: string[]) => execFileSync('git', args, { cwd, env: clean, encoding: 'utf8' }).trim();
-
-    // The pull request's head, whose .gitattributes names a filter only config defines.
     const source = join(root, 'source');
     mkdirSync(source);
     git(source, 'init', '--quiet', '.');
-    writeFileSync(join(source, 'Makefile'), 'host-ci:\n\ttrue\n');
-    writeFileSync(join(source, '.gitattributes'), '* filter=planted\n');
-    git(source, 'add', '.');
-    git(source, '-c', 'user.name=t', '-c', 'user.email=t@example.com', 'commit', '--quiet', '-m', 'head');
-    const head = git(source, 'rev-parse', 'HEAD');
-    git(source, 'update-ref', 'refs/openadlc/host-check/7', head);
-    const bundle = join(root, 'head.bundle');
-    git(source, 'bundle', 'create', bundle, 'refs/openadlc/host-check/7');
-
-    // What an earlier run, as the account, could have left: a planted program,
-    // named by the account's ~/.gitconfig and by the folder's own config and hooks.
     const planted = join(root, 'planted.sh');
     writeFileSync(planted, `#!/bin/sh\ntouch "${marks}/$(basename "$0")-ran"\ncat\n`);
     chmodSync(planted, 0o755);
-    const hooks = join(root, 'hooks');
-    mkdirSync(hooks);
-    for (const hook of ['post-checkout', 'reference-transaction']) {
-      writeFileSync(join(hooks, hook), `#!/bin/sh\ntouch "${marks}/${hook}"\n`);
-      chmodSync(join(hooks, hook), 0o755);
-    }
     const home = join(root, 'home');
     mkdirSync(home);
-    writeFileSync(join(home, '.gitconfig'), `[core]\n\thooksPath = ${hooks}\n[filter "planted"]\n\tsmudge = ${planted}\n\tclean = ${planted}\n`);
     const folder = join(home, 'openadlc', 'default', 'acme__mac-app');
     mkdirSync(folder, { recursive: true });
-    git(folder, 'init', '--quiet', '.');
-    git(folder, 'config', 'core.hooksPath', hooks);
-    git(folder, 'config', 'core.fsmonitor', planted);
+    let bundles = 0;
+    return {
+      root,
+      marks,
+      planted,
+      home,
+      folder,
+      filterConfig: `[filter "planted"]\n\tsmudge = ${planted}\n\tclean = ${planted}\n`,
+      /** A commit on the pull request's ref with these files; its sha. */
+      commit(files: Record<string, string>): string {
+        for (const [path, content] of Object.entries(files)) {
+          mkdirSync(join(source, path, '..'), { recursive: true });
+          writeFileSync(join(source, path), content);
+        }
+        git(source, 'add', '.');
+        git(source, '-c', 'user.name=t', '-c', 'user.email=t@example.com', 'commit', '--quiet', '-m', 'head');
+        const head = git(source, 'rev-parse', 'HEAD');
+        git(source, 'update-ref', 'refs/openadlc/host-check/7', head);
+        return head;
+      },
+      /** The bundle hostd sends: all of it, or only what a folder given `since` lacks. */
+      bundle(since?: string): Buffer {
+        bundles += 1;
+        const path = join(root, `head-${bundles}.bundle`);
+        git(source, 'bundle', 'create', path, 'refs/openadlc/host-check/7', ...(since ? [`^${since}`] : []));
+        return readFileSync(path);
+      },
+      /** RECEIVE as hostd runs it, with only the command's environment. */
+      receive(head: string, bundle: Buffer) {
+        return spawnSync('/bin/sh', ['-c', RECEIVE, 'sh', folder, head], {
+          input: bundle,
+          env: { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: home, LANG: 'en_US.UTF-8' },
+          encoding: 'utf8',
+        });
+      },
+      ran: () => readdirSync(marks),
+    };
+  }
+
+  it('runs no hook, fsmonitor or global config an earlier run left, and checks the head out', () => {
+    const f = fixture();
+    // The pull request's head, whose .gitattributes names a filter only config defines.
+    const head = f.commit({ Makefile: 'host-ci:\n\ttrue\n', '.gitattributes': '* filter=planted\n' });
+
+    // What an earlier run, as the account, could have left: a planted program,
+    // named by the account's ~/.gitconfig and by the folder's own config and hooks.
+    const hooks = join(f.root, 'hooks');
+    mkdirSync(hooks);
     for (const hook of ['post-checkout', 'reference-transaction']) {
-      writeFileSync(join(folder, '.git', 'hooks', hook), `#!/bin/sh\ntouch "${marks}/local-${hook}"\n`);
-      chmodSync(join(folder, '.git', 'hooks', hook), 0o755);
+      writeFileSync(join(hooks, hook), `#!/bin/sh\ntouch "${f.marks}/${hook}"\n`);
+      chmodSync(join(hooks, hook), 0o755);
+    }
+    writeFileSync(join(f.home, '.gitconfig'), `[core]\n\thooksPath = ${hooks}\n${f.filterConfig}`);
+    git(f.folder, 'init', '--quiet', '.');
+    git(f.folder, 'config', 'core.hooksPath', hooks);
+    git(f.folder, 'config', 'core.fsmonitor', f.planted);
+    for (const hook of ['post-checkout', 'reference-transaction']) {
+      writeFileSync(join(f.folder, '.git', 'hooks', hook), `#!/bin/sh\ntouch "${f.marks}/local-${hook}"\n`);
+      chmodSync(join(f.folder, '.git', 'hooks', hook), 0o755);
     }
 
-    // As hostd runs it, with only the command's environment.
-    const received = spawnSync('/bin/sh', ['-c', RECEIVE, 'sh', folder, head], {
-      input: readFileSync(bundle),
-      env: { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: home, LANG: 'en_US.UTF-8' },
-      encoding: 'utf8',
-    });
+    const received = f.receive(head, f.bundle());
     expect(received.stderr).toBe('');
     expect(received.status).toBe(0);
-    expect(git(folder, 'rev-parse', 'HEAD')).toBe(head);
-    expect(readFileSync(join(folder, 'Makefile'), 'utf8')).toBe('host-ci:\n\ttrue\n');
-    expect(existsSync(join(folder, '.git', 'openadlc-incoming.bundle'))).toBe(false);
-    expect(execFileSync('ls', [marks], { encoding: 'utf8' })).toBe('');
+    expect(git(f.folder, 'rev-parse', 'HEAD')).toBe(head);
+    expect(readFileSync(join(f.folder, 'Makefile'), 'utf8')).toBe('host-ci:\n\ttrue\n');
+    expect(existsSync(join(f.folder, '.git', 'openadlc-incoming.bundle'))).toBe(false);
+    expect(f.ran()).toEqual([]);
+  });
+
+  it("runs no filter the folder's own config and info/attributes define, and keeps only git's objects, refs and index", () => {
+    const f = fixture();
+    const head = f.commit({ Makefile: 'host-ci:\n\ttrue\n' });
+    git(f.folder, 'init', '--quiet', '.');
+    const gitDir = join(f.folder, '.git');
+    writeFileSync(join(gitDir, 'config'), `${readFileSync(join(gitDir, 'config'), 'utf8')}${f.filterConfig}`);
+    mkdirSync(join(gitDir, 'info'), { recursive: true });
+    writeFileSync(join(gitDir, 'info', 'attributes'), '* filter=planted\n');
+    // And what git reads through the layout when config points at it.
+    writeFileSync(join(gitDir, 'config.worktree'), f.filterConfig);
+    mkdirSync(join(gitDir, 'worktrees', 'other'), { recursive: true });
+    mkdirSync(join(gitDir, 'modules', 'sub'), { recursive: true });
+    mkdirSync(join(gitDir, 'objects', 'info'), { recursive: true });
+    mkdirSync(join(f.root, 'elsewhere'));
+    writeFileSync(join(gitDir, 'objects', 'info', 'alternates'), `${join(f.root, 'elsewhere')}\n`);
+
+    const received = f.receive(head, f.bundle());
+    expect(received.stderr).toBe('');
+    expect(received.status).toBe(0);
+    expect(git(f.folder, 'rev-parse', 'HEAD')).toBe(head);
+    expect(f.ran()).toEqual([]);
+    expect(lstatSync(gitDir).isDirectory()).toBe(true);
+    const kept = /^(objects|refs|packed-refs|HEAD|index|sharedindex\..+|shallow|config|description|info)$/;
+    expect(readdirSync(gitDir).filter((name) => !kept.test(name))).toEqual([]);
+    expect(readFileSync(join(gitDir, 'config'), 'utf8')).not.toContain('planted');
+    expect(existsSync(join(gitDir, 'info', 'attributes'))).toBe(false);
+    expect(existsSync(join(gitDir, 'hooks'))).toBe(false);
+    expect(existsSync(join(gitDir, 'objects', 'info', 'alternates'))).toBe(false);
+  });
+
+  it.each(['a gitfile', 'a symlink'])('starts a new repository when .git is %s pointing elsewhere, and leaves that one alone', (kind) => {
+    const f = fixture();
+    const head = f.commit({ Makefile: 'host-ci:\n\ttrue\n' });
+    const other = join(f.root, 'other');
+    mkdirSync(other);
+    git(other, 'init', '--quiet', '.');
+    const otherGit = join(other, '.git');
+    writeFileSync(join(otherGit, 'config'), `${readFileSync(join(otherGit, 'config'), 'utf8')}${f.filterConfig}`);
+    mkdirSync(join(otherGit, 'info'), { recursive: true });
+    writeFileSync(join(otherGit, 'info', 'attributes'), '* filter=planted\n');
+    const otherConfig = readFileSync(join(otherGit, 'config'), 'utf8');
+    if (kind === 'a gitfile') writeFileSync(join(f.folder, '.git'), `gitdir: ${otherGit}\n`);
+    else symlinkSync(otherGit, join(f.folder, '.git'));
+
+    const received = f.receive(head, f.bundle());
+    expect(received.stderr).toBe('');
+    expect(received.status).toBe(0);
+    expect(git(f.folder, 'rev-parse', 'HEAD')).toBe(head);
+    expect(f.ran()).toEqual([]);
+    expect(lstatSync(join(f.folder, '.git')).isDirectory()).toBe(true);
+    expect(readFileSync(join(otherGit, 'config'), 'utf8')).toBe(otherConfig);
+    expect(existsSync(join(otherGit, 'refs', 'openadlc'))).toBe(false);
+  });
+
+  it('reads no config through .git/commondir', () => {
+    const f = fixture();
+    const head = f.commit({ Makefile: 'host-ci:\n\ttrue\n' });
+    const common = join(f.root, 'common');
+    mkdirSync(common);
+    git(common, 'init', '--quiet', '--bare', '.');
+    writeFileSync(join(common, 'config'), `[core]\n\trepositoryformatversion = 0\n\tbare = false\n${f.filterConfig}`);
+    mkdirSync(join(common, 'info'), { recursive: true });
+    writeFileSync(join(common, 'info', 'attributes'), '* filter=planted\n');
+    git(f.folder, 'init', '--quiet', '.');
+    writeFileSync(join(f.folder, '.git', 'commondir'), `${common}\n`);
+
+    const received = f.receive(head, f.bundle());
+    expect(received.stderr).toBe('');
+    expect(received.status).toBe(0);
+    expect(git(f.folder, 'rev-parse', 'HEAD')).toBe(head);
+    expect(f.ran()).toEqual([]);
+    expect(existsSync(join(f.folder, '.git', 'commondir'))).toBe(false);
+  });
+
+  it("keeps the build's untracked and ignored files, and the files the new head does not change, across a thin bundle", () => {
+    const f = fixture();
+    const first = f.commit({ Makefile: 'host-ci:\n\ttrue\n', '.gitignore': '*.log\n', 'src/a.c': 'int a;\n', 'src/b.c': 'int b;\n' });
+    const firstReceived = f.receive(first, f.bundle());
+    expect(firstReceived.stderr).toBe('');
+    expect(firstReceived.status).toBe(0);
+    mkdirSync(join(f.folder, 'build'));
+    writeFileSync(join(f.folder, 'build', 'out.o'), 'object\n');
+    writeFileSync(join(f.folder, 'build.log'), 'log\n');
+    const unchanged = statSync(join(f.folder, 'src', 'a.c'), { bigint: true });
+
+    // Only what the folder lacks, as hostd sends it after a head it gave: it
+    // fetches only while the kept objects still hold the first head.
+    const second = f.commit({ 'src/b.c': 'int b = 1;\n' });
+    const received = f.receive(second, f.bundle(first));
+    expect(received.stderr).toBe('');
+    expect(received.status).toBe(0);
+    expect(git(f.folder, 'rev-parse', 'HEAD')).toBe(second);
+    expect(readFileSync(join(f.folder, 'src', 'b.c'), 'utf8')).toBe('int b = 1;\n');
+    expect(readFileSync(join(f.folder, 'build', 'out.o'), 'utf8')).toBe('object\n');
+    expect(readFileSync(join(f.folder, 'build.log'), 'utf8')).toBe('log\n');
+    const after = statSync(join(f.folder, 'src', 'a.c'), { bigint: true });
+    expect(after.ino).toBe(unchanged.ino);
+    expect(after.mtimeNs).toBe(unchanged.mtimeNs);
   });
 });
 
