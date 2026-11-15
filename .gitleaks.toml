@@ -75,6 +75,17 @@ paths = [
 ]
 regexes = ['''\$\{PEM_BODY\}''']
 
+# The release run's signing test (#344) first wrote that same published key
+# out whole, on one line, in commit 7590c19; the history keeps it, so the next
+# commit building it from its body cannot clear the finding. Only that key's
+# body, and only in that file: any other key there, or this one anywhere
+# else, is still a finding.
+[[allowlists]]
+description = "The published RFC 8032 test key, written out whole in the release run's test"
+condition = "AND"
+paths = ['''^apps/hostd/src/release-run\.test\.ts$''']
+regexes = ['''MC4CAQAwBQYDK2VwBCIEIJ1hsZ3v/VpguoRK9JLsLMREScVpezJpGXA7rAMcrn9g''']
+
 # NodeSource's public signing key, which the bot image checks its packages
 # against: a fingerprint, published so that anyone can.
 [[allowlists]]
