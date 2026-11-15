@@ -151,6 +151,11 @@ A change that makes one of these possible is wrong even when its tests pass:
   — is the repository row's, set only by an admin, and the artifact and its
   fields stay under hostd's work root; nothing but #345's route starts a
   build (docs/adr/0070-a-release-recipe-is-an-admins-and-its-artifact-stays-with-hostd.md).
+  That route is the cut's sign-in in `apps/bridge/src/release-routes.ts`, the
+  one caller of `ReleaseService.start`: it builds the SHA of a compare view
+  the bridge pinned, never one a request names, for a linked account with
+  Approves on, asked before and after a fresh device-code proof
+  (docs/adr/0072-a-release-is-cut-by-an-approver-from-a-pinned-view-with-a-fresh-device-code-proof.md).
   The key comes only from `openadlc release-key import` on the host, is read
   only by `signRelease`, goes only into encrypted backups, and a restore never
   overwrites one; the signed bytes are a fixed four-line layout clients pin

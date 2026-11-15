@@ -226,6 +226,12 @@ none yet, says its kind of work instead ("writing the change").
   and publishes, all with the app's token alone. No automation-account
   fallback is used
   ([ADR 0071](adr/0071-a-release-is-tagged-and-published-as-the-app-only-after-it-is-signed.md)).
+  A release is started only by a person with Approves on, from the console's
+  Cut release (`apps/bridge/src/release-routes.ts`). The bridge pins the
+  default branch's head when it builds the compare view, and the cut names
+  that view, never a commit. The person proves who they are with a fresh
+  device-code sign-in, whose token is used only to ask who approved
+  ([ADR 0072](adr/0072-a-release-is-cut-by-an-approver-from-a-pinned-view-with-a-fresh-device-code-proof.md)).
 - **GitHub → OpenADLC.** A delivery is taken only when it is signed with the
   webhook secret, names a repository OpenADLC works in by owner and name, and was
   written by somebody with access to it, or by the crew

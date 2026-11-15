@@ -14,7 +14,7 @@ vi.mock('@openadlc/db', () => {
 });
 
 import { ReleaseAlreadyRunning, releaseRuns, repos } from '@openadlc/db';
-import { ReleaseService, lastReleaseVersion, lastVersionOnGitHub, type PublishedRelease, type ReleaseServiceDeps } from './release-service.js';
+import { ReleaseService, lastReleaseOnGitHub, lastReleaseVersion, lastVersionOnGitHub, type PublishedRelease, type ReleaseServiceDeps } from './release-service.js';
 import type { ReleaseRunView } from './hostd-client.js';
 
 const SHA = 'a'.repeat(40);
@@ -77,7 +77,7 @@ function service(overrides: Partial<ReleaseServiceDeps> = {}) {
   };
   const deps: ReleaseServiceDeps = {
     hostd,
-    lastVersion: vi.fn(async () => '1.4.0-x.3'),
+    lastRelease: vi.fn(async () => ({ version: '1.4.0-x.3', tag: 'v1.4.0-x.3', url: 'https://github.com/acme/app/releases/tag/v1.4.0-x.3' })),
     fetchBot: async () => 'atlas',
     newId: () => 'run-1',
     warn: () => undefined,
@@ -194,7 +194,7 @@ describe('starting a release build (#343)', () => {
     vi.mocked(repos.getRelease).mockResolvedValue({ ...SETTING, releaseRepo: 'acme/app-releases' });
     const { releases, deps } = service();
     await releases.start({ repo: REPO, sha: SHA, clean: false, by: BY });
-    expect(deps.lastVersion).toHaveBeenCalledWith('acme/app-releases');
+    expect(deps.lastRelease).toHaveBeenCalledWith('acme/app-releases');
   });
 
   it('refuses, saying what to do, with no recipe, a sha that is not one, a run going, no hostd, no account, or hostd not answering', async () => {
@@ -237,7 +237,7 @@ describe('starting a release build (#343)', () => {
   });
 
   it('refuses the run when the last release cannot be read, never reading it as no release', async () => {
-    const { releases, hostd } = service({ lastVersion: async () => Promise.reject(new Error('GitHub answered 502')) });
+    const { releases, hostd } = service({ lastRelease: async () => Promise.reject(new Error('GitHub answered 502')) });
     const refused = await releases.start({ repo: REPO, sha: SHA, clean: false, by: BY });
     expect(refused).toMatchObject({ state: 'refused', reason: expect.stringContaining('could not be read') });
     expect(refused.reason).toContain('GitHub answered 502');
@@ -360,5 +360,30 @@ describe('the last release', () => {
     expect(request).toHaveBeenCalledWith('GET', '/repos/acme/app/releases?per_page=100');
     await expect(lastVersionOnGitHub(async () => null)('acme/app')).rejects.toThrow(/can read the releases of acme\/app/);
     await expect(lastVersionOnGitHub(async () => ({ request: async () => Promise.reject(new Error('502')) }) as never)('acme/app')).rejects.toThrow('502');
+  });
+
+  it('answers the tag and page of the release the run takes its version from (#345)', async () => {
+    const request = vi.fn(async () => [
+      release('v1.3.0', { html_url: 'https://github.com/acme/app/releases/tag/v1.3.0' }),
+      release('v1.4.0', { html_url: 'https://github.com/acme/app/releases/tag/v1.4.0' }),
+      release('v2.0.0', { prerelease: true, html_url: 'https://github.com/acme/app/releases/tag/v2.0.0' }),
+    ]);
+    await expect(lastReleaseOnGitHub(async () => ({ request }) as never)('acme/app')).resolves.toEqual({
+      version: '1.4.0',
+      tag: 'v1.4.0',
+      url: 'https://github.com/acme/app/releases/tag/v1.4.0',
+    });
+    await expect(lastReleaseOnGitHub(async () => ({ request: async () => [] }) as never)('acme/app')).resolves.toBeNull();
+    await expect(lastReleaseOnGitHub(async () => ({ request: async () => Promise.reject(new Error('502')) }) as never)('acme/app')).rejects.toThrow('502');
+  });
+
+  it('is read through the service, which start takes after from, and a failed read throws', async () => {
+    const one = { version: '1.4.0', tag: 'v1.4.0', url: null };
+    const { releases, hostd } = service({ lastRelease: vi.fn(async () => one) });
+    await expect(releases.lastRelease('acme/app')).resolves.toBe(one);
+    await releases.start({ repo: REPO, sha: SHA, clean: false, by: BY });
+    expect(hostd.startRelease).toHaveBeenCalledWith(expect.objectContaining({ after: '1.4.0' }));
+    const broken = service({ lastRelease: async () => Promise.reject(new Error('GitHub answered 502')) });
+    await expect(broken.releases.lastRelease('acme/app')).rejects.toThrow('GitHub answered 502');
   });
 });

@@ -44,7 +44,7 @@ export interface NeedsItem {
   item: string | null;
 }
 
-export type Page = 'board' | 'crew' | 'costs' | 'insights' | 'settings' | 'needs-you';
+export type Page = 'board' | 'crew' | 'costs' | 'insights' | 'releases' | 'settings' | 'needs-you';
 
 export function headerData(input: {
   repos: readonly string[];
@@ -95,6 +95,8 @@ export const NAV: readonly { page: Exclude<Page, 'needs-you'>; label: string; hr
   { page: 'crew', label: 'Crew', href: () => '/crew' },
   { page: 'costs', label: 'Costs', href: () => '/costs' },
   { page: 'insights', label: 'Insights', href: () => '/insights' },
+  // The releasing repositories, and cutting one (#345); anyone may watch a release.
+  { page: 'releases', label: 'Releases', href: () => '/releases' },
   { page: 'settings', label: 'Settings', href: () => '/settings' },
 ];
 

@@ -86,9 +86,14 @@ describe('the work the tab’s alerts watch', () => {
 describe('the header’s navigation', () => {
   it('has Settings for everyone signed in, a user too: their Settings is Notifications (ADR 0053)', () => {
     for (const role of ['admin', 'user'] as const) {
-      expect(navFor(role).map((item) => item.page), role).toEqual(['board', 'crew', 'costs', 'insights', 'settings']);
+      expect(navFor(role).map((item) => item.page), role).toEqual(['board', 'crew', 'costs', 'insights', 'releases', 'settings']);
       expect(navFor(role)).toBe(NAV);
     }
     expect(navFor('user').find((item) => item.page === 'settings')?.href('all')).toBe('/settings');
+  });
+
+  it('has Releases for everyone, since anyone may watch a release (#345)', () => {
+    expect(navFor('user').find((item) => item.page === 'releases')).toMatchObject({ label: 'Releases' });
+    expect(navFor('user').find((item) => item.page === 'releases')?.href('all')).toBe('/releases');
   });
 });

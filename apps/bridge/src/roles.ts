@@ -117,6 +117,16 @@ export const ROUTE_ROLES: Readonly<Record<string, Role>> = {
   'POST /v1/items/:subject/pull/held-merge/merge': 'user',
   'GET /v1/items/:subject/pull/flows/:flowId': 'user',
   'GET /v1/items/:subject/pull/images/:commentId/:index': 'user',
+  // Releases (#345, ADR 0072): anyone may watch them and see the compare view.
+  // The cut is refused by the bridge unless the caller's linked account has
+  // Approves on in People and a fresh sign-in proves it (`release-routes.ts`);
+  // Approves is per person, not a role, so the cut is a user route too.
+  'GET /v1/releases': 'user',
+  'GET /v1/releases/:id': 'user',
+  'GET /v1/repos/:name/releases': 'user',
+  'POST /v1/repos/:name/release/views': 'user',
+  'POST /v1/repos/:name/release/cut': 'user',
+  'GET /v1/repos/:name/release/flows/:flowId': 'user',
   'POST /v1/threads/:bot/messages': 'user',
   'POST /v1/items/:subject/messages': 'user',
   // A file given with a request or a message, and looking at one.

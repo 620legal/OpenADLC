@@ -119,6 +119,8 @@ import { bridgeStopReason, stoppedByTheBridge, THE_BRIDGE } from './bridge-stops
 import { asAutomation } from './automation-bot.js';
 import { livePersonGitHubDeps, PersonFlows, registerPersonGitHubRoutes } from './person-github.js';
 import { liveHeldMergeDecisions, liveHumanReviewDecisions, livePullCommands, registerPullRoutes } from './pull-routes.js';
+import { liveReleaseCuts, registerReleaseRoutes, type ReleaseReader } from './release-routes.js';
+import type { ReleaseService } from './release-service.js';
 import { DeployKnowledge, isTestingDeployChoice, testingDeployChoice, testingDeployStored } from './deploys.js';
 import { deploysNothingHere } from './deploy-pipeline.js';
 import { releaseEventsOf } from './health/checks/ships-by-release.js';
@@ -235,6 +237,12 @@ export interface ApiDeps {
   notifier?: Notifier;
   /** People and the roles, which Needs you is routed by (`needs-you-audience.ts`); read from the database unless a test says otherwise. */
   audienceFacts?: () => Promise<AudienceFacts>;
+  /**
+   * Releases cut from the console (#345, `release-routes.ts`): the service
+   * whose `start` the cut alone calls, and the client the compare view reads
+   * GitHub with. Absent, no release route is registered.
+   */
+  releaseCuts?: { service: Pick<ReleaseService, 'start' | 'lastRelease'>; reader: (fullName: string) => Promise<ReleaseReader | null> };
 }
 
 /** Where what runs after an answer belongs: the task it was for, or else a subject's thread. */
@@ -1198,6 +1206,17 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
   // A held merge merged by a person from the console, as that person (`held-merge-decide.ts`).
   const heldMerges = liveHeldMergeDecisions({ reader: () => asAutomation(deps.actors, config), person: personGitHub, flows: personFlows, automation: deps.automation });
   registerPullRoutes(router, pullCommands, personFlows, undefined, humanReview, heldMerges);
+  // Cutting a release from the console, by a person with Approves, from a
+  // compare view the bridge pinned, with a fresh sign-in (#345, ADR 0072).
+  // A cut's sign-in that ends unapproved is audited by the sweep, which also
+  // runs on every release route.
+  let releaseSweep: ReturnType<typeof setInterval> | null = null;
+  if (deps.releaseCuts) {
+    const cuts = liveReleaseCuts({ release: deps.releaseCuts.service, reader: deps.releaseCuts.reader, person: personGitHub, flows: personFlows });
+    registerReleaseRoutes(router, cuts);
+    releaseSweep = setInterval(() => void cuts.sweepFlows().catch(() => undefined), 30_000);
+    releaseSweep.unref?.();
+  }
   // hostd signs a subscription in and checks an account, where the bots think.
   registerModelAccountRoutes(router, {
     ...defaultModelAccountDeps(hostd),
@@ -3841,7 +3860,10 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
     return { moved: true };
   });
 
-  return () => waitingNotices?.stop();
+  return () => {
+    waitingNotices?.stop();
+    if (releaseSweep) clearInterval(releaseSweep);
+  };
 }
 
 /**
