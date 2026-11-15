@@ -474,8 +474,13 @@ export const RECEIVE_KEEPS = ['objects', 'refs', 'packed-refs', 'HEAD', 'index',
  * fsmonitor. The fetch writes no `FETCH_HEAD` and git no reflog, so the run
  * leaves `.git` with only what it keeps and what `init` wrote
  * (docs/adr/0067-a-host-checks-working-folder-keeps-only-gits-objects-refs-and-index.md).
+ *
+ * `namespace` is the refs the bundle carries, `refs/openadlc/<namespace>/*`:
+ * a host check's, or a release's (`release-run.ts`), which runs the same
+ * script as its own account.
  */
-export const RECEIVE = [
+export function receiveScript(namespace: 'host-check' | 'release'): string {
+  return [
   'set -e',
   'export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1',
   'g() { git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c core.attributesFile=/dev/null -c core.logAllRefUpdates=false "$@"; }',
@@ -489,9 +494,17 @@ export const RECEIVE = [
   'bundle=.git/openadlc-incoming.bundle',
   'cat > "$bundle"',
   'trap \'rm -f "$bundle"\' EXIT',
-  "g fetch --quiet --no-write-fetch-head \"$bundle\" '+refs/openadlc/host-check/*:refs/openadlc/host-check/*'",
+  `g fetch --quiet --no-write-fetch-head "$bundle" '+refs/openadlc/${namespace}/*:refs/openadlc/${namespace}/*'`,
   'g -c advice.detachedHead=false checkout --quiet --force --detach "$head"',
-].join('\n');
+  ].join('\n');
+}
+
+/**
+ * The host check's receive. Unchanged byte for byte since the release run
+ * (`release-run.ts`) began to share it: only the namespace of the refs it
+ * fetches is a parameter, so the `.git` cleaning of ADR 0067 is one script.
+ */
+export const RECEIVE = receiveScript('host-check');
 
 function view(run: HostCheckRun): HostCheckRun {
   const { stop: _stop, ...rest } = run as Held;

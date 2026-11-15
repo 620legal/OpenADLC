@@ -147,6 +147,10 @@ A change that makes one of these possible is wrong even when its tests pass:
   home the host check account cannot read or enter. Every signed field is
   computed by hostd, and the key never reaches the account
   (docs/adr/0068-a-release-is-built-in-its-own-account-and-signed-from-fields-hostd-computes.md).
+  What it builds with — the command, the artifact, where the version is read
+  — is the repository row's, set only by an admin, and the artifact and its
+  fields stay under hostd's work root; nothing but #345's route starts a
+  build (docs/adr/0070-a-release-recipe-is-an-admins-and-its-artifact-stays-with-hostd.md).
   The key comes only from `openadlc release-key import` on the host, is read
   only by `signRelease`, goes only into encrypted backups, and a restore never
   overwrites one; the signed bytes are a fixed four-line layout clients pin

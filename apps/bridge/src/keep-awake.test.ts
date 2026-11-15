@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { InFlight } from '@openadlc/db';
 import { KEEP_AWAKE_GRACE_MS, KeepAwake, onPath, type KeepAwakeDeps, type Slept } from './keep-awake.js';
 
-const NOTHING: InFlight = { tasks: 0, merges: 0, deploys: 0 };
+const NOTHING: InFlight = { tasks: 0, merges: 0, deploys: 0, releases: 0 };
 const START = Date.parse('2026-11-02T10:00:00.000Z');
 
 class FakeChild extends EventEmitter {
@@ -58,9 +58,10 @@ function rig(overrides: Partial<KeepAwakeDeps> = {}) {
 
 describe('holding the host awake while work is in flight', () => {
   for (const [source, counts] of [
-    ['a task queued or running', { tasks: 1, merges: 0, deploys: 0 }],
-    ['a merge waiting on CI', { tasks: 0, merges: 1, deploys: 0 }],
-    ['a deploy waiting or running', { tasks: 0, merges: 0, deploys: 1 }],
+    ['a task queued or running', { tasks: 1, merges: 0, deploys: 0, releases: 0 }],
+    ['a merge waiting on CI', { tasks: 0, merges: 1, deploys: 0, releases: 0 }],
+    ['a deploy waiting or running', { tasks: 0, merges: 0, deploys: 1, releases: 0 }],
+    ['a release building', { tasks: 0, merges: 0, deploys: 0, releases: 1 }],
   ] as const) {
     it(`holds one caffeinate -i, tied to the bridge, for ${source}`, async () => {
       const { world, spawn, keepAwake, pass } = rig();
@@ -88,7 +89,7 @@ describe('holding the host awake while work is in flight', () => {
 
   it('lets go a minute after the last tick that saw work, and not before', async () => {
     const { world, children, keepAwake, pass } = rig();
-    world.inFlight = { tasks: 1, merges: 0, deploys: 0 };
+    world.inFlight = { tasks: 1, merges: 0, deploys: 0, releases: 0 };
     await keepAwake.tick();
     world.inFlight = NOTHING;
 
@@ -105,7 +106,7 @@ describe('holding the host awake while work is in flight', () => {
 
   it('measures the grace on the monotonic clock, so a wall clock stepped back does not hold it', async () => {
     const { world, children, keepAwake, pass } = rig();
-    world.inFlight = { tasks: 1, merges: 0, deploys: 0 };
+    world.inFlight = { tasks: 1, merges: 0, deploys: 0, releases: 0 };
     await keepAwake.tick();
     world.inFlight = NOTHING;
     world.wall -= 10 * 60_000;
@@ -116,12 +117,12 @@ describe('holding the host awake while work is in flight', () => {
 
   it('does not flap between one task and the next', async () => {
     const { world, spawn, children, keepAwake, pass } = rig();
-    world.inFlight = { tasks: 1, merges: 0, deploys: 0 };
+    world.inFlight = { tasks: 1, merges: 0, deploys: 0, releases: 0 };
     await keepAwake.tick();
     world.inFlight = NOTHING;
     pass(30_000);
     await keepAwake.tick();
-    world.inFlight = { tasks: 1, merges: 0, deploys: 0 };
+    world.inFlight = { tasks: 1, merges: 0, deploys: 0, releases: 0 };
     pass(30_000);
     await keepAwake.tick();
     expect(spawn).toHaveBeenCalledTimes(1);
@@ -130,7 +131,7 @@ describe('holding the host awake while work is in flight', () => {
 
   it('starts another when caffeinate dies on its own while work is in flight, and none once nothing is', async () => {
     const { world, spawn, children, keepAwake, pass } = rig();
-    world.inFlight = { tasks: 1, merges: 0, deploys: 0 };
+    world.inFlight = { tasks: 1, merges: 0, deploys: 0, releases: 0 };
     await keepAwake.tick();
     children[0]?.emit('exit');
     expect(keepAwake.state().holding).toBe(false);
@@ -148,7 +149,7 @@ describe('holding the host awake while work is in flight', () => {
 
   it('lets go on the next tick when the switch is turned off, and takes no new one', async () => {
     const { world, spawn, children, keepAwake, pass } = rig();
-    world.inFlight = { tasks: 2, merges: 1, deploys: 0 };
+    world.inFlight = { tasks: 2, merges: 1, deploys: 0, releases: 0 };
     await keepAwake.tick();
     world.setting = 'off';
     pass(30_000);
@@ -167,7 +168,7 @@ describe('holding the host awake while work is in flight', () => {
 
   it('holds nothing, and fails nothing, on a host that is not macOS', async () => {
     const { world, spawn, keepAwake } = rig({ platform: 'linux' });
-    world.inFlight = { tasks: 1, merges: 0, deploys: 0 };
+    world.inFlight = { tasks: 1, merges: 0, deploys: 0, releases: 0 };
     await expect(keepAwake.tick()).resolves.toBeUndefined();
     expect(spawn).not.toHaveBeenCalled();
     expect(keepAwake.state()).toEqual({ available: false, holding: false });
@@ -175,7 +176,7 @@ describe('holding the host awake while work is in flight', () => {
 
   it('holds nothing on a Mac with no caffeinate on its PATH', async () => {
     const { world, spawn, keepAwake } = rig({ onPath: () => false });
-    world.inFlight = { tasks: 1, merges: 0, deploys: 0 };
+    world.inFlight = { tasks: 1, merges: 0, deploys: 0, releases: 0 };
     await keepAwake.tick();
     expect(spawn).not.toHaveBeenCalled();
     expect(keepAwake.state().available).toBe(false);
@@ -183,7 +184,7 @@ describe('holding the host awake while work is in flight', () => {
 
   it('stops trying once a spawn finds no caffeinate after all', async () => {
     const { world, spawn, children, keepAwake, pass } = rig();
-    world.inFlight = { tasks: 1, merges: 0, deploys: 0 };
+    world.inFlight = { tasks: 1, merges: 0, deploys: 0, releases: 0 };
     await keepAwake.tick();
     children[0]?.emit('error', Object.assign(new Error('spawn caffeinate ENOENT'), { code: 'ENOENT' }));
     expect(keepAwake.state()).toEqual({ available: false, holding: false });
@@ -195,7 +196,7 @@ describe('holding the host awake while work is in flight', () => {
   it('neither starts nor stops caffeinate when what is in flight cannot be read', async () => {
     const { world, spawn, children, keepAwake, pass } = rig();
     world.failing = true;
-    world.inFlight = { tasks: 1, merges: 0, deploys: 0 };
+    world.inFlight = { tasks: 1, merges: 0, deploys: 0, releases: 0 };
     await keepAwake.tick();
     expect(spawn).not.toHaveBeenCalled();
 
@@ -214,7 +215,7 @@ describe('holding the host awake while work is in flight', () => {
     vi.useFakeTimers();
     try {
       const { world, spawn, children, keepAwake } = rig();
-      world.inFlight = { tasks: 1, merges: 0, deploys: 0 };
+      world.inFlight = { tasks: 1, merges: 0, deploys: 0, releases: 0 };
       keepAwake.start();
       await vi.advanceTimersByTimeAsync(0);
       expect(spawn).toHaveBeenCalledTimes(1);
@@ -245,7 +246,7 @@ describe('holding the host awake while work is in flight', () => {
 
   it('kills the child synchronously for the exit handler', async () => {
     const { world, children, keepAwake } = rig();
-    world.inFlight = { tasks: 1, merges: 0, deploys: 0 };
+    world.inFlight = { tasks: 1, merges: 0, deploys: 0, releases: 0 };
     await keepAwake.tick();
     keepAwake.killNow();
     expect(children[0]?.killed).toEqual(['SIGTERM']);
@@ -257,7 +258,7 @@ describe('noticing the machine slept', () => {
 
   it('records a sleep after a tick that saw work, with what it saw', async () => {
     const { world, slept, asked, keepAwake, pass } = rig();
-    world.inFlight = { tasks: 2, merges: 1, deploys: 0 };
+    world.inFlight = { tasks: 2, merges: 1, deploys: 0, releases: 0 };
     await keepAwake.tick();
     pass(30_000);
     await keepAwake.tick();
@@ -265,7 +266,7 @@ describe('noticing the machine slept', () => {
     // Suspended: the wall clock runs on, the monotonic one stands still.
     world.wall += FORTY_SEVEN_MINUTES;
     world.mono += 2_000;
-    world.inFlight = { tasks: 1, merges: 0, deploys: 0 };
+    world.inFlight = { tasks: 1, merges: 0, deploys: 0, releases: 0 };
     await keepAwake.tick();
 
     expect(slept).toEqual([
@@ -273,7 +274,7 @@ describe('noticing the machine slept', () => {
         sleptAt: new Date(START + 30_000).toISOString(),
         wokeAt: new Date(START + 30_000 + FORTY_SEVEN_MINUTES).toISOString(),
         seconds: 47 * 60,
-        inFlight: { tasks: 2, merges: 1, deploys: 0 },
+        inFlight: { tasks: 2, merges: 1, deploys: 0, releases: 0 },
         keepAwake: 'holding',
       },
     ]);
@@ -287,7 +288,7 @@ describe('noticing the machine slept', () => {
     ] as const) {
       const { world, slept, keepAwake } = rig(overrides);
       world.setting = setting;
-      world.inFlight = { tasks: 1, merges: 0, deploys: 0 };
+      world.inFlight = { tasks: 1, merges: 0, deploys: 0, releases: 0 };
       await keepAwake.tick();
       world.wall += 10 * 60_000;
       await keepAwake.tick();
@@ -297,7 +298,7 @@ describe('noticing the machine slept', () => {
 
   it('records a sleep whose wake tick cannot read the database, once', async () => {
     const { world, slept, keepAwake, pass } = rig();
-    world.inFlight = { tasks: 1, merges: 0, deploys: 0 };
+    world.inFlight = { tasks: 1, merges: 0, deploys: 0, releases: 0 };
     await keepAwake.tick();
 
     // The pooled connection died with the sleep: the wake tick's read fails.
@@ -305,7 +306,7 @@ describe('noticing the machine slept', () => {
     world.failing = true;
     await keepAwake.tick();
     expect(slept).toHaveLength(1);
-    expect(slept[0]).toMatchObject({ seconds: 47 * 60, inFlight: { tasks: 1, merges: 0, deploys: 0 } });
+    expect(slept[0]).toMatchObject({ seconds: 47 * 60, inFlight: { tasks: 1, merges: 0, deploys: 0, releases: 0 } });
 
     world.failing = false;
     pass(30_000);
@@ -322,7 +323,7 @@ describe('noticing the machine slept', () => {
         written.push(one);
       },
     });
-    world.inFlight = { tasks: 1, merges: 0, deploys: 0 };
+    world.inFlight = { tasks: 1, merges: 0, deploys: 0, releases: 0 };
     await keepAwake.tick();
     world.wall += FORTY_SEVEN_MINUTES;
     await keepAwake.tick();
@@ -332,7 +333,7 @@ describe('noticing the machine slept', () => {
     pass(30_000);
     await keepAwake.tick();
     expect(written).toHaveLength(1);
-    expect(written[0]).toMatchObject({ sleptAt: new Date(START).toISOString(), inFlight: { tasks: 1, merges: 0, deploys: 0 } });
+    expect(written[0]).toMatchObject({ sleptAt: new Date(START).toISOString(), inFlight: { tasks: 1, merges: 0, deploys: 0, releases: 0 } });
 
     pass(30_000);
     await keepAwake.tick();
@@ -345,7 +346,7 @@ describe('noticing the machine slept', () => {
         throw new Error('spawn EAGAIN');
       },
     });
-    world.inFlight = { tasks: 1, merges: 0, deploys: 0 };
+    world.inFlight = { tasks: 1, merges: 0, deploys: 0, releases: 0 };
     await keepAwake.tick();
     world.wall += 10 * 60_000;
     await keepAwake.tick();
@@ -356,14 +357,14 @@ describe('noticing the machine slept', () => {
     const { world, slept, keepAwake } = rig();
     await keepAwake.tick();
     world.wall += 10 * 60_000;
-    world.inFlight = { tasks: 1, merges: 0, deploys: 0 };
+    world.inFlight = { tasks: 1, merges: 0, deploys: 0, releases: 0 };
     await keepAwake.tick();
     expect(slept).toEqual([]);
   });
 
   it('records nothing for an event loop blocked as long, where the monotonic clock moved too', async () => {
     const { world, slept, keepAwake, pass } = rig();
-    world.inFlight = { tasks: 1, merges: 0, deploys: 0 };
+    world.inFlight = { tasks: 1, merges: 0, deploys: 0, releases: 0 };
     await keepAwake.tick();
     pass(120_001 + 60_000);
     await keepAwake.tick();
@@ -372,7 +373,7 @@ describe('noticing the machine slept', () => {
 
   it('records nothing for a gap of 90 seconds, however the clocks moved', async () => {
     const { world, slept, keepAwake } = rig();
-    world.inFlight = { tasks: 1, merges: 0, deploys: 0 };
+    world.inFlight = { tasks: 1, merges: 0, deploys: 0, releases: 0 };
     await keepAwake.tick();
     world.wall += 90_000;
     await keepAwake.tick();

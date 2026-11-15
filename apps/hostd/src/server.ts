@@ -1,4 +1,5 @@
 import { execFile as execFileCallback } from 'node:child_process';
+import { createReadStream } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { promisify } from 'node:util';
 import { audit, bots, sessions as sessionStore, tasks } from '@openadlc/db';
@@ -20,6 +21,7 @@ import { isWorktreeRefusal, readWorktree } from './worktree-files.js';
 import { LocalCiRefused, type LocalCi } from './local-ci.js';
 import { hostCheckRequestFrom, type HostChecks } from './host-check.js';
 import type { ReleaseAccount } from './release-account.js';
+import { ReleaseBusy, releaseRunRequestFrom, type ReleaseRuns } from './release-run.js';
 import type { ImageRestart } from './restart-onto-image.js';
 import type { TaskDatabases } from './task-db.js';
 import { ATTACH_SUBPROTOCOL_PREFIX } from './terminal-gateway.js';
@@ -113,6 +115,12 @@ export function createHostdServer(input: {
   hostChecks?: Pick<HostChecks, 'start' | 'get' | 'cancel' | 'probe'>;
   /** The account releases are built in (`release-account.ts`); null or absent when none is named, which `/release/account` answers as `null`. */
   releaseAccount?: Pick<ReleaseAccount, 'probe'> | null;
+  /**
+   * Builds a release of one pinned commit in the release account, for the
+   * bridge only (`release-run.ts`); null or absent when no release account is
+   * named, which its routes answer with 501.
+   */
+  releaseRuns?: Pick<ReleaseRuns, 'start' | 'get' | 'cancel' | 'artifact' | 'deleteArtifact'> | null;
   /** Moves this hostd onto a release's image on a cloud host (`restart-onto-image.ts`). Absent, its route says why. */
   restartOntoImage?: ImageRestart;
   /** Asks the egress proxy about a name, and puts Settings' names on it (`egress.ts`). Absent, its routes say so. */
@@ -629,6 +637,55 @@ export function createHostdServer(input: {
     // account is named, so the card stays quiet (docs/adr/0068).
     if (method === 'GET' && path === '/release/account') {
       return send(response, 200, { probe: input.releaseAccount ? await input.releaseAccount.probe() : null });
+    }
+
+    // A release build of one pinned commit, started, read and stopped by the
+    // bridge only, and its artifact served from hostd's own copy under the
+    // work root, never from the account's folder (`release-run.ts`). Nothing
+    // here decides who may cut a release: the bridge's caller does (#345).
+    if (path.startsWith('/release/runs')) {
+      if (!input.releaseRuns) return send(response, 501, { error: 'this hostd builds no releases: set OPENADLC_RELEASE_ACCOUNT to the account made for them (docs/self-hosting.md#the-release-account)' });
+      if (method === 'POST' && path === '/release/runs') {
+        const body = await readBody(request);
+        const request_ = releaseRunRequestFrom(body);
+        if (typeof request_ === 'string') return send(response, 400, { error: request_ });
+        try {
+          return send(response, 202, { run: input.releaseRuns.start(request_) });
+        } catch (error) {
+          if (error instanceof ReleaseBusy) return send(response, 409, { error: error.message });
+          throw error;
+        }
+      }
+      const releaseMatch = /^\/release\/runs\/([^/]+)(\/artifact)?$/.exec(path);
+      const runId = releaseMatch?.[1] ? decodeURIComponent(releaseMatch[1]) : null;
+      if (runId && !releaseMatch?.[2]) {
+        if (method === 'GET') {
+          const run = input.releaseRuns.get(runId);
+          return run ? send(response, 200, { run }) : send(response, 404, { error: `no release run ${runId} on this host` });
+        }
+        if (method === 'DELETE') return send(response, 200, { cancelled: input.releaseRuns.cancel(runId) });
+      }
+      if (runId && releaseMatch?.[2]) {
+        if (method === 'GET') {
+          const artifact = input.releaseRuns.artifact(runId);
+          if (!artifact) return send(response, 404, { error: `no built artifact for release run ${runId} on this host` });
+          response.writeHead(200, {
+            'content-type': 'application/octet-stream',
+            'content-length': String(artifact.bytes),
+            'content-disposition': `attachment; filename="${artifact.artifactName.replace(/["\\]/g, '_')}"`,
+            'x-openadlc-sha256': artifact.sha256,
+            'x-openadlc-version': artifact.version,
+          });
+          await new Promise<void>((resolve, reject) => {
+            const stream = createReadStream(artifact.path);
+            stream.on('error', reject);
+            stream.on('end', () => resolve());
+            stream.pipe(response);
+          });
+          return;
+        }
+        if (method === 'DELETE') return send(response, 200, { deleted: input.releaseRuns.deleteArtifact(runId) });
+      }
     }
 
     // A repository's host check, started, read and stopped by the bridge

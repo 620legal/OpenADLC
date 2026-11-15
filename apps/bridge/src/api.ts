@@ -35,6 +35,7 @@ import {
   withAdvisoryLock,
   workItems,
   type HostCheckSetting,
+  type ReleaseSetting,
   type Role,
 } from '@openadlc/db';
 import {
@@ -715,6 +716,65 @@ export function hostCheckSettingFrom(value: unknown): HostCheckSetting | null {
   }
   if (required !== undefined && typeof required !== 'boolean') throw new HttpFailure(400, 'hostCheck.required is true or false');
   return { command: said, timeoutMinutes: minutes, required: required ?? true };
+}
+
+/**
+ * A path in the release account's working folder, or the version file at the
+ * pinned commit, as an admin wrote it: relative, with no `..`, `.` or empty
+ * part, no leading `/` or `~`, no NUL, newline or backslash, at most 300
+ * characters. hostd checks the same before it runs anything.
+ */
+function releasePath(value: unknown, name: string, example: string): string {
+  if (typeof value !== 'string' || !value.trim()) throw new HttpFailure(400, `release.${name} is a path relative to the repository's folder, such as ${example}`);
+  const path = value.trim();
+  if (path.length > 300) throw new HttpFailure(400, `release.${name} is at most 300 characters`);
+  if (/[\u0000\r\n\\]/.test(path)) throw new HttpFailure(400, `release.${name} has no NUL, newline or backslash: write it with / between folders`);
+  if (path.startsWith('/') || path.startsWith('~')) throw new HttpFailure(400, `release.${name} is relative to the repository's folder: take off the leading ${path[0]}`);
+  if (path.split('/').some((part) => part === '' || part === '.' || part === '..')) {
+    throw new HttpFailure(400, `release.${name} has no empty, . or .. part: write the path from the repository's folder down, such as ${example}`);
+  }
+  return path;
+}
+
+/**
+ * A repository's release recipe as an admin sent it, checked, or a 400 that
+ * says what is wrong; null, or an empty command, takes it away
+ * (docs/adr/0070). The command runs as the release account through
+ * `/bin/sh -c`, so it is one line, as a host check's is. What runs as the
+ * release account is an admin's, here, and never a file a pull request can
+ * change.
+ */
+export function releaseSettingFrom(value: unknown): ReleaseSetting | null {
+  if (value === null) return null;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new HttpFailure(400, 'release is { command, artifact, versionFile, versionKey?, releaseRepo?, timeoutMinutes? }, or null to take it away');
+  }
+  const { command, artifact, versionFile, versionKey, releaseRepo, timeoutMinutes } = value as Record<string, unknown>;
+  if (typeof command !== 'string') throw new HttpFailure(400, 'release.command is the command that builds the release, such as make release');
+  const said = command.trim();
+  if (!said) return null;
+  if (said.length > 500) throw new HttpFailure(400, 'release.command is at most 500 characters: put a longer one in a Makefile target');
+  if (/[\u0000\r\n]/.test(said)) throw new HttpFailure(400, 'release.command is one line: put more than one command in a Makefile target');
+  const key = versionKey === undefined || versionKey === null || versionKey === '' ? null : versionKey;
+  if (key !== null && (typeof key !== 'string' || !/^[A-Za-z0-9_.-]{1,100}$/.test(key))) {
+    throw new HttpFailure(400, 'release.versionKey is the key the version is under, such as MARKETING_VERSION or version: letters, digits, _, . and -, at most 100');
+  }
+  const repo = releaseRepo === undefined || releaseRepo === null || releaseRepo === '' ? null : releaseRepo;
+  if (repo !== null && (typeof repo !== 'string' || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo) || repo.includes('..'))) {
+    throw new HttpFailure(400, 'release.releaseRepo is the owner/name the release is published to, or empty for this repository');
+  }
+  const minutes = timeoutMinutes ?? 180;
+  if (typeof minutes !== 'number' || !Number.isInteger(minutes) || minutes < 1 || minutes > 1440) {
+    throw new HttpFailure(400, 'release.timeoutMinutes is a whole number of minutes from 1 to 1440');
+  }
+  return {
+    command: said,
+    artifact: releasePath(artifact, 'artifact', 'build/App.zip'),
+    versionFile: releasePath(versionFile, 'versionFile', 'VERSION'),
+    versionKey: key as string | null,
+    releaseRepo: repo as string | null,
+    timeoutMinutes: minutes,
+  };
 }
 
 /**
@@ -2241,6 +2301,8 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
             // The command an admin set to run on this machine, its time limit, and whether the merge waits on it (#327).
             // A column not there yet is none, not a page that fails.
             hostCheck: await (async () => repos.getHostCheck(repo.id))().catch(() => null),
+            // What an admin set to build this repository's releases with, as the release account (#343).
+            release: await (async () => repos.getRelease(repo.id))().catch(() => null),
           };
         }),
       ),
@@ -2279,10 +2341,12 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
   });
 
   router.patch('/v1/repos/:name', async ({ params, body, identity }) => {
-    const input = await body<{ concurrency?: number; stageModes?: Record<string, string>; color?: unknown; testingDeploy?: unknown; testingUrl?: unknown; defaultBranch?: unknown; hostCheck?: unknown }>();
+    const input = await body<{ concurrency?: number; stageModes?: Record<string, string>; color?: unknown; testingDeploy?: unknown; testingUrl?: unknown; defaultBranch?: unknown; hostCheck?: unknown; release?: unknown }>();
     // What runs on this machine as the host check's account (docs/adr/0064):
     // only ever an admin's words, here, and never a file a pull request can change.
     const hostCheck = input.hostCheck === undefined ? undefined : hostCheckSettingFrom(input.hostCheck);
+    // And what runs as the release account (docs/adr/0070), by the same rule.
+    const release = input.release === undefined ? undefined : releaseSettingFrom(input.release);
     // The branch every task starts from and every merge lands on. The
     // reconcile keeps it in step with GitHub; this is for a person who knows
     // better sooner.
@@ -2330,7 +2394,7 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
     // update for an empty patch would still touch updated_at, and a repository
     // OpenADLC does not work in is refused before the setting is written.
     const choiceOnly =
-      (input.testingDeploy !== undefined || input.testingUrl !== undefined || hostCheck !== undefined) &&
+      (input.testingDeploy !== undefined || input.testingUrl !== undefined || hostCheck !== undefined || release !== undefined) &&
       input.concurrency === undefined &&
       input.stageModes === undefined &&
       input.color === undefined &&
@@ -2361,6 +2425,7 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
       await repos.setDelivery(updated.id, { testingUrl: url });
     }
     if (hostCheck !== undefined) await repos.setHostCheck(updated.id, hostCheck);
+    if (release !== undefined) await repos.setRelease(updated.id, release);
     // What the rules were read as is read again on the next ask.
     if (input.testingDeploy !== undefined || input.testingUrl !== undefined) deps.delivery?.forget(updated.fullName);
     await audit({

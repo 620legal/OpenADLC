@@ -2427,6 +2427,53 @@ Only an encrypted backup (`openadlc backup`) carries the key. An
 `--unencrypted` one leaves it out and says so. A restore never writes over a
 key this install already holds.
 
+### Set the repository's release recipe
+
+What the release account runs is set by an admin on the repository, never by
+a file in it
+([ADR 0070](adr/0070-a-release-recipe-is-an-admins-and-its-artifact-stays-with-hostd.md)).
+Until the console has a form for it, an admin sends it to the bridge as
+`PATCH /v1/repos/<name>`, with a body such as:
+
+```json
+{
+  "release": {
+    "command": "make release",
+    "artifact": "build/Widget.zip",
+    "versionFile": "Config/Version.xcconfig",
+    "versionKey": "MARKETING_VERSION",
+    "timeoutMinutes": 180
+  }
+}
+```
+
+- `command` is one line, run as the release account in the repository's
+  folder. Put more than one step in a Makefile target.
+- `artifact` is the file the command leaves, relative to the repository's
+  folder.
+- `versionFile` is where the version is read, at the commit being released.
+  With no `versionKey`, the whole file is the version. For a `.json` file,
+  `versionKey` is a dotted path, `version` by default. For any other file, it
+  is the key of a `KEY = value` line.
+- `releaseRepo` is the `owner/name` the release is published to, if not this
+  repository.
+- `timeoutMinutes` is 1 to 1440, 180 by default.
+
+`"release": null` takes the recipe away.
+
+A version is 1 to 4 numbers, optionally followed by `-<lowercase label>.<number>`.
+For example, `1.4.0`, `156.0.8078.79` and `156.0.8078.79-abc.29` are versions;
+`1.4.0-rc`, `1.4.0-RC.1` and `v1.4.0` are not. Each release must be strictly
+above the last published one: compared by the numbers first, then by the
+number after the label, with a version without a label counting as `.0`. It
+must also carry the last release's label, if both have one. After
+`v156.0.8078.79-abc.29`, the next release can be `156.0.8078.79-abc.30`,
+`156.0.8078.80-abc.1` or `156.0.8078.80`. hostd checks this before the build,
+and the release is tagged `v<version>`.
+
+The release account keeps its build tree between releases, so later builds
+are incremental. A clean build removes it first.
+
 ## 11. Operate it
 
 ```bash

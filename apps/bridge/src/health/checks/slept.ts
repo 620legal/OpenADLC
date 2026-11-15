@@ -31,6 +31,7 @@ export function inFlightWords(counts: InFlight): string {
   if (counts.tasks > 0) parts.push(`${counts.tasks} ${counts.tasks === 1 ? 'task' : 'tasks'}`);
   if (counts.merges > 0) parts.push(`${counts.merges} ${counts.merges === 1 ? 'merge' : 'merges'} waiting on CI`);
   if (counts.deploys > 0) parts.push(`${counts.deploys} ${counts.deploys === 1 ? 'deploy' : 'deploys'} waiting or running`);
+  if (counts.releases > 0) parts.push(`${counts.releases} ${counts.releases === 1 ? 'release' : 'releases'} building`);
   return parts.join(', ') || 'work';
 }
 

@@ -51,6 +51,7 @@ import { sentBackReason } from './send-back.js';
 import { issueNumberFromBranch, parseRef, repoOfSubject } from './work.js';
 import type { Webhooks } from './webhooks.js';
 import type { HostCheckService } from './host-check-service.js';
+import type { ReleaseService } from './release-service.js';
 
 export const INTERNAL_SECRET_HEADER = 'x-openadlc-internal-secret';
 /** What a task's own session presents, in place of the install's secret. */
@@ -180,6 +181,8 @@ export function registerInternalApi(
     pauseHolds?: Pick<PauseHolds, 'paused' | 'forget'> | null;
     /** Records what hostd reports of a repository's host check (`host-check-service.ts`). Absent, the route says so. */
     hostChecks?: Pick<HostCheckService, 'record'> | null;
+    /** Records what hostd reports of a release build (`release-service.ts`). Absent, the route says so. */
+    releases?: Pick<ReleaseService, 'record'> | null;
   },
 ): void {
   /**
@@ -1086,6 +1089,35 @@ export function registerInternalApi(
       durationMs: typeof input.durationMs === 'number' ? Math.round(input.durationMs) : null,
       logTail: typeof input.logTail === 'string' ? input.logTail : null,
       reason: typeof input.reason === 'string' ? input.reason.slice(0, 2_000) : null,
+    });
+    return { recorded };
+  });
+
+  /**
+   * A release build hostd ended, with the install's secret: the one way its
+   * result is written (docs/adr/0070). The run is the one the bridge recorded
+   * when it asked for it; its repository and commit are that row's, not the
+   * report's, and `record` holds a `built` report to every signed field.
+   */
+  post('/internal/release', async ({ body }) => {
+    if (!deps.releases) throw new HttpFailure(501, 'this bridge records no release builds');
+    const input = await body<Record<string, unknown>>();
+    const states = ['built', 'failed', 'cancelled', 'refused'] as const;
+    if (typeof input.runId !== 'string' || !input.runId || !states.includes(input.state as (typeof states)[number])) {
+      throw new HttpFailure(400, 'a release result names its run and how it ended: built, failed, cancelled or refused');
+    }
+    const text = (value: unknown, max: number) => (typeof value === 'string' ? value.slice(0, max) : null);
+    const recorded = await deps.releases.record({
+      runId: input.runId,
+      state: input.state as (typeof states)[number],
+      version: text(input.version, 200),
+      sha256: text(input.sha256, 200),
+      bytes: typeof input.bytes === 'number' ? input.bytes : null,
+      artifactName: text(input.artifactName, 300),
+      exitCode: typeof input.exitCode === 'number' ? input.exitCode : null,
+      durationMs: typeof input.durationMs === 'number' ? Math.round(input.durationMs) : null,
+      logTail: typeof input.logTail === 'string' ? input.logTail : null,
+      reason: text(input.reason, 2_000),
     });
     return { recorded };
   });

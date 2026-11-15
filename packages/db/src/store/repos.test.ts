@@ -12,13 +12,16 @@ import {
   addRepo,
   getProductionChoice,
   getRepoByName,
+  anyRelease,
   getHostCheck,
+  getRelease,
   getTaskPostgres,
   listRepos,
   removeRepo,
   setDefaultBranch,
   setHostCheck,
   setProductionChoice,
+  setRelease,
   setTaskPostgres,
   updateRepoSettings,
   upsertRepo,
@@ -436,5 +439,51 @@ describe('a repository’s host check', () => {
     await setHostCheck('repo-1', null);
     expect(vi.mocked(query).mock.calls.map(([, params]) => params)).toEqual([['repo-1', 'make host-ci', 90, true], ['repo-1']]);
     expect(String(vi.mocked(query).mock.calls[1]?.[0])).toContain('host_check_command = null');
+  });
+});
+
+describe('a repository’s release recipe', () => {
+  const RECIPE = { command: 'make release', artifact: 'build/App.zip', versionFile: 'VERSION', versionKey: null, releaseRepo: 'acme/app-releases', timeoutMinutes: 240 };
+
+  it('reads as none while no command is set, and as the row says once one is', async () => {
+    vi.mocked(queryOne).mockResolvedValueOnce({
+      release_command: null,
+      release_artifact: null,
+      release_version_file: null,
+      release_version_key: null,
+      release_repo: null,
+      release_timeout_minutes: 180,
+    });
+    await expect(getRelease('repo-1')).resolves.toBeNull();
+    vi.mocked(queryOne).mockResolvedValueOnce({
+      release_command: 'make release',
+      release_artifact: 'build/App.zip',
+      release_version_file: 'VERSION',
+      release_version_key: null,
+      release_repo: 'acme/app-releases',
+      release_timeout_minutes: 240,
+    });
+    await expect(getRelease('repo-1')).resolves.toEqual(RECIPE);
+  });
+
+  it('is written whole, and null clears only the command', async () => {
+    vi.mocked(query).mockResolvedValue([]);
+    await setRelease('repo-1', RECIPE);
+    await setRelease('repo-1', null);
+    expect(vi.mocked(query).mock.calls.map(([, params]) => params)).toEqual([
+      ['repo-1', 'make release', 'build/App.zip', 'VERSION', null, 'acme/app-releases', 240],
+      ['repo-1'],
+    ]);
+    expect(String(vi.mocked(query).mock.calls[1]?.[0])).toContain('release_command = null');
+  });
+
+  it('names a repository OpenADLC works in that releases, or none', async () => {
+    vi.mocked(queryOne).mockResolvedValueOnce(null);
+    await expect(anyRelease()).resolves.toBeNull();
+    vi.mocked(queryOne).mockResolvedValueOnce({ full_name: 'acme/app' });
+    await expect(anyRelease()).resolves.toBe('acme/app');
+    const sql = String(vi.mocked(queryOne).mock.calls.at(-1)?.[0]);
+    expect(sql).toContain('release_command is not null');
+    expect(sql).toContain('removed_at is null');
   });
 });

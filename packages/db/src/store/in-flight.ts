@@ -2,18 +2,20 @@ import { query } from '../client.js';
 
 /**
  * What the install has under way that a sleeping host would stop: tasks
- * queued or running, merges the line is working on, and deploys waiting on a
- * promote or still running. The bridge holds its host awake while any is
+ * queued or running, merges the line is working on, deploys waiting on a
+ * promote or still running, and release builds hostd is running. The bridge holds its host awake while any is
  * above zero (the bridge's `keep-awake.ts`).
  */
 export interface InFlight {
   tasks: number;
   merges: number;
   deploys: number;
+  /** Release builds `running` (`release_runs`, docs/adr/0070): one can take hours, and a sleep stops it. */
+  releases: number;
 }
 
 /**
- * Deploy and merge rows untouched for longer than this are a fault rather
+ * Deploy, merge and release rows untouched for longer than this are a fault rather
  * than work: one stuck for a day would otherwise keep a laptop awake for good.
  * Tasks need no bound, since reconcile fails the stale ones.
  */
@@ -34,7 +36,7 @@ const PROMOTABLE = `smoke_conclusion = 'success' and sent_back_at is null and ro
 const WAITING_FOR_PERSON = 'waiting for a person to merge it';
 
 /**
- * One statement, so the three counts are of one moment. A `paused` task waits
+ * One statement, so the four counts are of one moment. A `paused` task waits
  * on a person and a merge `waiting` is held for a person, an approval or a
  * stack: neither is work a sleep interrupts. Nor is a `merging` row held for
  * a person: the line rewrites it every pass, which moves its `updated_at`, so
@@ -42,7 +44,7 @@ const WAITING_FOR_PERSON = 'waiting for a person to merge it';
  * A null detail is left in, as auto-merge's is.
  */
 export async function inFlight(): Promise<InFlight> {
-  const [row] = await query<{ tasks: number | string; merges: number | string; deploys: number | string }>(
+  const [row] = await query<{ tasks: number | string; merges: number | string; deploys: number | string; releases: number | string }>(
     `select
        (select count(*) from tasks where state in ('queued', 'running')) as tasks,
        (select count(*) from merge_lines
@@ -54,7 +56,14 @@ export async function inFlight(): Promise<InFlight> {
               (promote_dispatched_at is null and (promote_after is not null or promote_held_at is not null) and ${PROMOTABLE})
               or (testing_dispatched_at is not null and testing_conclusion is null)
               or (promote_dispatched_at is not null and production_conclusion is null)
-            )) as deploys`,
+            )) as deploys,
+       (select count(*) from release_runs
+          where state = 'running' and started_at > now() - interval '${STALE_AFTER}') as releases`,
   );
-  return { tasks: Number(row?.tasks ?? 0), merges: Number(row?.merges ?? 0), deploys: Number(row?.deploys ?? 0) };
+  return {
+    tasks: Number(row?.tasks ?? 0),
+    merges: Number(row?.merges ?? 0),
+    deploys: Number(row?.deploys ?? 0),
+    releases: Number(row?.releases ?? 0),
+  };
 }

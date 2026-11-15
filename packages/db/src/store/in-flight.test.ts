@@ -19,14 +19,14 @@ describe('what the install has in flight', () => {
     vi.mocked(query).mockResolvedValue([] as never);
   });
 
-  it('counts the three sources in one statement, as numbers', async () => {
-    vi.mocked(query).mockResolvedValueOnce([{ tasks: '2', merges: '1', deploys: '0' }] as never);
-    expect(await inFlight()).toEqual({ tasks: 2, merges: 1, deploys: 0 });
+  it('counts the four sources in one statement, as numbers', async () => {
+    vi.mocked(query).mockResolvedValueOnce([{ tasks: '2', merges: '1', deploys: '0', releases: '3' }] as never);
+    expect(await inFlight()).toEqual({ tasks: 2, merges: 1, deploys: 0, releases: 3 });
     expect(query).toHaveBeenCalledTimes(1);
   });
 
   it('is nothing when the database answers no row', async () => {
-    expect(await inFlight()).toEqual({ tasks: 0, merges: 0, deploys: 0 });
+    expect(await inFlight()).toEqual({ tasks: 0, merges: 0, deploys: 0, releases: 0 });
   });
 
   it('counts tasks queued or running, and not one paused on a person', async () => {
@@ -56,5 +56,10 @@ describe('what the install has in flight', () => {
     // Dispatched and not seen to end.
     expect(sql).toContain('testing_dispatched_at is not null and testing_conclusion is null');
     expect(sql).toContain('promote_dispatched_at is not null and production_conclusion is null');
+  });
+
+  it('counts release builds running, none started more than a day ago', async () => {
+    const sql = await statement();
+    expect(sql).toContain("from release_runs where state = 'running' and started_at > now() - interval '24 hours') as releases");
   });
 });

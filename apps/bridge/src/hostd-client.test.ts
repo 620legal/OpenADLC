@@ -12,7 +12,7 @@ import { HOSTD_NOT_ANSWERING_FOR_ACCOUNTS, HOSTD_NOT_ANSWERING_FOR_ATTACH, Hostd
 let hostd: Server;
 let client: HostdClient;
 let asked: { url: string; secret: string | undefined; method?: string; onBehalfOf?: string | undefined; body?: string }[];
-let answer: { status: number; body: unknown };
+let answer: { status: number; body: unknown; headers?: Record<string, string>; raw?: string };
 
 const SECRET = 'install-secret-for-the-test';
 
@@ -31,8 +31,8 @@ beforeEach(async () => {
     asked.push(seen);
     request.on('data', (chunk: Buffer) => (seen.body += chunk.toString()));
     request.on('end', () => {
-      response.writeHead(answer.status, { 'content-type': 'application/json' });
-      response.end(JSON.stringify(answer.body));
+      response.writeHead(answer.status, { 'content-type': 'application/json', ...answer.headers });
+      response.end(answer.raw ?? JSON.stringify(answer.body));
     });
   });
   await new Promise<void>((resolve) => hostd.listen(0, '127.0.0.1', resolve));
@@ -373,6 +373,59 @@ describe('the bridge asking hostd about the release account', () => {
 
     expect(asked.map((one) => `${one.method} ${one.url}`)).toEqual(['GET /release/account', 'GET /release/account']);
     expect(asked.every((one) => one.secret === SECRET)).toBe(true);
+  });
+});
+
+describe('the bridge asking hostd for a release build (#343)', () => {
+  const start = {
+    runId: 'run-1',
+    repo: 'acme/app',
+    sha: 'a'.repeat(40),
+    defaultBranch: 'main',
+    versionFile: 'VERSION',
+    versionKey: null,
+    after: '1.3.0',
+    command: 'make release',
+    artifact: 'build/App.zip',
+    timeoutMinutes: 180,
+    clean: false,
+    bot: 'atlas',
+  };
+
+  it('starts, reads, cancels and deletes one with the install secret', async () => {
+    answer = { status: 202, body: { run: { ...start, state: 'running' } } };
+    await client.startRelease(start);
+    answer = { status: 200, body: { run: { ...start, state: 'built' } } };
+    await client.releaseRun('run-1');
+    answer = { status: 200, body: { cancelled: true } };
+    await expect(client.cancelRelease('run-1')).resolves.toEqual({ cancelled: true });
+    answer = { status: 200, body: { deleted: true } };
+    await expect(client.deleteReleaseArtifact('run-1')).resolves.toEqual({ deleted: true });
+
+    expect(asked.map((one) => `${one.method} ${one.url}`)).toEqual([
+      'POST /release/runs',
+      'GET /release/runs/run-1',
+      'DELETE /release/runs/run-1',
+      'DELETE /release/runs/run-1/artifact',
+    ]);
+    expect(asked.every((one) => one.secret === SECRET)).toBe(true);
+    expect(JSON.parse(asked[0]?.body ?? '{}')).toEqual(start);
+  });
+
+  it('carries a refusal in hostd’s own words and status', async () => {
+    answer = { status: 409, body: { error: 'a release of acme/app is building; wait for it to end, or cancel it' } };
+    await expect(client.startRelease(start)).rejects.toMatchObject({ status: 409, message: expect.stringContaining('is building') });
+  });
+
+  it('streams the artifact with the sha256 and version hostd computed', async () => {
+    answer = { status: 200, body: null, raw: 'zip bytes', headers: { 'content-type': 'application/octet-stream', 'content-length': '9', 'x-openadlc-sha256': 'e'.repeat(64), 'x-openadlc-version': '1.4.0' } };
+    const artifact = await client.releaseArtifact('run-1');
+    expect(artifact).toMatchObject({ sha256: 'e'.repeat(64), version: '1.4.0', bytes: 9 });
+    expect(await new Response(artifact.body).text()).toBe('zip bytes');
+    expect(asked.at(-1)).toMatchObject({ method: 'GET', url: '/release/runs/run-1/artifact', secret: SECRET });
+
+    answer = { status: 404, body: { error: 'no built artifact for release run run-2 on this host' } };
+    await expect(client.releaseArtifact('run-2')).rejects.toMatchObject({ status: 404 });
   });
 });
 
