@@ -77,11 +77,10 @@ regexes = ['''\$\{PEM_BODY\}''']
 
 # The release run's signing test (#344) first wrote that same published key
 # out whole, on one line, in commit 7590c19; the history keeps it, so the next
-# commit building it from its body cannot clear the finding. Allowed by value
-# alone, with no path: gitleaks 8.30.1 skips a file whole for an entry that
-# names its path, even with condition = "AND", so a real key pasted into the
-# test would go unseen. The key is a published test vector, so letting it
-# through anywhere hides nothing, and any other key is still a finding.
+# commit building it from its body cannot clear the finding. Allowed by its
+# value alone, as this file's rule says: the key is RFC 8032's published test
+# vector, so letting it through anywhere hides nothing, and any other key, in
+# that test or elsewhere, is still a finding.
 [[allowlists]]
 description = "RFC 8032 §7.1 test 1's published key, in the release tests"
 regexes = ['''MC4CAQAwBQYDK2VwBCIEIJ1hsZ3v/VpguoRK9JLsLMREScVpezJpGXA7rAMcrn9g''']
