@@ -145,6 +145,7 @@ import {
   humanReviewPathsFor,
   isRevert,
   leaseHoldUntil,
+  pullOpenReader,
   settleLeaseAfter,
   stopAtUsd,
   RUNAWAY_GUARD_MULTIPLE,
@@ -287,6 +288,30 @@ describe('a review seat’s part and lens', () => {
   });
 });
 
+describe('whether a pull request a lease would wait for is open', () => {
+  const openadlc = { id: 'repo-1', name: 'openadlc', fullName: 'janedoe/OpenADLC' };
+  const reader = (getPullRequest: (repo: string, number: number) => Promise<{ state: string }>) =>
+    pullOpenReader({ asBot: vi.fn(async () => ({ getPullRequest }) as never) }, { automationBot: 'flow' } as never);
+
+  beforeEach(() => vi.mocked(repos.listRepos).mockImplementation((async () => [openadlc]) as never));
+  afterEach(() => vi.mocked(repos.listRepos).mockImplementation((async () => []) as never));
+
+  it('is GitHub’s answer, read as the automation account in the lease’s repository', async () => {
+    const getPullRequest = vi.fn(async () => ({ state: 'open' }));
+    await expect(reader(getPullRequest)('repo-1', 334)).resolves.toBe(true);
+    expect(getPullRequest).toHaveBeenCalledWith('janedoe/OpenADLC', 334);
+
+    await expect(reader(async () => ({ state: 'closed' }))('repo-1', 334)).resolves.toBe(false);
+  });
+
+  it('is unknown when GitHub does not answer, or the repository or the account is missing', async () => {
+    await expect(reader(async () => Promise.reject(new Error('rate limited')))('repo-1', 334)).resolves.toBeNull();
+    await expect(reader(async () => ({ state: 'closed' }))('repo-gone', 334)).resolves.toBeNull();
+    const unconnected = pullOpenReader({ asBot: vi.fn(async () => null) }, { automationBot: 'flow' } as never);
+    await expect(unconnected('repo-1', 334)).resolves.toBeNull();
+  });
+});
+
 describe('a paused lease when its task ends', () => {
   beforeEach(() => vi.mocked(leases.settlePausedLeases).mockClear());
 
@@ -299,6 +324,14 @@ describe('a paused lease when its task ends', () => {
       reason: `its task on openadlc#78 ${state === 'done' ? 'finished' : state}`,
       holdUntil: expect.any(Date),
     });
+  });
+
+  it('is given whether its pull request is open, so it is never parked on a closed one (ADR 0073)', async () => {
+    const pullOpen = vi.fn(async () => false);
+
+    await settleLeaseAfter({ leaseId: 'lease-78', state: 'failed', subjectRef: 'openadlc#78' }, pullOpen);
+
+    expect(leases.settlePausedLeases).toHaveBeenCalledWith(expect.objectContaining({ leaseId: 'lease-78', pullOpen }));
   });
 
   it('is left alone while the task has not ended, or when it had no lease', async () => {

@@ -78,6 +78,9 @@ export interface SendBackDeps {
   client?: (() => Promise<GitHubClient | null>) | null;
 }
 
+/** What a held round reads of its pull request. */
+type HeldPull = Awaited<ReturnType<GitHubClient['getPullRequest']>>;
+
 const title = (stage: StageKey): string => STAGE_COLUMN_TITLES[stage];
 const quoted = (text: string): string =>
   text
@@ -743,7 +746,7 @@ export class SendBack {
    * It stays ready for review: the round pushes to it, and that push moves
    * the card to Review again.
    */
-  private async backFromReview(input: { repo: repos.RepoRecord; issueNumber: number; prNumber: number; by: string }): Promise<void> {
+  private async backFromReview(input: { repo: repos.RepoRecord; issueNumber: number; prNumber: number; by: string; pull?: HeldPull | null }): Promise<void> {
     const { repo, issueNumber, prNumber } = input;
     const ref = `${repo.name}#${issueNumber}`;
     await this.deps.mergeLine.leave(repo.name, prNumber).catch(() => undefined);
@@ -751,7 +754,37 @@ export class SendBack {
       console.warn(`[bridge] ${ref}: adlc:ci was not taken off #${prNumber}: ${error instanceof Error ? error.message : error}`),
     );
 
-    await this.openHeldRound({ repo, issueNumber, prNumber, by: input.by });
+    await this.openHeldRound({ repo, issueNumber, prNumber, by: input.by, pull: input.pull ?? null });
+  }
+
+  /**
+   * A person moved a card from Review back to Build and its pull request is
+   * closed: there is no branch for a patch round to push to, so the lease is
+   * let go and the dispatcher starts a fresh build, briefed by the move just
+   * recorded (`sent-back.md`). OpenADLC#329's move was refused with "#334 is
+   * closed" in bridge.log alone, and the lease it kept left the card in Build
+   * with nothing running (ADR 0073). A task still under the lease — a build
+   * paused on a question — is the build, and keeps it.
+   */
+  private async letGoOfClosedPull(input: { repo: repos.RepoRecord; issueNumber: number; prNumber: number; actor: string }): Promise<void> {
+    const { repo, issueNumber, prNumber } = input;
+    const ref = `${repo.name}#${issueNumber}`;
+    const lease = await leases.getActiveLease(repo.id, issueNumber).catch(() => null);
+    if (!lease) return;
+    const released = await leases.releaseUnlessWorkedUnder(lease.id).catch((error: unknown) => {
+      console.warn(`[bridge] ${ref}: the lease held for closed #${prNumber} was not let go: ${error instanceof Error ? error.message : error}`);
+      return false;
+    });
+    if (!released) {
+      console.log(`[bridge] ${ref}: #${prNumber} is closed, and a task still works under its lease, which keeps it`);
+      return;
+    }
+    await audit({
+      actor: input.actor,
+      action: 'lease.released',
+      target: ref,
+      payload: { leaseId: lease.id, reason: `#${prNumber} is closed, so the move back to Build starts a fresh build`, pullRequest: prNumber },
+    }).catch(() => undefined);
   }
 
   /**
@@ -790,16 +823,31 @@ export class SendBack {
     prNumber: number;
     by: string;
     fromNeedsYou?: boolean;
+    /** The pull request as the caller already read it. */
+    pull?: HeldPull | null;
   }): Promise<{ round: number; bot: string; waiting?: string } | null> {
     const { repo, issueNumber, prNumber } = input;
     const ref = `${repo.name}#${issueNumber}`;
-    const notStarted = (why: string) => {
+    let head: string | undefined;
+    // A person's move that started nothing said so only in bridge.log, and
+    // OpenADLC#329 sat in Build with nothing running and nothing on its card
+    // (ADR 0073). From a move it is a stopped review on the card, with why,
+    // once for each head; Needs you's button answers the person who pressed
+    // it. Not when the round limit stopped it: that has its own record.
+    const notStarted = async (why: string, options: { recorded?: boolean } = {}) => {
       console.warn(`[bridge] ${ref}: no builder round started on #${prNumber}: ${why}`);
+      if (!input.fromNeedsYou && !options.recorded) {
+        const pr = { number: prNumber, head: head ? { sha: head } : {} };
+        if (!(await this.stallSaid(repo.name, pr))) {
+          await this.recordStall({ repo, pr, issue: issueNumber, why: `moved back to Build, and no builder round started: ${why}` });
+        }
+      }
       return null;
     };
     const client = (await this.deps.client?.().catch(() => null)) ?? null;
-    const pull = client ? await client.getPullRequest(repo.fullName, prNumber).catch(() => null) : null;
+    const pull = input.pull ?? (client ? await client.getPullRequest(repo.fullName, prNumber).catch(() => null) : null);
     if (!pull) return notStarted(client ? `GitHub did not answer for #${prNumber}` : 'the automation account is not connected');
+    head = pull.headSha;
     if (pull.state !== 'open') return notStarted(`#${prNumber} is ${pull.state}`);
     const found = await leases.getActiveLease(repo.id, issueNumber).catch(() => null);
     const lease = found && (found.prNumber === null || found.prNumber === undefined || found.prNumber === prNumber) ? found : null;
@@ -813,7 +861,7 @@ export class SendBack {
     if (open) return notStarted('a patch round is already live on it');
     const pr = { number: prNumber, head: { ref: pull.headRef } };
     const round = await this.nextRound({ repo, repoFullName: repo.fullName, pr, issueNumber, lease, builder });
-    if (round === null) return notStarted('its review rounds have not converged, and the loop stopped for a person');
+    if (round === null) return notStarted('its review rounds have not converged, and the loop stopped for a person', { recorded: true });
     const opened = await this.openPatchRound({ repo, repoFullName: repo.fullName, pr, client, issueNumber, lease, builder, round, by: input.by, head: pull.headSha });
     if (opened.refused) return notStarted(opened.refused);
     if (opened.waiting) {
@@ -1202,7 +1250,10 @@ export class SendBack {
 
     await this.letGoOfBuild({ repo, issueNumber: input.issueNumber, prNumber: issue.prNumber, from, to: input.to, why: `moved back to ${input.to} by ${input.actor}` });
     if (input.to === 'build' && from === 'review' && issue.prNumber) {
-      await this.backFromReview({ repo, issueNumber: input.issueNumber, prNumber: issue.prNumber, by: input.actor });
+      const client = (await this.deps.client?.().catch(() => null)) ?? null;
+      const pull = client ? await client.getPullRequest(repo.fullName, issue.prNumber).catch(() => null) : null;
+      if (pull && pull.state !== 'open') await this.letGoOfClosedPull({ repo, issueNumber: input.issueNumber, prNumber: issue.prNumber, actor: input.actor });
+      else await this.backFromReview({ repo, issueNumber: input.issueNumber, prNumber: issue.prNumber, by: input.actor, pull });
     }
 
     const staffed = repo.stageModes[input.to] !== 'untouched';
