@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DEFAULT_DELIVERY_RULES, declaredPathsFrom, missingForRouting, parseDeliveryRules, parseDependencyRefs, parseYamlFile, REQUIRED_CHECK } from '@openadlc/shared';
 import { describe, expect, it } from 'vitest';
+import { evaluate, holds } from './actions-expression.ts';
 
 /**
  * An issue form's field labels are an interface, not captions.
@@ -232,6 +233,7 @@ describe('what the template tree carries', () => {
       env: {
         event: string;
         vouched?: string;
+        copy?: string;
         before?: 'parent' | 'other';
         docsSkip?: string;
         start?: Record<string, string>;
@@ -277,6 +279,7 @@ describe('what the template tree carries', () => {
             REPO_ID: '42',
             DOCS_ALONE_SKIPS: env.docsSkip ?? workflow.env.DOCS_ALONE_SKIPS ?? '',
             VOUCHED: env.vouched ?? '',
+            COPY: env.copy ?? '',
           },
         });
         return /^run=(.*)$/m.exec(readFileSync(output, 'utf8'))?.[1];
@@ -314,6 +317,11 @@ describe('what the template tree carries', () => {
     it('runs a push of several commits at once, whose diff it cannot read from two', () => {
       expect(needs({ 'docs/guide.md': 'x\n' }, { event: 'push', before: 'other' })).toBe('true');
     });
+
+    it('runs nothing on a label change that copied the head’s earlier ci, whatever it copied', () => {
+      for (const copy of ['success', 'failure', 'timeout']) expect(needs({ 'src/app.js': 'x\n' }, { event: 'pull_request', copy })).toBe('false');
+      expect(needs({ 'src/app.js': 'x\n' }, { event: 'pull_request', copy: '' })).toBe('true');
+    });
   });
 
   describe('lets only a pull request’s own run into the default branch vouch for the tree a push lands', () => {
@@ -334,11 +342,14 @@ describe('what the template tree carries', () => {
     }
     const workflow = parseYamlFile(join(TEMPLATE, '.github', 'workflows', 'ci.yml')) as {
       permissions: Record<string, string>;
-      jobs: Record<string, { steps: Step[] }>;
+      jobs: Record<string, { name?: string; if?: string; needs?: string; outputs?: Record<string, string>; 'timeout-minutes'?: number; steps: Step[] }>;
     };
     const steps = workflow.jobs[REQUIRED_CHECK]?.steps ?? [];
     const index = (id: string) => steps.findIndex((step) => step.id === id);
-    const step = steps.find((candidate) => candidate.id === 'vouched');
+    // The lookup is a job of its own, ahead of `ci`: a job's name is fixed
+    // before its steps run, and `ci` is named from what the lookup found.
+    const lookup = workflow.jobs.earlier;
+    const step = lookup?.steps.find((candidate) => candidate.id === 'vouched');
 
     const REPO = 'exampleco/api';
     const TREE = 'a'.repeat(40);
@@ -368,17 +379,26 @@ describe('what the template tree carries', () => {
      * hundred at a time, all of it with `--paginate --slurp` as a list of
      * pages, and only its first page without. A path with no fixture is
      * recorded and fails as a 404 does; one matching `failing` fails as a
-     * token without the permission does.
+     * token without the permission does. A path in `sequences` answers the
+     * next of its answers each time it is asked, and the last one after that.
      */
     const FAKE_GH = [
       '#!/usr/bin/env node',
-      "const { appendFileSync, readFileSync } = require('node:fs');",
-      "const { answers, failing, unanswered } = JSON.parse(readFileSync(process.env.FAKE_GH_ANSWERS, 'utf8'));",
+      "const { appendFileSync, readFileSync, writeFileSync } = require('node:fs');",
+      "const { answers, sequences = {}, failing, unanswered, asked } = JSON.parse(readFileSync(process.env.FAKE_GH_ANSWERS, 'utf8'));",
       'const args = process.argv.slice(2);',
       'const path = args.at(-1);',
       "const paginate = args.includes('--paginate');",
       "if (args[0] !== 'api') { process.stderr.write('gh: this stand-in answers only gh api\\n'); process.exit(2); }",
       "if (failing && new RegExp(failing).test(path)) { process.stderr.write('gh: Resource not accessible by integration (HTTP 403)\\n'); process.exit(1); }",
+      'if (path in sequences) {',
+      "  const counts = JSON.parse(readFileSync(asked, 'utf8') || '{}');",
+      '  const n = counts[path] ?? 0;',
+      '  counts[path] = n + 1;',
+      '  writeFileSync(asked, JSON.stringify(counts));',
+      '  process.stdout.write(JSON.stringify(sequences[path][Math.min(n, sequences[path].length - 1)]));',
+      '  process.exit(0);',
+      '}',
       "if (!(path in answers)) { appendFileSync(unanswered, path + '\\n'); process.stderr.write('gh: Not Found (HTTP 404)\\n'); process.exit(1); }",
       'const answer = answers[path];',
       'if (!Array.isArray(answer)) {',
@@ -395,11 +415,54 @@ describe('what the template tree carries', () => {
       '',
     ].join('\n');
 
+    /** The commit a push lands, whose tree is TREE. */
+    const PUSHED = 'c'.repeat(40);
+
     /**
      * The step's script, run as the runner runs it, with the runner's node
-     * and a stand-in `gh` that answers from fixtures: run 900 of the
-     * template's ci.yml, for pull request #31 from branch `x` into `main`,
-     * which tested TREE and passed, unless `change` says otherwise.
+     * and a stand-in `gh` that answers from `answers` (and `sequences`).
+     */
+    function lookupRun(
+      answers: Record<string, unknown>,
+      env: Record<string, string>,
+      options: { failing?: RegExp; sequences?: Record<string, unknown[]> } = {},
+    ) {
+      const dir = mkdtempSync(join(tmpdir(), 'openadlc-ci-vouched-'));
+      try {
+        const unanswered = join(dir, 'unanswered');
+        const asked = join(dir, 'asked');
+        const output = join(dir, 'output');
+        writeFileSync(unanswered, '');
+        writeFileSync(asked, '');
+        writeFileSync(output, '');
+        writeFileSync(join(dir, 'answers.json'), JSON.stringify({ answers, sequences: options.sequences ?? {}, failing: options.failing?.source, unanswered, asked }));
+        writeFileSync(join(dir, 'gh'), FAKE_GH, { mode: 0o755 });
+        const said = execFileSync('bash', ['-e', '-c', step?.run ?? 'false'], {
+          cwd: dir,
+          encoding: 'utf8',
+          env: {
+            PATH: `${dir}:${dirname(process.execPath)}:${process.env.PATH}`,
+            GITHUB_OUTPUT: output,
+            FAKE_GH_ANSWERS: join(dir, 'answers.json'),
+            GH_TOKEN: 'none',
+            REPO,
+            REPO_ID: '42',
+            DEFAULT_BRANCH: 'main',
+            ...env,
+          },
+        });
+        const written = readFileSync(output, 'utf8');
+        const out = (key: string) => new RegExp(`^${key}=(.*)$`, 'm').exec(written)?.[1];
+        return { out, said, unanswered: readFileSync(unanswered, 'utf8').split('\n').filter(Boolean) };
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+
+    /**
+     * A push of PUSHED, whose tree is TREE: run 900 of the template's ci.yml,
+     * for pull request #31 from branch `x` into `main`, tested TREE and
+     * passed, unless `change` says otherwise.
      */
     function vouched(change: (found: Found) => void = () => undefined, options: { defaultBranch?: string; failing?: RegExp } = {}) {
       const pull: Pull = { number: 31, head: { sha: HEAD, ref: 'x', repo: { id: 42 } }, base: { ref: 'main', repo: { id: 42 } } };
@@ -414,6 +477,7 @@ describe('what the template tree carries', () => {
       };
       change(found);
       const answers: Record<string, unknown> = {
+        [`repos/${REPO}/git/commits/${PUSHED}`]: { sha: PUSHED, tree: { sha: TREE } },
         [`repos/${REPO}/actions/artifacts?name=tested-tree-${TREE}&per_page=100`]: { total_count: found.artifacts.length, artifacts: found.artifacts },
         [`repos/${REPO}/actions/runs/900`]: found.run,
         [`repos/${REPO}/git/commits/${HEAD}`]: { sha: HEAD, tree: { sha: found.headTree } },
@@ -422,60 +486,109 @@ describe('what the template tree carries', () => {
         [`repos/${REPO}/actions/runs/900/jobs?per_page=100`]: { total_count: 1, jobs: [found.job] },
       };
       for (const [number, events] of Object.entries(found.events)) answers[`repos/${REPO}/issues/${number}/events?per_page=100`] = events;
-
-      const dir = mkdtempSync(join(tmpdir(), 'openadlc-ci-vouched-'));
-      try {
-        const unanswered = join(dir, 'unanswered');
-        const output = join(dir, 'output');
-        writeFileSync(unanswered, '');
-        writeFileSync(output, '');
-        writeFileSync(join(dir, 'answers.json'), JSON.stringify({ answers, failing: options.failing?.source, unanswered }));
-        writeFileSync(join(dir, 'gh'), FAKE_GH, { mode: 0o755 });
-        const said = execFileSync('bash', ['-e', '-c', step?.run ?? 'false'], {
-          cwd: dir,
-          encoding: 'utf8',
-          env: {
-            PATH: `${dir}:${dirname(process.execPath)}:${process.env.PATH}`,
-            GITHUB_OUTPUT: output,
-            FAKE_GH_ANSWERS: join(dir, 'answers.json'),
-            GH_TOKEN: 'none',
-            REPO,
-            REPO_ID: '42',
-            DEFAULT_BRANCH: options.defaultBranch ?? 'main',
-            TREE,
-          },
-        });
-        return {
-          result: /^vouched=(.*)$/m.exec(readFileSync(output, 'utf8'))?.[1],
-          said,
-          unanswered: readFileSync(unanswered, 'utf8').split('\n').filter(Boolean),
-        };
-      } finally {
-        rmSync(dir, { recursive: true, force: true });
-      }
+      const { out, said, unanswered } = lookupRun(answers, { MODE: 'push', HEAD_SHA: PUSHED, DEFAULT_BRANCH: options.defaultBranch ?? 'main' }, { failing: options.failing });
+      return { result: out('vouched'), copy: out('copy'), said, unanswered };
     }
 
-    it('is a step of its own on a push, before what the change needs is decided, that never fails CI', () => {
-      expect(step?.if).toBe("github.event_name == 'push'");
+    /** What GitHub says about the head's earlier runs, for a test to change one. */
+    interface Earlier {
+      runs: Record<string, unknown>[];
+      /** Each run's jobs, one answer each time they are asked, the last one standing. */
+      jobs: Record<number, { name: string; status: string; conclusion: string | null }[][]>;
+      /** Each run as asked again after the list, the same way. */
+      again: Record<number, Record<string, unknown>[]>;
+      withHead: Pull[];
+      fromBranch: Pull[];
+      events: Record<number, { event: string }[]>;
+    }
+
+    const OPENED = '2026-11-01T10:00:00Z';
+    const pullFromX = (number: number, base = 'main'): Pull => ({ number, head: { sha: HEAD, ref: 'x', repo: { id: 42 } }, base: { ref: base, repo: { id: 42 } } });
+    const ciJob = (conclusion: string | null, status = 'completed') => [{ name: 'ci', status, conclusion }];
+
+    /**
+     * A label change on pull request #31, head HEAD from branch `x` into
+     * `main`: run 900 of the template's ci.yml ran its ci on HEAD and it
+     * passed, unless `change` says otherwise. This run is 950.
+     */
+    function copied(change: (found: Earlier) => void = () => undefined, options: { env?: Record<string, string>; failing?: RegExp } = {}) {
+      const found: Earlier = {
+        runs: [{ id: 900, event: 'pull_request', status: 'completed', path: '.github/workflows/ci.yml', head_sha: HEAD, head_branch: 'x', head_repository: { id: 42 }, created_at: '2026-11-01T11:00:00Z' }],
+        jobs: { 900: [ciJob('success')] },
+        again: {},
+        withHead: [pullFromX(31)],
+        fromBranch: [pullFromX(31)],
+        events: { 31: [{ event: 'labeled' }] },
+      };
+      change(found);
+      const answers: Record<string, unknown> = {
+        [`repos/${REPO}/actions/runs?event=pull_request&head_sha=${HEAD}&per_page=100`]: { total_count: found.runs.length, workflow_runs: found.runs },
+        [`repos/${REPO}/commits/${HEAD}/pulls`]: found.withHead,
+        [`repos/${REPO}/pulls?state=all&head=${encodeURIComponent('exampleco:x')}&per_page=100`]: found.fromBranch,
+      };
+      for (const [number, events] of Object.entries(found.events)) answers[`repos/${REPO}/issues/${number}/events?per_page=100`] = events;
+      const sequences: Record<string, unknown[]> = {};
+      for (const [id, answersOf] of Object.entries(found.jobs)) sequences[`repos/${REPO}/actions/runs/${id}/jobs?per_page=100`] = answersOf.map((jobs) => ({ total_count: jobs.length, jobs }));
+      for (const [id, runs] of Object.entries(found.again)) sequences[`repos/${REPO}/actions/runs/${id}`] = runs;
+      const { out, said, unanswered } = lookupRun(
+        answers,
+        {
+          MODE: 'label',
+          HEAD_SHA: HEAD,
+          HEAD_REF: 'x',
+          HEAD_REPO_ID: '42',
+          PR_NUMBER: '31',
+          PR_OPENED_AT: OPENED,
+          RUN_ID: '950',
+          EARLIER_WAIT_MS: '400',
+          EARLIER_POLL_MS: '100',
+          ...options.env,
+        },
+        { failing: options.failing, sequences },
+      );
+      return { copy: out('copy'), run: out('run'), vouched: out('vouched'), said, unanswered };
+    }
+
+    it('is the one step of a job of its own, on a push or a label change, that never fails CI', () => {
       // A refusal runs the tests, and so does a question GitHub does not
       // answer, a stalled one, or the step itself failing.
       expect(step?.['continue-on-error']).toBe(true);
-      expect(step?.['timeout-minutes']).toBe(3);
+      // A label change waits up to 35 minutes for a run still going; a push
+      // bounds its own lookup to three inside the script.
+      expect(step?.['timeout-minutes']).toBe(38);
+      expect(lookup?.['timeout-minutes']).toBe(40);
+      expect(lookup?.name).toBe('ci lookup');
+      // The lookup, and a step that fails the job when a wait ran out.
+      expect(lookup?.steps).toHaveLength(2);
+      expect(lookup?.outputs).toEqual({
+        vouched: '${{ steps.vouched.outputs.vouched }}',
+        copy: '${{ steps.vouched.outputs.copy }}',
+        run: '${{ steps.vouched.outputs.run }}',
+      });
       // The default branch by its own name: the push filter lists three.
       expect(step?.env).toEqual({
         GH_TOKEN: '${{ github.token }}',
+        MODE: "${{ github.event_name == 'push' && 'push' || 'label' }}",
         REPO: '${{ github.repository }}',
         REPO_ID: '${{ github.repository_id }}',
         DEFAULT_BRANCH: '${{ github.event.repository.default_branch }}',
-        TREE: '${{ steps.tree.outputs.tree }}',
+        HEAD_SHA: '${{ github.event.pull_request.head.sha || github.sha }}',
+        HEAD_REF: '${{ github.event.pull_request.head.ref }}',
+        HEAD_REPO_ID: '${{ github.event.pull_request.head.repo.id }}',
+        PR_NUMBER: '${{ github.event.pull_request.number }}',
+        PR_OPENED_AT: '${{ github.event.pull_request.created_at }}',
+        RUN_ID: '${{ github.run_id }}',
       });
       // What GitHub says reaches the script as data, never spliced into it.
       expect(step?.run).toMatch(/^node - <<'JS'\n/);
       expect(step?.run ?? '').not.toContain('${{');
+      // It checks out nothing: it runs none of the pull request's code.
+      expect(lookup?.steps.some((candidate) => candidate.uses)).toBe(false);
+      expect(workflow.jobs[REQUIRED_CHECK]?.needs).toBe('earlier');
       expect(steps[index('tree')]?.run).toContain("git rev-parse 'HEAD^{tree}'");
-      expect(index('tree')).toBeLessThan(index('vouched'));
-      expect(index('vouched')).toBeLessThan(index('needs'));
-      expect(steps[index('needs')]?.env?.VOUCHED).toBe('${{ steps.vouched.outputs.vouched }}');
+      expect(index('tree')).toBeLessThan(index('needs'));
+      expect(steps[index('needs')]?.env?.VOUCHED).toBe('${{ needs.earlier.outputs.vouched }}');
+      expect(steps[index('needs')]?.env?.COPY).toBe('${{ needs.earlier.outputs.copy }}');
       // The artifact it looks for is the one a pull request's run uploads.
       const upload = steps.find((candidate) => candidate.uses?.startsWith('actions/upload-artifact@'));
       expect(upload?.with?.name).toBe('tested-tree-${{ steps.tree.outputs.tree }}');
@@ -641,6 +754,231 @@ describe('what the template tree carries', () => {
       expect(result).toBe('false');
       expect(said).toMatch(/could not tell whether a pull request's run passed tree a{40} \(gh api \S+: gh: Resource not accessible by integration \(HTTP 403\)\); running the tests/);
     });
+
+    it('answers a push with whether the tree was vouched for, and copies nothing', () => {
+      const { result, copy } = vouched();
+      expect(result).toBe('true');
+      expect(copy).toBeUndefined();
+    });
+
+    // The bug: a green pull request had `needs-human` taken off. The run that
+    // started skipped its job as `ci (after approval)`, GitHub counted that
+    // newest run in place of the `ci` that passed, and the merge line waited
+    // on a `ci` GitHub said was expected.
+    describe('copies the head’s earlier ci on a label change', () => {
+      it('copies a green ci that ran for this pull request alone, into the default branch, never retargeted', () => {
+        const { copy, run, said, unanswered, vouched: answer } = copied();
+        expect(unanswered).toEqual([]);
+        expect(copy).toBe('success');
+        expect(run).toBe('900');
+        expect(said).toMatch(/ci passed on this head in run 900, for pull request #31 alone/);
+        expect(answer).toBeUndefined();
+      });
+
+      it('copies a red ci, whatever its ties', () => {
+        const red = (found: Earlier) => void (found.jobs[900] = [ciJob('failure')]);
+        expect(copied(red).copy).toBe('failure');
+        const untied = copied((found) => {
+          red(found);
+          found.events[31] = [{ event: 'base_ref_changed' }];
+          found.fromBranch = [pullFromX(30), pullFromX(31)];
+          found.events[30] = [];
+        });
+        expect(untied.copy).toBe('failure');
+        expect(untied.said).toMatch(/ci ended failure on this head in run 900/);
+      });
+
+      it.each<[string, (found: Earlier) => void, RegExp]>([
+        ['its pull request had its base changed', (found) => void (found.events[31] = [{ event: 'base_ref_changed' }]), /#31 from x had its base changed/],
+        [
+          'another pull request was opened from its branch',
+          (found) => {
+            found.fromBranch = [pullFromX(30), pullFromX(31)];
+            found.events[30] = [];
+          },
+          /#30 was opened from x too/,
+        ],
+        ['a pull request from its branch is into another branch', (found) => void (found.withHead = [pullFromX(31, 'foo')]), /#31 from x is into foo, not main/],
+        ['the run was made before the pull request opened', (found) => void (found.runs[0]!.created_at = '2026-11-01T09:00:00Z'), /nothing to copy/],
+      ])('copies no green ci when %s', (_what, change, why) => {
+        const { copy, said } = copied(change);
+        expect(copy).toBe('');
+        expect(said).toMatch(why);
+      });
+
+      it.each<[string, (found: Earlier) => void, Record<string, string>]>([
+        ['there is no run on the head', (found) => void (found.runs = []), {}],
+        ['the only run skipped its ci as ci (after approval)', (found) => void (found.jobs[900] = [[{ name: 'ci (after approval)', status: 'completed', conclusion: 'skipped' }]]), {}],
+        ['the only run was a lookup', (found) => void (found.jobs[900] = [[{ name: 'ci lookup', status: 'completed', conclusion: 'success' }]]), {}],
+        ['the only ci was cancelled', (found) => void (found.jobs[900] = [ciJob('cancelled')]), {}],
+        ['the only run is this one', () => undefined, { RUN_ID: '900' }],
+        ['the pull request is from a fork', () => undefined, { HEAD_REPO_ID: '7' }],
+        ['the run is of another workflow', (found) => void (found.runs[0]!.path = '.github/workflows/other.yml'), {}],
+      ])('copies nothing when %s, and the run stays ci (after approval)', (_what, change, env) => {
+        const { copy, unanswered } = copied(change, { env });
+        expect(unanswered).toEqual([]);
+        expect(copy).toBe('');
+      });
+
+      it('waits for a run still going, and copies what it ends with', () => {
+        const { copy, said } = copied((found) => {
+          found.runs[0]!.status = 'in_progress';
+          found.again[900] = [{ ...found.runs[0]!, status: 'in_progress' }, { ...found.runs[0]!, status: 'completed' }];
+          found.jobs[900] = [ciJob(null, 'in_progress'), ciJob('success')];
+        });
+        expect(copy).toBe('success');
+        expect(said).toMatch(/run 900 on this head is still going; waiting for it/);
+      });
+
+      it('says timeout, never success, for a run still going at the deadline', () => {
+        const { copy } = copied((found) => {
+          found.runs[0]!.status = 'in_progress';
+          found.again[900] = [{ ...found.runs[0]!, status: 'in_progress' }];
+          found.jobs[900] = [ciJob(null, 'in_progress')];
+        });
+        expect(copy).toBe('timeout');
+      });
+
+      it('fails the lookup job itself on a timeout, so re-running the failed jobs looks again', () => {
+        // Were only `ci` red, "re-run failed jobs" (the bridge's retry, and
+        // GitHub's button) would re-run `ci` alone, which reads the same
+        // `timeout` from this job's kept outputs and fails again.
+        const late = lookup?.steps[1];
+        expect(late?.if).toBe("steps.vouched.outputs.copy == 'timeout'");
+        expect(late?.['continue-on-error']).toBeUndefined();
+        const exit = spawnSync('bash', ['-e', '-c', late?.run ?? 'true'], { env: { PATH: process.env.PATH }, encoding: 'utf8' });
+        expect(exit.status).toBe(1);
+        expect(exit.stdout).toMatch(/re-run the failed jobs to look again/);
+        // `ci` still runs and reports red after a failed lookup.
+        expect(holds(workflow.jobs[REQUIRED_CHECK]?.if, {
+          github: { event_name: 'pull_request', repository: REPO, head_ref: 'feature', event: { action: 'unlabeled', label: { name: 'needs-human' }, pull_request: { head: { repo: { full_name: REPO } }, labels: [] } } },
+          needs: { earlier: { outputs: { copy: 'timeout' } } },
+        })).toBe(true);
+      });
+
+      it('passes over a newer run that was itself a copy, so a timed-out copy is never passed on as a failure', () => {
+        const { copy, run, said } = copied((found) => {
+          found.runs = [{ ...found.runs[0]!, id: 901, created_at: '2026-11-01T12:00:00Z' }, ...found.runs];
+          found.jobs[901] = [[{ name: 'ci lookup', status: 'completed', conclusion: 'failure' }, ...ciJob('failure')]];
+          found.jobs[900] = [[{ name: 'ci lookup', status: 'completed', conclusion: 'skipped' }, ...ciJob('success')]];
+        });
+        expect(copy).toBe('success');
+        expect(run).toBe('900');
+        expect(said).toMatch(/run 901 copied an earlier result; passing over it/);
+      });
+
+      it('does not wait on a copy still going, which waits on the same runs', () => {
+        const { copy, run, said } = copied((found) => {
+          found.runs = [{ ...found.runs[0]!, id: 901, status: 'in_progress', created_at: '2026-11-01T12:00:00Z' }, ...found.runs];
+          found.jobs[901] = [[{ name: 'ci lookup', status: 'in_progress', conclusion: null }]];
+        });
+        expect(copy).toBe('success');
+        expect(run).toBe('900');
+        expect(said).not.toMatch(/run 901 on this head is still going/);
+      });
+
+      it('lets the newest ci decide, and never looks for an older pass behind a newer failure', () => {
+        const { copy, run } = copied((found) => {
+          found.runs = [{ ...found.runs[0]!, id: 901, created_at: '2026-11-01T12:00:00Z' }, ...found.runs];
+          found.jobs[901] = [ciJob('failure')];
+        });
+        expect(copy).toBe('failure');
+        expect(run).toBe('901');
+      });
+
+      it('copies nothing, rather than failing CI, when GitHub does not answer', () => {
+        const { copy, said } = copied(() => undefined, { failing: /\/events/ });
+        expect(copy).toBe('');
+        expect(said).toMatch(/could not read the earlier runs on this head \(gh api \S+: gh: Resource not accessible by integration \(HTTP 403\)\): nothing to copy/);
+      });
+    });
+
+    describe('names the job ci only when it ran or copied something', () => {
+      interface Event {
+        event?: string;
+        action?: string;
+        label?: string;
+        crew?: boolean;
+        labels?: string[];
+      }
+      const context = (event: Event, copy: string | null = '') => {
+        const name = event.event ?? 'pull_request';
+        return {
+          github: {
+            event_name: name,
+            repository: REPO,
+            head_ref: name === 'pull_request' ? (event.crew ? 'agent/builder/7-x' : 'feature') : '',
+            event:
+              name === 'pull_request'
+                ? {
+                    action: event.action ?? 'synchronize',
+                    label: event.label ? { name: event.label } : null,
+                    pull_request: { head: { repo: { full_name: REPO } }, labels: (event.labels ?? []).map((label) => ({ name: label })) },
+                  }
+                : {},
+          },
+          needs: { earlier: { outputs: { copy } } },
+        };
+      };
+      const ci = workflow.jobs[REQUIRED_CHECK]!;
+      const result = steps.find((candidate) => candidate.id === 'earlier');
+
+      it.each<[string, Event, boolean]>([
+        ['a person’s label change', { action: 'unlabeled', label: 'needs-human' }, true],
+        ['adlc:ci put on a crew pull request', { action: 'labeled', label: 'adlc:ci', crew: true, labels: ['adlc:ci'] }, false],
+        ['another label on a crew pull request with adlc:ci', { action: 'unlabeled', label: 'needs-human', crew: true, labels: ['adlc:ci'] }, true],
+        ['another label on a crew pull request without it', { action: 'labeled', label: 'needs-human', crew: true }, true],
+        ['a push', { event: 'push' }, true],
+        ['a new head on a person’s pull request', { action: 'synchronize' }, false],
+      ])('looks up the earlier result on %s: %s', (_what, event, looks) => {
+        expect(holds(lookup?.if, context(event))).toBe(looks);
+      });
+
+      it('runs and names ci as before on an event that runs it', () => {
+        for (const event of [{ event: 'push' }, { action: 'synchronize' }, { action: 'labeled', label: 'adlc:ci', crew: true, labels: ['adlc:ci'] }]) {
+          expect(holds(ci.if, context(event))).toBe(true);
+          expect(evaluate(ci.name!, context(event))).toBe('ci');
+        }
+        // A push runs its tests when the lookup failed or was skipped.
+        expect(ci.if).toMatch(/^\$\{\{ !cancelled\(\) && /);
+        expect(holds(ci.if, context({ event: 'push' }, null))).toBe(true);
+        expect(holds(ci.if, context({ event: 'push' }), { cancelled: true })).toBe(false);
+      });
+
+      it.each<[string, Event]>([
+        ['a person’s label change', { action: 'unlabeled', label: 'needs-human' }],
+        ['a crew pull request’s label change, whose ci came from adlc:ci', { action: 'unlabeled', label: 'needs-human', crew: true, labels: ['adlc:ci'] }],
+        ['a crew pull request’s label change before adlc:ci', { action: 'labeled', label: 'needs-human', crew: true }],
+      ])('names ci on %s only when there was something to copy', (_what, event) => {
+        for (const copy of ['success', 'failure', 'timeout']) {
+          expect(holds(ci.if, context(event, copy))).toBe(true);
+          expect(evaluate(ci.name!, context(event, copy))).toBe('ci');
+        }
+        for (const nothing of ['', null]) {
+          expect(holds(ci.if, context(event, nothing))).toBe(false);
+          expect(evaluate(ci.name!, context(event, nothing))).toBe('ci (after approval)');
+        }
+      });
+
+      it('defers a crew pull request’s new head as before', () => {
+        expect(holds(lookup?.if, context({ action: 'synchronize', crew: true }))).toBe(false);
+        expect(evaluate(ci.name!, context({ action: 'synchronize', crew: true }))).toBe('ci (after approval)');
+      });
+
+      it('reports the copied result first, passing only a copied pass, and checks out nothing then', () => {
+        expect(index('earlier')).toBe(0);
+        expect(result?.if).toBe("needs.earlier.outputs.copy != ''");
+        const exit = (copy: string) => spawnSync('bash', ['-e', '-c', result?.run ?? 'false'], { env: { PATH: process.env.PATH, COPY: copy, COPIED: '900' }, encoding: 'utf8' });
+        expect(exit('success').status).toBe(0);
+        expect(exit('failure').status).toBe(1);
+        const late = exit('timeout');
+        expect(late.status).toBe(1);
+        expect(late.stdout).toMatch(/had not finished after 35 minutes: re-run the failed jobs to look again/);
+        const checkout = steps.find((candidate) => candidate.uses?.startsWith('actions/checkout@'));
+        expect(checkout?.if).toBe("needs.earlier.outputs.copy == ''");
+        expect(steps[index('tree')]?.if).toBe("needs.earlier.outputs.copy == ''");
+      });
+    });
   });
 
   it('runs CI on a crew pull request only once it carries adlc:ci, and a person’s as before', () => {
@@ -674,12 +1012,18 @@ describe('what the template tree carries', () => {
     expect(own.jobs.changes?.if).toContain("(github.event.action != 'edited' || github.event.changes.body)");
     expect(own.jobs.changes?.if).toContain("github.event.label.name == 'scope:cross-cutting'");
     expect(wanted).not.toContain('scope:cross-cutting');
-    expect(ownRule(own.jobs.changes?.if)).toContain(wanted.replace(/^\$\{\{ | \}\}$/g, ''));
+    // `ci` also runs, in both, when a run that runs nothing found the head's
+    // earlier ci to report again.
+    const runs = /^\$\{\{ !cancelled\(\) && \(\((.*)\) \|\| needs\.earlier\.outputs\.copy != ''\) \}\}$/.exec(wanted)?.[1];
+    expect(runs).toBeDefined();
+    expect(ownRule(own.jobs.changes?.if)).toBe(`\${{ ${runs} }}`);
+    // Every job that runs anything waits on `changes`. The lookup does not: it
+    // runs only when `changes` is skipped, and runs none of the change's code.
     for (const [name, job] of Object.entries(own.jobs)) {
-      if (name === 'changes') continue;
+      if (name === 'changes' || name === 'earlier') continue;
       expect([job.needs ?? []].flat(), `${name} waits on changes`).toContain('changes');
     }
-    expect(ownRule(own.jobs[REQUIRED_CHECK]?.if)).toContain(wanted.replace(/^\$\{\{ | \}\}$/g, ''));
+    expect(ownRule(own.jobs[REQUIRED_CHECK]?.if)).toBe(wanted);
     // A draft skips the integration suites, so its pass is not `ci`: that
     // would stand on the head after it is marked ready, until the full run's
     // `ci` appears.

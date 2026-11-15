@@ -1012,6 +1012,44 @@ function notLandable(facts: MergeFacts): string {
   }
 }
 
+/** What the `ci` job's name expression gives when the job is skipped: deferred until `adlc:ci`, or a label change's run that ran nothing. */
+const DEFERRED_CHECK = 'ci (after approval)';
+
+/**
+ * Whether a check run is the `ci` job skipped as `ci (after approval)`.
+ *
+ * GitHub never evaluates a skipped job's `name:` expression: its check run
+ * carries the expression's raw text, `${{ }}` taken off, such as
+ * `(github.event_name != 'pull_request' || …) && 'ci' || 'ci (after approval)'`.
+ * Matching the evaluated name alone, the hold below never fired on a real
+ * repository (#358, check run 132949306618). Both forms are matched: the raw
+ * text ends with the quoted name as the last `||` choice.
+ */
+function isDeferredCheck(name: string): boolean {
+  return name === DEFERRED_CHECK || /\|\|\s*'ci \(after approval\)'\s*$/.test(name);
+}
+
+/**
+ * Whether the newest run of the `ci` workflow on the head is a skipped
+ * `ci (after approval)` that came after a `ci` that passed.
+ *
+ * OpenADLC's templates before #357 skipped a label change's run under that
+ * name expression, and GitHub counts a workflow's newest run on the head:
+ * once `needs-human` came off a green pull request, GitHub said `blocked`
+ * and named nothing, and the merge line said it did not know why. Check-run
+ * ids only grow, so the deferred run is newer when its id is higher than
+ * every `ci`'s; with an id missing, nothing here can tell, and this says no.
+ */
+function deferredAfterCi(checkRuns: MergeFacts['checkRuns']): boolean {
+  const ci = checkRuns.filter((run) => run.name === REQUIRED_CHECK);
+  if (ci.length === 0 || ci.some((run) => typeof run.id !== 'number')) return false;
+  const newest = ci.reduce((one, other) => ((other.id ?? 0) > (one.id ?? 0) ? other : one));
+  if (newest.status !== 'completed' || newest.conclusion !== 'success') return false;
+  return checkRuns.some(
+    (run) => isDeferredCheck(run.name) && run.status === 'completed' && run.conclusion === 'skipped' && typeof run.id === 'number' && run.id > (newest.id ?? 0),
+  );
+}
+
 /**
  * Why GitHub says `blocked`, from what the merge facts hold and the rules on
  * the base branch (`BlockedFacts`): each cause they show, with what to do,
@@ -1111,6 +1149,12 @@ function whyBlocked(facts: MergeFacts): string {
   }
 
   if (causes.length > 0) return causes.join('; ');
+  if (deferredAfterCi(facts.checkRuns)) {
+    return (
+      `${GITHUB_BLOCKED_DEFERRED}: a skipped ${nameInReason(DEFERRED_CHECK)} that a label change started, which it counts in place of the ${REQUIRED_CHECK} that passed ` +
+      `(the repository's ci.yml skips a label change, as OpenADLC's earlier template did): put adlc:ci on it (taking it off first if it is on), or push a new commit, so ${REQUIRED_CHECK} runs on the head again`
+    );
+  }
   const look = 'the merge box on its GitHub page lists what is missing';
   if (!facts.blocked) return `GitHub says it is blocked, and did not say why: ${look}`;
   if (!rules) return `GitHub says it is blocked, and did not say why, and ${base}'s rules could not be read to tell: ${look}`;
@@ -1603,7 +1647,9 @@ export function mergeBlockers(facts: MergeFacts): MergeBlocker[] {
     // Blocked on a cause it names — a check, a review, unsigned commits — is
     // GitHub's refusal already, and not one to offer a button over.
     const reason = notLandable(facts);
-    const theirs = facts.mergeableState === 'behind' || (facts.mergeableState === 'blocked' && reason.startsWith(GITHUB_BLOCKED_UNSAID));
+    const theirs =
+      facts.mergeableState === 'behind' ||
+      (facts.mergeableState === 'blocked' && (reason.startsWith(GITHUB_BLOCKED_UNSAID) || reason.startsWith(GITHUB_BLOCKED_DEFERRED)));
     add(theirs ? 'person' : 'github', reason);
   }
   if (!facts.filesComplete) add('unknown', 'it changes more files than GitHub lists (3000), so the paths a person must review are not all known');
@@ -1775,9 +1821,17 @@ const LINE_REASONS_A_PERSON_MERGES = [
 /** How `whyBlocked` begins when GitHub says `blocked` and no cause it shows names why. */
 const GITHUB_BLOCKED_UNSAID = 'GitHub says it is blocked, and did not say why';
 
+/**
+ * How `whyBlocked` begins when what it would otherwise call unsaid is most
+ * likely a label change's skipped `ci (after approval)` (`deferredAfterCi`).
+ * A person may merge over it as over the unsaid case, which it narrows.
+ */
+const GITHUB_BLOCKED_DEFERRED = 'GitHub says it is blocked, most likely by the newest run of ci on the head';
+
 /** The reasons `mergeBlockers` calls `person`, matched on the words each begins or ends with. */
 const PERSON_REASONS = [
   /^GitHub says it is blocked, and did not say why/,
+  /^GitHub says it is blocked, most likely by the newest run of ci on the head/,
   /^it is held for a person \(needs-human or openadlc:paused\)$/,
   /^it is behind .+ requires a branch to be up to date before it merges: update it from /,
   /^it is a crew pull request that closes no issue, so nothing declared what it may change; a person decides$/,

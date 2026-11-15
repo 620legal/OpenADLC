@@ -323,13 +323,17 @@ describe('a CI workflow OpenADLC wrote earlier', () => {
   // The ones that shipped before this one, exactly as they were written into
   // repositories, each offered with what bringing it up to date changes for
   // it: OpenADLC's first skipped the default branch's tests for a pull
-  // request into any branch.
-  const VOUCHES = {
-    says: 'counts only a pull request into the default branch as having tested a tree',
-    title: 'count only a pull request into the default branch as having tested a tree',
-  };
+  // request into any branch, and both left a label change's skipped run
+  // standing as the head's newest ci.
+  const KEEPS = 'keeps a pull request’s ci when a label is put on or taken off';
   const versions = [
-    { name: 'OpenADLC’s first', file: 'ci-template-openadlc-1.yml', ...VOUCHES },
+    {
+      name: 'OpenADLC’s first',
+      file: 'ci-template-openadlc-1.yml',
+      says: 'counts only a pull request into the default branch as having tested a tree',
+      title: 'count only a pull request into the default branch as having tested a tree, and keep a pull request’s ci when a label changes',
+    },
+    { name: 'OpenADLC’s second', file: 'ci-template-openadlc-2.yml', says: KEEPS, title: 'keep a pull request’s ci when a label changes' },
   ].map((version) => ({ ...version, body: readFileSync(join(import.meta.dirname, 'fixtures', version.file), 'utf8') }));
   const shipped = versions.map((version) => version.body);
 
@@ -391,7 +395,19 @@ describe('a CI workflow OpenADLC wrote earlier', () => {
     },
   );
 
-  it.each(versions)('tells a repository on $name which pull requests its push counts now, and what it reads to tell', async ({ body }) => {
+  it.each(versions)('tells a repository on $name that a label change keeps its pull request’s ci', async ({ body }) => {
+    // Both skipped a label change's job, and GitHub counted that skipped run
+    // as the newest ci on the head: a green pull request waited again.
+    const { api, writes } = withWorkflow(body);
+    const detail = (await checkRepoTemplates(api, 'owner/repo')).find((report) => report.name === CI_WORKFLOW)?.detail;
+    expect(detail).toContain(KEEPS);
+    expect(detail).toContain('GitHub counted as the newest run of ci on the head');
+    const outcome = (await applyRepoTemplates(api, { fullName: 'owner/repo', root: ROOT })).find((entry) => entry.name === CI_WORKFLOW)?.detail;
+    expect(outcome).toContain(KEEPS);
+    expect(writes[0]!.body.message).toContain(KEEPS);
+  });
+
+  it.each(versions.slice(0, 1))('tells a repository on $name which pull requests its push counts now, and what it reads to tell', async ({ body }) => {
     // The earlier template skipped the push's tests for a pull request into
     // any branch; the current one also reads pull requests and their events,
     // which a repository agrees to with it.

@@ -7,7 +7,9 @@ on:
   # starts on a crew pull request: see `adlc:ci` below. `ready_for_review`
   # runs the integration suites a draft skipped. `edited` is here because
   # scope-check reads the issues the body closes: an edited body left its
-  # verdict stale. Only an edit to the body runs anything, not one to the title.
+  # verdict stale. Only an edit to the body runs the checks; one to the title
+  # alone, like a label that runs nothing, reports the head's earlier `ci`
+  # again (job `earlier`).
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled, edited]
   push:
@@ -68,6 +70,50 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # A label other than `adlc:ci` and `scope:cross-cutting`, put on or taken
+  # off, or an edit of the title alone, runs nothing: the head is the one
+  # already tested. Skipped, though, its `ci` would be the newest run of `ci`
+  # on the head, which GitHub counts in place of the one that passed, and a
+  # green pull request went back to "Expected" when `needs-human` came off.
+  # So this reads what the head's earlier `ci` said (release-check.mjs,
+  # `earlierCi`), and `ci` reports it again: red as it was, green only for a
+  # pull request into main that is the only one from its branch and was never
+  # retargeted, and red after 35 minutes waiting for one still going (this
+  # job fails then too, so re-running the failed jobs looks again, rather
+  # than `ci` reading the same `timeout` from this job's kept outputs). A
+  # run that was itself a copy is never copied. With
+  # nothing to copy, `ci` is skipped, not named `ci`, as it was (GitHub lists
+  # a skipped job under its name expression's raw text). A
+  # draft is left out: its last job is `ci (draft)`, not `ci`. Its own job,
+  # not a step of `ci`: a job's name is fixed before its steps run.
+  earlier:
+    name: ci lookup
+    if: ${{ github.event_name == 'pull_request' && !github.event.pull_request.draft && ((github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != 'adlc:ci' && github.event.label.name != 'scope:cross-cutting' || github.event.action == 'edited' && !github.event.changes.body && !github.event.changes.base) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    outputs:
+      copy: ${{ steps.earlier.outputs.copy }}
+      run: ${{ steps.earlier.outputs.run }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: .github/scripts
+
+      - name: the earlier result on this head
+        id: earlier
+        timeout-minutes: 38
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          REPO_ID: ${{ github.repository_id }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_REPO_ID: ${{ github.event.pull_request.head.repo.id }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_OPENED_AT: ${{ github.event.pull_request.created_at }}
+          RUN_ID: ${{ github.run_id }}
+        run: node .github/scripts/release-check.mjs earlier
+
   changes:
     name: changes
     if: ${{ github.event_name != 'pull_request' || ((github.event.action != 'labeled' && github.event.action != 'unlabeled' && (github.event.action != 'edited' || github.event.changes.body)) || github.event.label.name == 'adlc:ci' || github.event.label.name == 'scope:cross-cutting') && (!startsWith(github.head_ref, 'agent/') || github.event.pull_request.head.repo.full_name != github.repository || contains(github.event.pull_request.labels.*.name, 'adlc:ci')) }}
@@ -481,14 +527,19 @@ jobs:
   # skipped because the change did not need it is a pass; one the change
   # needed and that did not succeed is not.
   ci:
-    name: ${{ (github.event_name != 'pull_request' || ((github.event.action != 'labeled' && github.event.action != 'unlabeled' && (github.event.action != 'edited' || github.event.changes.body)) || github.event.label.name == 'adlc:ci' || github.event.label.name == 'scope:cross-cutting') && (!startsWith(github.head_ref, 'agent/') || github.event.pull_request.head.repo.full_name != github.repository || contains(github.event.pull_request.labels.*.name, 'adlc:ci'))) && (github.event.pull_request.draft && 'ci (draft)' || 'ci') || 'ci (after approval)' }}
-    needs: [changes, secrets, check, integration, docs, cloud-module]
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || ((github.event.action != 'labeled' && github.event.action != 'unlabeled' && (github.event.action != 'edited' || github.event.changes.body)) || github.event.label.name == 'adlc:ci' || github.event.label.name == 'scope:cross-cutting') && (!startsWith(github.head_ref, 'agent/') || github.event.pull_request.head.repo.full_name != github.repository || contains(github.event.pull_request.labels.*.name, 'adlc:ci'))) }}
+    name: ${{ ((github.event_name != 'pull_request' || ((github.event.action != 'labeled' && github.event.action != 'unlabeled' && (github.event.action != 'edited' || github.event.changes.body)) || github.event.label.name == 'adlc:ci' || github.event.label.name == 'scope:cross-cutting') && (!startsWith(github.head_ref, 'agent/') || github.event.pull_request.head.repo.full_name != github.repository || contains(github.event.pull_request.labels.*.name, 'adlc:ci'))) || needs.earlier.outputs.copy != '') && (github.event.pull_request.draft && 'ci (draft)' || 'ci') || 'ci (after approval)' }}
+    needs: [earlier, changes, secrets, check, integration, docs, cloud-module]
+    if: ${{ !cancelled() && ((github.event_name != 'pull_request' || ((github.event.action != 'labeled' && github.event.action != 'unlabeled' && (github.event.action != 'edited' || github.event.changes.body)) || github.event.label.name == 'adlc:ci' || github.event.label.name == 'scope:cross-cutting') && (!startsWith(github.head_ref, 'agent/') || github.event.pull_request.head.repo.full_name != github.repository || contains(github.event.pull_request.labels.*.name, 'adlc:ci'))) || needs.earlier.outputs.copy != '') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
+      # A run that runs nothing (`earlier`) reports the head's earlier ci as
+      # it ended; every other job is skipped then.
       - name: verdict
         env:
+          EARLIER: ${{ needs.earlier.result }}
+          COPY: ${{ needs.earlier.outputs.copy }}
+          COPIED: ${{ needs.earlier.outputs.run }}
           CHANGES: ${{ needs.changes.result }}
           SECRETS: ${{ needs.secrets.result }}
           CHECK: ${{ needs.check.result }}
@@ -499,6 +550,11 @@ jobs:
           INFRA: ${{ needs.changes.outputs.infra }}
           TESTED: ${{ needs.changes.outputs.tested }}
         run: |
+          case "$COPY" in
+            success) echo "copied the head's earlier ci result (run $COPIED): green"; exit 0 ;;
+            failure) echo "copied the head's earlier ci result (run $COPIED): it did not pass"; exit 1 ;;
+            timeout) echo "the earlier run on this head (run $COPIED) had not finished after 35 minutes: re-run the failed jobs, which runs the lookup again"; exit 1 ;;
+          esac
           echo "changes=$CHANGES secrets=$SECRETS check=$CHECK integration=$INTEGRATION docs=$DOCS cloud=$CLOUD (code=$CODE infra=$INFRA already-passed=$TESTED)"
           failed=0
           [ "$CHANGES" = success ] || failed=1

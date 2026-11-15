@@ -21,6 +21,18 @@ name: ci
 # Skipped, a job named `ci` would still report a `ci` check that branch rules
 # count as passing, so the job is named `ci` only when it runs.
 #
+# A label put on or taken off a pull request, other than `adlc:ci`, runs
+# nothing again: the head it would test is the one already tested. Skipped,
+# though, its job would be the newest run of `ci` on the head, and GitHub
+# counts the newest; a green pull request went back to "Expected" when
+# `needs-human` came off it. So such a run reports the head's earlier `ci`
+# result instead (job `earlier`): red when that one was red, green only when
+# that one passed for this pull request alone, and red when it has not
+# finished after 35 minutes (re-run the failed jobs to look again). A run
+# that was itself a copy is never copied. With nothing to copy it is skipped,
+# as before, and not named `ci`: GitHub lists a skipped job under the raw text
+# of its name expression, which ends in `|| 'ci (after approval)'`.
+#
 # Runner minutes are this repository's bill, so it runs only what a change needs:
 # - a change to docs alone (docs/, Markdown at the root or directly under
 #   .github/, the licence files) passes without `make setup` or `make ci`. Set
@@ -44,7 +56,8 @@ on:
   merge_group:
 
 # It reads the code and writes nothing. The rest is for a push to ask whether
-# a pull request's run already passed the tree it lands: the run and its jobs
+# a pull request's run already passed the tree it lands, and for a label
+# change to read the head's earlier runs: the runs and their jobs
 # (`actions`), the pull requests from the run's branch (`pull-requests`), and
 # whether any of them had its base changed (`issues`, where GitHub keeps a
 # pull request's events).
@@ -63,66 +76,88 @@ concurrency:
   group: ci-${{ github.ref }}-${{ (github.event_name != 'pull_request' || ((github.event.action != 'labeled' && github.event.action != 'unlabeled') || github.event.label.name == 'adlc:ci') && (!startsWith(github.head_ref, 'agent/') || github.event.pull_request.head.repo.full_name != github.repository || contains(github.event.pull_request.labels.*.name, 'adlc:ci'))) && 'run' || 'deferred' }}
   cancel-in-progress: true
 
+
 jobs:
-  ci:
-    name: ${{ (github.event_name != 'pull_request' || ((github.event.action != 'labeled' && github.event.action != 'unlabeled') || github.event.label.name == 'adlc:ci') && (!startsWith(github.head_ref, 'agent/') || github.event.pull_request.head.repo.full_name != github.repository || contains(github.event.pull_request.labels.*.name, 'adlc:ci'))) && 'ci' || 'ci (after approval)' }}
-    if: ${{ github.event_name != 'pull_request' || ((github.event.action != 'labeled' && github.event.action != 'unlabeled') || github.event.label.name == 'adlc:ci') && (!startsWith(github.head_ref, 'agent/') || github.event.pull_request.head.repo.full_name != github.repository || contains(github.event.pull_request.labels.*.name, 'adlc:ci')) }}
+  # What `ci` reads before it starts, and it has to be a job of its own: a
+  # job's name is fixed before its steps run, and a label change's `ci` is
+  # named `ci` only when it found an earlier result to copy. It checks out
+  # nothing, so it runs none of the pull request's code.
+  earlier:
+    name: ci lookup
+    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' && (github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.event.label.name != 'adlc:ci' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 40
+    outputs:
+      vouched: ${{ steps.vouched.outputs.vouched }}
+      copy: ${{ steps.vouched.outputs.copy }}
+      run: ${{ steps.vouched.outputs.run }}
     steps:
-      # Two commits: a pull request's merge commit and the base it is tested
-      # against, or a push and the commit before it.
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          fetch-depth: 2
-
-      # What a pull request's run passed, and what a push lands, are named by
-      # their tree: the squash of an up-to-date pull request is a new commit
-      # with its head's tree.
-      - name: the tree it tests
-        id: tree
-        run: echo "tree=$(git rev-parse 'HEAD^{tree}')" >> "$GITHUB_OUTPUT"
-
-      # The push to the default branch skips `make setup` and `make ci` for a
-      # tree a pull request's run already passed, which leaves an artifact
-      # named after the tree. The name proves nothing: any run can upload one,
-      # and a pull request into some other branch runs that branch's copy of
-      # this file, which anyone who can push there writes. So only this
-      # counts: a passed run of this file for a pull request of this
-      # repository into the default branch, whose head has this tree and
-      # whose `make ci` passed. Nothing in a run says which pull request it
-      # was for, and two can share a head, one into a branch whose copy
-      # passes anything and one into the default branch; so every pull
-      # request ever opened from the run's branch must be into the default
-      # branch, and none may have had its base changed. Anything else, a
-      # question GitHub does not answer, or a stalled one, runs the tests:
-      # this step never fails CI.
+      # One lookup, two questions, and the same ties for both.
       #
-      # It is the runner's own node and gh, not an action: the runner fetches
-      # every action a job names before its first step, a skipped step's
-      # too, so one an organization has not allowed fails every run.
+      # On a push to the default branch: did a pull request's run already pass
+      # the tree this push lands? Its run left an artifact named after the
+      # tree. The name proves nothing: any run can upload one, and a pull
+      # request into some other branch runs that branch's copy of this file,
+      # which anyone who can push there writes. So only this counts: a passed
+      # run of this file for a pull request of this repository into the
+      # default branch, whose head has this tree and whose `make ci` passed.
+      # Nothing in a run says which pull request it was for, and two can share
+      # a head, one into a branch whose copy passes anything and one into the
+      # default branch; so every pull request ever opened from the run's
+      # branch must be into the default branch, and none may have had its base
+      # changed. Anything else, a question GitHub does not answer, or one that
+      # takes more than three minutes, runs the tests.
+      #
+      # On a label change: what did `ci` last say on this head? The newest
+      # run of this file for the head whose `ci` job finished, not cancelled,
+      # decides: a red one is copied as it is, and a green one only under the
+      # ties above and with this the only pull request ever opened from its
+      # branch (the merge line judges a `ci` by when its run was made, and a
+      # copy is made later than what it copies). One still going is waited
+      # for, up to 35 minutes. A run that was itself a copy (its `ci
+      # lookup` ran) is passed over: what it copied is on the head already,
+      # and its red may be a wait that timed out, which tested nothing.
+      # Nothing found, a fork's pull request, or GitHub not answering copies
+      # nothing.
+      #
+      # This step never fails CI; a wait that ran out fails the next one. It is the runner's own node and gh, not an
+      # action: the runner fetches every action a job names before its first
+      # step, a skipped step's too, so one an organization has not allowed
+      # fails every run.
       - name: already passed on its pull request
         id: vouched
-        if: github.event_name == 'push'
         continue-on-error: true
-        timeout-minutes: 3
+        timeout-minutes: 38
         env:
           GH_TOKEN: ${{ github.token }}
+          MODE: ${{ github.event_name == 'push' && 'push' || 'label' }}
           REPO: ${{ github.repository }}
           REPO_ID: ${{ github.repository_id }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          TREE: ${{ steps.tree.outputs.tree }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_REPO_ID: ${{ github.event.pull_request.head.repo.id }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_OPENED_AT: ${{ github.event.pull_request.created_at }}
+          RUN_ID: ${{ github.run_id }}
         run: |
           node - <<'JS'
           const { execFileSync } = require('node:child_process');
           const { appendFileSync } = require('node:fs');
           // What GitHub answers is data: a branch's name or a run's path is
           // compared and printed, never run.
-          const { REPO: repo, REPO_ID: repoId, DEFAULT_BRANCH: base, TREE: tree } = process.env;
+          const { MODE: mode, REPO: repo, REPO_ID: repoId, DEFAULT_BRANCH: base, HEAD_SHA: head } = process.env;
+          const started = Date.now();
+          // A push's lookup is held to three minutes in all, a call to
+          // GitHub included, so a slow answer runs the tests rather than
+          // holding them up; each call is held to a minute.
+          const PUSH_BOUND = 3 * 60_000;
           function gh(args) {
+            const left = mode === 'push' ? started + PUSH_BOUND - Date.now() : 60_000;
+            if (left <= 0) throw new Error('it took more than three minutes');
             let out;
             try {
-              out = execFileSync('gh', ['api', ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 256 * 1024 * 1024 });
+              out = execFileSync('gh', ['api', ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 256 * 1024 * 1024, timeout: Math.min(60_000, left) });
             } catch (error) {
               throw new Error(`gh api ${args.at(-1)}: ${String(error.stderr ?? '').trim().split('\n')[0] || error.message}`);
             }
@@ -134,20 +169,23 @@ jobs:
           const all = (path) => gh(['--paginate', '--slurp', path]).flat();
           const ours = (id) => String(id) === repoId;
           const where = (pull) => (ours(pull.base?.repo?.id) ? pull.base?.ref : `${pull.base?.ref} of another repository`);
+          const output = (values) => appendFileSync(process.env.GITHUB_OUTPUT, Object.entries(values).map(([key, value]) => `${key}=${value}\n`).join(''));
+          const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+          const jobsOf = (runId) => api(`repos/${repo}/actions/runs/${runId}/jobs?per_page=100`).jobs ?? [];
+          const ciOf = (jobs) => jobs.filter((job) => job.name === 'ci').at(-1);
+          const ciJob = (runId) => ciOf(jobsOf(runId));
+          // A pull request's run whose lookup ran copied an earlier result.
+          const copied = (jobs) => jobs.some((job) => job.name === 'ci lookup' && job.conclusion !== 'skipped');
 
-          // Why the run that uploaded this artifact does not vouch for the
-          // tree, or null when it does.
-          function refusal(artifact) {
-            const id = artifact.workflow_run?.id;
-            if (!id) return 'it names no run';
-            if (!ours(artifact.workflow_run.head_repository_id)) return "a fork's run uploaded it";
-            const run = api(`repos/${repo}/actions/runs/${id}`);
+          // Why a pull request's run of this file is not tied to pull
+          // requests into the default branch alone, or null when it is. With
+          // `only`, that pull request must also be the only one ever opened
+          // from the run's branch.
+          function tiedToPullsIntoDefault(run, only) {
             if (run.event !== 'pull_request') return `it ran for a ${run.event}, not a pull request`;
             if (run.path !== '.github/workflows/ci.yml') return `it ran ${run.path}, not .github/workflows/ci.yml`;
-            if (run.conclusion !== 'success') return `it ended ${run.conclusion}`;
             if (!ours(run.head_repository?.id)) return "it ran for a fork's branch";
             if (!run.head_branch) return 'it names no branch';
-            if (api(`repos/${repo}/git/commits/${run.head_sha}`).tree?.sha !== tree) return `its head ${run.head_sha} is another tree`;
             // Tied to its pull request by its branch as well as its head: a
             // run's `pull_requests` is empty once the pull request merged.
             const branch = run.head_branch;
@@ -162,45 +200,185 @@ jobs:
             const pulls = [...withHead, ...fromBranch];
             const elsewhere = pulls.find((pull) => pull.base?.ref !== base || !ours(pull.base?.repo?.id));
             if (elsewhere) return `pull request #${elsewhere.number} from ${branch} is into ${where(elsewhere)}, not ${base}`;
-            for (const number of new Set(pulls.map((pull) => pull.number))) {
+            const numbers = new Set(pulls.map((pull) => pull.number));
+            const other = only === undefined ? undefined : [...numbers].find((number) => String(number) !== String(only));
+            if (other !== undefined) return `pull request #${other} was opened from ${branch} too`;
+            for (const number of numbers) {
               const events = all(`repos/${repo}/issues/${number}/events?per_page=100`);
               if (events.some((event) => event.event === 'base_ref_changed')) return `pull request #${number} from ${branch} had its base changed`;
             }
-            const { jobs = [] } = api(`repos/${repo}/actions/runs/${id}/jobs?per_page=100`);
-            const job = jobs.filter((candidate) => candidate.name === 'ci').at(-1);
+            return null;
+          }
+
+          // A push: why the run that uploaded this tree's artifact does not
+          // vouch for it, or null when it does.
+          function refusal(artifact, tree) {
+            const id = artifact.workflow_run?.id;
+            if (!id) return 'it names no run';
+            if (!ours(artifact.workflow_run.head_repository_id)) return "a fork's run uploaded it";
+            const run = api(`repos/${repo}/actions/runs/${id}`);
+            if (run.conclusion !== 'success') return `it ended ${run.conclusion}`;
+            if (api(`repos/${repo}/git/commits/${run.head_sha}`).tree?.sha !== tree) return `its head ${run.head_sha} is another tree`;
+            const tie = tiedToPullsIntoDefault(run);
+            if (tie) return tie;
+            const job = ciJob(id);
             if (job?.conclusion !== 'success') return `its ci job did not pass (${job?.conclusion ?? 'none'})`;
             const tests = job.steps?.find((step) => step.name === 'make ci')?.conclusion;
             if (tests !== 'success') return `its make ci did not pass (${tests ?? 'not run'})`;
             return null;
           }
 
-          let vouched = false;
-          try {
-            const { artifacts = [] } = api(`repos/${repo}/actions/artifacts?name=tested-tree-${tree}&per_page=100`);
-            for (const artifact of artifacts) {
-              const why = refusal(artifact);
-              if (why === null) {
-                console.log(`tree ${tree} passed in run ${artifact.workflow_run.id}, of a pull request into ${base}; nothing to run again`);
-                vouched = true;
-                break;
+          function vouch() {
+            let vouched = false;
+            let tree = '';
+            try {
+              tree = api(`repos/${repo}/git/commits/${head}`).tree?.sha;
+              if (!tree) throw new Error(`GitHub names no tree for ${head}`);
+              const { artifacts = [] } = api(`repos/${repo}/actions/artifacts?name=tested-tree-${tree}&per_page=100`);
+              for (const artifact of artifacts) {
+                if (Date.now() - started > PUSH_BOUND) throw new Error('it took more than three minutes');
+                const why = refusal(artifact, tree);
+                if (why === null) {
+                  console.log(`tree ${tree} passed in run ${artifact.workflow_run.id}, of a pull request into ${base}; nothing to run again`);
+                  vouched = true;
+                  break;
+                }
+                console.log(`run ${artifact.workflow_run?.id} does not count: ${why}`);
               }
-              console.log(`run ${artifact.workflow_run?.id} does not count: ${why}`);
+              if (!vouched) console.log(`no pull request's run into ${base} passed tree ${tree}; running the tests`);
+            } catch (error) {
+              console.log(`could not tell whether a pull request's run passed tree ${tree || head} (${error.message}); running the tests`);
             }
-            if (!vouched) console.log(`no pull request's run into ${base} passed tree ${tree}; running the tests`);
-          } catch (error) {
-            console.log(`could not tell whether a pull request's run passed tree ${tree} (${error.message}); running the tests`);
+            output({ vouched });
           }
-          appendFileSync(process.env.GITHUB_OUTPUT, `vouched=${vouched}\n`);
+
+          // A label change: what to copy, as { copy, run }.
+          function earlier() {
+            const wait = Number(process.env.EARLIER_WAIT_MS || 35 * 60_000);
+            const poll = Number(process.env.EARLIER_POLL_MS || 20_000);
+            const number = process.env.PR_NUMBER;
+            if (!ours(process.env.HEAD_REPO_ID)) return { why: "a fork's pull request: nothing to copy" };
+            // A run made before the pull request opened was for another one.
+            const opened = Date.parse(process.env.PR_OPENED_AT ?? '');
+            if (Number.isNaN(opened)) return { why: 'the event names no time the pull request opened: nothing to copy' };
+            const runs = (api(`repos/${repo}/actions/runs?event=pull_request&head_sha=${head}&per_page=100`).workflow_runs ?? [])
+              .filter(
+                (run) =>
+                  run.path === '.github/workflows/ci.yml' &&
+                  run.head_sha === head &&
+                  run.head_branch === process.env.HEAD_REF &&
+                  ours(run.head_repository?.id) &&
+                  String(run.id) !== String(process.env.RUN_ID) &&
+                  !(Date.parse(run.created_at) < opened),
+              )
+              .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)) || b.id - a.id);
+            for (let run of runs) {
+              let jobs = jobsOf(run.id);
+              let job = ciOf(jobs);
+              // Still going: its `ci` may yet appear, or finish.
+              while (!copied(jobs) && job?.status !== 'completed' && !(job === undefined && run.status === 'completed')) {
+                if (Date.now() - started >= wait) return { copy: 'timeout', run: run.id, why: `run ${run.id} on this head had not finished after ${Math.round(wait / 60_000)} minutes` };
+                console.log(`run ${run.id} on this head is still going; waiting for it`);
+                sleep(poll);
+                run = api(`repos/${repo}/actions/runs/${run.id}`);
+                jobs = jobsOf(run.id);
+                job = ciOf(jobs);
+              }
+              if (copied(jobs)) {
+                console.log(`run ${run.id} copied an earlier result; passing over it`);
+                continue;
+              }
+              // No `ci` (a skipped `ci (after approval)`, or a lookup alone),
+              // or a cancelled one, which a newer run superseded.
+              if (!job || job.conclusion === 'cancelled') {
+                console.log(`run ${run.id} has no ci that finished (${job?.conclusion ?? 'none'}); passing over it`);
+                continue;
+              }
+              // Copying red launders nothing, so its ties are not asked.
+              if (job.conclusion !== 'success') return { copy: 'failure', run: run.id, why: `ci ended ${job.conclusion} on this head in run ${run.id}` };
+              const tie = tiedToPullsIntoDefault(run, number);
+              if (tie) return { run: run.id, why: `ci passed on this head in run ${run.id}, which is not copied: ${tie}` };
+              return { copy: 'success', run: run.id, why: `ci passed on this head in run ${run.id}, for pull request #${number} alone` };
+            }
+            return { why: 'no earlier run of ci finished on this head: nothing to copy' };
+          }
+
+          if (mode === 'push') vouch();
+          else {
+            let found;
+            try {
+              found = earlier();
+            } catch (error) {
+              found = { why: `could not read the earlier runs on this head (${error.message}): nothing to copy` };
+            }
+            console.log(found.why);
+            output({ copy: found.copy ?? '', run: found.run ?? '' });
+          }
           JS
+
+      # A wait that ran out tested nothing, so this job fails as well as
+      # `ci`: "re-run failed jobs" (OpenADLC's own retry, and GitHub's
+      # button) then runs the lookup again. Were only `ci` red, its re-run
+      # would read the same `timeout` from this job's kept outputs.
+      - name: the earlier run had not finished
+        if: steps.vouched.outputs.copy == 'timeout'
+        run: |
+          echo "the earlier run on this head had not finished after 35 minutes: re-run the failed jobs to look again"
+          exit 1
+
+  ci:
+    name: ${{ ((github.event_name != 'pull_request' || ((github.event.action != 'labeled' && github.event.action != 'unlabeled') || github.event.label.name == 'adlc:ci') && (!startsWith(github.head_ref, 'agent/') || github.event.pull_request.head.repo.full_name != github.repository || contains(github.event.pull_request.labels.*.name, 'adlc:ci'))) || needs.earlier.outputs.copy != '') && 'ci' || 'ci (after approval)' }}
+    needs: earlier
+    # `!cancelled()`: a push runs its tests when the lookup failed or was
+    # skipped, as a merge group's is.
+    if: ${{ !cancelled() && ((github.event_name != 'pull_request' || ((github.event.action != 'labeled' && github.event.action != 'unlabeled') || github.event.label.name == 'adlc:ci') && (!startsWith(github.head_ref, 'agent/') || github.event.pull_request.head.repo.full_name != github.repository || contains(github.event.pull_request.labels.*.name, 'adlc:ci'))) || needs.earlier.outputs.copy != '') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      # A label change: the head's earlier `ci`, as it ended. Nothing below
+      # runs: `what this change needs` says so.
+      - name: the earlier result on this head
+        id: earlier
+        if: needs.earlier.outputs.copy != ''
+        env:
+          COPY: ${{ needs.earlier.outputs.copy }}
+          COPIED: ${{ needs.earlier.outputs.run }}
+        run: |
+          case "$COPY" in
+            success) echo "ci passed on this head in run $COPIED; copied, with nothing to run again" ;;
+            timeout) echo "the earlier run on this head had not finished after 35 minutes: re-run the failed jobs to look again"; exit 1 ;;
+            *) echo "ci did not pass on this head in run $COPIED; copied"; exit 1 ;;
+          esac
+
+      # Two commits: a pull request's merge commit and the base it is tested
+      # against, or a push and the commit before it.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        if: needs.earlier.outputs.copy == ''
+        with:
+          fetch-depth: 2
+
+      # What a pull request's run passed, and what a push lands, are named by
+      # their tree: the squash of an up-to-date pull request is a new commit
+      # with its head's tree.
+      - name: the tree it tests
+        id: tree
+        if: needs.earlier.outputs.copy == ''
+        run: echo "tree=$(git rev-parse 'HEAD^{tree}')" >> "$GITHUB_OUTPUT"
 
       - name: what this change needs
         id: needs
         env:
           EVENT: ${{ github.event_name }}
           BEFORE: ${{ github.event.before }}
-          VOUCHED: ${{ steps.vouched.outputs.vouched }}
+          VOUCHED: ${{ needs.earlier.outputs.vouched }}
+          COPY: ${{ needs.earlier.outputs.copy }}
         run: |
           run=true
+          if [ -n "$COPY" ]; then
+            echo "copied the head's earlier ci result; nothing to run"
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           if [ "$VOUCHED" = true ]; then
             echo "this tree passed on its pull request; nothing to run again"
             run=false
