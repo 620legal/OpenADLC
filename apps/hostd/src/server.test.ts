@@ -89,7 +89,7 @@ function logins() {
 
 async function start(
   service: ReturnType<typeof logins> | undefined,
-  parts: { runner?: object; driver?: object; taskDatabases?: object; hostChecks?: object; releaseAccount?: object | null } = {},
+  parts: { runner?: object; driver?: object; taskDatabases?: object; hostChecks?: object; releaseAccount?: object | null; releaseRuns?: object | null } = {},
 ) {
   const { createHostdServer } = await import('./server.js');
   const { RegistryCredentials } = await import('./registry.js');
@@ -107,6 +107,7 @@ async function start(
     ...(parts.taskDatabases ? { taskDatabases: parts.taskDatabases as never } : {}),
     ...(parts.hostChecks ? { hostChecks: parts.hostChecks as never } : {}),
     ...(parts.releaseAccount !== undefined ? { releaseAccount: parts.releaseAccount as never } : {}),
+    ...(parts.releaseRuns !== undefined ? { releaseRuns: parts.releaseRuns as never } : {}),
   });
 
   await new Promise<void>((resolve) => http.listen(0, '127.0.0.1', resolve));
@@ -121,6 +122,11 @@ async function start(
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       });
       return { status: response.status, body: (await response.json()) as Record<string, unknown> };
+    },
+    /** A call whose answer is not JSON: its status, headers and bytes. */
+    async raw(method: string, path: string, headers: Record<string, string> = PLATFORM) {
+      const response = await fetch(`http://127.0.0.1:${port}${path}`, { method, headers });
+      return { status: response.status, headers: response.headers, bytes: Buffer.from(await response.arrayBuffer()) };
     },
   };
 }
@@ -638,6 +644,101 @@ describe('the release account, through hostd', () => {
       probe: { ok: false, account: 'openadlc-hostcheck', problem: 'host_check_account', detail: 'the same account' },
     });
     expect(releaseAccount.probe).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('a release build, through hostd (#343)', () => {
+  const SHA = 'd'.repeat(40);
+  const START = {
+    runId: 'run-1',
+    repo: 'acme/app',
+    sha: SHA,
+    defaultBranch: 'main',
+    versionFile: 'VERSION',
+    versionKey: null,
+    after: '1.3.0',
+    command: 'make release',
+    artifact: 'build/App.zip',
+    timeoutMinutes: 180,
+    clean: false,
+    bot: 'atlas',
+  };
+
+  async function releaseRuns() {
+    const { ReleaseBusy } = await import('./release-run.js');
+    const folder = mkdtempSync(join(tmpdir(), 'openadlc-server-artifact-'));
+    writeFileSync(join(folder, 'App.zip'), 'zip bytes');
+    let busy = false;
+    return {
+      folder,
+      start: vi.fn((request: typeof START) => {
+        if (busy) throw new ReleaseBusy(request.repo);
+        busy = true;
+        return { ...request, state: 'running' };
+      }),
+      get: vi.fn((runId: string) => (runId === 'run-1' ? { ...START, state: 'running' } : null)),
+      cancel: vi.fn(() => true),
+      artifact: vi.fn((runId: string) =>
+        runId === 'run-1'
+          ? { runId, repo: 'acme/app', sha: SHA, version: '1.4.0', sha256: 'e'.repeat(64), bytes: 9, artifactName: 'App.zip', finishedAt: '', path: join(folder, 'App.zip') }
+          : null,
+      ),
+      deleteArtifact: vi.fn(() => true),
+    };
+  }
+
+  it('is refused to a caller without the install’s secret, and starts nothing', async () => {
+    const runs = await releaseRuns();
+    server = await start(undefined, { releaseRuns: runs });
+    expect((await server.call('POST', '/release/runs', {}, START)).status).toBe(401);
+    expect((await server.call('GET', '/release/runs/run-1/artifact', {})).status).toBe(401);
+    expect(runs.start).not.toHaveBeenCalled();
+    expect(runs.artifact).not.toHaveBeenCalled();
+    rmSync(runs.folder, { recursive: true, force: true });
+  });
+
+  it('answers 501 where no release account is named', async () => {
+    server = await start(undefined);
+    expect((await server.call('POST', '/release/runs', PLATFORM, START)).status).toBe(501);
+    await server.close();
+    server = await start(undefined, { releaseRuns: null });
+    expect((await server.call('GET', '/release/runs/run-1')).status).toBe(501);
+  });
+
+  it('starts, reads and cancels a run, and refuses a second start with 409', async () => {
+    const runs = await releaseRuns();
+    server = await start(undefined, { releaseRuns: runs });
+    expect((await server.call('POST', '/release/runs', PLATFORM, START)).status).toBe(202);
+    expect(runs.start).toHaveBeenCalledWith(START);
+    const second = await server.call('POST', '/release/runs', PLATFORM, { ...START, runId: 'run-2' });
+    expect(second).toMatchObject({ status: 409, body: { error: expect.stringContaining('a release of acme/app is building') } });
+    expect((await server.call('GET', '/release/runs/run-1')).body).toMatchObject({ run: { state: 'running', sha: SHA } });
+    expect((await server.call('GET', '/release/runs/run-9')).status).toBe(404);
+    expect((await server.call('DELETE', '/release/runs/run-1')).body).toEqual({ cancelled: true });
+    expect(runs.cancel).toHaveBeenCalledWith('run-1');
+    rmSync(runs.folder, { recursive: true, force: true });
+  });
+
+  it('refuses a start it cannot check, such as a time limit over a day', async () => {
+    const runs = await releaseRuns();
+    server = await start(undefined, { releaseRuns: runs });
+    expect((await server.call('POST', '/release/runs', PLATFORM, { ...START, timeoutMinutes: 1441 })).status).toBe(400);
+    expect((await server.call('POST', '/release/runs', PLATFORM, { ...START, artifact: '../../etc/passwd' })).status).toBe(400);
+    expect(runs.start).not.toHaveBeenCalled();
+    rmSync(runs.folder, { recursive: true, force: true });
+  });
+
+  it('streams hostd’s own copy of the artifact, with its hash, and deletes it', async () => {
+    const runs = await releaseRuns();
+    server = await start(undefined, { releaseRuns: runs });
+    const got = await server.raw('GET', '/release/runs/run-1/artifact');
+    expect(got.status).toBe(200);
+    expect(got.bytes.toString('utf8')).toBe('zip bytes');
+    expect(got.headers.get('x-openadlc-sha256')).toBe('e'.repeat(64));
+    expect(got.headers.get('content-type')).toBe('application/octet-stream');
+    expect((await server.raw('GET', '/release/runs/run-2/artifact')).status).toBe(404);
+    expect((await server.call('DELETE', '/release/runs/run-1/artifact')).body).toEqual({ deleted: true });
+    rmSync(runs.folder, { recursive: true, force: true });
   });
 });
 

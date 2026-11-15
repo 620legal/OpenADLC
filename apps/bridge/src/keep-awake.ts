@@ -103,7 +103,7 @@ export function onPath(name: string, path = process.env.PATH ?? ''): boolean {
     });
 }
 
-const busy = (counts: InFlight): boolean => counts.tasks > 0 || counts.merges > 0 || counts.deploys > 0;
+const busy = (counts: InFlight): boolean => counts.tasks > 0 || counts.merges > 0 || counts.deploys > 0 || counts.releases > 0;
 
 export class KeepAwake {
   private available: boolean;

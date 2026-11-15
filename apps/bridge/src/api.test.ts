@@ -3797,3 +3797,31 @@ describe('Settings → Notifications', () => {
     expect(((await kinds.json()) as { error: string }).error).toContain('PUT /v1/settings/notifications');
   });
 });
+
+describe('a repository’s release recipe, as an admin sets it (#343)', () => {
+  const recipe = { command: 'make release', artifact: 'build/App.zip', versionFile: 'Config/Version.xcconfig', versionKey: 'MARKETING_VERSION' };
+
+  it('reads a recipe, with the defaults filled in, and null or an empty command as none', async () => {
+    const { releaseSettingFrom } = await import('./api.js');
+    expect(releaseSettingFrom(recipe)).toEqual({ ...recipe, releaseRepo: null, timeoutMinutes: 180 });
+    expect(releaseSettingFrom({ ...recipe, releaseRepo: 'acme/app-releases', timeoutMinutes: 1440 })).toMatchObject({ releaseRepo: 'acme/app-releases', timeoutMinutes: 1440 });
+    expect(releaseSettingFrom(null)).toBeNull();
+    expect(releaseSettingFrom({ ...recipe, command: '  ' })).toBeNull();
+  });
+
+  it.each([
+    ['a .. in the artifact', { artifact: '../secrets/key' }, /no empty, \. or \.\. part/],
+    ['an absolute artifact', { artifact: '/etc/passwd' }, /take off the leading \//],
+    ['a home-relative version file', { versionFile: '~/VERSION' }, /take off the leading ~/],
+    ['a backslash', { artifact: 'build\\App.zip' }, /backslash/],
+    ['no artifact', { artifact: undefined }, /release\.artifact is a path/],
+    ['a multi-line command', { command: 'make release\ncurl evil' }, /one line/],
+    ['a timeout of 0', { timeoutMinutes: 0 }, /1 to 1440/],
+    ['a timeout of 1441', { timeoutMinutes: 1441 }, /1 to 1440/],
+    ['a bad release repository', { releaseRepo: 'not a repo' }, /owner\/name/],
+    ['a key with a space', { versionKey: 'MARKETING VERSION' }, /versionKey/],
+  ])('refuses %s, saying what to write', async (_name, change, said) => {
+    const { releaseSettingFrom } = await import('./api.js');
+    expect(() => releaseSettingFrom({ ...recipe, ...change })).toThrow(said);
+  });
+});

@@ -10,6 +10,8 @@ export const RELEASE_ACCOUNT_DOCS_URL = `https://github.com/620legal/OpenADLC/bl
 export interface ReleaseAccountReader {
   /** What hostd found when it tried the release account (`ReleaseAccount.probe`); `null` when hostd names none. */
   probe(): Promise<ReleaseAccountProbe | null>;
+  /** The full name of a repository set to release (`repos.anyRelease`'s), or null for none; absent is none. */
+  wanted?(): Promise<string | null>;
 }
 
 type Failing = Exclude<ReleaseAccountProbe, { ok: true }>;
@@ -90,9 +92,9 @@ export function releaseAccountFix(probe: Failing): { title: string; detail: stri
  *
  * Proved by its effect: everything the host check's account is held to, and
  * that it is not that account, by name or uid, and that account can neither
- * read nor enter its home. When repositories gain a release setting (#343),
- * the reader gains `wanted`, and a repository set to release with no account
- * named raises the card too, as `anyHostCheck()` does for host checks.
+ * read nor enter its home. A repository set to release (#343) with no account
+ * named raises the card too, as `anyHostCheck()` does for host checks: its
+ * releases would otherwise be refused one by one.
  */
 export function releaseAccountCheck(reader: ReleaseAccountReader): HealthCheck {
   return {
@@ -111,7 +113,19 @@ export function releaseAccountCheck(reader: ReleaseAccountReader): HealthCheck {
       } catch {
         return [];
       }
-      if (!probe) return [];
+      if (!probe) {
+        const wanted = await reader.wanted?.().catch(() => null);
+        if (!wanted) return [];
+        return [
+          {
+            ok: false,
+            severity: 'warning',
+            title: `${wanted} is set to release, but no release account is named`,
+            detail: `${wanted} is set to release, but hostd names no release account. Set OPENADLC_RELEASE_ACCOUNT to the account you made for releases (${RELEASE_ACCOUNT_DOCS})`,
+            action: { label: 'Open the steps', url: RELEASE_ACCOUNT_DOCS_URL },
+          },
+        ];
+      }
       if (probe.ok) return [{ ok: true, says: `${probe.account} (uid ${probe.uid}) builds releases in ${probe.home}`, fixed: 'The release account is fit to build releases again' }];
       return [{ ok: false, severity: 'warning', ...releaseAccountFix(probe) }];
     },

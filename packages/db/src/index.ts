@@ -85,3 +85,7 @@ export type { PushDevice } from './store/push-devices.js';
 export { AccountLinkedElsewhere } from './store/people.js';
 export type { Person, PersonInput } from './store/people.js';
 export type { PersonAccount } from './store/person-accounts.js';
+export * as releaseRuns from './store/release-runs.js';
+export type { ReleaseRun, ReleaseRunState } from './store/release-runs.js';
+export { ReleaseAlreadyRunning } from './store/release-runs.js';
+export type { ReleaseSetting } from './store/repos.js';

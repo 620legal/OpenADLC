@@ -445,10 +445,12 @@ export function defaultChecks(wiring: HealthWiring): HealthCheck[] {
       wanted: () => repos.anyHostCheck(),
       probe: async () => (await hostd.hostCheckAccount()).probe,
     }),
-    // The account a release is built in, asked of hostd only while it names
-    // one (`OPENADLC_RELEASE_ACCOUNT`, #341, docs/adr/0068).
+    // The account a release is built in, asked of hostd while it names one
+    // (`OPENADLC_RELEASE_ACCOUNT`, #341, docs/adr/0068), and wanted while a
+    // repository is set to release (#343).
     releaseAccountCheck({
       probe: async () => (await hostd.releaseAccount()).probe,
+      wanted: () => repos.anyRelease(),
     }),
   ];
 }

@@ -23,6 +23,7 @@ import { TaskRunner } from './task-runner.js';
 import { LocalCi, bridgeReporter } from './local-ci.js';
 import { HostChecks, dockerSocketsOf, hostCheckReporter } from './host-check.js';
 import { ReleaseAccount } from './release-account.js';
+import { ReleaseRuns, releaseReporter } from './release-run.js';
 import { gitAuthEnv } from './worktree.js';
 import { TokenClient } from './token-client.js';
 
@@ -276,6 +277,23 @@ async function main(): Promise<void> {
   // The account releases are built in, only where one is named: unnamed,
   // this install builds none (docs/adr/0068).
   const releaseAccount = config.releaseAccount ? new ReleaseAccount({ account: config.releaseAccount, hostCheckAccount, places: guarded }) : null;
+  // A release build of one pinned commit in that account (`release-run.ts`,
+  // docs/adr/0070): its mirror and its artifacts under the work root, which
+  // the account cannot enter. The token only fetches the default branch into
+  // hostd's mirror, as the host check's does.
+  const releaseRuns = releaseAccount
+    ? new ReleaseRuns({
+        account: releaseAccount,
+        installId: config.installId ?? 'default',
+        workRoot: config.workRoot,
+        remote: (repoFullName) =>
+          process.env[`OPENADLC_REMOTE_${repoFullName.replace(/[^A-Za-z0-9]/g, '_').toUpperCase()}`] ||
+          process.env.OPENADLC_SCRIPTED_REPO_PATH ||
+          `https://github.com/${repoFullName}.git`,
+        fetchAuth: async (bot, repoFullName, remote) => (bot ? gitAuthEnv(remote, (await tokens.tokenForTask(bot, repoFullName)).token) : {}),
+        report: releaseReporter(config.bridgeUrl, secretStore),
+      })
+    : null;
 
   const attachTokens = new AttachTokens();
   // The file a cloud host's unit starts hostd's image from, which the
@@ -330,6 +348,7 @@ async function main(): Promise<void> {
     localCi,
     hostChecks,
     releaseAccount,
+    releaseRuns,
     ...(restartOntoImage ? { restartOntoImage } : {}),
     egress: { probe: new EgressProbe(egressProxyToAsk()), list: egressList },
     ...(databases ? { taskDatabases: databases } : {}),

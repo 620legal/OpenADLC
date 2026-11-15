@@ -1787,6 +1787,15 @@ describe('the gates of pull requests in review, worked out again', () => {
     expect(actions).toContain('openadlc-testbed#2: host check started on abc123');
   });
 
+  it('sweeps release builds hostd lost, beside the host checks (#343)', async () => {
+    const releaseRuns = { sweep: vi.fn(async () => ['app: release of aaaaaaa was lost by hostd']) };
+    const waiting = sweep({ standing: null, gate: { state: 'pending', description: 'waiting on openadlc-sydney-janedoe' } });
+    waiting.scheduler.useReleaseRuns(releaseRuns);
+    const actions = await waiting.scheduler.settleGates();
+    expect(releaseRuns.sweep).toHaveBeenCalledTimes(1);
+    expect(actions).toContain('app: release of aaaaaaa was lost by hostd');
+  });
+
   it('finds the pull request from GitHub, and records it on the issue that had none', async () => {
     const { scheduler } = sweep({
       standing: { state: 'pending', description: 'waiting on irisexampleco' },
