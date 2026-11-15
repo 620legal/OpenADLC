@@ -71,11 +71,11 @@ describe('the commands', () => {
   const ids = (role: 'admin' | 'user', paused: boolean | null) => paletteCommands({ role, paused }).map((command) => command.id);
 
   it('go to every page an admin has, Needs you among them', () => {
-    expect(ids('admin', false)).toEqual(['go:board', 'go:needs-you', 'go:crew', 'go:costs', 'go:insights', 'go:settings', 'new-request', 'board-view', 'pause']);
+    expect(ids('admin', false)).toEqual(['go:board', 'go:needs-you', 'go:crew', 'go:costs', 'go:insights', 'go:releases', 'go:settings', 'new-request', 'board-view', 'pause']);
   });
 
   it('leave Settings, Pause work and Resume out for a user', () => {
-    expect(ids('user', true)).toEqual(['go:board', 'go:needs-you', 'go:crew', 'go:costs', 'go:insights', 'new-request', 'board-view']);
+    expect(ids('user', true)).toEqual(['go:board', 'go:needs-you', 'go:crew', 'go:costs', 'go:insights', 'go:releases', 'new-request', 'board-view']);
   });
 
   it('group the board the other way from how it is, for an admin and a user alike', () => {
