@@ -109,6 +109,10 @@ function stubGitHub(options: {
   published?: Release[];
   rulesets?: Record<string, unknown>[];
   fullName?: (repo: string) => string;
+  /** The digest GitHub answers for an uploaded asset, in place of the bytes' own. */
+  digest?: (name: string) => string;
+  /** Applies a publish before failing it, as a timed-out PATCH GitHub did act on. */
+  failAfterPublish?: () => Error;
 } = {}) {
   const calls: Call[] = [];
   const tags = new Map<string, string>(Object.entries(options.tags ?? {}));
@@ -170,6 +174,7 @@ function stubGitHub(options: {
           if (method === 'GET') return view(release) as T;
           if (method === 'PATCH') {
             release.draft = (body as { draft: boolean }).draft;
+            if (!release.draft && options.failAfterPublish) throw options.failAfterPublish();
             return view(release) as T;
           }
           if (method === 'DELETE') {
@@ -192,7 +197,7 @@ function stubGitHub(options: {
           name: stored,
           state: 'uploaded',
           size: text.length,
-          digest: `sha256:${createHash('sha256').update(text).digest('hex')}`,
+          digest: options.digest ? options.digest(stored) : `sha256:${createHash('sha256').update(text).digest('hex')}`,
           browser_download_url: downloadUrl(release, stored),
         };
       },
@@ -201,26 +206,37 @@ function stubGitHub(options: {
   return { calls, tags, releases, client };
 }
 
-function hostd(options: { sign?: (url: string) => Promise<SignedReleaseRun> } = {}) {
+/** hostd's signed answer for this run, with any field changed by `extra`. */
+function signedAnswer(url: string, extra: Partial<SignedReleaseRun> = {}): SignedReleaseRun {
+  const sig = 'c2ln'.repeat(22);
+  return { sig, asset: `${JSON.stringify({ version: '1.4.0', url, sha256: SHA256, sig })}\n`, publicKey: 'cHVi', repo: 'acme/app', sha: SHA, version: '1.4.0', sha256: SHA256, bytes: BYTES.length, ...extra };
+}
+
+function hostd(options: { sign?: (url: string) => Promise<SignedReleaseRun>; artifact?: Partial<{ sha256: string; version: string; bytes: number }> } = {}) {
   const signed: string[] = [];
+  const cancelled: unknown[] = [];
   return {
     signed,
+    cancelled,
     releaseArtifact: vi.fn(async (_runId: string) => ({
       body: new ReadableStream<Uint8Array>({
         start(controller) {
           controller.enqueue(new Uint8Array(BYTES));
           controller.close();
         },
+        cancel(reason) {
+          cancelled.push(reason);
+        },
       }),
       sha256: SHA256,
       version: '1.4.0',
       bytes: BYTES.length,
+      ...options.artifact,
     })),
     signRelease: vi.fn(async (_runId: string, url: string) => {
       signed.push(url);
       if (options.sign) return options.sign(url);
-      const sig = 'c2ln'.repeat(22);
-      return { sig, asset: `${JSON.stringify({ version: '1.4.0', url, sha256: SHA256, sig })}\n`, publicKey: 'cHVi', repo: 'acme/app', sha: SHA, version: '1.4.0', sha256: SHA256, bytes: BYTES.length };
+      return signedAnswer(url);
     }),
     deleteReleaseArtifact: vi.fn(async (_runId: string) => ({ deleted: true })),
   };
@@ -412,6 +428,81 @@ describe('what a failed run or publish leaves (#344)', () => {
     expect(done?.reason).toContain('The draft release at https://github.com/acme/app/releases/tag/untagged-0abc could not be deleted: delete it there');
   });
 
+  it.each([
+    ['another sha256', { sha256: 'b'.repeat(64) }],
+    ['another size', { bytes: BYTES.length + 1 }],
+    ['another version', { version: '1.4.1' }],
+  ])('uploads nothing when hostd serves an artifact with %s than the row, deletes the draft and tags nothing', async (_name, artifact) => {
+    const github = stubGitHub();
+    const host = hostd({ artifact });
+    const done = await publisher(github, host).releases.publish('run-1');
+    expect(done).toMatchObject({ state: 'publish_failed', tagged: false });
+    expect(done?.reason).toContain('hostd’s kept artifact is not the one recorded for this run');
+    expect(github.calls.some((call) => call.method === 'UPLOAD')).toBe(false);
+    expect(host.cancelled).toHaveLength(1);
+    expect(writes(github.calls)).toContain('DELETE /repos/acme/app/releases/991');
+    expect(github.releases.size).toBe(0);
+    expect(host.signRelease).not.toHaveBeenCalled();
+    expect(github.calls.some((call) => call.path.endsWith('/git/refs'))).toBe(false);
+  });
+
+  it.each([
+    ['another commit', { sha: 'd'.repeat(40) }],
+    ['another version', { version: '1.4.1' }],
+    ['another sha256', { sha256: 'b'.repeat(64) }],
+    ['another repository', { repo: 'acme/other' }],
+  ])('uploads no manifest and tags nothing when hostd signs %s than the row', async (_name, extra) => {
+    const github = stubGitHub();
+    const host = hostd({ sign: async (url) => signedAnswer(url, extra) });
+    const done = await publisher(github, host).releases.publish('run-1');
+    expect(done).toMatchObject({ state: 'publish_failed', tagged: false });
+    expect(done?.reason).toContain("which is not this run's acme/app@aaaaaaa 1.4.0");
+    expect(host.signRelease).toHaveBeenCalledTimes(1);
+    expect(github.calls.filter((call) => call.method === 'UPLOAD').map((call) => call.path)).toEqual(['/repos/acme/app/releases/991/assets?name=App.zip']);
+    expect(github.calls.some((call) => call.path.endsWith('/git/refs'))).toBe(false);
+    expect(writes(github.calls)).toContain('DELETE /repos/acme/app/releases/991');
+    expect(github.releases.size).toBe(0);
+  });
+
+  it('signs nothing and tags nothing when GitHub’s digest of the upload is not the run’s sha256', async () => {
+    const other = `sha256:${'e'.repeat(64)}`;
+    const github = stubGitHub({ digest: () => other });
+    const { releases, host } = publisher(github);
+    const done = await releases.publish('run-1');
+    expect(done).toMatchObject({ state: 'publish_failed', tagged: false });
+    expect(done?.reason).toContain(`GitHub’s digest of the uploaded artifact is ${other}, not sha256:${SHA256}`);
+    expect(host.signRelease).not.toHaveBeenCalled();
+    expect(github.calls.some((call) => call.path.endsWith('/git/refs'))).toBe(false);
+    expect(github.releases.size).toBe(0);
+  });
+
+  it('does not delete a release the publish may have made public when the read-back fails, and names it', async () => {
+    const github = stubGitHub({ fail: { 'GET /repos/acme/app/releases/991': () => new GitHubApiError(502, '/repos/acme/app/releases/991', '{"message":"Bad Gateway"}') } });
+    const done = await publisher(github).releases.publish('run-1');
+    expect(done).toMatchObject({ state: 'publish_failed', tagged: true });
+    expect(done?.reason).toContain('may be public, so it was not deleted');
+    expect(done?.reason).toContain('v1.4.0 is on aaaaaaa in acme/app');
+    expect(writes(github.calls)).not.toContain('DELETE /repos/acme/app/releases/991');
+    expect(github.releases.get(991)?.draft).toBe(false);
+  });
+
+  it('does not delete a release GitHub published though its PATCH answered an error, and names it', async () => {
+    const github = stubGitHub({ failAfterPublish: () => new GitHubApiError(504, '/repos/acme/app/releases/991', '{"message":"Gateway Timeout"}') });
+    const done = await publisher(github).releases.publish('run-1');
+    expect(done?.state).toBe('publish_failed');
+    expect(done?.reason).toContain('The release at https://github.com/acme/app/releases/tag/v1.4.0 may be public, so it was not deleted');
+    expect(writes(github.calls)).not.toContain('DELETE /repos/acme/app/releases/991');
+  });
+
+  it('refuses before anything is written when the manifest would take the artifact’s name', async () => {
+    const github = stubGitHub();
+    store.row = builtRow({ artifactName: 'manifest.json' });
+    const done = await publisher(github).releases.publish('run-1');
+    expect(done?.state).toBe('publish_failed');
+    expect(done?.reason).toContain("the manifest asset's name, manifest.json, is the artifact's");
+    expect(writes(github.calls)).toEqual([]);
+  });
+
   it('says to add the bypass when the tag is refused by a rule', async () => {
     const github = stubGitHub({
       fail: { 'POST /repos/acme/app/git/refs': () => new GitHubApiError(422, '/repos/acme/app/git/refs', '{"message":"Repository rule violations found","errors":["Cannot create ref due to creations being restricted."]}') },
@@ -482,7 +573,16 @@ describe('what a failed run or publish leaves (#344)', () => {
     const done = await releases.abandon(store.row);
     expect(done?.state).toBe('publish_failed');
     expect(done?.reason).toMatch(/^the bridge restarted while publishing\. v1\.4\.0 is on aaaaaaa in acme\/app/);
+    expect(done?.reason).not.toContain('may also have been made');
     expect(github.releases.size).toBe(0);
+  });
+
+  it('says a restart may have left a tag on a separate release repository', async () => {
+    const github = stubGitHub();
+    const { releases } = publisher(github);
+    store.row = builtRow({ state: 'publishing', tag: 'v1.4.0', releaseRepo: 'acme/app-releases', releaseId: null, tagged: true });
+    const done = await releases.abandon(store.row);
+    expect(done?.reason).toContain("v1.4.0 may also have been made on acme/app-releases's default branch");
   });
 });
 

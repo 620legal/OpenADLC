@@ -1,5 +1,5 @@
 import { releaseRuns, repos, type ReleaseRun, type ReleaseSetting } from '@openadlc/db';
-import { githubSaid, rulesetSettingsUrl, tagBlockedDetail, tagCreationBlockers, type ReleaseAsset, type RuleApi } from '@openadlc/github';
+import { GitHubApiError, githubSaid, rulesetSettingsUrl, tagBlockedDetail, tagCreationBlockers, type ReleaseAsset, type RuleApi } from '@openadlc/github';
 import type { HostdClient } from './hostd-client.js';
 
 /**
@@ -70,7 +70,7 @@ const status = (error: unknown): number | null => {
   return typeof value === 'number' ? value : null;
 };
 
-const said = (error: unknown): string => (error instanceof Stop ? error.message : status(error) !== null && /→/.test(String((error as Error).message)) ? githubSaid(error) : error instanceof Error ? error.message : String(error));
+const said = (error: unknown): string => (error instanceof Stop ? error.message : error instanceof GitHubApiError ? githubSaid(error) : error instanceof Error ? error.message : String(error));
 
 /** The download URL of a published asset, as GitHub forms it: built here, then checked against GitHub's own after publishing. */
 export function releaseAssetUrl(fullName: string, tag: string, assetName: string): string {
@@ -111,6 +111,12 @@ export class ReleasePublisher {
     }
     const { sourceApi, targetApi, fullName, defaultBranch } = preflight;
     const manifestName = (await this.deps.getRelease(run.repoId).catch(() => null))?.manifestAsset ?? repos.DEFAULT_MANIFEST_ASSET;
+    // The admin PATCH refuses a manifest named like the artifact, but the run
+    // holds the artifact's name as the recipe was at its start: a recipe
+    // changed since could make the two collide on one release.
+    if (manifestName === run.artifactName) {
+      return fail(`nothing was published or tagged: the manifest asset's name, ${manifestName}, is the artifact's. Set the repository's release manifestAsset to another name, then cut the release again`);
+    }
     if (!(await releaseRuns.toPublishing(runId, tag))) return null;
 
     const left: { draft: GitHubRelease | null; tagged: boolean; releaseTagged: boolean; public: boolean; leftPublic: boolean } = {
@@ -265,7 +271,13 @@ export class ReleasePublisher {
           public: false,
           leftPublic: false,
         });
-    return releaseRuns.publishFailed(run.runId, isPublic && run.tagged ? `${reason}. ${tagLeft(run.repoFullName, tag, run.sha.slice(0, 7))}` : reason);
+    const parts = [isPublic && run.tagged ? `${reason}. ${tagLeft(run.repoFullName, tag, run.sha.slice(0, 7))}` : reason];
+    // The release repository's own tag comes after the source's and is not
+    // on the row, so a restart cannot know whether it was made: say it may be.
+    if (run.tagged && releaseRepo.toLowerCase() !== run.repoFullName.toLowerCase()) {
+      parts.push(`${tag} may also have been made on ${releaseRepo}'s default branch; a later cut reuses it, or delete it at https://github.com/${releaseRepo}/tags if the version is raised`);
+    }
+    return releaseRuns.publishFailed(run.runId, parts.join('. '));
   }
 
   private async preflight(run: ReleaseRun, tag: string, source: string, releaseRepo: string, separate: boolean): Promise<Preflight> {
@@ -323,18 +335,32 @@ export class ReleasePublisher {
     // A release left public is named in `why`, with what to do; deleting it
     // here would take a public release away without the person deciding.
     if (left.draft && !left.leftPublic) {
-      const deleted = left.api
-        ? await left.api.request('DELETE', `/repos/${left.releaseRepo}/releases/${left.draft.id}`).then(
-            () => true,
-            (error: unknown) => status(error) === 404,
-          )
-        : false;
-      if (!deleted) {
-        parts.push(
-          left.public
-            ? `The release at ${left.draft.html_url} may be public and could not be deleted: delete it there`
-            : `The draft release at ${left.draft.html_url} could not be deleted: delete it there`,
-        );
+      // Once the publish was asked for, a failure after it (the read-back, a
+      // timeout on a PATCH that applied) may come from a release that is
+      // live, whose `published` delivery may already have moved cards to
+      // Done. Only one GitHub still holds as a draft is deleted.
+      let draft: GitHubRelease | null = left.draft;
+      let mayBePublic = false;
+      if (left.public) {
+        const read = left.api
+          ? await left.api.request<GitHubRelease>('GET', `/repos/${left.releaseRepo}/releases/${left.draft.id}`).catch((error: unknown) => (status(error) === 404 ? null : undefined))
+          : undefined;
+        if (read === null) draft = null;
+        else if (read === undefined || read.draft !== true) {
+          mayBePublic = true;
+          if (read) draft = read;
+        }
+      }
+      if (draft && mayBePublic) {
+        parts.push(`The release at ${draft.html_url} may be public, so it was not deleted: check that its manifest's url is the artifact's download URL, or delete it there`);
+      } else if (draft) {
+        const deleted = left.api
+          ? await left.api.request('DELETE', `/repos/${left.releaseRepo}/releases/${draft.id}`).then(
+              () => true,
+              (error: unknown) => status(error) === 404,
+            )
+          : false;
+        if (!deleted) parts.push(`The draft release at ${draft.html_url} could not be deleted: delete it there`);
       }
     }
     if (left.tagged) parts.push(tagLeft(left.source, left.tag, left.sha7));
