@@ -1,0 +1,141 @@
+import { renderToStaticMarkup } from 'react-dom/server';
+import { describe, expect, it, vi } from 'vitest';
+import type { ReleaseRunView, ReleaseView } from '@/lib/api';
+import { BridgeAnswered } from '@/lib/bridge-answered';
+import { headerData } from '@/lib/header';
+
+/** A repository's releases page (#345): the pinned view, Cut release, and the runs. */
+
+const SHA = 'abc1234def5678abc1234def5678abc1234def56';
+
+const VIEW: ReleaseView = {
+  viewId: 'view-1',
+  repo: 'mac-app',
+  fullName: 'acme/mac-app',
+  releaseRepo: 'acme/mac-app',
+  sha: SHA,
+  defaultBranch: 'main',
+  last: { version: '1.4.0', tag: 'v1.4.0', url: 'https://github.com/acme/mac-app/releases/tag/v1.4.0' },
+  version: { text: '1.5.0', after: '1.4.0' },
+  compare: {
+    first: false,
+    status: 'ahead',
+    aheadBy: 3,
+    totalCommits: 3,
+    commits: [
+      { sha7: 'ddddddd', title: 'Add the export menu', author: 'ann' },
+      { sha7: 'ccccccc', title: 'Fix the crash on open', author: null },
+    ],
+    files: 7,
+    htmlUrl: 'https://github.com/acme/mac-app/compare/v1.4.0...abc1234',
+  },
+  mayCut: true,
+  inFlight: null,
+  expiresInSeconds: 900,
+};
+
+const RUN: ReleaseRunView = {
+  id: 'r-1',
+  runId: 'run-1',
+  repo: 'mac-app',
+  sha: '1'.repeat(40),
+  state: 'published',
+  clean: false,
+  version: '1.4.0',
+  previousVersion: '1.3.0',
+  reason: null,
+  logTail: null,
+  tag: 'v1.4.0',
+  releaseUrl: 'https://github.com/acme/mac-app/releases/tag/v1.4.0',
+  requestedBy: 'jane',
+  startedAt: '2026-11-14T10:00:00.000Z',
+  finishedAt: '2026-11-14T10:30:00.000Z',
+  publishedAt: '2026-11-14T10:31:00.000Z',
+};
+
+const bridge = vi.hoisted(() => ({ view: null as unknown, runs: [] as unknown }));
+
+vi.mock('@/lib/api', () => ({
+  api: {
+    releaseView: async () => {
+      if (bridge.view instanceof Error) throw bridge.view;
+      return bridge.view;
+    },
+    releaseRuns: async () => {
+      if (bridge.runs instanceof Error) throw bridge.runs;
+      return bridge.runs;
+    },
+  },
+}));
+vi.mock('@/lib/read-header', () => ({
+  readHeader: async () => headerData({ repos: ['mac-app'], crew: [], budget: { spentUsd: 0, capUsd: 1500 }, needsYou: 0 }),
+}));
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ refresh: () => undefined, push: () => undefined }),
+  usePathname: () => '/releases/mac-app',
+  notFound: () => {
+    throw new Error('NOT_FOUND');
+  },
+}));
+
+async function page(repo = 'mac-app'): Promise<{ html: string; text: string }> {
+  const { default: ReleasePage } = await import('./page');
+  const html = renderToStaticMarkup(await ReleasePage({ params: Promise.resolve({ repo }) })).replace(/<!-- -->/g, '');
+  return { html, text: html.replace(/<[^>]+>/g, ' ').replace(/&#x27;|&#39;/g, "'").replace(/\s+/g, ' ') };
+}
+
+describe('a repository’s releases page', () => {
+  it('shows the head it would cut in full, the last release, the compare and the version', async () => {
+    bridge.view = VIEW;
+    bridge.runs = [RUN];
+    const { html, text } = await page();
+    expect(text).toContain('Releases of mac-app');
+    expect(text).toContain(`main at abc1234`);
+    expect(html).toContain(SHA);
+    expect(html).toContain('href="https://github.com/acme/mac-app/releases/tag/v1.4.0"');
+    expect(text).toContain('3 commits and 7 files changed since v1.4.0.');
+    expect(text).toContain('Add the export menu');
+    expect(text).toContain('@ann');
+    expect(text).toContain('and 1 more');
+    expect(html).toContain('Open the compare on GitHub');
+    expect(text).toContain('1.5.0, after 1.4.0');
+    expect(html).toMatch(/<button[^>]*data-cut[^>]*>Cut release<\/button>/);
+    expect(text).toContain('Clean build');
+    // The runs below, a published one with its release.
+    expect(text).toContain('Published');
+    expect(html).toMatch(/data-release-link[^>]*>v1.4.0 on GitHub/);
+  });
+
+  it('shows the reason and no button when the view may not be cut', async () => {
+    bridge.view = { ...VIEW, mayCut: false, why: '1.4.0 is not above the last release, 1.4.0: raise it in VERSION', version: null };
+    bridge.runs = [];
+    const { html, text } = await page();
+    expect(html).not.toMatch(/<button[^>]*data-cut=/);
+    expect(text).toContain('1.4.0 is not above the last release, 1.4.0: raise it in VERSION');
+    expect(text).toContain('No release has been cut here yet.');
+  });
+
+  it('says a first release', async () => {
+    bridge.view = { ...VIEW, last: null, compare: { first: true }, version: { text: '1.0.0', after: null } };
+    bridge.runs = [];
+    const { text } = await page();
+    expect(text).toContain('No release yet; this cuts the first one from abc1234.');
+    expect(text).toContain('1.0.0, the first release');
+  });
+
+  it('says the bridge’s refusal of the view, with the runs still shown', async () => {
+    bridge.view = new BridgeAnswered('/v1/repos/mac-app/release/views', 404, 'mac-app has no release recipe; an admin sets it in Settings → mac-app → Release.');
+    bridge.runs = [{ ...RUN, state: 'publish_failed', reason: 'GitHub refused the tag: a ruleset blocks it', releaseUrl: null }];
+    const { html, text } = await page();
+    expect(text).toContain('mac-app has no release recipe');
+    expect(html).not.toMatch(/<button[^>]*data-cut=/);
+    expect(text).toContain('Publish failed');
+    expect(text).toContain('GitHub refused the tag: a ruleset blocks it');
+  });
+
+  it('is not found for a repository the bridge does not have', async () => {
+    bridge.view = new BridgeAnswered('/v1/repos/nope/release/views', 404, 'nope is not a repository this install manages.');
+    bridge.runs = new BridgeAnswered('/v1/repos/nope/releases', 404, 'nope is not a repository this install manages.');
+    await expect(page('nope')).rejects.toThrow('NOT_FOUND');
+  });
+});

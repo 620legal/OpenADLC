@@ -1025,7 +1025,20 @@ exists ([ADR 0068](adr/0068-a-release-is-built-in-its-own-account-and-signed-fro
 
 - **Who.** Only the install's people with Approves on, each proved by a fresh
   device-code sign-in that matches their People row. A bot never cuts one.
-- **What.** One commit on the default branch, pinned at the click. The tag is
+  The console's Cut release is the only way to start a run
+  ([ADR 0072](adr/0072-a-release-is-cut-by-an-approver-from-a-pinned-view-with-a-fresh-device-code-proof.md)).
+  Approves is asked of the person's linked GitHub account before the sign-in
+  and again after it. The account that approves the code must have the
+  linked account id and login, and must not be one the crew uses. Its token
+  is used only to ask GitHub who approved it, and is then revoked. Every
+  refusal is audited as `release.cut_refused`, with its reason, and a cut as
+  `release.cut`. `ReleaseService.start` has that one caller, and a test fails
+  for a second one.
+- **What.** One commit on the default branch, pinned at the click. The bridge
+  pins it when it builds the compare view the person reads: it reads the
+  branch's head once, and the click names that view, never a commit. A cut
+  whose body names a commit is refused. A view belongs to the person who
+  opened it, lasts 15 minutes, and is used once. The tag is
   made only after the build and signing succeed. hostd checks the commit is
   an ancestor of the branch on its own fetch, and builds that commit even
   when the branch has moved on. The command, the artifact's path and where
@@ -1074,7 +1087,9 @@ The run, the signing step, the release service and the publish
 (`apps/hostd/src/release-run.ts`, `apps/hostd/src/release-sign.ts`,
 `apps/bridge/src/release-service.ts`, `apps/bridge/src/release-publish.ts`),
 with the shared probe and the release account's probe, are under Human
-review.
+review. The cut's route (`apps/bridge/src/release-routes.ts`) is not. Its
+one effect is to call `start`, which is listed, and its test pins that call to
+the sign-in.
 
 ### The console
 

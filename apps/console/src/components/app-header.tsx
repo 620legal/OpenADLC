@@ -5,7 +5,7 @@ import { createContext, useContext, useEffect, useId, useRef, useState, type Rea
 import { CommandPalette } from '@/components/command-palette';
 import { IntakeDialog } from '@/components/intake-dialog';
 import { KeysHelp } from '@/components/keys-help';
-import { BoardIcon, CheckIcon, ChevronDownIcon, CostsIcon, CrewIcon, InsightsIcon, PlusIcon, SettingsIcon } from '@/components/icons';
+import { BoardIcon, CheckIcon, ChevronDownIcon, CostsIcon, CrewIcon, InsightsIcon, PlusIcon, SettingsIcon, ShipIcon } from '@/components/icons';
 import { LiveRefresh } from '@/components/live-refresh';
 import { AlertsMenu, NeedsYouAlerts } from '@/components/needs-you-alerts';
 import { RepoColorsProvider, RepoDot } from '@/components/repo-badge';
@@ -421,6 +421,7 @@ const NAV_ICONS: Record<Exclude<Page, 'needs-you'>, (props: { size?: number }) =
   crew: CrewIcon,
   costs: CostsIcon,
   insights: InsightsIcon,
+  releases: ShipIcon,
   settings: SettingsIcon,
 };
 

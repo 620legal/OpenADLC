@@ -6,7 +6,17 @@ import { BridgeDown } from '@/components/bridge-down';
 import { ChevronLeftIcon } from '@/components/icons';
 import { AdminsOnly } from '@/components/not-a-user';
 import { RepoSettings } from '@/components/repo-settings';
-import { api, readMe, saveHostCheck, type DesignMemoryEntry, type HostCheckSetting, type TaskPostgresView, type WorkPauses } from '@/lib/api';
+import {
+  api,
+  readMe,
+  saveHostCheck,
+  saveRelease,
+  type DesignMemoryEntry,
+  type HostCheckSetting,
+  type ReleaseSetting,
+  type TaskPostgresView,
+  type WorkPauses,
+} from '@/lib/api';
 import { findBot } from '@/lib/bot-label';
 import { colorMapOf } from '@/lib/repo-colors';
 import { readHeader } from '@/lib/read-header';
@@ -26,11 +36,11 @@ export default async function RepositorySettingsPage({
   searchParams,
 }: {
   params: Promise<{ name: string }>;
-  /** `hostCheckError`: the bridge's refusal of the last host check save, said beside its form. */
-  searchParams?: Promise<{ hostCheckError?: string }>;
+  /** `hostCheckError`, `releaseError`: the bridge's refusal of the last host check or release save, said beside its form. */
+  searchParams?: Promise<{ hostCheckError?: string; releaseError?: string }>;
 }) {
   const { name } = await params;
-  const { hostCheckError } = (await searchParams) ?? {};
+  const { hostCheckError, releaseError } = (await searchParams) ?? {};
   const wanted = decodeURIComponent(name);
   // A repository's settings are an admin's, as Settings is: a user who types
   // the address is told so, rather than shown controls whose every save, and
@@ -97,6 +107,7 @@ export default async function RepositorySettingsPage({
           </p>
         </section>
         <HostCheckSection repo={repo.name} setting={repo.hostCheck ?? null} error={hostCheckError ?? null} />
+        <ReleaseSection repo={repo.name} setting={repo.release ?? null} error={releaseError ?? null} />
       </main>
     </AppShell>
   );
@@ -165,6 +176,119 @@ function HostCheckSection({ repo, setting, error }: { repo: string; setting: Hos
         </label>
         {error && (
           <p role="status" data-error className="text-alarm">
+            {error}
+          </p>
+        )}
+        <div className="flex gap-1.5">
+          <button type="submit" name="intent" value="save" className="h-9 rounded-md border border-edge bg-surface px-3 text-body hover:bg-panel">
+            Save
+          </button>
+          {setting && (
+            <button type="submit" name="intent" value="clear" className="h-9 rounded-md border border-edge px-3 text-soft hover:bg-surface">
+              Clear
+            </button>
+          )}
+        </div>
+      </form>
+    </section>
+  );
+}
+
+/** The time limit a new release recipe is given, as the bridge's own default. */
+const DEFAULT_RELEASE_MINUTES = 180;
+
+/** The recipe's text fields, as the form names them and the bridge reads them. */
+const RELEASE_FIELDS: { name: Exclude<keyof ReleaseSetting, 'timeoutMinutes'>; label: string; placeholder: string; optional?: boolean }[] = [
+  { name: 'command', label: 'Command', placeholder: 'make release' },
+  { name: 'artifact', label: 'Artifact path', placeholder: 'build/App.zip' },
+  { name: 'versionFile', label: 'Version file', placeholder: 'VERSION' },
+  { name: 'versionKey', label: 'Version key', placeholder: 'MARKETING_VERSION, or empty for the whole file', optional: true },
+  { name: 'releaseRepo', label: 'Release repository', placeholder: 'owner/name, or empty for this repository', optional: true },
+  { name: 'manifestAsset', label: 'Manifest asset name', placeholder: 'manifest.json', optional: true },
+];
+
+/** Where the release account is set up. */
+const RELEASE_ACCOUNT_DOCS = 'https://github.com/620legal/OpenADLC/blob/main/docs/self-hosting.md#the-release-account';
+
+/**
+ * A repository's release recipe (#343, #344, docs/adr/0070): what the release
+ * account runs at the pinned commit, the artifact it takes out, where the
+ * version is read, where the release is published and its manifest's name.
+ * An admin's, here, and never a file a pull request can change. Saved by a
+ * server action: an empty command, or Clear, takes it away; the bridge
+ * checks the rest and its words come back on the page when it refuses. A
+ * release is cut from the repository's Releases page (#345).
+ */
+function ReleaseSection({ repo, setting, error }: { repo: string; setting: ReleaseSetting | null; error: string | null }) {
+  const here = `/settings/repositories/${encodeURIComponent(repo)}`;
+  async function save(form: FormData) {
+    'use server';
+    const text = (name: string) => String(form.get(name) ?? '').trim();
+    const command = text('command');
+    const clear = form.get('intent') === 'clear' || command === '';
+    const minutes = Number(form.get('timeoutMinutes'));
+    const saved = await saveRelease(
+      repo,
+      clear
+        ? null
+        : {
+            command,
+            artifact: text('artifact'),
+            versionFile: text('versionFile'),
+            versionKey: text('versionKey') || null,
+            releaseRepo: text('releaseRepo') || null,
+            timeoutMinutes: Number.isFinite(minutes) && minutes > 0 ? Math.round(minutes) : DEFAULT_RELEASE_MINUTES,
+            manifestAsset: text('manifestAsset') || null,
+          },
+    );
+    revalidatePath(here);
+    redirect(saved.ok ? `${here}#release` : `${here}?releaseError=${encodeURIComponent(saved.error ?? 'it was not saved')}#release`);
+  }
+  return (
+    <section id="release" aria-label="Release" className="rounded-[10px] border border-edge bg-panel px-5 py-[18px]">
+      <h3 className="text-[14px] font-semibold text-body">Release</h3>
+      <p className="mt-1 text-[12.5px] text-muted">
+        Builds a release on this machine as the release account, from the commit a person with Approves on pins on{' '}
+        <Link href={`/releases/${encodeURIComponent(repo)}`} className="text-link hover:underline">
+          its Releases page
+        </Link>
+        ; set the account up first as{' '}
+        <a href={RELEASE_ACCOUNT_DOCS} target="_blank" rel="noreferrer" className="text-link hover:underline">
+          docs/self-hosting.md#the-release-account
+        </a>{' '}
+        says.
+      </p>
+      <form action={save} className="mt-3 flex flex-col gap-2.5 text-[12.5px]">
+        {RELEASE_FIELDS.map((field) => (
+          <label key={field.name} className="flex flex-col gap-1">
+            <span className="text-soft">
+              {field.label}
+              {field.optional ? <span className="text-dim"> (optional)</span> : null}
+            </span>
+            <input
+              name={field.name}
+              type="text"
+              maxLength={500}
+              defaultValue={setting?.[field.name] ?? ''}
+              placeholder={field.placeholder}
+              className="h-9 rounded-md border border-edge bg-surface px-2.5 font-mono text-body"
+            />
+          </label>
+        ))}
+        <label className="flex flex-col gap-1">
+          <span className="text-soft">Time limit, in minutes</span>
+          <input
+            name="timeoutMinutes"
+            type="number"
+            min={1}
+            max={1440}
+            step={1}
+            defaultValue={setting?.timeoutMinutes ?? DEFAULT_RELEASE_MINUTES}
+            className="h-9 w-32 rounded-md border border-edge bg-surface px-2.5 text-body"
+          />
+        </label>
+        {error && (
+          <p role="status" data-release-error className="text-alarm">
             {error}
           </p>
         )}

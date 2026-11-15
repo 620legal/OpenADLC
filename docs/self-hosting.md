@@ -2432,8 +2432,10 @@ key this install already holds.
 What the release account runs is set by an admin on the repository, never by
 a file in it
 ([ADR 0070](adr/0070-a-release-recipe-is-an-admins-and-its-artifact-stays-with-hostd.md)).
-Until the console has a form for it, an admin sends it to the bridge as
-`PATCH /v1/repos/<name>`, with a body such as:
+An admin sets it in **Settings → the repository → Release**. Clear takes it
+away, and a field the bridge refuses is said beside the form. The form sends
+the bridge `PATCH /v1/repos/<name>`, which can also be sent directly, with a
+body such as:
 
 ```json
 {
@@ -2476,6 +2478,40 @@ and the release is tagged `v<version>`.
 
 The release account keeps its build tree between releases, so later builds
 are incremental. A clean build removes it first.
+
+### Cut a release
+
+**Releases** in the console's header lists the repositories that have a
+recipe. Anyone signed in to the console can open one and watch its runs.
+Only a person with **Approves** on in Settings → People, who has linked their
+GitHub account in Settings → Your GitHub account, can cut one
+([ADR 0072](adr/0072-a-release-is-cut-by-an-approver-from-a-pinned-view-with-a-fresh-device-code-proof.md)).
+
+A repository's page shows:
+
+- the last release;
+- the default branch's head it would cut, by its full SHA;
+- GitHub's compare of the last release's tag with that commit;
+- the version at that commit, and the release it follows.
+
+**Cut release** builds exactly that commit, even if the branch moves on
+before the build starts. It asks for a device code. Approve it on GitHub as
+your own linked account. OpenADLC uses that sign-in only to check who
+approved, then revokes it. The page then follows the run through building
+and publishing, and links to the published release. **Clean build** removes
+the release account's build tree first.
+
+The page offers no cut, and says why, when:
+
+- the last release's tag is not in the repository;
+- the head does not contain that tag;
+- the version is not above the last release's, or carries a different label;
+- a release of the repository is still in flight;
+- you have no linked account, or Approves is off for you.
+
+The page's view of the head lasts 15 minutes and is used once. Reload the
+page to see the head again. Every cut, and every refused one, is in the audit
+log under `<owner/name>:release`.
 
 ### How a built release is published
 

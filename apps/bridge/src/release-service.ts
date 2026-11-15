@@ -16,10 +16,13 @@ import { HttpFailure } from './router.js';
  * and keeps the record:
  *
  * - `start` is for one commit, pinned when a person asked for it, and builds
- *   that commit only. Nothing here checks who asked: the only caller is #345's
- *   route, which holds the Approves check and the device-code proof. No route
- *   of this file's, nor an admin's, reaches it, so nothing can cut a release
- *   around them.
+ *   that commit only. Nothing here checks who asked: the only caller is the
+ *   cut's sign-in in `release-routes.ts` (#345,
+ *   docs/adr/0072-a-release-is-cut-by-an-approver-from-a-pinned-view-with-a-fresh-device-code-proof.md),
+ *   which holds the Approves check and the device-code proof, and builds the
+ *   SHA of the view the person saw. No route of this file's, nor an admin's,
+ *   reaches it, so nothing can cut a release around them;
+ *   `release-routes.test.ts` scans the source for a second caller.
  * - The recipe (command, artifact, version file and key, where it is
  *   published, the time limit) is the repository row's, which only an admin
  *   writes; nothing in the repository can choose what runs as the release
@@ -48,50 +51,78 @@ export interface PublishedRelease {
   draft: boolean;
   prerelease: boolean;
   published_at: string | null;
+  /** The release's page; absent in a list a test made. */
+  html_url?: string;
 }
 
 /**
- * The last release's version, from a repository's releases: the highest of
- * the published, non-draft releases GitHub does not mark prerelease, by tag
- * name with one leading `v` taken off. A tag that is not a version is
- * skipped. Labels do not choose it; the gate holds the next version to the
- * label of the one chosen. Two at the highest with different labels cannot
- * be told apart, and throw, naming both. Null when there is none.
+ * The last release as the run and the compare view read it (#345): its
+ * version, the tag it was published under, which the compare starts from, and
+ * its page.
  */
-export function lastReleaseVersion(releases: readonly PublishedRelease[]): RepoVersion | null {
-  let best: { version: RepoVersion; tag: string }[] = [];
+export interface LastRelease {
+  version: string;
+  tag: string;
+  url: string | null;
+}
+
+/**
+ * The last release, from a repository's releases: the highest of the
+ * published, non-draft releases GitHub does not mark prerelease, by tag name
+ * with one leading `v` taken off. A tag that is not a version is skipped.
+ * Labels do not choose it; the gate holds the next version to the label of
+ * the one chosen. Two at the highest with different labels cannot be told
+ * apart, and throw, naming both. Null when there is none.
+ */
+export function lastPublishedRelease(releases: readonly PublishedRelease[]): { version: RepoVersion; release: PublishedRelease } | null {
+  let best: { version: RepoVersion; release: PublishedRelease }[] = [];
   for (const release of releases) {
     if (release.draft || release.prerelease || !release.published_at) continue;
     const version = repoVersionFromTag(release.tag_name);
     if (!version) continue;
     const order = best[0] ? compareRepoVersionsIgnoringLabel(version, best[0].version) : 1;
-    if (order > 0) best = [{ version, tag: release.tag_name }];
-    else if (order === 0) best.push({ version, tag: release.tag_name });
+    if (order > 0) best = [{ version, release }];
+    else if (order === 0) best.push({ version, release });
   }
   const labels = new Set(best.map((one) => one.version.label).filter((label) => label !== null));
   if (labels.size > 1) {
     const [a, b] = best.filter((one) => one.version.label !== null);
-    throw new Error(`the last releases ${a?.tag} and ${b?.tag} are equal but for their labels, so the next one's label cannot be told: delete or mark one of them prerelease`);
+    throw new Error(
+      `the last releases ${a?.release.tag_name} and ${b?.release.tag_name} are equal but for their labels, so the next one's label cannot be told: delete or mark one of them prerelease`,
+    );
   }
   // A labelled release ranks with its bare twin; the label is the one to keep.
-  return (best.find((one) => one.version.label !== null) ?? best[0])?.version ?? null;
+  return best.find((one) => one.version.label !== null) ?? best[0] ?? null;
 }
 
+/** The last release's version; see `lastPublishedRelease`. */
+export function lastReleaseVersion(releases: readonly PublishedRelease[]): RepoVersion | null {
+  return lastPublishedRelease(releases)?.version ?? null;
+}
+
+type ReleaseReadClient = (repoFullName: string) => Promise<{ request<T>(method: string, path: string): Promise<T> } | null>;
+
 /**
- * `ReleaseServiceDeps.lastVersion` on GitHub: the first page of 100 releases
- * of the release repository, read with `client`, as `lastReleaseVersion`
- * chooses. No client, or a failed read, throws: the run is refused.
+ * `ReleaseServiceDeps.lastRelease` on GitHub: the first page of 100 releases
+ * of the release repository, read with `client`, as `lastPublishedRelease`
+ * chooses. No client, or a failed read, throws: the run is refused, and the
+ * compare view says it cannot be built.
  */
-export function lastVersionOnGitHub(
-  client: (repoFullName: string) => Promise<{ request<T>(method: string, path: string): Promise<T> } | null>,
-): (repoFullName: string) => Promise<string | null> {
+export function lastReleaseOnGitHub(client: ReleaseReadClient): (repoFullName: string) => Promise<LastRelease | null> {
   return async (repoFullName) => {
     const github = await client(repoFullName);
     if (!github) throw new Error(`neither the app nor the automation account can read the releases of ${repoFullName}`);
     const releases = await github.request<PublishedRelease[]>('GET', `/repos/${repoFullName}/releases?per_page=100`);
     if (!Array.isArray(releases)) throw new Error(`GitHub did not answer a list of the releases of ${repoFullName}`);
-    return lastReleaseVersion(releases)?.text ?? null;
+    const last = lastPublishedRelease(releases);
+    return last ? { version: last.version.text, tag: last.release.tag_name, url: typeof last.release.html_url === 'string' ? last.release.html_url : null } : null;
   };
+}
+
+/** The last release's version text alone, as the `release-tag-rules` card reads it; see `lastReleaseOnGitHub`. */
+export function lastVersionOnGitHub(client: ReleaseReadClient): (repoFullName: string) => Promise<string | null> {
+  const read = lastReleaseOnGitHub(client);
+  return async (repoFullName) => (await read(repoFullName))?.version ?? null;
 }
 
 /** What hostd reports when a run ends (`POST /internal/release`). */
@@ -119,11 +150,11 @@ export interface ReleaseRepo {
 export interface ReleaseServiceDeps {
   hostd: Pick<HostdClient, 'releaseAccount' | 'startRelease' | 'releaseRun' | 'cancelRelease'> | null;
   /**
-   * The release repository's last release's version text (`v` taken off), or
-   * null when it has none; throws when it cannot be read. See
-   * `lastReleaseVersion`.
+   * The release repository's last release — its version text (`v` taken
+   * off), its tag and its page — or null when it has none; throws when it
+   * cannot be read. See `lastPublishedRelease`.
    */
-  lastVersion(repoFullName: string): Promise<string | null>;
+  lastRelease(repoFullName: string): Promise<LastRelease | null>;
   /** The crew account whose token hostd fetches the default branch with. */
   fetchBot(): Promise<string | null>;
   /**
@@ -168,6 +199,17 @@ export class ReleaseService {
   }
 
   /**
+   * The last release of a release repository, the one reader of it: `start`
+   * takes `after` from it, and the compare view (#345,
+   * `release-routes.ts`) the tag it compares from, so the person sees the
+   * changes since the very release the run is held above. Throws when it
+   * cannot be read; no caller reads that as "no release yet".
+   */
+  async lastRelease(repoFullName: string): Promise<LastRelease | null> {
+    return this.deps.lastRelease(repoFullName);
+  }
+
+  /**
    * Starts a release build of `sha`; see the header. Throws an `HttpFailure`
    * that says what to do when nothing can start; answers the row otherwise,
    * `running`, or `refused` with its reason when the account, the last
@@ -199,7 +241,7 @@ export class ReleaseService {
     const releaseRepo = setting.releaseRepo ?? repo.fullName;
     let after: string | null;
     try {
-      after = await this.deps.lastVersion(releaseRepo);
+      after = (await this.lastRelease(releaseRepo))?.version ?? null;
     } catch (error) {
       // Never "no release": the run would then pass any version, a downgrade included.
       return row({

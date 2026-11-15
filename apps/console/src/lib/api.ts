@@ -650,6 +650,116 @@ export async function saveHostCheck(repo: string, hostCheck: HostCheckSetting | 
   }
 }
 
+/**
+ * A repository's release recipe (#343, docs/adr/0070), an admin's: what the
+ * release account runs, the artifact it takes out, where the version is read,
+ * where the release is published, how long it may run, and the signed
+ * manifest's asset name (#344).
+ */
+export interface ReleaseSetting {
+  command: string;
+  artifact: string;
+  versionFile: string;
+  versionKey: string | null;
+  releaseRepo: string | null;
+  timeoutMinutes: number;
+  manifestAsset: string | null;
+}
+
+/**
+ * Sets a repository's release recipe, or takes it away with null
+ * (`PATCH /v1/repos/:name`, an admin's). The bridge checks every field and
+ * audits the change; its refusal comes back as `error`.
+ */
+export async function saveRelease(repo: string, release: ReleaseSetting | null): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const response = await fetch(`${BRIDGE_URL}/v1/repos/${encodeURIComponent(repo)}`, {
+      method: 'PATCH',
+      cache: 'no-store',
+      headers: { 'content-type': 'application/json', ...(await identityHeaders()) },
+      body: JSON.stringify({ release }),
+    });
+    if (response.ok) return { ok: true };
+    const text = await response.text();
+    const said = (() => {
+      try {
+        return (JSON.parse(text) as { error?: string }).error ?? text;
+      } catch {
+        return text;
+      }
+    })();
+    return { ok: false, error: said.slice(0, 300) || `the bridge answered ${response.status}` };
+  } catch {
+    return { ok: false, error: 'the bridge is not answering, so the release recipe was not saved; try again' };
+  }
+}
+
+/** A release run's state (`release_runs`, #343 and #344). */
+export type ReleaseRunState = 'running' | 'built' | 'failed' | 'cancelled' | 'refused' | 'lost' | 'publishing' | 'published' | 'publish_failed';
+
+/** A release run as the bridge shows it (`runView` in `release-routes.ts`). The reason and log tail were redacted by hostd. */
+export interface ReleaseRunView {
+  id: string;
+  runId: string;
+  repo: string;
+  sha: string;
+  state: ReleaseRunState;
+  clean: boolean;
+  version: string | null;
+  previousVersion: string | null;
+  reason: string | null;
+  logTail: string | null;
+  tag: string | null;
+  releaseUrl: string | null;
+  requestedBy: string;
+  startedAt: string;
+  finishedAt: string | null;
+  publishedAt: string | null;
+}
+
+/** GitHub's compare of the last release's tag with the pinned head. */
+export type ReleaseCompare =
+  | { first: true }
+  | {
+      first: false;
+      status: string;
+      aheadBy: number;
+      totalCommits: number;
+      commits: { sha7: string; title: string; author: string | null }[];
+      files: number;
+      htmlUrl: string | null;
+    };
+
+/**
+ * The compare view the bridge pinned (#345, ADR 0072): the default branch's
+ * head read once, which a cut of this view builds and nothing else.
+ */
+export interface ReleaseView {
+  viewId: string;
+  repo: string;
+  fullName: string;
+  releaseRepo: string;
+  sha: string;
+  defaultBranch: string;
+  last: { version: string; tag: string; url: string | null } | null;
+  version: { text: string; after: string | null } | null;
+  compare: ReleaseCompare | null;
+  mayCut: boolean;
+  /** Why not, when `mayCut` is false, and where to act on it. */
+  why?: string;
+  url?: string;
+  inFlight: ReleaseRunView | null;
+  expiresInSeconds: number;
+}
+
+/** Builds and pins a compare view: a POST, since each one is a new pin. */
+async function pinReleaseView(repo: string): Promise<ReleaseView> {
+  const path = `/v1/repos/${encodeURIComponent(repo)}/release/views`;
+  const response = await fetch(`${BRIDGE_URL}${path}`, { method: 'POST', cache: 'no-store', headers: await identityHeaders() });
+  if (!response.ok) throw await bridgeAnswered(path, response);
+  return (await response.json()) as ReleaseView;
+}
+
 /** A promote held for a person, as its card describes it (`HeldPromoteDecision`). */
 export interface HeldPromoteDecision {
   repo: string;
@@ -1655,6 +1765,13 @@ export const api = {
   pushDevices: () => get<PushDevicesView>('/v1/me/push'),
   hosts: () => get<HostsView>('/v1/hosts'),
   hostCheck: (id: string) => get<{ run: HostCheckRun }>(`/v1/host-checks/${encodeURIComponent(id)}`).then((body) => body.run),
+  /** The repositories set to release, each with its latest run (#345). */
+  releases: () =>
+    get<{ repos: { name: string; fullName: string; releaseRepo: string | null; latest: ReleaseRunView | null }[] }>('/v1/releases').then((body) => body.repos),
+  /** A repository's release runs, newest first. */
+  releaseRuns: (repo: string) => get<{ runs: ReleaseRunView[] }>(`/v1/repos/${encodeURIComponent(repo)}/releases`).then((body) => body.runs),
+  /** Pins a new compare view of a repository's default branch. */
+  releaseView: (repo: string) => pinReleaseView(repo),
   attention: () => get<{ items: AttentionItem[] }>('/v1/attention'),
   modelAccounts: () => get<{ accounts: ModelAccountRef[] }>('/v1/model-accounts'),
   githubAccounts: () => get<GitHubAccountsView>('/v1/github/identities'),
@@ -1718,6 +1835,8 @@ export const api = {
         releaseEvents?: ReleaseEvents | null;
         /** Its host check (#327), or null for none. Absent from an older bridge. */
         hostCheck?: HostCheckSetting | null;
+        /** Its release recipe (#343), or null for none. Absent from an older bridge. */
+        release?: ReleaseSetting | null;
       }[];
       /** How many rounds a review runs before it stops and asks. Absent from an older bridge. */
       maxReviewRounds?: number | null;

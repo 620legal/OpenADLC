@@ -35,7 +35,7 @@ import { identityFromConfig } from './identity.js';
 import { HostdClient } from './hostd-client.js';
 import { NO_CLIENT_ID, registerInternalApi } from './internal-api.js';
 import { HostCheckService } from './host-check-service.js';
-import { ReleaseService, lastVersionOnGitHub } from './release-service.js';
+import { ReleaseService, lastReleaseOnGitHub } from './release-service.js';
 import { ReleasePublisher } from './release-publish.js';
 import { PauseHolds } from './pause-holds.js';
 import { MergeLine } from './merge-line.js';
@@ -412,9 +412,10 @@ async function main(): Promise<void> {
   });
   webhooks.useHostChecks(hostChecks);
   // A release build of one pinned commit, run by hostd as the release account
-  // (docs/adr/0068, 0070). Nothing here starts one: #345's route, behind the
-  // Approves check and a device-code proof, is its only caller. The last
-  // release is read as the app where it can be.
+  // (docs/adr/0068, 0070). Nothing here starts one: the cut's sign-in in
+  // `release-routes.ts`, behind the Approves check and a device-code proof,
+  // is its only caller (docs/adr/0072). The last release is read as the app
+  // where it can be.
   //
   // A built run is signed by hostd, tagged on its pinned SHA and published
   // as the app (#344, docs/adr/0071): with `appGate.client` only, never
@@ -427,7 +428,7 @@ async function main(): Promise<void> {
   });
   const releaseRuns = new ReleaseService({
     hostd,
-    lastVersion: lastVersionOnGitHub(deployClient),
+    lastRelease: lastReleaseOnGitHub(deployClient),
     fetchBot: () => automationBotName(config),
     publisher: releasePublisher,
   });
@@ -842,6 +843,9 @@ async function main(): Promise<void> {
     nextRun: (job: string) => jobs.nextRun(job),
     dispatching: anythingDispatches(dispatchMode),
     notifier,
+    // The cut's routes (`release-routes.ts`), the only caller of `start`;
+    // the compare view reads GitHub as the last release is read.
+    releaseCuts: { service: releaseRuns, reader: deployClient },
   };
   // Stops the look at Needs you for a waiting merge or a stopped review (`notify-waiting.ts`).
   const stopConsoleApi = registerConsoleApi(router, deps);

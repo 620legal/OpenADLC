@@ -31,6 +31,7 @@ who.me = ADMIN;
 /** What the host check form sent the bridge, what the bridge answers, and where the page went after. */
 const saved = vi.hoisted(() => ({
   calls: [] as { repo: string; hostCheck: unknown }[],
+  releases: [] as { repo: string; release: unknown }[],
   answer: { ok: true } as { ok: boolean; error?: string },
   redirects: [] as string[],
 }));
@@ -39,6 +40,10 @@ vi.mock('@/lib/api', () => ({
   readMe: async () => who.me,
   saveHostCheck: async (repo: string, hostCheck: unknown) => {
     saved.calls.push({ repo, hostCheck });
+    return saved.answer;
+  },
+  saveRelease: async (repo: string, release: unknown) => {
+    saved.releases.push({ repo, release });
     return saved.answer;
   },
   api: {
@@ -53,6 +58,23 @@ vi.mock('@/lib/api', () => ({
           stageModes: {},
           color: 'amber',
           hostCheck: { command: 'make host-ci', timeoutMinutes: 90, required: false },
+        },
+        {
+          name: 'mac-app',
+          fullName: 'janedoe/mac-app',
+          concurrency: 1,
+          owner: 'openadlc-atlas-janedoe',
+          stageModes: {},
+          color: 'green',
+          release: {
+            command: 'make release',
+            artifact: 'build/App.zip',
+            versionFile: 'Config.xcconfig',
+            versionKey: 'MARKETING_VERSION',
+            releaseRepo: 'janedoe/mac-app-releases',
+            timeoutMinutes: 240,
+            manifestAsset: 'manifest.json',
+          },
         },
       ],
       maxReviewRounds: 3,
@@ -206,6 +228,105 @@ describe('a repository’s settings page', () => {
         await RepositorySettingsPage({ params: Promise.resolve({ name: 'openadlc-testbed' }), searchParams: Promise.resolve({ hostCheckError: 'timeoutMinutes is 1 to 1440' }) }),
       );
       expect(html).toContain('timeoutMinutes is 1 to 1440');
+    });
+  });
+
+  describe('its release recipe (#343, #345)', () => {
+    /** The Release section's form's action. */
+    async function releaseAction(name: string): Promise<(form: FormData) => Promise<void>> {
+      const { default: RepositorySettingsPage } = await import('./page');
+      const tree = await RepositorySettingsPage({ params: Promise.resolve({ name }) });
+      const find = (node: unknown, inside: boolean): ((form: FormData) => Promise<void>) | null => {
+        if (!node || typeof node !== 'object') return null;
+        if (Array.isArray(node)) {
+          for (const child of node) {
+            const found = find(child, inside);
+            if (found) return found;
+          }
+          return null;
+        }
+        const element = node as { type?: unknown; props?: { action?: unknown; children?: unknown } };
+        if (inside && element.type === 'form' && typeof element.props?.action === 'function') return element.props.action as (form: FormData) => Promise<void>;
+        if (typeof element.type === 'function' && (element.type as { name?: string }).name === 'ReleaseSection') {
+          return find((element.type as (props: unknown) => unknown)(element.props), true);
+        }
+        return find(element.props?.children, inside);
+      };
+      const action = find(tree, false);
+      if (!action) throw new Error('no release form');
+      return action;
+    }
+
+    const form = (fields: Record<string, string>) => {
+      const data = new FormData();
+      for (const [key, value] of Object.entries(fields)) data.set(key, value);
+      return data;
+    };
+
+    it('says what it is, links to the Releases page and the account’s setup, with no Clear while none is set', async () => {
+      const html = await page('openadlc-testbed');
+      const section = html.slice(html.indexOf('id="release"'));
+      expect(section).toContain('>Release</h3>');
+      expect(section).toContain('href="/releases/openadlc-testbed"');
+      expect(section).toContain('docs/self-hosting.md#the-release-account');
+      for (const name of ['command', 'artifact', 'versionFile', 'versionKey', 'releaseRepo', 'manifestAsset']) expect(section).toMatch(new RegExp(`<input[^>]*name="${name}"`));
+      expect(section).toMatch(/<input[^>]*name="timeoutMinutes"[^>]*value="180"/);
+      expect(section).not.toContain('>Clear</button>');
+    });
+
+    it('shows the recipe set, and offers Clear', async () => {
+      const html = await page('mac-app');
+      const section = html.slice(html.indexOf('id="release"'));
+      expect(section).toMatch(/<input[^>]*name="command"[^>]*value="make release"/);
+      expect(section).toMatch(/<input[^>]*name="versionKey"[^>]*value="MARKETING_VERSION"/);
+      expect(section).toMatch(/<input[^>]*name="releaseRepo"[^>]*value="janedoe\/mac-app-releases"/);
+      expect(section).toMatch(/<input[^>]*name="timeoutMinutes"[^>]*value="240"/);
+      expect(section).toContain('>Clear</button>');
+    });
+
+    it('saves what was typed, empty optional fields as none, and an empty command or Clear takes it away', async () => {
+      saved.releases.length = 0;
+      saved.redirects.length = 0;
+      saved.answer = { ok: true };
+      const save = await releaseAction('mac-app');
+      await save(
+        form({
+          command: ' make release ',
+          artifact: 'build/App.zip',
+          versionFile: 'VERSION',
+          versionKey: '',
+          releaseRepo: '',
+          manifestAsset: '',
+          timeoutMinutes: '90',
+          intent: 'save',
+        }),
+      );
+      await save(form({ command: '', artifact: 'x', versionFile: 'VERSION', timeoutMinutes: '90', intent: 'save' }));
+      await save(form({ command: 'make release', artifact: 'x', versionFile: 'VERSION', timeoutMinutes: '90', intent: 'clear' }));
+      expect(saved.releases).toEqual([
+        {
+          repo: 'mac-app',
+          release: { command: 'make release', artifact: 'build/App.zip', versionFile: 'VERSION', versionKey: null, releaseRepo: null, timeoutMinutes: 90, manifestAsset: null },
+        },
+        { repo: 'mac-app', release: null },
+        { repo: 'mac-app', release: null },
+      ]);
+      expect(saved.redirects[0]).toBe('/settings/repositories/mac-app#release');
+    });
+
+    it('says the bridge’s refusal beside the form', async () => {
+      saved.redirects.length = 0;
+      saved.answer = { ok: false, error: 'release.artifact is a path relative to the repository' };
+      const save = await releaseAction('mac-app');
+      await save(form({ command: 'make release', artifact: '/abs', versionFile: 'VERSION', timeoutMinutes: '90', intent: 'save' }));
+      expect(saved.redirects[0]).toBe(`/settings/repositories/mac-app?releaseError=${encodeURIComponent('release.artifact is a path relative to the repository')}#release`);
+      saved.answer = { ok: true };
+
+      const { default: RepositorySettingsPage } = await import('./page');
+      const html = renderToStaticMarkup(
+        await RepositorySettingsPage({ params: Promise.resolve({ name: 'mac-app' }), searchParams: Promise.resolve({ releaseError: 'release.artifact is a path relative to the repository' }) }),
+      );
+      expect(html).toMatch(/data-release-error[^>]*>release.artifact is a path relative to the repository/);
     });
   });
 
