@@ -2214,6 +2214,15 @@ describe('whether the bridge may merge a pull request', () => {
       }
     });
 
+    it('holds for a green host-check status whose poster cannot be read, since it may hide another account’s red (#338)', () => {
+      const unknown = facts({
+        statuses: [{ context: 'review-gate', state: 'success' }, { context: 'host-check', state: 'success', byBridge: false, creatorUnknown: true }],
+      });
+      const reason = 'who posted host-check on the head cannot be read, so a red one another account set may be hidden';
+      expect(mergeDecision(unknown)).toMatchObject({ land: false, reason });
+      expect(mergeBlockers(unknown)).toContainEqual({ kind: 'unknown', reason });
+    });
+
     it('is a check a person never merges over', () => {
       const held = facts(required([], { state: 'failed', reason: null }));
       expect(mergeBlockers(held)[0]).toEqual({ kind: 'check', reason: mergeDecision(held).reason });
@@ -4725,10 +4734,22 @@ describe('an author named for their own paths signs off in the console (#322)', 
     expect(await read(async () => [ours('failure')], [ours('failure')]).decide()).toMatchObject({ land: true });
 
     // The full list unreadable: the combined status's host-check is taken as nobody's, and its red holds.
-    const unread = read(async () => {
+    const unreadable = async () => {
       throw new Error('GitHub answered 502');
-    }, [ours('failure')]);
+    };
+    const unread = read(unreadable, [ours('failure')]);
     expect(await unread.decide()).toMatchObject({ land: false, reason: 'host-check failed on the head' });
+
+    // Still unreadable, with the bridge's newer green the only one the combined status shows: it may be hiding
+    // another account's red, so who posted it being unknown holds the merge (#338).
+    const hiddenUnread = read(unreadable, [ours('success')]);
+    expect(await hiddenUnread.decide()).toMatchObject({
+      land: false,
+      reason: 'who posted host-check on the head cannot be read, so a red one another account set may be hidden',
+    });
+
+    // No host-check on the head at all: the combined status would show one if any account had posted it.
+    expect(await read(unreadable, []).decide()).toMatchObject({ land: true });
   });
 
   it('reads a required host check from the record, and carries its pass to a head with the same diff (#327)', async () => {

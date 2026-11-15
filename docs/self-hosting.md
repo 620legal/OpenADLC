@@ -2287,7 +2287,10 @@ the automation account. A status of that name posted by any other account,
 such as your own CI, counts like any other check: when it is red, it holds
 the merge. The bridge reads every status on the head, not GitHub's combined view,
 which keeps only the newest status of each name. Otherwise the bridge's own
-status could hide a red one.
+status could hide a red one. When GitHub won't return every status, a
+`host-check` on the head holds the merge, even a green one, until it does.
+The pull request's blockers say `who posted host-check on the head cannot be
+read`.
 
 **A result is only as trustworthy as every head that ran before it in that
 folder.** The working folder is kept between runs so that builds can be

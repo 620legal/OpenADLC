@@ -64,8 +64,12 @@ status only when it is `host-check` and `byBridge` is true. Any other red
 `host-check` is a red check.
 
 It fails closed. A login that can't be read matches nothing. If the full list
-can't be read, the combined status's `host-check` stands as nobody's, and its
-red holds.
+can't be read, the combined status's `host-check` stands as nobody's, marked
+`creatorUnknown`, and holds the merge whatever its state. That includes a
+green: the combined status keeps only the newest of a name, so a green from
+the bridge can hide an older red that another account posted. A head with no
+`host-check` at all holds nothing, because the combined status would show one
+if any account had posted it.
 
 The merge still decides the host check from the bridge's record
 (`host_check_runs`), never from a status, as 0064 says.

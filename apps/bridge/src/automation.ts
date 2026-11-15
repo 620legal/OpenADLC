@@ -161,6 +161,19 @@ function skippedForHostCheck(status: { context: string; byBridge?: boolean }): b
 }
 
 /**
+ * Why the head's `host-check` statuses can't be judged, or null. The
+ * combined status keeps only the newest of a name, so when the full list
+ * can't be read, a green it shows (the bridge's, say) can hide an older red
+ * that another account posted. Counting that one entry as nobody's red let
+ * the hidden red through, so an unknown creator holds the merge (#338).
+ */
+function hostCheckCreatorsUnknown(facts: Pick<MergeFacts, 'statuses'>): string | null {
+  return facts.statuses.some((status) => status.context === HOST_CHECK_CONTEXT && status.creatorUnknown === true)
+    ? `who posted ${nameInReason(HOST_CHECK_CONTEXT)} on the head cannot be read, so a red one another account set may be hidden`
+    : null;
+}
+
+/**
  * Why a required host check holds the merge, or null when it does not: a
  * pass on the head, or on an earlier head with its diff, lands it. Never a
  * pass through `carriedFrom`: a conflict resolution changed the code the
@@ -309,6 +322,13 @@ export interface MergeFacts {
      * the newest of a name. False when who posted it cannot be told.
      */
     byBridge?: boolean;
+    /**
+     * Set on the combined status's `host-check` when the full list could not
+     * be read. Who posted it is unknown, and a newer post can hide another
+     * account's red, whatever this one's state. It holds the merge until the
+     * list can be read (`hostCheckCreatorsUnknown`).
+     */
+    creatorUnknown?: boolean;
   }[];
   /** `review-gate` as OpenADLC published it on the head, or null when it cannot be read. */
   gate: 'pending' | 'success' | 'failure' | null;
@@ -1405,6 +1425,8 @@ export function mergeDecision(facts: MergeFacts): {
     ...facts.statuses.filter((status) => RED.has(status.state) && !skippedForHostCheck(status)).map((status) => status.context),
   ];
   if (red.length > 0) return refuse(`${[...new Set(red)].map(nameInReason).join(', ')} failed on the head`);
+  const creatorsUnknown = hostCheckCreatorsUnknown(facts);
+  if (creatorsUnknown) return refuse(creatorsUnknown);
   if (verdictFor([...ci], [REQUIRED_CHECK]) !== 'green') return refuse(`${REQUIRED_CHECK} has not passed on the head`);
   const hostHold = hostCheckHold(facts);
   if (hostHold) return refuse(hostHold);
@@ -1634,6 +1656,8 @@ export function mergeBlockers(facts: MergeFacts): MergeBlocker[] {
     ...facts.statuses.filter((status) => RED.has(status.state) && !skippedForHostCheck(status)).map((status) => status.context),
   ];
   if (red.length > 0) add('check', `${[...new Set(red)].map(nameInReason).join(', ')} failed on the head`);
+  const creatorsUnknown = hostCheckCreatorsUnknown(facts);
+  if (creatorsUnknown) add('unknown', creatorsUnknown);
   if (verdictFor([...ci], [REQUIRED_CHECK]) !== 'green') add('check', `${REQUIRED_CHECK} has not passed on the head`);
   // As `mergeDecision`: a required host check, from the bridge's record, is a check a person never merges over.
   const hostHold = hostCheckHold(facts);
@@ -3243,7 +3267,8 @@ export class Automation {
    * status keeps one per name, so the bridge's own post hid a red
    * `host-check` the repository's CI had set (#335). When the full list
    * cannot be read, the combined status's `host-check` stands, taken as
-   * nobody's: its red then holds, which is the side to fail on.
+   * nobody's and marked `creatorUnknown`. That holds the merge whatever its
+   * state, because its green may be hiding another account's red.
    */
   private async headStatuses(
     client: GitHubClient,
@@ -3258,7 +3283,7 @@ export class Automation {
     const others = combined.filter((status) => status.context !== HOST_CHECK_CONTEXT).map(({ context, state }) => ({ context, state }));
     const hostChecks = perCreator
       ? perCreator.map((status) => ({ context: status.context, state: status.state, byBridge: ours(status.creator) }))
-      : combined.filter((status) => status.context === HOST_CHECK_CONTEXT).map(({ context, state }) => ({ context, state, byBridge: false }));
+      : combined.filter((status) => status.context === HOST_CHECK_CONTEXT).map(({ context, state }) => ({ context, state, byBridge: false, creatorUnknown: true }));
     return [...others, ...hostChecks];
   }
 
