@@ -40,6 +40,9 @@ const GUARDED = [
   // account, and the release account's own (docs/adr/0068).
   'apps/hostd/src/account-probe.ts',
   'apps/hostd/src/release-account.ts',
+  // The cut's route, the one caller of ReleaseService.start: it alone decides
+  // who may cut a release (docs/adr/0072).
+  'apps/bridge/src/release-routes.ts',
 ];
 
 const skillTools = readdirSync(join(ROOT, 'crew', 'skills'))
