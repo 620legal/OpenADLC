@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { GitHubApiError, type PullCommit } from '@openadlc/github';
 import { DEFAULT_DELIVERY_RULES, MERGE_IS_SHIPPING, isForwardMove, renderGateComment, type StageKey } from '@openadlc/shared';
-import { deployRuns, hasEventOfType, ignoredIssues, issues, leases, listEventsOfType, mergeLines, repos, spendingLimits, tasks } from '@openadlc/db';
+import { audit, deployRuns, hasEventOfType, ignoredIssues, issues, lastEventAt, leases, listEventsOfType, mergeLines, recordEvent, repos, spendingLimits, tasks, withAdvisoryLock } from '@openadlc/db';
 import { Automation, mergeDecision, type MergeFacts } from './automation.js';
 import { attentionItems } from './attention.js';
 import { recordDesignMemory } from './design-memory.js';
@@ -12334,5 +12334,291 @@ describe('a crew pull request whose head conflicts with its base, before any sea
     expect(lines).toEqual(['openadlc#31: unknown after a restart, not yet acted on; tried again shortly']);
     expect(reviews()).toEqual([]);
     expect(decided).toEqual([]);
+  });
+});
+
+/**
+ * #360 opened while the webhook tunnel was down, and no delivery of its
+ * opening ever came: the board said its build had ended, Needs you was empty,
+ * and no seat was asked for 35 minutes, until a person turned it to draft and
+ * back. Reconcile hands such a pull request to `reviewUnheard`, which runs the
+ * `opened` delivery that never came; the round is claimed once, by it or by a
+ * late delivery (ADR 0077).
+ */
+describe('a crew pull request whose opening was never delivered, opened by reconcile', () => {
+  const HEAD = 'c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5';
+  const BUILDER = 'openadlc-atlas-janedoe';
+  const REPO = { id: 'repo-1', name: 'openadlc' };
+  const LIVE = { number: 31, title: 'Cache the price list', body: 'Closes #11', htmlUrl: 'https://github.test/janedoe/openadlc/pull/31', createdAt: '2026-11-16T16:42:00Z', author: BUILDER };
+  const PULL = {
+    number: 31,
+    title: LIVE.title,
+    body: LIVE.body,
+    draft: false,
+    state: 'open',
+    head: { sha: HEAD, ref: `agent/${BUILDER}/11-issue-11`, repo: { full_name: 'janedoe/openadlc' } },
+    base: { ref: 'main' },
+    labels: [],
+    html_url: LIVE.htmlUrl,
+    user: { login: BUILDER },
+  };
+  const pullNow = (over: Record<string, unknown> = {}) => ({
+    number: 31,
+    state: 'open' as const,
+    draft: false,
+    merged: false,
+    headRef: PULL.head.ref,
+    headSha: HEAD,
+    baseRef: 'main',
+    labels: [] as string[],
+    mergeable: true,
+    mergeableState: 'clean',
+    autoMerge: false,
+    author: BUILDER,
+    mergedBy: null,
+    headRepoFullName: 'janedoe/openadlc',
+    requestedReviewers: [],
+    requestedTeams: [],
+    ...over,
+  });
+
+  /** The `review.round_opened` events recorded, as the event log keeps them. */
+  let rounds: Record<string, unknown>[] = [];
+  const realRecord = vi.mocked(recordEvent).getMockImplementation()!;
+  const realLastEventAt = vi.mocked(lastEventAt).getMockImplementation()!;
+  const realLock = vi.mocked(withAdvisoryLock).getMockImplementation()!;
+  /** Who holds each lock, so two claims really wait on each other as Postgres's would. */
+  const held = new Map<string, Promise<unknown>>();
+
+  beforeEach(() => {
+    rounds = [];
+    held.clear();
+    store.bots = [{ id: 'bot-builder', name: BUILDER, slot: 'builder', role: 'implement', githubLogin: BUILDER }];
+    store.lease = { id: 'lease-11', botId: 'bot-builder', declaredPaths: ['src/a.ts'] };
+    store.botTasks = [];
+    store.localCiPasses = new Set([HEAD]);
+    vi.mocked(audit).mockClear();
+    vi.mocked(issues.setPullRequestNumber).mockClear();
+    vi.mocked(recordEvent).mockImplementation(async (event) => {
+      if (event.type === 'review.round_opened') rounds.push(event.payload as Record<string, unknown>);
+      return realRecord(event);
+    });
+    vi.mocked(lastEventAt).mockImplementation(async (type, fields) =>
+      type === 'review.round_opened' && rounds.some((round) => Object.entries(fields).every(([key, value]) => round[key] === value)) ? '2026-11-16T17:00:00.000Z' : null,
+    );
+    vi.mocked(withAdvisoryLock).mockImplementation(async (key, fn) => {
+      const before = held.get(key) ?? Promise.resolve();
+      const mine = before.then(() => fn());
+      held.set(key, mine.catch(() => undefined));
+      return mine;
+    });
+  });
+
+  afterEach(() => {
+    vi.mocked(recordEvent).mockImplementation(realRecord);
+    vi.mocked(lastEventAt).mockImplementation(realLastEventAt);
+    vi.mocked(withAdvisoryLock).mockImplementation(realLock);
+  });
+
+  type Statuses = () => Promise<{ context: string; state: string; creator: string | null }[]>;
+  function bridge(options: { pull?: ReturnType<typeof pullNow>; statuses?: Statuses; mergeable?: boolean } = {}) {
+    const gates: { state: string; description: string }[] = [];
+    const github = {
+      getPullRequest: vi.fn(async (_repo: string, _number: number) =>
+        options.pull ?? (options.mergeable === false ? pullNow({ mergeable: false, mergeableState: 'dirty' }) : pullNow()),
+      ),
+      statusesFor: vi.fn(options.statuses ?? (async () => [{ context: 'ci', state: 'success', creator: 'github-actions[bot]' }])),
+      getIssue: vi.fn(async () => ({ number: 31, state: 'open', labels: [], pullRequest: true })),
+      listPullFiles: async () => ['src/a.ts'],
+      listPullFilesAsNamed: async () => ['src/a.ts'],
+      listEveryPullFile: async () => ({ files: ['src/a.ts'], complete: true, renamedFrom: [] }),
+      readFileIfPresent: async () => null,
+    };
+    const automation = {
+      actors: { asBot: async () => github },
+      setReviewGate: vi.fn(async (input: { state: string; description: string }) => (gates.push({ state: input.state, description: input.description }), input)),
+      moveStage: vi.fn(async (_input: unknown) => ({ moved: true })),
+      comment: vi.fn(async () => 'https://github.test/c/1'),
+      decideReviewers: vi.fn(() => ({ reviewers: ['second', 'lead'], lead: 'lead', approvers: ['lead'], reasons: {}, humanReviewRequired: false })),
+      closingIssueLabels: vi.fn(async () => []),
+      requestReviewers: vi.fn(async () => undefined),
+      humansRequiredFor: vi.fn(async () => ({ rules: [], required: [] })),
+      setHumanReviewLabels: vi.fn(async () => undefined),
+      dropUnneededHumanRequests: vi.fn(async () => undefined),
+      computeReviewGate: vi.fn(() => ({ state: 'pending', description: 'waiting on second' })),
+      cannotReviewHere: vi.fn(async () => []),
+    };
+    const taskService = { open: vi.fn(async (_input: unknown) => ({ taskId: 'task-1', session: 's' })), gateDescription: async (text: string) => text };
+    const webhooks = new Webhooks(
+      { automationBot: null, humans: [], review: { maxRounds: 3 } } as never,
+      automation as never,
+      {} as never,
+      taskService as never,
+      {} as never,
+      { leave: async () => undefined } as never,
+    );
+    const conflicts = { pushed: vi.fn(async () => null), resolving: vi.fn(async () => false), start: vi.fn(async (_input: unknown) => 'resolving' as const) };
+    webhooks.useConflictRounds(conflicts);
+    // The real wait, for the conflict check; GitHub answers at once here, so it never waits.
+    if (options.mergeable !== undefined) {
+      webhooks.useMergeabilityWait(
+        new MergeabilityWait({
+          read: async (repoFullName, number) => github.getPullRequest(repoFullName, number),
+          now: () => Date.parse('2026-11-16T17:00:00.000Z'),
+          setTimer: () => undefined,
+          record: async () => undefined,
+          events: async () => [],
+          log: () => undefined,
+        }),
+      );
+    }
+    const opened = (kind: string) => taskService.open.mock.calls.filter(([input]) => (input as { kind: string }).kind === kind);
+    return { webhooks, automation, github, gates, conflicts, reviews: () => opened('review'), patches: () => opened('patch') };
+  }
+
+  async function quietly<T>(run: () => Promise<T>): Promise<T> {
+    const quiet = [vi.spyOn(console, 'log').mockImplementation(() => undefined), vi.spyOn(console, 'warn').mockImplementation(() => undefined)];
+    try {
+      return await run();
+    } finally {
+      for (const spy of quiet) spy.mockRestore();
+    }
+  }
+
+  function delivered(webhooks: Webhooks, action = 'opened') {
+    return webhooks.receive(
+      'pull_request',
+      { action, pull_request: PULL, repository: { name: 'openadlc', full_name: 'janedoe/openadlc' }, sender: { login: BUILDER } } as never,
+      `delivery-${Math.random()}`,
+    );
+  }
+
+  const opensUnheard = () => vi.mocked(audit).mock.calls.filter(([entry]) => entry.action === 'review.opened_unheard');
+
+  it('opens its round as the delivery would have: recorded, moved to Review, and its seats asked', async () => {
+    const { webhooks, automation, github, reviews } = bridge();
+
+    expect(await quietly(() => webhooks.reviewUnheard(REPO, LIVE))).toBe(true);
+
+    expect(github.getPullRequest).toHaveBeenCalledWith('janedoe/openadlc', 31);
+    expect(rounds).toEqual([{ subjectRef: 'openadlc#31', sha: HEAD, by: 'reconciler' }]);
+    expect(automation.moveStage).toHaveBeenCalledWith(expect.objectContaining({ issueNumber: 11, to: 'review' }));
+    expect(automation.requestReviewers).toHaveBeenCalledTimes(1);
+    expect(reviews().map(([input]) => (input as { bot: string }).bot)).toEqual(['second']);
+    expect(vi.mocked(issues.setPullRequestNumber)).toHaveBeenCalledWith('repo-1', 11, 31);
+    expect(opensUnheard()).toEqual([[{ actor: 'reconciler', action: 'review.opened_unheard', target: 'openadlc#31', payload: { sha: HEAD, issue: 11 } }]]);
+  });
+
+  it('opens nothing more when asked again, nor for a delivery of the same opening that comes late', async () => {
+    const { webhooks, automation, reviews } = bridge();
+
+    await quietly(() => webhooks.reviewUnheard(REPO, LIVE));
+    expect(await quietly(() => webhooks.reviewUnheard(REPO, LIVE))).toBe(false);
+    await quietly(() => delivered(webhooks));
+
+    expect(rounds).toHaveLength(1);
+    expect(automation.requestReviewers).toHaveBeenCalledTimes(1);
+    expect(reviews()).toHaveLength(1);
+  });
+
+  // A redelivered opening used to record a second round on the head, which
+  // moved the round's start: the reviews already given on it stopped counting.
+  it('records no second round for a redelivered opening, while a reopen still opens one', async () => {
+    const { webhooks, automation } = bridge();
+
+    await quietly(() => delivered(webhooks));
+    await quietly(() => delivered(webhooks));
+    expect(rounds).toEqual([{ subjectRef: 'openadlc#31', sha: HEAD }]);
+    expect(automation.requestReviewers).toHaveBeenCalledTimes(1);
+    expect(opensUnheard()).toEqual([]);
+
+    await quietly(() => delivered(webhooks, 'reopened'));
+    expect(rounds).toHaveLength(2);
+  });
+
+  it('leaves exactly one round when the late delivery and the repair race on the same head', async () => {
+    const { webhooks, automation, reviews } = bridge();
+    // The claim's read of the head's round is slow to come back, as a
+    // database's is: both openings are past every other check and read it at
+    // once, and only the lock keeps the second from reading before the first
+    // has recorded.
+    const answer = vi.mocked(lastEventAt).getMockImplementation()!;
+    vi.mocked(lastEventAt).mockImplementation(async (type, fields) => {
+      const read = await answer(type, fields);
+      if ('sha' in fields) await new Promise((resolve) => setTimeout(resolve, 20));
+      return read;
+    });
+
+    await quietly(() => Promise.all([webhooks.reviewUnheard(REPO, LIVE), delivered(webhooks)]));
+
+    expect(rounds).toHaveLength(1);
+    expect(automation.requestReviewers).toHaveBeenCalledTimes(1);
+    expect(reviews()).toHaveLength(1);
+  });
+
+  const failing: Statuses = async () => {
+    throw new Error('GitHub answered 502');
+  };
+  it.each([
+    ['a draft', { pull: pullNow({ draft: true }) }],
+    ['a closed one', { pull: pullNow({ state: 'closed' }) }],
+    ['one from a fork', { pull: pullNow({ headRepoFullName: 'stranger/openadlc' }) }],
+    ['one whose branch names no issue', { pull: pullNow({ headRef: 'fix-the-cache' }) }],
+    ['a person’s', { pull: pullNow({ author: 'janedoe' }) }],
+    ['one with a review-gate on its head', { statuses: (async () => [{ context: 'review-gate', state: 'pending', creator: 'openadlc[bot]' }]) as Statuses }],
+    ['one whose statuses cannot be read', { statuses: failing }],
+  ])('leaves %s alone', async (_name, options) => {
+    const { webhooks, automation, reviews } = bridge(options);
+
+    expect(await quietly(() => webhooks.reviewUnheard(REPO, LIVE))).toBe(false);
+
+    expect(rounds).toEqual([]);
+    expect(automation.requestReviewers).not.toHaveBeenCalled();
+    expect(reviews()).toEqual([]);
+  });
+
+  it('leaves one with no lease alone, and one with a round on an earlier head', async () => {
+    store.lease = null;
+    const unleased = bridge();
+    expect(await quietly(() => unleased.webhooks.reviewUnheard(REPO, LIVE))).toBe(false);
+
+    store.lease = { id: 'lease-11', botId: 'bot-builder', declaredPaths: ['src/a.ts'] };
+    rounds = [{ subjectRef: 'openadlc#31', sha: 'an-earlier-head' }];
+    const reviewed = bridge();
+    expect(await quietly(() => reviewed.webhooks.reviewUnheard(REPO, LIVE))).toBe(false);
+
+    expect(rounds).toHaveLength(1);
+    expect(unleased.automation.requestReviewers).not.toHaveBeenCalled();
+    expect(reviewed.automation.requestReviewers).not.toHaveBeenCalled();
+  });
+
+  it('holds a head with no local CI pass, as the builder’s own opening would be', async () => {
+    store.localCiPasses = new Set();
+    const { webhooks, gates, reviews, patches } = bridge();
+
+    expect(await quietly(() => webhooks.reviewUnheard(REPO, LIVE))).toBe(true);
+
+    expect(gates).toEqual([{ state: 'pending', description: 'no local CI pass for c5c5c5c: the builder runs openadlc-ci on it and pushes again' }]);
+    expect(patches().map(([input]) => (input as { bot: string }).bot)).toEqual([BUILDER]);
+    expect(reviews()).toEqual([]);
+  });
+
+  it('holds a head that conflicts with its base for its builder, and asks no seat', async () => {
+    const { webhooks, conflicts, automation, reviews } = bridge({ mergeable: false });
+
+    await quietly(() => webhooks.reviewUnheard(REPO, LIVE));
+
+    expect(conflicts.start).toHaveBeenCalledWith(expect.objectContaining({ prNumber: 31, beforeReview: true }));
+    expect(vi.mocked(audit)).toHaveBeenCalledWith(expect.objectContaining({ action: 'review.held_for_conflict', target: 'openadlc#31' }));
+    expect(automation.requestReviewers).not.toHaveBeenCalled();
+    expect(reviews()).toEqual([]);
+  });
+
+  it('throws when GitHub cannot be asked for the pull request, so reconcile tries again', async () => {
+    const { webhooks, github } = bridge();
+    github.getPullRequest.mockRejectedValueOnce(new Error('GitHub answered 502'));
+
+    await expect(quietly(() => webhooks.reviewUnheard(REPO, LIVE))).rejects.toThrow('GitHub answered 502');
+    expect(rounds).toEqual([]);
   });
 });

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { GitHubApiError } from '@openadlc/github';
 
 /**
@@ -96,6 +96,10 @@ vi.mock('@openadlc/db', () => ({
     return 'event-1';
   }),
   listEventsOfType: vi.fn(async () => ALREADY_RECORDED),
+  // The review rounds recorded, by the fields an event's payload holds.
+  lastEventAt: vi.fn(async (type: string, fields: Record<string, string | number>) =>
+    ROUNDS.some((round) => type === 'review.round_opened' && Object.entries(fields).every(([key, value]) => round[key] === value)) ? '2026-11-16T17:00:00.000Z' : null,
+  ),
   lastGithubDelivery: vi.fn(async () => HEARD),
   stageMoves: { listForIssue: vi.fn(async () => MOVES) },
   // Work items: a link per thing, an item per link, numbered once `WORK.numbered`.
@@ -135,6 +139,8 @@ const VOUCHED_SET: Record<string, unknown>[] = [];
 let LABELS_SET: { number: number; labels: string[] }[] = [];
 
 let RECORDED: { type: string; payload: unknown }[] = [];
+/** The `review.round_opened` events recorded, by their payloads. */
+let ROUNDS: Record<string, string | number>[] = [];
 let UNSTARTED: { id: string; subjectRef: string; leaseId: string | null; createdAt: string }[] = [];
 let ACTIVE_LEASES: { id: string; issueNumber: number; prNumber?: number | null; updatedAt?: string }[] = [];
 let SETTLED: { released: unknown[]; held: unknown[] } = { released: [], held: [] };
@@ -328,6 +334,7 @@ beforeEach(() => {
   VOUCHED_SET.length = 0;
   REFUSED.clear();
   RECORDED = [];
+  ROUNDS = [];
   ALREADY_RECORDED = [];
   HEARD = null;
   PAGES_ASKED = [];
@@ -1787,5 +1794,116 @@ describe('an install that cannot read GitHub', () => {
     expect(drift).toContainEqual(
       expect.objectContaining({ subject: 'qa', detail: 'no GitHub account is connected for this bot. Run: openadlc auth login --bot qa' }),
     );
+  });
+});
+
+/**
+ * #360 opened while no delivery reached the bridge, and sat unreviewed for
+ * 35 minutes with nothing on the board or in Needs you saying so: reconcile
+ * read it open every quarter hour and only recorded it as unheard.
+ */
+describe('a crew pull request whose opening was never delivered', () => {
+  const BUILDER = 'openadlc-atlas-janedoe';
+  const pull = (over: Partial<(typeof LIVE)[number]> = {}) =>
+    issue({ number: 31, pullRequest: true, labels: [], author: BUILDER, title: 'Cache the price list', htmlUrl: 'https://github.com/janedoe/OpenADLC/pull/31', ...over });
+
+  /** A reconciler whose intake opens a round as the webhook would, recording it. */
+  async function withReview(review?: (repo: unknown, live: { number: number }) => Promise<boolean>) {
+    const { Reconciler } = await import('./reconciler.js');
+    const reviewUnheard = vi.fn(
+      review ??
+        (async (_repo: unknown, live: { number: number }) => {
+          ROUNDS.push({ subjectRef: `openadlc#${live.number}`, sha: 'c1c1c1c' });
+          return true;
+        }),
+    );
+    const reconciler = new Reconciler(
+      { automationBot: 'flow' } as never,
+      { asBot: async () => ({ listIssues, getIssue, ...pullLookups }) } as never,
+      { health: async () => ({ ok: true }) } as never,
+      { learnIssue: async () => undefined, reviewUnheard },
+    );
+    return { run: (repair = true) => reconciler.run({ repair }), reviewUnheard };
+  }
+  const ofKind = (drift: { kind: string }[]) => drift.filter((entry) => entry.kind === 'review_unopened');
+
+  beforeEach(async () => {
+    const { bots } = await import('@openadlc/db');
+    vi.mocked(bots.listBots).mockResolvedValue([{ id: 'bot-builder', name: BUILDER, githubLogin: BUILDER }] as never);
+  });
+  afterEach(async () => {
+    const { bots } = await import('@openadlc/db');
+    vi.mocked(bots.listBots).mockResolvedValue([]);
+  });
+
+  it('gets its round from reconcile, once, and is still recorded as unheard', async () => {
+    LIVE = [issue(), pull({ createdAt: minutesAgo(10) })];
+    const { run, reviewUnheard } = await withReview();
+
+    const drift = await run();
+
+    expect(reviewUnheard).toHaveBeenCalledTimes(1);
+    expect(reviewUnheard).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'repo-1', name: 'openadlc' }),
+      expect.objectContaining({ number: 31, author: BUILDER, title: 'Cache the price list', htmlUrl: 'https://github.com/janedoe/OpenADLC/pull/31' }),
+    );
+    expect(ofKind(drift)).toEqual([
+      { kind: 'review_unopened', subject: 'openadlc#31', detail: 'its opening was never delivered; its review round was opened', repaired: true },
+    ]);
+    expect(RECORDED).toContainEqual(expect.objectContaining({ type: 'webhook.unheard', payload: expect.objectContaining({ subject: 'openadlc#31', what: 'opened' }) }));
+
+    // The round it opened is recorded: the next pass asks nothing.
+    expect(ofKind(await run())).toEqual([]);
+    expect(reviewUnheard).toHaveBeenCalledTimes(1);
+  });
+
+  it('is left alone with a round recorded on any head, a person’s, or closed', async () => {
+    ROUNDS = [{ subjectRef: 'openadlc#31', sha: 'an-earlier-head' }];
+    LIVE = [pull(), pull({ number: 32, author: 'janedoe' }), pull({ number: 33, state: 'closed' }), issue({ number: 34, author: BUILDER })];
+    const { run, reviewUnheard } = await withReview();
+
+    expect(ofKind(await run())).toEqual([]);
+    expect(reviewUnheard).not.toHaveBeenCalled();
+  });
+
+  it('is not reported when the webhook leaves it alone: a draft, no lease, a review-gate already on it', async () => {
+    LIVE = [pull()];
+    const { run, reviewUnheard } = await withReview(async () => false);
+
+    expect(ofKind(await run())).toEqual([]);
+    expect(reviewUnheard).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens nothing on a pass that only reads', async () => {
+    LIVE = [pull()];
+    const { run, reviewUnheard } = await withReview();
+
+    expect(ofKind(await run(false))).toEqual([]);
+    expect(reviewUnheard).not.toHaveBeenCalled();
+  });
+
+  it('goes on to the next when one fails, reports it, and tries it again on the next pass', async () => {
+    LIVE = [pull({ number: 31 }), pull({ number: 32 })];
+    const { run, reviewUnheard } = await withReview(async (_repo, live) => {
+      if (live.number === 31) throw new Error('GitHub answered 502');
+      ROUNDS.push({ subjectRef: `openadlc#${live.number}`, sha: 'c2c2c2c' });
+      return true;
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const drift = await run();
+
+      expect(reviewUnheard.mock.calls.map(([, live]) => live.number)).toEqual([31, 32]);
+      expect(ofKind(drift)).toEqual([
+        { kind: 'review_unopened', subject: 'openadlc#31', detail: 'its review round could not be opened: GitHub answered 502', repaired: false },
+        { kind: 'review_unopened', subject: 'openadlc#32', detail: 'its opening was never delivered; its review round was opened', repaired: true },
+      ]);
+      expect(warn).toHaveBeenCalledWith('[reconciler] openadlc#31: its review round was not opened: GitHub answered 502');
+
+      await run();
+      expect(reviewUnheard.mock.calls.map(([, live]) => live.number)).toEqual([31, 32, 31]);
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

@@ -1,7 +1,7 @@
-import { audit, bots, hosts, ignoredIssues, issues, lastGithubDelivery, leases, repos, stageMoves, tasks } from '@openadlc/db';
+import { audit, bots, hosts, ignoredIssues, issues, lastEventAt, lastGithubDelivery, leases, repos, stageMoves, tasks } from '@openadlc/db';
 import { actsForOn } from './people.js';
 import { GitHubApiError, type GitHubClient } from '@openadlc/github';
-import { actsFor, declaredPathsFrom, hasAbandonedLabel, isBackwardMove, isStageLabel, STAGE_LABELS, stageFromLabels, hasIgnoreLabel, type StageKey } from '@openadlc/shared';
+import { actsFor, declaredPathsFrom, hasAbandonedLabel, isCrewLogin, isBackwardMove, isStageLabel, STAGE_LABELS, stageFromLabels, hasIgnoreLabel, type StageKey } from '@openadlc/shared';
 import { howClosed } from './abandoned.js';
 import type { Actors } from './actors.js';
 import { asAutomation, automationBotName } from './automation-bot.js';
@@ -10,6 +10,7 @@ import type { HostdClient } from './hostd-client.js';
 import { leaseHoldUntil, pullOpenReader } from './task-service.js';
 import { openedUnheard, recordUnheard, type UnheardFinding } from './unheard.js';
 import { chooseIssueText, editNotTaken } from './vouched-text.js';
+import { REVIEW_ROUND_OPENED } from './work.js';
 import { linkListed, numberedRepoIds } from './work-items.js';
 
 export interface Drift {
@@ -27,6 +28,7 @@ export interface Drift {
     | 'label_missing'
     | 'github_unreadable'
     | 'bot_unconnected'
+    | 'review_unopened'
     | 'repair_failed';
   subject: string;
   /**
@@ -95,6 +97,15 @@ export interface IssueIntake {
    * (`Webhooks.leasesReleased`).
    */
   leasesReleased?(why?: string): Promise<void>;
+  /**
+   * An open crew pull request with no review round, whose `opened` delivery
+   * never came: that delivery run through as it would have been, so its
+   * round opens (`Webhooks.reviewUnheard`). Whether its head has a round now.
+   */
+  reviewUnheard?(
+    repo: { id: string; name: string },
+    live: { number: number; title: string; body: string | null; htmlUrl: string; createdAt?: string | null; author: string | null },
+  ): Promise<boolean>;
 }
 
 /** An issue or pull request as reconcile reads it from GitHub. */
@@ -461,6 +472,8 @@ export class Reconciler {
         letGo += 1;
         drift.push({ kind: 'lease_on_closed_pull', subject, detail, repaired: true });
       }
+
+      if (repair && this.intake.reviewUnheard) await this.reviewUnopened(repo, live, crew, drift);
     }
 
     // The first pass named its closed records from the bodies stored before
@@ -608,6 +621,39 @@ export class Reconciler {
     const moves = await (async () => stageMoves.listForIssue(repoId, issueNumber))().catch(() => []);
     const last = moves.at(-1);
     return last?.actor === 'bridge' && last.to === stage;
+  }
+
+  /**
+   * Open crew pull requests no round was ever opened on, handed to the
+   * webhook's own opening (`reviewUnheard`). #360 opened while no delivery
+   * reached the bridge, and sat unreviewed with nothing on the board or in
+   * Needs you saying so: this pass only recorded it as unheard.
+   *
+   * Only a crew account's with no round recorded on any head goes to GitHub
+   * at all, so the pass does not read every open pull request each time. One
+   * that fails is said and reported, the rest go on, and nothing is recorded,
+   * so the next pass tries it again.
+   */
+  private async reviewUnopened(
+    repo: { id: string; name: string },
+    live: readonly LiveIssue[],
+    crew: readonly { githubLogin: string | null }[],
+    drift: Drift[],
+  ): Promise<void> {
+    const review = this.intake.reviewUnheard;
+    if (!review) return;
+    for (const pull of live) {
+      if (!pull.pullRequest || pull.state !== 'open' || !isCrewLogin(crew, pull.author)) continue;
+      const subject = `${repo.name}#${pull.number}`;
+      try {
+        if (await lastEventAt(REVIEW_ROUND_OPENED, { subjectRef: subject })) continue;
+        if (!(await review.call(this.intake, repo, pull))) continue;
+        drift.push({ kind: 'review_unopened', subject, detail: 'its opening was never delivered; its review round was opened', repaired: true });
+      } catch (error) {
+        console.warn(`[reconciler] ${subject}: its review round was not opened: ${reasonOf(error)}`);
+        drift.push({ kind: 'review_unopened', subject, detail: `its review round could not be opened: ${reasonOf(error)}`, repaired: false });
+      }
+    }
   }
 
   /** One issue: what GitHub says against what the board has. */
