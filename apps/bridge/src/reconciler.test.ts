@@ -96,10 +96,15 @@ vi.mock('@openadlc/db', () => ({
     return 'event-1';
   }),
   listEventsOfType: vi.fn(async () => ALREADY_RECORDED),
-  // The review rounds recorded, by the fields an event's payload holds.
-  lastEventAt: vi.fn(async (type: string, fields: Record<string, string | number>) =>
-    ROUNDS.some((round) => type === 'review.round_opened' && Object.entries(fields).every(([key, value]) => round[key] === value)) ? '2026-11-16T17:00:00.000Z' : null,
-  ),
+  // The review rounds recorded, by the fields an event's payload holds; an
+  // entry may name another `type` and its own `at`, the latest of which is
+  // answered.
+  lastEventAt: vi.fn(async (type: string, fields: Record<string, string | number>) => {
+    const ats = ROUNDS.filter((round) => (round.type ?? 'review.round_opened') === type && Object.entries(fields).every(([key, value]) => round[key] === value)).map(
+      (round) => String(round.at ?? '2026-11-16T17:00:00.000Z'),
+    );
+    return ats.sort().at(-1) ?? null;
+  }),
   lastGithubDelivery: vi.fn(async () => HEARD),
   stageMoves: { listForIssue: vi.fn(async () => MOVES) },
   // Work items: a link per thing, an item per link, numbered once `WORK.numbered`.
@@ -1864,6 +1869,32 @@ describe('a crew pull request whose opening was never delivered', () => {
 
     expect(ofKind(await run())).toEqual([]);
     expect(reviewUnheard).not.toHaveBeenCalled();
+  });
+
+  // An opening that claimed its round and then failed, or that the bridge
+  // stopped in, used to be taken for open by its claim alone.
+  it('is handed over again when its round was claimed by an opening that never finished', async () => {
+    ROUNDS = [
+      { subjectRef: 'openadlc#31', sha: 'c1c1c1c', claim: 'opened', at: '2026-11-16T17:00:00.000Z' },
+      { subjectRef: 'openadlc#32', sha: 'c2c2c2c', claim: 'opened', at: '2026-11-16T17:00:00.000Z' },
+      { type: 'review.first_round_finished', subjectRef: 'openadlc#32', sha: 'c2c2c2c', at: '2026-11-16T17:00:01.000Z' },
+      // A claim, then a later round on a new head: that round is the one open.
+      { subjectRef: 'openadlc#33', sha: 'c3c3c3c', claim: 'opened', at: '2026-11-16T17:00:00.000Z' },
+      { subjectRef: 'openadlc#33', sha: 'c4c4c4c', at: '2026-11-16T17:05:00.000Z' },
+    ];
+    LIVE = [pull({ number: 31 }), pull({ number: 32 }), pull({ number: 33 })];
+    const { run, reviewUnheard } = await withReview(async (_repo, live) => {
+      ROUNDS.push({ type: 'review.first_round_finished', subjectRef: `openadlc#${live.number}`, sha: 'c1c1c1c', at: '2026-11-16T17:15:00.000Z' });
+      return true;
+    });
+
+    expect(ofKind(await run())).toEqual([
+      { kind: 'review_unopened', subject: 'openadlc#31', detail: 'its opening was never delivered; its review round was opened', repaired: true },
+    ]);
+    expect(reviewUnheard.mock.calls.map(([, live]) => live.number)).toEqual([31]);
+
+    expect(ofKind(await run())).toEqual([]);
+    expect(reviewUnheard).toHaveBeenCalledTimes(1);
   });
 
   it('is not reported when the webhook leaves it alone: a draft, no lease, a review-gate already on it', async () => {

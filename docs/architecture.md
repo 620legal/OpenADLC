@@ -1196,7 +1196,9 @@ task's session, rather than waiting for the role's next task
 - **Webhooks are idempotent.** Each handler works out what should be true from
   the delivery and the current state, so a duplicate does nothing twice. A
   delivered `opened` and reconcile's repair of one claim a head's first review
-  round once, under one lock, so a redelivery or a race leaves one round
+  round once, under one lock held until the opening is done, so a redelivery
+  or a race leaves one round; an opening that failed after its claim is
+  finished by the next delivery or reconcile pass, on the same round
   (docs/adr/0077-a-pull-requests-first-round-is-claimed-once-by-its-delivery-or-by-reconcile.md).
 - **The reconciler** (every 15 minutes) compares GitHub with the board and
   repairs what a missed delivery left wrong: an issue never heard of, a stage

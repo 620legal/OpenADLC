@@ -32,23 +32,34 @@ stopped counting; a repair racing a late delivery would have opened two.
 ## Decision
 
 A first round on a head is claimed once. A delivered `opened` and reconcile's
-repair both claim it under `withAdvisoryLock('review-round:<repo>#<pr>')`
-(`firstRoundLock`). Inside the lock they check for a `review.round_opened`
-with that subject and sha, and record one only when none exists; the one that
-finds one opens nothing more. `reopened`, `ready_for_review` and `synchronize`
-record as before: a reopen or a new diff is a new round on purpose.
+repair both open it under `withAdvisoryLock('review-round:<repo>#<pr>')`
+(`firstRoundLock`), held until the opening is done (`openFirstRound`). Inside
+the lock they record a `review.round_opened` with that subject and sha and
+`claim: 'opened'` when none exists, run the rest of the opening (the local-CI
+hold, the conflict hold, or `openReviews`), and then record
+`review.first_round_finished` for that head. Only the finish makes a later
+opening of the head open nothing. A claim with no finish after it was left by
+an opening that threw after the claim (a GitHub error before the seats were
+asked) or that the bridge stopped in; the next delivery, or reconcile, finishes
+it on the round already recorded, recording no second one. A round on the
+head that no `opened` claimed (a reopen's, or one from before the claim) is
+taken as open. `reopened`, `ready_for_review` and `synchronize` record as
+before: a reopen or a new diff is a new round on purpose.
 
 Reconcile opens a first round only for an open, non-draft, same-repository
 pull request that a crew account opened, whose branch names an issue with an
 active lease, and that has no recorded round on any head and no `review-gate`
-status on its head; a status that cannot be read is not "none". It opens it by
+status on its head, a status that cannot be read is not "none"; or one whose
+head's round an `opened` claimed and never finished, its own `review-gate`
+notwithstanding, since the opening may have set one before it failed. It
+opens it by
 running the `opened` delivery that never came through `onPullRequest`
 (`Webhooks.reviewUnheard`, with the author as the sender), never by calling
-`openReviews` directly. Its claim records `by: 'reconciler'`, and the repair
-audits `review.opened_unheard` and reports drift `review_unopened`. One that
-fails is reported, the pass goes on, and the next pass tries it again. A
-delivery whose lock cannot be had records as before, unclaimed, rather than
-leave a pull request unreviewed.
+`openReviews` directly. Its claim and finish record `by: 'reconciler'`, and
+the repair audits `review.opened_unheard` and reports drift
+`review_unopened`. One that fails is reported, the pass goes on, and the next
+pass tries it again. A delivery whose lock cannot be had opens without it,
+rather than leave a pull request unreviewed.
 
 ## What this rules out
 
@@ -58,6 +69,13 @@ leave a pull request unreviewed.
   `createdAt`). A person's manual redelivery, or the tunnel watch's own, can
   arrive at any time, so a window narrows the race without closing it. The
   lock closes it, and costs one lock per opening.
+- **Ending an opening at its claim.** The first build of this did: a
+  delivery that claimed the round and then failed on GitHub left a round
+  recorded and no seat asked, its redelivery found the claim and opened
+  nothing, and reconcile skipped a pull request with a round recorded — the
+  stranding this decision exists to end.
+- **Recording the round only once the opening is done.** The round's start is
+  what reviews count from, and it is recorded before any seat is asked (#118).
 - **A unique row per round.** That needs a migration, and the event plus the
   lock already give one round.
 - **Repairing a lost `ready_for_review` or `synchronize`.** A pull request

@@ -964,7 +964,10 @@ repository, on a branch whose issue has an active lease, with no round recorded
 and no `review-gate` on its head. Reconcile's report names it
 `review_unopened`, and the audit log records `review.opened_unheard`. There is
 no need to turn it to draft and back. One it could not open is reported with
-the reason and tried again on the next pass.
+the reason and tried again on the next pass. So is one whose opening was
+delivered but failed part way, after its round was recorded and before its
+seats were asked (a GitHub error, or the bridge stopping): GitHub's
+redelivery, or the next pass, finishes it on the round already recorded.
 
 ## A service stopped, or keeps stopping
 

@@ -37,6 +37,7 @@ import {
   testedCandidate,
   Webhooks,
 } from './webhooks.js';
+import { REVIEW_FIRST_ROUND_FINISHED } from './reconciler.js';
 
 /**
  * The store is a fake so an issue delivery can be watched arriving, and a
@@ -5693,7 +5694,7 @@ describe('a pull request for an issue', () => {
     );
 
     const rounds = vi.mocked(recordEvent).mock.calls.filter(([event]) => event.type === 'review.round_opened');
-    expect(rounds).toEqual([[{ source: 'platform', type: 'review.round_opened', payload: { subjectRef: 'openadlc#2', sha: 'abc123' } }]]);
+    expect(rounds).toEqual([[{ source: 'platform', type: 'review.round_opened', payload: { subjectRef: 'openadlc#2', sha: 'abc123', claim: 'opened' } }]]);
     expect(open).toHaveBeenCalledTimes(1);
     const recordedAt = vi.mocked(recordEvent).mock.invocationCallOrder[vi.mocked(recordEvent).mock.calls.findIndex(([event]) => event.type === 'review.round_opened')]!;
     expect(recordedAt).toBeLessThan(open.mock.invocationCallOrder[0]!);
@@ -10280,7 +10281,7 @@ describe('a push to a stacked pull request', () => {
       await opened(webhooks);
 
       expect(taskService.open).toHaveBeenCalledWith(expect.objectContaining({ bot: 'second', kind: 'review', subjectRef: 'openadlc#31' }));
-      expect(await roundsOpened()).toEqual([{ subjectRef: 'openadlc#31', sha: PUSHED }]);
+      expect(await roundsOpened()).toEqual([{ subjectRef: 'openadlc#31', sha: PUSHED, claim: 'opened' }]);
     });
 
     it('is left as it is while what it was built on has not merged, or when it was not stacked', async () => {
@@ -12384,6 +12385,8 @@ describe('a crew pull request whose opening was never delivered, opened by recon
 
   /** The `review.round_opened` events recorded, as the event log keeps them. */
   let rounds: Record<string, unknown>[] = [];
+  /** The openings recorded as finished (`review.first_round_finished`). */
+  let finishes: Record<string, unknown>[] = [];
   const realRecord = vi.mocked(recordEvent).getMockImplementation()!;
   const realLastEventAt = vi.mocked(lastEventAt).getMockImplementation()!;
   const realLock = vi.mocked(withAdvisoryLock).getMockImplementation()!;
@@ -12399,13 +12402,16 @@ describe('a crew pull request whose opening was never delivered, opened by recon
     store.localCiPasses = new Set([HEAD]);
     vi.mocked(audit).mockClear();
     vi.mocked(issues.setPullRequestNumber).mockClear();
+    finishes = [];
     vi.mocked(recordEvent).mockImplementation(async (event) => {
       if (event.type === 'review.round_opened') rounds.push(event.payload as Record<string, unknown>);
+      if (event.type === REVIEW_FIRST_ROUND_FINISHED) finishes.push(event.payload as Record<string, unknown>);
       return realRecord(event);
     });
-    vi.mocked(lastEventAt).mockImplementation(async (type, fields) =>
-      type === 'review.round_opened' && rounds.some((round) => Object.entries(fields).every(([key, value]) => round[key] === value)) ? '2026-11-16T17:00:00.000Z' : null,
-    );
+    vi.mocked(lastEventAt).mockImplementation(async (type, fields) => {
+      const kept = type === 'review.round_opened' ? rounds : type === REVIEW_FIRST_ROUND_FINISHED ? finishes : [];
+      return kept.some((event) => Object.entries(fields).every(([key, value]) => event[key] === value)) ? '2026-11-16T17:00:00.000Z' : null;
+    });
     vi.mocked(withAdvisoryLock).mockImplementation(async (key, fn) => {
       const before = held.get(key) ?? Promise.resolve();
       const mine = before.then(() => fn());
@@ -12501,7 +12507,8 @@ describe('a crew pull request whose opening was never delivered, opened by recon
     expect(await quietly(() => webhooks.reviewUnheard(REPO, LIVE))).toBe(true);
 
     expect(github.getPullRequest).toHaveBeenCalledWith('janedoe/openadlc', 31);
-    expect(rounds).toEqual([{ subjectRef: 'openadlc#31', sha: HEAD, by: 'reconciler' }]);
+    expect(rounds).toEqual([{ subjectRef: 'openadlc#31', sha: HEAD, claim: 'opened', by: 'reconciler' }]);
+    expect(finishes).toEqual([{ subjectRef: 'openadlc#31', sha: HEAD, by: 'reconciler' }]);
     expect(automation.moveStage).toHaveBeenCalledWith(expect.objectContaining({ issueNumber: 11, to: 'review' }));
     expect(automation.requestReviewers).toHaveBeenCalledTimes(1);
     expect(reviews().map(([input]) => (input as { bot: string }).bot)).toEqual(['second']);
@@ -12528,12 +12535,64 @@ describe('a crew pull request whose opening was never delivered, opened by recon
 
     await quietly(() => delivered(webhooks));
     await quietly(() => delivered(webhooks));
-    expect(rounds).toEqual([{ subjectRef: 'openadlc#31', sha: HEAD }]);
+    expect(rounds).toEqual([{ subjectRef: 'openadlc#31', sha: HEAD, claim: 'opened' }]);
+    expect(finishes).toEqual([{ subjectRef: 'openadlc#31', sha: HEAD }]);
     expect(automation.requestReviewers).toHaveBeenCalledTimes(1);
     expect(opensUnheard()).toEqual([]);
 
     await quietly(() => delivered(webhooks, 'reopened'));
     expect(rounds).toHaveLength(2);
+  });
+
+  // Claimed and then stopped short of the seats — a GitHub error between the
+  // claim and the reviews, or the bridge stopping — the round used to be
+  // taken for open by its claim alone: the redelivery opened nothing, and
+  // reconcile skipped a pull request with a round recorded.
+  it('lets a redelivery finish an opening that claimed its round and then failed, on the same round', async () => {
+    const { webhooks, automation, reviews } = bridge();
+    automation.moveStage.mockRejectedValueOnce(new Error('GitHub answered 502'));
+
+    await quietly(() => delivered(webhooks)).catch(() => undefined);
+    expect(rounds).toHaveLength(1);
+    expect(finishes).toEqual([]);
+    expect(reviews()).toEqual([]);
+
+    await quietly(() => delivered(webhooks));
+    expect(rounds).toEqual([{ subjectRef: 'openadlc#31', sha: HEAD, claim: 'opened' }]);
+    expect(finishes).toEqual([{ subjectRef: 'openadlc#31', sha: HEAD }]);
+    expect(automation.requestReviewers).toHaveBeenCalledTimes(1);
+    expect(reviews()).toHaveLength(1);
+
+    await quietly(() => delivered(webhooks));
+    expect(reviews()).toHaveLength(1);
+  });
+
+  it('finishes from reconcile an opening that claimed its round and then failed, its own review-gate notwithstanding', async () => {
+    const { webhooks, automation, reviews } = bridge({ statuses: async () => [{ context: 'review-gate', state: 'pending', creator: 'openadlc[bot]' }] });
+    automation.moveStage.mockRejectedValueOnce(new Error('GitHub answered 502'));
+    await quietly(() => delivered(webhooks)).catch(() => undefined);
+    expect(reviews()).toEqual([]);
+
+    expect(await quietly(() => webhooks.reviewUnheard(REPO, LIVE))).toBe(true);
+    expect(rounds).toHaveLength(1);
+    expect(finishes).toEqual([{ subjectRef: 'openadlc#31', sha: HEAD, by: 'reconciler' }]);
+    expect(reviews()).toHaveLength(1);
+    expect(opensUnheard()).toHaveLength(1);
+
+    expect(await quietly(() => webhooks.reviewUnheard(REPO, LIVE))).toBe(false);
+    expect(reviews()).toHaveLength(1);
+  });
+
+  it('leaves a repair that fails after its claim for the next pass to finish', async () => {
+    const { webhooks, automation, reviews } = bridge();
+    automation.moveStage.mockRejectedValueOnce(new Error('GitHub answered 502'));
+
+    await expect(quietly(() => webhooks.reviewUnheard(REPO, LIVE))).rejects.toThrow('GitHub answered 502');
+    expect(finishes).toEqual([]);
+
+    expect(await quietly(() => webhooks.reviewUnheard(REPO, LIVE))).toBe(true);
+    expect(rounds).toHaveLength(1);
+    expect(reviews()).toHaveLength(1);
   });
 
   it('leaves exactly one round when the late delivery and the repair race on the same head', async () => {

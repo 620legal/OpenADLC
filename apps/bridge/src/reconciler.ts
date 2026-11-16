@@ -108,6 +108,13 @@ export interface IssueIntake {
   ): Promise<boolean>;
 }
 
+/**
+ * Recorded once an `opened` delivery, or reconcile's repair of one, has done
+ * all its opening (ADR 0077): a first round claimed with none after it is
+ * finished by the next delivery or reconcile pass.
+ */
+export const REVIEW_FIRST_ROUND_FINISHED = 'review.first_round_finished';
+
 /** An issue or pull request as reconcile reads it from GitHub. */
 export type LiveIssue = Awaited<ReturnType<GitHubClient['listIssues']>>[number];
 
@@ -629,10 +636,11 @@ export class Reconciler {
    * reached the bridge, and sat unreviewed with nothing on the board or in
    * Needs you saying so: this pass only recorded it as unheard.
    *
-   * Only a crew account's with no round recorded on any head goes to GitHub
-   * at all, so the pass does not read every open pull request each time. One
-   * that fails is said and reported, the rest go on, and nothing is recorded,
-   * so the next pass tries it again.
+   * Only a crew account's with no round recorded on any head, or whose first
+   * round's opening never finished, goes to GitHub at all, so the pass does
+   * not read every open pull request each time. One that fails is said and
+   * reported, the rest go on, and nothing is recorded, so the next pass tries
+   * it again.
    */
   private async reviewUnopened(
     repo: { id: string; name: string },
@@ -646,7 +654,7 @@ export class Reconciler {
       if (!pull.pullRequest || pull.state !== 'open' || !isCrewLogin(crew, pull.author)) continue;
       const subject = `${repo.name}#${pull.number}`;
       try {
-        if (await lastEventAt(REVIEW_ROUND_OPENED, { subjectRef: subject })) continue;
+        if (!(await this.roundUnopened(subject))) continue;
         if (!(await review.call(this.intake, repo, pull))) continue;
         drift.push({ kind: 'review_unopened', subject, detail: 'its opening was never delivered; its review round was opened', repaired: true });
       } catch (error) {
@@ -654,6 +662,22 @@ export class Reconciler {
         drift.push({ kind: 'review_unopened', subject, detail: `its review round could not be opened: ${reasonOf(error)}`, repaired: false });
       }
     }
+  }
+
+  /**
+   * Whether a pull request has no round, or its latest round is an `opened`
+   * claim whose opening never finished: it threw after the claim, on a GitHub
+   * error before the seats were asked, or the bridge stopped in it. Taken for
+   * open by the claim alone, such a pull request sat unreviewed, since a
+   * redelivery's claim found the round and opened nothing (ADR 0077).
+   */
+  private async roundUnopened(subjectRef: string): Promise<boolean> {
+    const round = await lastEventAt(REVIEW_ROUND_OPENED, { subjectRef });
+    if (!round) return true;
+    const claim = await lastEventAt(REVIEW_ROUND_OPENED, { subjectRef, claim: 'opened' });
+    if (!claim || Date.parse(claim) < Date.parse(round)) return false;
+    const finished = await lastEventAt(REVIEW_FIRST_ROUND_FINISHED, { subjectRef });
+    return !finished || Date.parse(finished) < Date.parse(claim);
   }
 
   /** One issue: what GitHub says against what the board has. */
