@@ -116,10 +116,14 @@ export const PERSON_ASKED_AGAIN = 'review.person_asked_again';
 export const PERSON_AWAITED = 'review.person_awaited';
 
 /**
- * Answered work whose resume GitHub did not answer the sign-in's refresh for,
- * and which waits paused for it (`TaskService.resume`): `{ taskId, subjectRef,
- * answeredAt, until }`, all strings. Needs you reads it for a card while the
- * task is still owed that resume (`attention.ts`).
+ * Answered work whose resume waits paused (`TaskService.resume`): GitHub did
+ * not answer the sign-in's refresh, or the network failed between the bridge
+ * and hostd or out of hostd. `{ taskId, subjectRef, answeredAt, until, cause,
+ * reason }`, all strings: `cause` is `github` or `network`, and an event
+ * recorded before there was one is `github`; `reason` is what the try failed
+ * with, cut to 300 characters. Its name is kept, so events already stored
+ * still read. Needs you reads it for a card while the task is still owed that
+ * resume (`attention.ts`).
  */
 export const RESUME_WAITS_ON_GITHUB = 'task.resume_waits_on_github';
 

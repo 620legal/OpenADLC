@@ -3865,7 +3865,40 @@ describe('reading which answered work waits for GitHub', () => {
     try {
       const input = await readAttention(NOW);
       expect(input.resumeWaits).toEqual([
-        { taskId: 'task-waits', botId: 'bot-builder', kind: 'implement', subjectRef: 'openadlc-testbed#10', since: minutesAgo(19), until: '2026-09-24T13:40:00.000Z' },
+        // Recorded before there was a cause: GitHub's, as it was then.
+        { taskId: 'task-waits', botId: 'bot-builder', kind: 'implement', subjectRef: 'openadlc-testbed#10', since: minutesAgo(19), until: '2026-09-24T13:40:00.000Z', cause: 'github' },
+      ]);
+    } finally {
+      store.owed = [];
+      store.resumeWaits = [];
+    }
+  });
+
+  it('reads a wait the network caused, with its reason (#359)', async () => {
+    const { readAttention } = await load();
+    store.gates = [];
+    store.tasks = [];
+    store.owed = [{ id: 'task-net', botId: 'bot-builder', kind: 'intake', subjectRef: 'openadlc-testbed#30', answeredAt: minutesAgo(10) }];
+    store.resumeWaits = [
+      {
+        at: minutesAgo(9),
+        payload: { taskId: 'task-net', subjectRef: 'openadlc-testbed#30', answeredAt: minutesAgo(10), until: '2026-09-24T13:50:00.000Z', cause: 'network', reason: 'fetch failed' },
+      },
+    ];
+
+    try {
+      const input = await readAttention(NOW);
+      expect(input.resumeWaits).toEqual([
+        {
+          taskId: 'task-net',
+          botId: 'bot-builder',
+          kind: 'intake',
+          subjectRef: 'openadlc-testbed#30',
+          since: minutesAgo(9),
+          until: '2026-09-24T13:50:00.000Z',
+          cause: 'network',
+          reason: 'fetch failed',
+        },
       ]);
     } finally {
       store.owed = [];
@@ -4029,7 +4062,7 @@ describe('a start GitHub did not answer for', () => {
       requests: [],
       stallEvents: [],
       resumeWaits: [
-        { taskId: 'task-paused', botId: 'bot-builder', kind: 'implement', subjectRef: 'openadlc-testbed#16', since: minutesAgo(3), until: '2026-09-24T13:57:00.000Z' },
+        { taskId: 'task-paused', botId: 'bot-builder', kind: 'implement', subjectRef: 'openadlc-testbed#16', since: minutesAgo(3), until: '2026-09-24T13:57:00.000Z', cause: 'github' },
       ],
     });
 
@@ -4047,6 +4080,48 @@ describe('a start GitHub did not answer for', () => {
     });
     expect(items[0]?.actions).toEqual([
       { kind: 'open_url', label: 'GitHub’s status', url: 'https://www.githubstatus.com' },
+      { kind: 'stop_task', label: 'Stop', taskId: 'task-paused' },
+      { kind: 'open_thread', label: 'Open thread', bot: 'openadlc-atlas-janedoe' },
+    ]);
+  });
+
+  it('shows answered work that waits for the network as a card that says why, with no GitHub status (#359)', async () => {
+    const { attentionItems } = await load();
+
+    const items = attentionItems({
+      now: NOW,
+      gates: [],
+      tasks: [],
+      bots: BOTS,
+      repos: REPOS,
+      issues: ISSUES,
+      requests: [],
+      stallEvents: [],
+      resumeWaits: [
+        {
+          taskId: 'task-paused',
+          botId: 'bot-builder',
+          kind: 'implement',
+          subjectRef: 'openadlc-testbed#16',
+          since: minutesAgo(3),
+          until: '2026-09-24T13:57:00.000Z',
+          cause: 'network',
+          reason: 'fetch failed',
+        },
+      ],
+    });
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      id: 'resume-wait:task-paused',
+      kind: 'resume_waiting',
+      group: 'work',
+      headline: 'The builder (openadlc-atlas-janedoe) waits for the network to go on with the change',
+      detail:
+        'The answer is recorded. OpenADLC could not reach hostd to start it again (fetch failed). ' +
+        'It tries again on every sweep until 2026-09-24 13:57 UTC, then fails it with a card to try again.',
+    });
+    expect(items[0]?.actions).toEqual([
       { kind: 'stop_task', label: 'Stop', taskId: 'task-paused' },
       { kind: 'open_thread', label: 'Open thread', bot: 'openadlc-atlas-janedoe' },
     ]);

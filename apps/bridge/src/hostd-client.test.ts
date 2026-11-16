@@ -1,7 +1,14 @@
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { HOSTD_NOT_ANSWERING_FOR_ACCOUNTS, HOSTD_NOT_ANSWERING_FOR_ATTACH, HostdClient, LOCAL_CI_TIMEOUT_MS, START_TIMEOUT_MS } from './hostd-client.js';
+import {
+  HOSTD_NOT_ANSWERING_FOR_ACCOUNTS,
+  HOSTD_NOT_ANSWERING_FOR_ATTACH,
+  HostdClient,
+  LOCAL_CI_TIMEOUT_MS,
+  START_TIMEOUT_MS,
+  hostdDidNotAnswer,
+} from './hostd-client.js';
 
 /**
  * A stand-in for hostd that records what it was asked and answers what it is
@@ -257,6 +264,36 @@ describe('a refusal from hostd on any other call', () => {
     const failure = await silent.sessions('atlas').catch((error: Error) => error);
     expect(failure).toMatchObject({ status: 502 });
     expect((failure as Error).message).not.toContain('127.0.0.1');
+  });
+});
+
+describe('telling a hostd that did not answer from one that answered with a failure (#359)', () => {
+  it('tags a call nothing answered, and one past its time, and not a 502 or 504 hostd sent itself', async () => {
+    const refused = await new HostdClient('http://127.0.0.1:1', SECRET).resumeTask('task-1', []).catch((error: unknown) => error);
+    expect(refused).toMatchObject({ status: 502, noAnswer: true });
+    expect(hostdDidNotAnswer(refused)).toBe(true);
+
+    const silent = createServer(() => undefined);
+    await new Promise<void>((resolve) => silent.listen(0, '127.0.0.1', resolve));
+    try {
+      const { port } = silent.address() as AddressInfo;
+      const timedOut = await new HostdClient(`http://127.0.0.1:${port}`, SECRET, { localCiTimeoutMs: 50 }).startLocalCi('task-1').catch((error: unknown) => error);
+      expect(timedOut).toMatchObject({ status: 504, noAnswer: true });
+      expect(hostdDidNotAnswer(timedOut)).toBe(true);
+    } finally {
+      silent.closeAllConnections();
+      await new Promise<void>((resolve) => silent.close(() => resolve()));
+    }
+
+    answer = { status: 502, body: { error: 'x' } };
+    const answered502 = await client.resumeTask('task-1', []).catch((error: unknown) => error);
+    expect(answered502).toMatchObject({ status: 502, message: 'x' });
+    expect(hostdDidNotAnswer(answered502)).toBe(false);
+
+    answer = { status: 500, body: { error: 'fetch failed' } };
+    const answered500 = await client.resumeTask('task-1', []).catch((error: unknown) => error);
+    expect(answered500).toMatchObject({ status: 500, message: 'fetch failed' });
+    expect(hostdDidNotAnswer(answered500)).toBe(false);
   });
 });
 

@@ -10,7 +10,7 @@ import { effectiveConfig } from './effective-config.js';
 import { asAutomation } from './automation-bot.js';
 import { alreadyLanded, endsWithSubject, subjectClosed, wasRefused } from './gates.js';
 import { blockersOf, waitingOnBlocked, type Blocker } from './health/checks/crew.js';
-import type { HostdClient, ReviewMode } from './hostd-client.js';
+import { hostdDidNotAnswer, type HostdClient, type ReviewMode } from './hostd-client.js';
 import { reviewRulesOf, seatsWaitedOn, type LateAsk, type NotCounted, type PersonNotCounted } from './automation.js';
 import { requestPrefixOf } from './request-context.js';
 import { readSeatPauses, seatPausedWords, type SeatPause } from './seat-pause.js';
@@ -170,6 +170,28 @@ function hostWasFull(error: unknown): boolean {
   const status = (error as { status?: number } | null)?.status;
   return status === 503 && /all it has room for/.test(error instanceof Error ? error.message : String(error));
 }
+
+/** A call out of hostd that failed on the network: what hostd's catch-all 500 says when its own `fetch` threw. */
+const NETWORK_REASON = /\b(ECONNREFUSED|ECONNRESET|ETIMEDOUT|UND_ERR_CONNECT_TIMEOUT|UND_ERR_SOCKET)\b|socket hang up|aborted due to timeout/;
+
+/**
+ * Whether a resume failed on the network rather than being refused, and how.
+ * `'no-answer'`: hostd never answered (`hostdDidNotAnswer`), so it may have
+ * begun the resume all the same. `'answered'`: hostd answered 500 with its
+ * own call out failing — seen live as a bare `fetch failed` in the minute
+ * the bridge's own GitHub calls failed — and started nothing. Null for a
+ * refusal: any 4xx, a 500 with another reason, any other 5xx.
+ */
+export function resumeNetworkFailure(error: unknown): 'no-answer' | 'answered' | null {
+  if (hostdDidNotAnswer(error)) return 'no-answer';
+  const status = (error as { status?: number } | null)?.status;
+  const reason = (error instanceof Error ? error.message : String(error)).trim();
+  if (status === 500 && (reason === 'fetch failed' || NETWORK_REASON.test(reason))) return 'answered';
+  return null;
+}
+
+/** Why an answered task waits to be resumed: GitHub did not answer its sign-in's refresh, or hostd could not be reached. */
+type ResumeWaitCause = 'github' | 'network';
 
 /** Whether a task row was refused by `tasks_one_live_per_bot_subject`: the same work, started twice at once. */
 function sameWorkTwice(error: unknown): boolean {
@@ -1524,6 +1546,13 @@ export class TaskService {
     }
   }
 
+  /**
+   * Tasks whose last resume found hostd had already begun one it did not
+   * answer for, for the sweep of answered tasks to say so. Only the last
+   * try's: each resume clears its task's first.
+   */
+  private readonly begunResumes = new Set<string>();
+
   /** Resumes under way in this process, which the sweep of answered tasks leaves to finish. */
   private readonly resuming = new Set<string>();
 
@@ -1545,7 +1574,8 @@ export class TaskService {
    * its issue counted as building for good. The answer is the record that a
    * resume is owed, so this runs at start and on the merge sweep. It is also
    * what tries again, on every sweep for up to `RESUME_GITHUB_WAIT_MS`, a
-   * resume GitHub did not answer the sign-in's refresh for (`waitForGitHub`).
+   * resume GitHub did not answer the sign-in's refresh for, or the network
+   * failed (`waitToResume`).
    *
    * One a person paused since — its seat, its item or its repository — is
    * left: the sweep must not undo a person's pause. One this process is
@@ -1571,13 +1601,20 @@ export class TaskService {
       if (held) continue;
       try {
         await this.resume(task.id);
-        const now = await tasks.getTask(task.id).catch(() => null);
-        const resumed = now?.state !== 'paused';
-        const line = resumed
-          ? `resumed ${task.skill ?? task.kind} on ${task.subjectRef}, answered ${task.answeredAt}`
-          : this.githubWaits.has(task.id)
-            ? `${task.subjectRef}: answered, and waits for GitHub to answer its sign-in’s refresh`
-            : `${task.subjectRef}: answered, and waits for a host with room`;
+        const begun = this.begunResumes.delete(task.id);
+        const now = begun ? null : await tasks.getTask(task.id).catch(() => null);
+        const resumed = begun || now?.state !== 'paused';
+        // A full host is retried from a timer, and says so whatever an earlier try waited on.
+        const cause = this.resumeRetries.has(task.id) ? undefined : this.resumeWaits.get(task.id)?.cause;
+        const line = begun
+          ? `${task.subjectRef}: answered; hostd had already begun its resume`
+          : resumed
+            ? `resumed ${task.skill ?? task.kind} on ${task.subjectRef}, answered ${task.answeredAt}`
+            : cause === 'github'
+              ? `${task.subjectRef}: answered, and waits for GitHub to answer its sign-in’s refresh`
+              : cause === 'network'
+                ? `${task.subjectRef}: answered, and waits for hostd to be reached`
+                : `${task.subjectRef}: answered, and waits for a host with room`;
         lines.push(line);
         if (resumed) onResumed?.({ id: task.id, subjectRef: task.subjectRef }, line);
       } catch (error) {
@@ -1588,6 +1625,7 @@ export class TaskService {
   }
 
   private async resumeNow(taskId: string): Promise<void> {
+    this.begunResumes.delete(taskId);
     const task = await tasks.getTask(taskId);
     // A paused task answered while OpenADLC waits to restart stays paused: it
     // would hold the restart, and be cut off by it. The bridge that comes up
@@ -1667,13 +1705,28 @@ export class TaskService {
           await this.hostd.cleanupTask(now.id, now.exitReason ?? 'stopped').catch(() => undefined);
           return null;
         }
+        // hostd did not answer the last try, so it may have begun it all the
+        // same: a second resume beside it would run the bot twice. Tried
+        // again only once the row and hostd's sessions show it did not.
+        const waiting = this.resumeWaits.get(taskId);
+        if (task && waiting?.noAnswer) {
+          const began = now && now.state !== 'paused' ? true : await this.resumeBegan(now ?? task);
+          if (began) {
+            this.resumeWaits.delete(taskId);
+            this.begunResumes.add(taskId);
+            return null;
+          }
+          // hostd cannot be asked: still waiting, or failed with the last
+          // reason once the wait is over (the catch below).
+          if (began === null) throw Object.assign(new Error(waiting.reason), { noAnswer: true });
+        }
         return this.hostd.resumeTask(taskId, context, postHeader, files, reviewMode, reviewLens);
       };
       if (task) {
         if ((await this.names.withBot(task.botId, resume)) === null) return;
       } else await this.hostd.resumeTask(taskId, context, postHeader, files);
       this.resumeRetries.delete(taskId);
-      this.githubWaits.delete(taskId);
+      this.resumeWaits.delete(taskId);
     } catch (error) {
       if (!task) throw error;
       // A resume may take its seat past its tasks at once — the task was
@@ -1688,7 +1741,13 @@ export class TaskService {
       // the old session down, so nothing was: it stays paused and answered,
       // and the sweep of answered tasks resumes it once GitHub answers —
       // for a while, after which it is failed here as any refusal is.
-      if (githubDidNotAnswer(message) && (await this.waitForGitHub(task, message))) return;
+      if (githubDidNotAnswer(message) && (await this.waitToResume(task, message, 'github', false))) return;
+      // The network failed: hostd did not answer, or answered that its own
+      // call out failed. Failed, the answer to "OK, file it" on an intake
+      // draft sat through a short outage until a person pressed Try again
+      // (v0.1.36). It waits as GitHub's refresh does.
+      const network = resumeNetworkFailure(error);
+      if (network && (await this.waitToResume(task, message, 'network', network === 'no-answer'))) return;
       await tasks.updateTaskState(task.id, 'failed', { exitReason: `hostd refused: ${message}` });
       await this.hostd.cleanupTask(task.id, 'resume refused').catch(() => undefined);
       // It was paused on a question, so its lease was too, and a resume that
@@ -1712,33 +1771,48 @@ export class TaskService {
   /** A resume a full host refused, and how many times it has been tried again. */
   private readonly resumeRetries = new Map<string, number>();
 
-  /** Answered tasks whose resume GitHub did not answer for, which `resumeAnswered` tries again on every sweep. */
-  private readonly githubWaits = new Set<string>();
+  /**
+   * Answered tasks whose resume waits, which `resumeAnswered` tries again on
+   * every sweep: why, the last reason, and whether hostd left the last try
+   * unanswered, after which hostd is asked whether it began before another.
+   * Kept in memory: a restart forgets `noAnswer`, and its first sweep resumes
+   * without asking, as it resumes every answered task.
+   */
+  private readonly resumeWaits = new Map<string, { cause: ResumeWaitCause; noAnswer: boolean; reason: string }>();
 
   /**
    * Keeps answered work paused for the sweep of answered tasks to resume once
-   * GitHub answers, and says so once — in its thread, in the log, and as an
-   * event Needs you shows a card for (`RESUME_WAITS_ON_GITHUB`). False once it
-   * has waited `RESUME_GITHUB_WAIT_MS` since the answer, and for a resume no
-   * answered question explains (a plan change approved), which that sweep
-   * never comes back for: kept paused, it would wait with nothing to start it.
+   * GitHub answers, or hostd can be reached, and says so once — in its
+   * thread, in the log, and as an event Needs you shows a card for
+   * (`RESUME_WAITS_ON_GITHUB`, with its `cause`). A later try only keeps its
+   * reason and whether hostd answered. False once it has waited
+   * `RESUME_GITHUB_WAIT_MS` since the answer, and for a resume no answered
+   * question explains (a plan change approved), which that sweep never comes
+   * back for: kept paused, it would wait with nothing to start it.
    */
-  private async waitForGitHub(task: Task, reason: string): Promise<boolean> {
+  private async waitToResume(task: Task, reason: string, cause: ResumeWaitCause, noAnswer: boolean): Promise<boolean> {
     const answeredAt = await this.answeredAt(task.id);
     const until = answeredAt === null ? Number.NEGATIVE_INFINITY : Date.parse(answeredAt) + RESUME_GITHUB_WAIT_MS;
     if (answeredAt === null || Date.now() >= until) {
-      this.githubWaits.delete(task.id);
+      this.resumeWaits.delete(task.id);
       return false;
     }
-    if (this.githubWaits.has(task.id)) return true;
-    this.githubWaits.add(task.id);
+    const said = this.resumeWaits.has(task.id);
+    this.resumeWaits.set(task.id, { cause, noAnswer, reason });
+    if (said) return true;
     const untilAt = new Date(until).toISOString();
-    console.warn(`[bridge] ${task.subjectRef}: answered, and resumes once GitHub answers, until ${untilAt}: ${reason.slice(0, 300)}`);
+    const shown = reason.slice(0, 300);
+    console.warn(
+      cause === 'github'
+        ? `[bridge] ${task.subjectRef}: answered, and resumes once GitHub answers, until ${untilAt}: ${shown}`
+        : `[bridge] ${task.subjectRef}: answered, and resumes once hostd can be reached, until ${untilAt}: ${shown}`,
+    );
     await recordEvent({
       source: 'platform',
       type: RESUME_WAITS_ON_GITHUB,
-      payload: { taskId: task.id, subjectRef: task.subjectRef, answeredAt, until: untilAt },
+      payload: { taskId: task.id, subjectRef: task.subjectRef, answeredAt, until: untilAt, cause, reason: shown },
     }).catch(() => undefined);
+    const tried = `Tried until ${untilAt.slice(0, 16).replace('T', ' ')} UTC`;
     await threads
       .ensureThread({ botId: task.botId, repoId: task.repoId, subjectRef: task.subjectRef })
       .then((thread) =>
@@ -1746,11 +1820,39 @@ export class TaskService {
           threadId: thread.id,
           kind: 'sys',
           author: 'openadlc',
-          text: `answered; it starts again on its own once GitHub answers, which it did not just now when OpenADLC refreshed the bot's sign-in. Tried until ${untilAt.slice(0, 16).replace('T', ' ')} UTC`,
+          text:
+            cause === 'github'
+              ? `answered; it starts again on its own once GitHub answers, which it did not just now when OpenADLC refreshed the bot's sign-in. ${tried}`
+              : `answered; it starts again on its own once hostd can be reached, which it could not just now (${shown}). ${tried}`,
         }),
       )
       .catch(() => undefined);
     return true;
+  }
+
+  /**
+   * Whether hostd began a resume it did not answer for: a live session named
+   * as the task's was. A paused task has none — its runner exits on pause and
+   * tmux closes the session with it — and a resume starts one by the same
+   * name, which the row keeps as `<bot>/<session>`. Null when hostd cannot be
+   * asked, or the row names no session to look for: not known, so not tried.
+   * A start hostd is still preparing (cloning, before its session) shows no
+   * session; see docs/adr/0076.
+   */
+  private async resumeBegan(task: Task): Promise<boolean | null> {
+    const name = task.tmuxSession?.split('/').at(-1);
+    if (!name) return null;
+    const seat = await bots.getBotById(task.botId).catch(() => null);
+    if (!seat) return null;
+    try {
+      const { sessions } = await this.hostd.sessions(seat.name);
+      return sessions.some((one) => {
+        const session = one as { name?: unknown; state?: unknown } | null;
+        return session?.name === name && session.state !== 'stopped';
+      });
+    } catch {
+      return null;
+    }
   }
 
   /**

@@ -146,6 +146,7 @@ import {
   isRevert,
   leaseHoldUntil,
   pullOpenReader,
+  resumeNetworkFailure,
   settleLeaseAfter,
   stopAtUsd,
   RUNAWAY_GUARD_MULTIPLE,
@@ -1563,7 +1564,7 @@ describe('an answered task whose resume GitHub did not answer for', () => {
     expect(recordEvent).toHaveBeenCalledWith({
       source: 'platform',
       type: 'task.resume_waits_on_github',
-      payload: { taskId: 'task-1', subjectRef: 'openadlc#7', answeredAt: expect.any(String), until: expect.any(String) },
+      payload: { taskId: 'task-1', subjectRef: 'openadlc#7', answeredAt: expect.any(String), until: expect.any(String), cause: 'github', reason: UNANSWERED.slice(0, 300) },
     });
 
     // GitHub still down at the next sweep: still paused, and not said again.
@@ -1612,6 +1613,288 @@ describe('an answered task whose resume GitHub did not answer for', () => {
     await expect(tasksService.resume('task-1')).rejects.toBe(refusal);
 
     expect(tasks.updateTaskState).toHaveBeenCalledWith('task-1', 'failed', { exitReason: `hostd refused: ${refusal.message}` });
+  });
+});
+
+describe('an answered task whose resume the network failed (#359)', () => {
+  /**
+   * On v0.1.36 a short outage on the host answered the resume of "OK, file
+   * it" on an intake draft with hostd's 500 `fetch failed`, and the task was
+   * failed at once: nothing was filed until a person pressed Try again.
+   */
+  const SESSION = 'implement-task-1';
+  const PAUSED = {
+    id: 'task-1',
+    botId: 'bot-1',
+    repoId: null,
+    kind: 'implement',
+    subjectRef: 'openadlc#7',
+    skill: 'implement',
+    state: 'paused',
+    leaseId: 'lease-1',
+    tmuxSession: `builder/${SESSION}`,
+  };
+  const outOfHostd = () => Object.assign(new Error('fetch failed'), { status: 500 });
+  // As `HostdClient.call` throws it when nothing answered.
+  const noAnswer = () => Object.assign(new Error('hostd is not answering. It may be restarting; try again in a moment.'), { status: 502, noAnswer: true });
+  const answeredAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
+  const resumed = async () => {
+    state = 'running';
+    return { session: `builder/${SESSION}` };
+  };
+  let state: string;
+  let warn: { mock: { calls: unknown[][] }; mockRestore: () => void };
+
+  function answered(minutesAgo: number | null) {
+    vi.mocked(threads.listGatesForTasks).mockResolvedValue(
+      (minutesAgo === null ? [] : [{ id: 'gate-1', taskId: 'task-1', state: 'answered', answeredAt: answeredAgo(minutesAgo) }]) as never,
+    );
+  }
+  function texts(): string[] {
+    return vi.mocked(threads.addMessage).mock.calls.map(([message]) => message.text);
+  }
+  function waits() {
+    return vi.mocked(recordEvent).mock.calls.filter(([event]) => event.type === 'task.resume_waits_on_github');
+  }
+  function sweeper(hostd: Partial<HostdClient>): TaskService {
+    const tasksService = service({ cleanupTask: vi.fn(async () => undefined), ...hostd });
+    tasksService.seatPauses = async () => ({});
+    return tasksService;
+  }
+
+  beforeEach(() => {
+    state = 'paused';
+    vi.mocked(tasks.getTask).mockImplementation(async () => ({ ...PAUSED, state }) as never);
+    vi.mocked(tasks.pausedWithAnswer).mockImplementation(async () =>
+      (state === 'paused' ? [{ ...PAUSED, answeredAt: answeredAgo(1) }] : []) as never,
+    );
+    vi.mocked(recordEvent).mockClear();
+    vi.mocked(leases.settlePausedLeases).mockClear();
+    warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    answered(1);
+  });
+  afterEach(() => {
+    vi.mocked(tasks.pausedWithAnswer).mockReset().mockResolvedValue([]);
+    vi.mocked(threads.listGatesForTasks).mockResolvedValue([]);
+    warn.mockRestore();
+  });
+
+  function stillPaused(cleanupTask: ReturnType<typeof vi.fn>) {
+    expect(tasks.updateTaskState).not.toHaveBeenCalled();
+    expect(leases.settlePausedLeases).not.toHaveBeenCalled();
+    expect(cleanupTask).not.toHaveBeenCalled();
+    expect(texts().some((text) => text.startsWith('could not resume'))).toBe(false);
+  }
+
+  it('stays paused after hostd answers 500 fetch failed, says so once, and is resumed by a later sweep without asking hostd first', async () => {
+    const resumeTask = vi.fn().mockRejectedValueOnce(outOfHostd()).mockRejectedValueOnce(outOfHostd()).mockImplementationOnce(resumed);
+    const sessions = vi.fn(async () => ({ sessions: [] }));
+    const cleanupTask = vi.fn(async () => undefined);
+    const tasksService = sweeper({ resumeTask, sessions, cleanupTask });
+
+    await expect(tasksService.resume('task-1')).resolves.toBeUndefined();
+    stillPaused(cleanupTask);
+    expect(texts()).toEqual([
+      expect.stringMatching(/^answered; it starts again on its own once hostd can be reached, which it could not just now \(fetch failed\)\. Tried until \d{4}-\d\d-\d\d \d\d:\d\d UTC$/),
+    ]);
+    expect(waits()).toEqual([
+      [
+        {
+          source: 'platform',
+          type: 'task.resume_waits_on_github',
+          payload: { taskId: 'task-1', subjectRef: 'openadlc#7', answeredAt: expect.any(String), until: expect.any(String), cause: 'network', reason: 'fetch failed' },
+        },
+      ],
+    ]);
+
+    // Still failing at the next sweep: still paused, and not said again.
+    expect(await tasksService.resumeAnswered()).toEqual(['openadlc#7: answered, and waits for hostd to be reached']);
+    stillPaused(cleanupTask);
+    expect(texts()).toHaveLength(1);
+    expect(waits()).toHaveLength(1);
+    expect(warn.mock.calls.filter(([line]: unknown[]) => String(line).includes('hostd can be reached'))).toHaveLength(1);
+
+    // Back: hostd answered every try, so nothing could have begun, and it is not asked.
+    const lines = await tasksService.resumeAnswered();
+    expect(lines[0]).toMatch(/^resumed implement on openadlc#7/);
+    expect(resumeTask).toHaveBeenCalledTimes(3);
+    expect(sessions).not.toHaveBeenCalled();
+    expect(tasks.updateTaskState).not.toHaveBeenCalled();
+  });
+
+  it('says the wait again for a failure after it resumed', async () => {
+    const resumeTask = vi.fn().mockRejectedValueOnce(outOfHostd()).mockResolvedValueOnce({ session: `builder/${SESSION}` }).mockRejectedValueOnce(outOfHostd());
+    const tasksService = sweeper({ resumeTask });
+
+    await tasksService.resume('task-1');
+    await tasksService.resume('task-1');
+    await tasksService.resume('task-1');
+
+    expect(waits()).toHaveLength(2);
+    expect(texts()).toHaveLength(2);
+  });
+
+  it('stays paused when hostd did not answer, the same', async () => {
+    const cleanupTask = vi.fn(async () => undefined);
+    const tasksService = sweeper({ resumeTask: vi.fn(async () => Promise.reject(noAnswer())), cleanupTask });
+
+    await expect(tasksService.resume('task-1')).resolves.toBeUndefined();
+
+    stillPaused(cleanupTask);
+    expect(waits()).toHaveLength(1);
+    expect(waits()[0]?.[0].payload).toMatchObject({ cause: 'network', reason: expect.stringMatching(/^hostd is not answering/) });
+  });
+
+  describe('after hostd did not answer, asks it before trying again', () => {
+    async function afterNoAnswer(sessions: HostdClient['sessions']) {
+      const resumeTask = vi.fn().mockRejectedValueOnce(noAnswer()).mockImplementation(resumed);
+      const cleanupTask = vi.fn(async () => undefined);
+      const tasksService = sweeper({ resumeTask, sessions, cleanupTask });
+      await tasksService.resume('task-1');
+      expect(resumeTask).toHaveBeenCalledTimes(1);
+      return { tasksService, resumeTask, cleanupTask };
+    }
+
+    it('does not resume again when hostd shows the resume’s session live, and counts it as begun', async () => {
+      const sessions = vi.fn(async () => ({ sessions: [{ bot: 'builder', name: SESSION, state: 'working' }] }));
+      const { tasksService, resumeTask, cleanupTask } = await afterNoAnswer(sessions);
+      const onResumed = vi.fn();
+
+      const lines = await tasksService.resumeAnswered(onResumed);
+
+      expect(sessions).toHaveBeenCalledWith('builder');
+      expect(resumeTask).toHaveBeenCalledTimes(1);
+      expect(lines).toEqual(['openadlc#7: answered; hostd had already begun its resume']);
+      expect(onResumed).toHaveBeenCalledWith({ id: 'task-1', subjectRef: 'openadlc#7' }, lines[0]);
+      stillPaused(cleanupTask);
+
+      // The wait is over: a later sweep resumes without asking.
+      sessions.mockClear();
+      await tasksService.resumeAnswered();
+      expect(sessions).not.toHaveBeenCalled();
+      expect(resumeTask).toHaveBeenCalledTimes(2);
+    });
+
+    it('stays paused, and does not resume, while hostd cannot be asked', async () => {
+      const sessions = vi.fn(async () => Promise.reject(noAnswer()));
+      const { tasksService, resumeTask, cleanupTask } = await afterNoAnswer(sessions);
+
+      expect(await tasksService.resumeAnswered()).toEqual(['openadlc#7: answered, and waits for hostd to be reached']);
+
+      expect(sessions).toHaveBeenCalledTimes(1);
+      expect(resumeTask).toHaveBeenCalledTimes(1);
+      stillPaused(cleanupTask);
+      expect(waits()).toHaveLength(1);
+    });
+
+    it('resumes when hostd has no session for it, and one named otherwise or stopped is none', async () => {
+      const sessions = vi.fn(async () => ({
+        sessions: [
+          { bot: 'builder', name: 'implement-task-9', state: 'working' },
+          { bot: 'builder', name: SESSION, state: 'stopped' },
+        ],
+      }));
+      const { tasksService, resumeTask } = await afterNoAnswer(sessions);
+
+      const lines = await tasksService.resumeAnswered();
+
+      expect(sessions).toHaveBeenCalledTimes(1);
+      expect(resumeTask).toHaveBeenCalledTimes(2);
+      expect(lines[0]).toMatch(/^resumed implement on openadlc#7/);
+    });
+
+    it('asks neither hostd’s sessions nor a resume when the row shows the resume began', async () => {
+      const sessions = vi.fn(async () => ({ sessions: [] }));
+      const { tasksService, resumeTask } = await afterNoAnswer(sessions);
+      state = 'running';
+
+      // Out of the sweep's list…
+      expect(await tasksService.resumeAnswered()).toEqual([]);
+      // …and a resume asked for directly reads the row before hostd.
+      await tasksService.resume('task-1');
+
+      expect(sessions).not.toHaveBeenCalled();
+      expect(resumeTask).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('is failed with hostd’s reason, as any refusal is, once it has waited two hours since the answer', async () => {
+    answered(121);
+    const refusal = outOfHostd();
+    const cleanupTask = vi.fn(async () => undefined);
+    const tasksService = sweeper({ resumeTask: vi.fn(async () => Promise.reject(refusal)), cleanupTask });
+
+    await expect(tasksService.resume('task-1')).rejects.toBe(refusal);
+
+    expect(tasks.updateTaskState).toHaveBeenCalledWith('task-1', 'failed', { exitReason: 'hostd refused: fetch failed' });
+    expect(leases.settlePausedLeases).toHaveBeenCalled();
+    expect(cleanupTask).toHaveBeenCalledWith('task-1', 'resume refused');
+    expect(waits()).toHaveLength(0);
+  });
+
+  it('is failed with the last reason when hostd still cannot be asked once the wait is over', async () => {
+    const resumeTask = vi.fn(async () => Promise.reject(noAnswer()));
+    const sessions = vi.fn(async () => Promise.reject(noAnswer()));
+    const tasksService = sweeper({ resumeTask, sessions });
+    await tasksService.resume('task-1');
+    answered(121);
+
+    await expect(tasksService.resume('task-1')).rejects.toThrow(/^hostd is not answering/);
+
+    expect(resumeTask).toHaveBeenCalledTimes(1);
+    expect(tasks.updateTaskState).toHaveBeenCalledWith('task-1', 'failed', { exitReason: expect.stringMatching(/^hostd refused: hostd is not answering/) });
+  });
+
+  it('is failed at once when no answered question explains the resume, since no sweep would come back for it', async () => {
+    answered(null);
+    const refusal = outOfHostd();
+    const tasksService = sweeper({ resumeTask: vi.fn(async () => Promise.reject(refusal)) });
+
+    await expect(tasksService.resume('task-1')).rejects.toBe(refusal);
+
+    expect(tasks.updateTaskState).toHaveBeenCalledWith('task-1', 'failed', { exitReason: 'hostd refused: fetch failed' });
+  });
+
+  it.each([
+    ['a 500 for another reason', Object.assign(new Error('model x is not available'), { status: 500 })],
+    ['a 404', Object.assign(new Error('no such task'), { status: 404 })],
+    ['a 502 hostd answered itself', Object.assign(new Error('fetch failed'), { status: 502 })],
+  ])('is failed at once for %s', async (_name, refusal) => {
+    const tasksService = sweeper({ resumeTask: vi.fn(async () => Promise.reject(refusal)) });
+
+    await expect(tasksService.resume('task-1')).rejects.toBe(refusal);
+
+    expect(tasks.updateTaskState).toHaveBeenCalledWith('task-1', 'failed', { exitReason: `hostd refused: ${refusal.message}` });
+    expect(waits()).toHaveLength(0);
+  });
+
+  it('still waits for a host with room on a full host, not the network', async () => {
+    const full = Object.assign(new Error('every host is running all it has room for'), { status: 503 });
+    const tasksService = sweeper({ resumeTask: vi.fn(async () => Promise.reject(full)) });
+
+    await tasksService.resume('task-1');
+
+    expect(tasks.updateTaskState).not.toHaveBeenCalled();
+    expect(waits()).toHaveLength(0);
+  });
+});
+
+describe('telling a resume the network failed from one hostd refused', () => {
+  it.each([
+    ['502 hostd sent no answer', Object.assign(new Error('hostd is not answering.'), { status: 502, noAnswer: true }), 'no-answer'],
+    ['504 hostd sent no answer in time', Object.assign(new Error('hostd did not answer in time.'), { status: 504, noAnswer: true }), 'no-answer'],
+    ['500 fetch failed', Object.assign(new Error('fetch failed'), { status: 500 }), 'answered'],
+    ['500 fetch failed, padded', Object.assign(new Error(' fetch failed\n'), { status: 500 }), 'answered'],
+    ['500 connect ECONNREFUSED 127.0.0.1:47310', Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:47310'), { status: 500 }), 'answered'],
+    ['500 read ECONNRESET', Object.assign(new Error('read ECONNRESET'), { status: 500 }), 'answered'],
+    ['500 socket hang up', Object.assign(new Error('socket hang up'), { status: 500 }), 'answered'],
+    ['500 The operation was aborted due to timeout', Object.assign(new Error('The operation was aborted due to timeout'), { status: 500 }), 'answered'],
+    ['502 fetch failed hostd sent itself', Object.assign(new Error('fetch failed'), { status: 502 }), null],
+    ['409 fetch failed', Object.assign(new Error('fetch failed'), { status: 409 }), null],
+    ['500 model x is not available', Object.assign(new Error('model x is not available'), { status: 500 }), null],
+    ['no status fetch failed', new Error('fetch failed'), null],
+  ])('reads %s as %s', (_name, error, expected) => {
+    expect(resumeNetworkFailure(error)).toBe(expected);
   });
 });
 
