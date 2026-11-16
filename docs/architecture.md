@@ -1194,13 +1194,20 @@ task's session, rather than waiting for the role's next task
 ## Keeping the story straight
 
 - **Webhooks are idempotent.** Each handler works out what should be true from
-  the delivery and the current state, so a duplicate does nothing twice.
+  the delivery and the current state, so a duplicate does nothing twice. A
+  delivered `opened` and reconcile's repair of one claim a head's first review
+  round once, under one lock held until the opening is done, so a redelivery
+  or a race leaves one round; an opening that failed after its claim is
+  finished by the next delivery or reconcile pass, on the same round
+  (docs/adr/0077-a-pull-requests-first-round-is-claimed-once-by-its-delivery-or-by-reconcile.md).
 - **The reconciler** (every 15 minutes) compares GitHub with the board and
   repairs what a missed delivery left wrong: an issue never heard of, a stage
   changed by hand, a merge whose delivery never came (the issue GitHub closed
   moves to Merged or Done, not off the board; one labelled `openadlc:ignore`
   is left where it is, its labels only kept up to date), an issue closed
-  without a merge (to Done as abandoned) or reopened after one, a lease on a closed issue, a
+  without a merge (to Done as abandoned) or reopened after one, a crew pull
+  request whose opening was never delivered (its first round opened, through
+  the same `opened` handling), a lease on a closed issue, a
   lease a question paused whose task has since ended, a task recorded half an
   hour ago that no host ever started. It reads at most 5000 open issues and
   pull requests of a repository; past that it skips the repository, says so

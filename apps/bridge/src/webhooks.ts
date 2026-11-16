@@ -7,6 +7,7 @@ import {
   ignoredIssues,
   issues,
   lastAudit,
+  lastEventAt,
   leases,
   listEventsOfType,
   listEventsOfTypeWith,
@@ -106,6 +107,7 @@ import { forgetHold } from './item-hold.js';
 import { linkIssue, linkPull } from './work-items.js';
 import { CI_FAILED, everyJob, newestCiRun, type RunJob } from './ci-usage.js';
 import { isDeclaredCommand } from './pull-commands.js';
+import { REVIEW_FIRST_ROUND_FINISHED } from './reconciler.js';
 
 /** How many heads' real CI failures are remembered as sent back (`Webhooks.redSentBack`). */
 const RED_SENT_BACK_KEPT = 500;
@@ -261,6 +263,14 @@ const LEARNING_ACTIONS = new Set(['opened', 'reopened', 'labeled', 'unlabeled', 
  * other, its link is only brought up to date.
  */
 const RECLAIM_ACTIONS = new Set(['opened', 'reopened', 'edited', 'ready_for_review']);
+
+/** The lock a pull request's first round is claimed under, by its delivery or by reconcile (ADR 0077). */
+export function firstRoundLock(repoName: string, prNumber: number): string {
+  return `review-round:${repoName}#${prNumber}`;
+}
+
+/** Audited when reconcile opened a round whose `opened` delivery never came. */
+export const REVIEW_OPENED_UNHEARD = 'review.opened_unheard';
 
 /**
  * The bridge's event loop. Handlers re-derive what should be true from the
@@ -2347,7 +2357,71 @@ export class Webhooks {
     );
   }
 
-  private async onPullRequest(payload: WebhookPayload): Promise<void> {
+  /**
+   * Opens a head's first review round once, by its delivery or by
+   * reconcile's repair of one never delivered (`reviewUnheard`), under the
+   * pull request's round lock held until the opening is done, so the two
+   * leave one round between them however they interleave (ADR 0077). True
+   * when this call opened it.
+   *
+   * The round is recorded as an `opened` claim before `open` runs, since it
+   * starts the round the reviews count from (#118), and the opening's end is
+   * recorded after it (`REVIEW_FIRST_ROUND_FINISHED`). Only that end makes a
+   * later `opened` open nothing: a claim with none after it was left by an
+   * opening that threw, on a GitHub error between the claim and the seats, or
+   * that the bridge stopped in, and a redelivery or reconcile finishes it on
+   * the round already recorded. Ended by the claim alone, such a pull request
+   * sat unreviewed with a round recorded that reconcile took for open.
+   *
+   * A round on the head that no `opened` claimed (one from before the claim
+   * existed, or a reopen's) is taken as open.
+   *
+   * A delivery whose lock or reads fail goes on and opens as it did before
+   * the claim: a database that cannot be asked is no reason to leave a pull
+   * request unreviewed. The repair throws instead, and reconcile tries again
+   * on its next pass.
+   */
+  private async openFirstRound(repoName: string, prNumber: number, sha: string, unheard: boolean, open: () => Promise<void>): Promise<boolean> {
+    const subjectRef = `${repoName}#${prNumber}`;
+    const by: Record<string, string> = unheard ? { by: 'reconciler' } : {};
+    const read = (type: string, fields: Record<string, string>): Promise<string | null> =>
+      unheard ? lastEventAt(type, fields) : lastEventAt(type, fields).catch(() => null);
+    const record = (type: string, payload: Record<string, string>): Promise<unknown> =>
+      unheard ? recordEvent({ source: 'platform', type, payload }) : recordEvent({ source: 'platform', type, payload }).catch(() => undefined);
+    const run = async (): Promise<boolean> => {
+      if (await read(REVIEW_FIRST_ROUND_FINISHED, { subjectRef, sha })) return false;
+      const claimed = await read(REVIEW_ROUND_OPENED, { subjectRef, sha, claim: 'opened' });
+      if (claimed) {
+        console.log(`[bridge] ${subjectRef}: the opening of its round on ${sha.slice(0, 7)} did not finish; this one finishes it`);
+      } else {
+        if (await read(REVIEW_ROUND_OPENED, { subjectRef, sha })) return false;
+        await record(REVIEW_ROUND_OPENED, { subjectRef, sha, claim: 'opened', ...by });
+      }
+      await open();
+      await record(REVIEW_FIRST_ROUND_FINISHED, { subjectRef, sha, ...by });
+      return true;
+    };
+    if (unheard) return withAdvisoryLock(firstRoundLock(repoName, prNumber), run);
+    // `ran`: the lock was taken and the opening itself threw, which is the
+    // delivery's error to fail with, and not a lock to go on without; run
+    // again, it would open the round a second time.
+    let ran = false;
+    return withAdvisoryLock(firstRoundLock(repoName, prNumber), () => {
+      ran = true;
+      return run();
+    }).catch((error: unknown) => {
+      if (ran) throw error;
+      console.warn(`[bridge] ${subjectRef}: its first round on ${sha.slice(0, 7)} is opened without its lock: ${error instanceof Error ? error.message : error}`);
+      return run();
+    });
+  }
+
+  /**
+   * `unheard` marks an `opened` delivery reconcile built for one GitHub never
+   * delivered (`reviewUnheard`). An option and not a payload field, so no
+   * delivery can claim to be one.
+   */
+  private async onPullRequest(payload: WebhookPayload, options: { unheard?: boolean } = {}): Promise<void> {
     const pr = payload.pull_request;
     const repoName = payload.repository?.name;
     const repoFullName = payload.repository?.full_name;
@@ -2725,12 +2799,40 @@ export class Webhooks {
     // own update or a resolution round's push, which are what come of it.
     const crewSender = payload.sender?.login ? isCrewLogin(await bots.listBots().catch(() => []), payload.sender.login) : false;
     if (!resolution && !lineUpdate && !roundPush && (await this.updatedFirst(repo, pr, forIssue, crewSender))) return;
+    const open = (): Promise<void> => this.openRound(payload, repo, repoFullName, pr, forIssue, crewSender, lineUpdate, resolution);
+    if (!resolution && payload.action === 'opened') {
+      // A head's first round is claimed once, by its delivery or by
+      // reconcile's repair of one that never came (`reviewUnheard`), under one
+      // lock held until the opening is done (ADR 0077). Recorded
+      // unconditionally, a redelivered `opened` moved the round's start, so
+      // the reviews already given on that head stopped counting; and a repair
+      // racing a late delivery opened two.
+      const opened = await this.openFirstRound(repo.name, pr.number, pr.head.sha, options.unheard === true, open);
+      if (!opened) console.log(`[bridge] ${repo.name}#${pr.number}: a review round on ${pr.head.sha.slice(0, 7)} is already open; this opening opens no other`);
+      return;
+    }
     if (!resolution) {
       await recordEvent({ source: 'platform', type: REVIEW_ROUND_OPENED, payload: { subjectRef: `${repo.name}#${pr.number}`, sha: pr.head.sha } }).catch(
         () => undefined,
       );
     }
+    await open();
+  }
 
+  /**
+   * What opening a round does once it is recorded: a crew head with no local
+   * CI pass held, a conflicting head held, and otherwise the seats asked.
+   */
+  private async openRound(
+    payload: WebhookPayload,
+    repo: RepoRow,
+    repoFullName: string,
+    pr: NonNullable<WebhookPayload['pull_request']>,
+    forIssue: number | null,
+    crewSender: boolean,
+    lineUpdate: boolean,
+    resolution: { before: string; files: string[]; at: string } | null,
+  ): Promise<void> {
     // The builder's checks on this exact head are what the reviewers review on
     // top of: GitHub's CI runs only after the lead approves. OpenADLC's `gh` and
     // `git` refuse to open or push without a recorded pass, but a session holds
@@ -3524,6 +3626,89 @@ export class Webhooks {
       if (moved.length > 0) await this.stopPausedOn(record.name, [issueNumber, prNumber], alreadyLanded(`${record.name}#${issueNumber}`), null);
     }
     return to;
+  }
+
+  /**
+   * A crew pull request whose `opened` delivery never came, found open by the
+   * reconciler with no round. #360 opened while the webhook tunnel was down:
+   * the board said its build had ended and it waited for its pull request,
+   * Needs you was empty, and nothing reviewed it until a person turned it to
+   * draft and back. The gate sweep only continues a round, and only
+   * `openReviews` moves the card to Review, which nothing had called.
+   *
+   * Runs the `opened` delivery that never came through `onPullRequest`, so
+   * the closed check, the lease and `pr_number` writes, the local-CI hold and
+   * the conflict hold all apply as they would have; its round is claimed under
+   * the same lock as a delivery's, so a late one racing this opens no second
+   * (ADR 0077). Only an open, non-draft pull request from this repository
+   * that a crew account opened, whose branch names an issue with an active
+   * lease, with no round recorded on any head and no `review-gate` status on
+   * its head: a status that cannot be read is not "none". Or one whose head's
+   * round an `opened` claimed and whose opening never finished: it threw
+   * after the claim, or the bridge stopped in it, and is finished here.
+   * Whether its head's opening has finished now. A read of GitHub that fails
+   * is thrown, and the reconciler tries again on its next pass.
+   */
+  async reviewUnheard(
+    repo: { id: string; name: string },
+    live: { number: number; title: string; body: string | null; htmlUrl: string; createdAt?: string | null; author: string | null },
+  ): Promise<boolean> {
+    const record = await repos.getRepoByName(repo.name);
+    const client = await asAutomation(this.automation['actors'], this.config);
+    if (!record || !client) return false;
+    const pull = await client.getPullRequest(record.fullName, live.number);
+    if (pull.state !== 'open' || pull.draft) return false;
+    const issueNumber = ownIssueOf({ head: { ref: pull.headRef, repo: pull.headRepoFullName ? { full_name: pull.headRepoFullName } : null } }, record.fullName);
+    if (!issueNumber) return false;
+    const author = pull.author ?? live.author;
+    if (!author || !isCrewLogin(await bots.listBots(), author)) return false;
+    if (!(await leases.getActiveLease(record.id, issueNumber))) return false;
+    const subjectRef = `${record.name}#${pull.number}`;
+    // An opening of this head that claimed its round and never finished is
+    // finished here, its own `review-gate` notwithstanding: it may have set
+    // one before it threw (ADR 0077).
+    const unfinished =
+      (await lastEventAt(REVIEW_ROUND_OPENED, { subjectRef, sha: pull.headSha, claim: 'opened' })) !== null &&
+      (await lastEventAt(REVIEW_FIRST_ROUND_FINISHED, { subjectRef, sha: pull.headSha })) === null;
+    if (!unfinished && (await lastEventAt(REVIEW_ROUND_OPENED, { subjectRef }))) return false;
+    const gated = unfinished ? false : await client
+      .statusesFor(record.fullName, pull.headSha)
+      .then((statuses) => statuses.some((status) => status.context === REVIEW_GATE_CHECK))
+      .catch((error: unknown) => {
+        console.warn(`[bridge] ${subjectRef}: its review-gate on ${pull.headSha.slice(0, 7)} could not be read, so its round is not opened yet: ${error instanceof Error ? error.message : error}`);
+        return true;
+      });
+    if (gated) return false;
+
+    await this.onPullRequest(
+      {
+        action: 'opened',
+        repository: { name: record.name, full_name: record.fullName },
+        // The author as the sender, so a crew head with no local CI pass is
+        // held as the builder's own `gh pr create` would be.
+        sender: { login: author },
+        pull_request: {
+          number: pull.number,
+          title: live.title,
+          body: live.body,
+          html_url: live.htmlUrl,
+          draft: pull.draft,
+          state: 'open',
+          ...(live.createdAt ? { created_at: live.createdAt } : {}),
+          head: { sha: pull.headSha, ref: pull.headRef, repo: pull.headRepoFullName ? { full_name: pull.headRepoFullName } : null },
+          base: { ref: pull.baseRef },
+          labels: pull.labels.map((name) => ({ name })),
+          user: { login: author },
+        },
+      } as WebhookPayload,
+      { unheard: true },
+    );
+    if (!(await lastEventAt(REVIEW_FIRST_ROUND_FINISHED, { subjectRef, sha: pull.headSha }))) return false;
+    if (await lastEventAt(REVIEW_FIRST_ROUND_FINISHED, { subjectRef, sha: pull.headSha, by: 'reconciler' })) {
+      console.log(`[bridge] ${subjectRef}: its opening was never ${unfinished ? 'finished' : 'delivered'}; its review round on ${pull.headSha.slice(0, 7)} is opened`);
+      await audit({ actor: 'reconciler', action: REVIEW_OPENED_UNHEARD, target: subjectRef, payload: { sha: pull.headSha, issue: issueNumber } }).catch(() => undefined);
+    }
+    return true;
   }
 
   /**
