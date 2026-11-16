@@ -234,6 +234,17 @@ export const LOCAL_CI_TIMEOUT_MS = 15_000;
 export const HOSTD_NOT_ANSWERING = 'hostd is not answering. It may be restarting; try again in a moment.';
 
 /**
+ * Whether a call failed because hostd never answered it: the connection was
+ * refused or reset, or the call ran out of time. Read from the tag `call`
+ * puts on its own errors, never from the words or the status, which hostd
+ * can answer with itself. A call hostd did not answer may still have done
+ * its work, which a resume has to ask about before it is tried again.
+ */
+export function hostdDidNotAnswer(error: unknown): boolean {
+  return (error as { noAnswer?: unknown } | null)?.noAnswer === true;
+}
+
+/**
  * How long the bridge waits on hostd to ask the egress proxy about a few
  * names. hostd gives each CONNECT ten seconds, all at once.
  */
@@ -497,10 +508,13 @@ export class HostdClient {
         ...(options.timeoutMs ? { signal: AbortSignal.timeout(options.timeoutMs) } : {}),
       });
     } catch (error) {
+      // Tagged, not told apart by status: hostd can answer 502 or 504 itself,
+      // and a resume hostd never answered may have begun all the same
+      // (`hostdDidNotAnswer`).
       if (error instanceof DOMException && error.name === 'TimeoutError') {
-        throw Object.assign(new Error('hostd did not answer in time. It may be busy; try again in a moment.'), { status: 504 });
+        throw Object.assign(new Error('hostd did not answer in time. It may be busy; try again in a moment.'), { status: 504, noAnswer: true });
       }
-      throw Object.assign(new Error(options.notAnswering ?? HOSTD_NOT_ANSWERING), { status: 502 });
+      throw Object.assign(new Error(options.notAnswering ?? HOSTD_NOT_ANSWERING), { status: 502, noAnswer: true });
     }
     const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
     if (!response.ok) {

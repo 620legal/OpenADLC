@@ -627,7 +627,7 @@ type GateRow = Pick<Gate, 'id' | 'taskId' | 'question' | 'options' | 'githubComm
 type PlanChangeFacts = Pick<leases.PlanChangeRecord, 'paths' | 'held' | 'designer' | 'standing'>;
 type AskedGate = Pick<Gate, 'id' | 'taskId' | 'answer' | 'answeredAt' | 'createdAt'>;
 
-/** Answered work whose resume waits for GitHub; see `RESUME_WAITS_ON_GITHUB`. */
+/** Answered work whose resume waits for GitHub or the network; see `RESUME_WAITS_ON_GITHUB`. */
 export interface ResumeWait {
   taskId: string;
   botId: string;
@@ -637,6 +637,10 @@ export interface ResumeWait {
   since: string;
   /** Until when it is tried again, after which it is failed with a card. */
   until: string;
+  /** GitHub did not answer its sign-in's refresh, or hostd could not be reached. An event from before there was a cause is GitHub's. */
+  cause: 'github' | 'network';
+  /** What the try that began the wait failed with, when the event said. */
+  reason?: string;
 }
 
 /** `WaitFacts` are what a waiting card's chain is followed on (`wait-chain.ts`), and its `stackLinks` serve that alone. */
@@ -662,7 +666,7 @@ export interface AttentionInput extends WaitFacts {
    * is known, and a parked issue's card says so without a reason.
    */
   triaged?: ReadonlyMap<string, { at: string; reason: string | null }>;
-  /** Answered work waiting for GitHub before it resumes (`TaskService.waitForGitHub`), while still owed that resume. Absent, none. */
+  /** Answered work waiting for GitHub before it resumes (`TaskService.waitToResume`), or for hostd to be reached, while still owed that resume. Absent, none. */
   resumeWaits?: readonly ResumeWait[];
   /** Approved plan changes whose gate stays open until other work lets go of their paths. Absent, none. */
   heldPlanChanges?: readonly HeldPlanChange[];
@@ -1845,28 +1849,32 @@ export function attentionItems(given: AttentionInput): AttentionItem[] {
     });
   }
 
-  // Answered work waiting for GitHub to answer its bot's sign-in's refresh
-  // (`TaskService.waitForGitHub`). It is neither failed nor asking, so it was
-  // on no card at all while it waited, and Needs you said nothing about work
-  // a person had just answered.
+  // Answered work waiting for GitHub to answer its bot's sign-in's refresh,
+  // or for hostd to be reached (`TaskService.waitToResume`). It is neither
+  // failed nor asking, so it was on no card at all while it waited, and
+  // Needs you said nothing about work a person had just answered.
   for (const wait of input.resumeWaits ?? []) {
     const bot = botsById.get(wait.botId);
     const until = `${wait.until.slice(0, 16).replace('T', ' ')} UTC`;
+    const github = wait.cause !== 'network';
     const actions: AttentionAction[] = [
-      { kind: 'open_url', label: 'GitHub’s status', url: GITHUB_STATUS_URL },
+      ...(github ? [{ kind: 'open_url', label: 'GitHub’s status', url: GITHUB_STATUS_URL } as const] : []),
       { kind: 'stop_task', label: 'Stop', taskId: wait.taskId },
     ];
     if (bot) actions.push({ kind: 'open_thread', label: 'Open thread', bot: bot.name });
+    const reason = wait.reason ? ` (${wait.reason})` : '';
     items.push({
       id: `resume-wait:${wait.taskId}`,
       kind: 'resume_waiting',
-      headline: `${botSaid(bot)} waits for GitHub to go on with ${WORK[wait.kind]}`,
+      headline: `${botSaid(bot)} waits for ${github ? 'GitHub' : 'the network'} to go on with ${WORK[wait.kind]}`,
       subject: subjectOf(wait.subjectRef).subject,
       bot: asAttentionBot(bot),
       since: wait.since,
-      detail:
-        `The answer is recorded. GitHub did not answer when OpenADLC refreshed the sign-in of ${botInWords(bot)}, so the work has not started again. ` +
-        `OpenADLC tries again on every sweep until ${until}, then fails it with a card to try again.`,
+      detail: github
+        ? `The answer is recorded. GitHub did not answer when OpenADLC refreshed the sign-in of ${botInWords(bot)}, so the work has not started again. ` +
+          `OpenADLC tries again on every sweep until ${until}, then fails it with a card to try again.`
+        : `The answer is recorded. OpenADLC could not reach hostd to start it again${reason}. ` +
+          `It tries again on every sweep until ${until}, then fails it with a card to try again.`,
       actions,
     });
   }
@@ -2569,7 +2577,7 @@ function startUnanswered(task: TaskFacts): boolean {
 /**
  * When a task whose start GitHub did not answer for (`githubDidNotAnswer`) is
  * run again by itself, or null: it failed for something else, it ran before
- * it failed (a resume's card is `TaskService.waitForGitHub`'s), or every
+ * it failed (a resume's card is `TaskService.waitToResume`'s), or every
  * retry is spent. A console request's triage is null too: its queue tries the
  * start again itself (`request-queue.ts`). Its tries are the starts of the
  * same work, as `triedAgain` counts them, that failed this way one after
@@ -2616,9 +2624,19 @@ async function waitingOnGitHub(events: readonly { at: string; payload: unknown }
       const payload = (event.payload ?? {}) as Record<string, unknown>;
       return payload.taskId === task.id && Date.parse(event.at) >= Date.parse(task.answeredAt);
     });
-    const until = (said?.payload as Record<string, unknown> | undefined)?.until;
+    const payload = (said?.payload ?? {}) as Record<string, unknown>;
+    const until = payload.until;
     if (!said || typeof until !== 'string') continue;
-    waits.push({ taskId: task.id, botId: task.botId, kind: task.kind, subjectRef: task.subjectRef, since: said.at, until });
+    waits.push({
+      taskId: task.id,
+      botId: task.botId,
+      kind: task.kind,
+      subjectRef: task.subjectRef,
+      since: said.at,
+      until,
+      cause: payload.cause === 'network' ? 'network' : 'github',
+      ...(typeof payload.reason === 'string' ? { reason: payload.reason } : {}),
+    });
   }
   return waits;
 }
