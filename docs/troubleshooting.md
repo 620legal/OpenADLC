@@ -279,6 +279,7 @@ starts.
 | GitHub did not answer when OpenADLC refreshed the sign-in of `<bot>`, so the work did not start. OpenADLC tries again on its own after `<time>` UTC (retry N of 6), or at its next sweep once that time has passed | Nothing: it starts by itself once GitHub answers. The card's button opens GitHub's status page |
 | … and OpenADLC has stopped trying on its own | **Try again** once GitHub answers |
 | `<bot>` waits for GitHub to go on with … (an answered question) | Nothing: it resumes by itself once GitHub answers, until the time the card says |
+| `<bot>` waits for the network to go on with … (an answered question) | Nothing: it resumes by itself once hostd can be reached, until the time the card says. If it keeps waiting, check that hostd is up (`openadlc doctor`) and that the host can reach the network |
 | Engine claude is not available on this host | Build the bot image, `infra/local/build-bot-image.sh`; under the `local` driver, install the CLI |
 | This account cannot call `<model>` — it offers … | Give the bot a model its account lists, on the walkthrough's **Crew** step or in **Settings → Crew** |
 
@@ -419,6 +420,18 @@ When GitHub is **not answering**:
   task fails as any refused resume does, with **Try again** on its card. A
   resume no answered question explains (a plan change approved) fails at
   once, since that sweep would not come back for it.
+- **An answered question whose resume the network failed waits the same
+  way.** That is either hostd not answering the bridge (a connection refused
+  or reset, or a timeout), or hostd answering that its own call out failed (a
+  500 with `fetch failed`, or a connection or timeout code). The card reads
+  *`<bot>` waits for the network to go on with …*, shows the reason, and
+  offers **Stop**. hostd may have begun a resume it did not answer for, so
+  before the next try the bridge checks the task's row and asks hostd for
+  the task's session. If the resume began, nothing is started twice, and the
+  sweep says "hostd had already begun its resume". If hostd cannot be asked,
+  the bridge keeps waiting and starts nothing. Any other refusal — a 4xx, or
+  a 500 for another reason — still fails the task at once. See
+  [ADR 0076](adr/0076-a-resume-the-network-failed-waits-and-asks-hostd-before-it-is-tried-again.md).
 
 When a check cannot get an answer — a rate limit, an outage, a question
 GitHub will not answer as the account asking — it neither raises a card nor
