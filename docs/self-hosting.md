@@ -2278,8 +2278,9 @@ check runs only after the crew approves the head.
 - **Git reads only what the run gives it.** Before each fetch, hostd's script
   empties the working folder's `.git` down to git's objects, refs and index
   (`objects`, `refs`, `packed-refs`, `HEAD`, `index`, `sharedindex.*`,
-  `shallow`). The folder's `config`, `info/` (with `info/attributes`) and
-  `hooks/` go, and so do `commondir`, `worktrees/`, `modules/` and
+  `shallow`), plus `modules/`, whose submodule git dirs are cleaned the same
+  way (below). The folder's `config`, `info/` (with `info/attributes`) and
+  `hooks/` go, and so do `commondir`, `worktrees/` and
   `objects/info/alternates`. A `.git` that is a file or a symlink is removed,
   and the folder starts a fresh repository. Then `git init --template=` writes
   a new config with no hooks. The fetch and checkout read:
@@ -2294,6 +2295,28 @@ check runs only after the crew approves the head.
   untracked and ignored files, is kept, and the index is kept with it, so files
   the new head doesn't change keep their timestamps and `make` stays
   incremental. The account's git needs version 2.29 or later.
+- **Repositories with submodules are supported, and their submodules are
+  kept.** Each submodule's git dir under `.git/modules` is cleaned the same
+  way. It keeps only its objects, refs, `HEAD`, index and its own nested
+  `modules`. It gets a fresh config that the script writes, holding only a
+  `remote.origin.url` carried over when it is an `https://`, `ssh://`,
+  `git://`, `file://`, absolute-path or `host:path` URL that names no remote
+  helper. The submodule folder's `.git` is written again as a gitfile pointing
+  at that cleaned dir, and any other `.git` inside the submodule's folder is
+  removed. The fetch doesn't recurse into submodules. Your command must run
+  `git submodule update --init` (add `--recursive` for nested ones): the fresh
+  top-level config marks no submodule active, so a bare
+  `git submodule update` updates nothing. It then reuses each kept submodule,
+  so files the new pin doesn't change keep their timestamps. A submodule the
+  script can't vouch for (no valid name in `.gitmodules`, or no kept git dir)
+  is emptied instead, and `--init` clones it again. That also happens once,
+  for every submodule, on the first run after upgrading from a version that
+  removed `.git/modules`. A submodule path with a tab, newline, quote or
+  backslash in it stops the run with a message naming the path
+  ([ADR 0079](adr/0079-a-submodules-git-dir-is-kept-and-cleaned-like-the-top-level-git.md)).
+- **The account's processes start in `/`.** That is the one folder every
+  account can enter. Starting in hostd's own folder made the shell print a
+  `getcwd` error as the first line of every log.
 - **A pass carries to a head with the same changes.** When the merge line
   brings a branch up to date with its base, the build doesn't run again. When
   a conflict was resolved, it does, because the code changed.
@@ -2497,7 +2520,11 @@ must also carry the last release's label, if both have one. After
 and the release is tagged `v<version>`.
 
 The release account keeps its build tree between releases, so later builds
-are incremental. A clean build removes it first.
+are incremental. A clean build removes it first. The tree includes its
+submodules: each submodule's git dir is kept and cleaned as
+[the host check's](#host-checks) is, so a command that runs
+`git submodule update --init` reuses it on the next cut, and needs no Clean
+build.
 
 ### Cut a release
 

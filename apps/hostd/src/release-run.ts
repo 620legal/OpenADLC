@@ -29,7 +29,10 @@ import { signRelease, type SignedRelease } from './release-sign.js';
  *   above the last release before anything is built: a wrong version costs
  *   seconds, not hours.
  * - The account keeps its build tree between releases and the next bundle is
- *   thin; `clean` removes the folder, as the account, first.
+ *   thin; `clean` removes the folder, as the account, first. The tree keeps
+ *   its submodules too: the receive script keeps each one's git dir, cleaned
+ *   like the top-level `.git`, so the repository's own `git submodule update
+ *   --init` reuses it and a second cut stays incremental (#365, docs/adr/0079).
  * - The artifact comes out as `cat` run as the account, whose stdout hostd
  *   hashes as it writes it into a file of its own under the work root, which
  *   the account cannot enter (the probe proves it). hostd never opens,

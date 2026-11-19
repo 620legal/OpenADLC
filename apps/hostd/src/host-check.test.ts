@@ -475,6 +475,18 @@ describe('the git steps the account runs', () => {
       planted,
       home,
       folder,
+      source,
+      /**
+       * The repository's own command, as its Makefile would run it in the
+       * folder: git as the account, which reads the folder's git dirs.
+       */
+      update() {
+        return spawnSync('/bin/sh', ['-c', 'git -c protocol.file.allow=always submodule update --init --recursive'], {
+          cwd: folder,
+          env: { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: home, LANG: 'en_US.UTF-8' },
+          encoding: 'utf8',
+        });
+      },
       filterConfig: `[filter "planted"]\n\tsmudge = ${planted}\n\tclean = ${planted}\n`,
       /** A commit on the pull request's ref with these files; its sha. */
       commit(files: Record<string, string>): string {
@@ -560,7 +572,7 @@ describe('the git steps the account runs', () => {
     expect(git(f.folder, 'rev-parse', 'HEAD')).toBe(head);
     expect(f.ran()).toEqual([]);
     expect(lstatSync(gitDir).isDirectory()).toBe(true);
-    const kept = /^(objects|refs|packed-refs|HEAD|index|sharedindex\..+|shallow|config|description|info)$/;
+    const kept = /^(objects|refs|packed-refs|HEAD|index|sharedindex\..+|shallow|modules|config|description|info)$/;
     expect(readdirSync(gitDir).filter((name) => !kept.test(name))).toEqual([]);
     expect(readFileSync(join(gitDir, 'config'), 'utf8')).not.toContain('planted');
     expect(existsSync(join(gitDir, 'info', 'attributes'))).toBe(false);
@@ -637,6 +649,281 @@ describe('the git steps the account runs', () => {
     expect(after.ino).toBe(unchanged.ino);
     expect(after.mtimeNs).toBe(unchanged.mtimeNs);
   });
+
+  describe("a submodule's git dir (#365)", () => {
+    /** What a module's git dir may hold once RECEIVE ends: `MODULE_KEEPS` and the config it wrote. */
+    const moduleKept = /^(objects|refs|packed-refs|HEAD|index|sharedindex\..+|shallow|modules|config)$/;
+
+    const commitIn = (dir: string, files: Record<string, string>): string => {
+      for (const [path, content] of Object.entries(files)) {
+        mkdirSync(join(dir, path, '..'), { recursive: true });
+        writeFileSync(join(dir, path), content);
+      }
+      git(dir, 'add', '-A');
+      git(dir, '-c', 'user.name=t', '-c', 'user.email=t@example.com', 'commit', '--quiet', '--allow-empty', '-m', 'commit');
+      return git(dir, 'rev-parse', 'HEAD');
+    };
+
+    /** A repository of its own, beside the pull request's, with these files. */
+    const repository = (f: ReturnType<typeof fixture>, name: string, files: Record<string, string>): string => {
+      const dir = join(f.root, name);
+      mkdirSync(dir);
+      git(dir, 'init', '--quiet', '.');
+      commitIn(dir, files);
+      return dir;
+    };
+
+    /** Adds `url` as a submodule at `path` of `dir`, which then has to be committed. */
+    const addSubmodule = (dir: string, url: string, path: string) => git(dir, '-c', 'protocol.file.allow=always', 'submodule', 'add', '--quiet', url, path);
+
+    /** Moves the submodule at `path` of `dir` to its remote's newest commit; the gitlink then has to be committed. */
+    const movePin = (dir: string, path: string) => {
+      git(join(dir, path), 'fetch', '--quiet', 'origin');
+      git(join(dir, path), 'checkout', '--quiet', 'FETCH_HEAD');
+    };
+
+    /** A head with a submodule `sub`, received and updated once, as a first build leaves it. */
+    function built() {
+      const f = fixture();
+      const sub = repository(f, 'subsrc', { 'a.c': 'int a;\n', 'b.c': 'int b;\n' });
+      addSubmodule(f.source, sub, 'sub');
+      const first = f.commit({ Makefile: 'host-ci:\n\ttrue\n' });
+      const received = f.receive(first, f.bundle());
+      expect(received.stderr).toBe('');
+      expect(received.status).toBe(0);
+      const updated = f.update();
+      expect(updated.status, updated.stderr).toBe(0);
+      expect(readFileSync(join(f.folder, 'sub', 'b.c'), 'utf8')).toBe('int b;\n');
+      /** A second head whose `sub` is pinned at a newer commit, which changes `b.c` only. */
+      const next = () => {
+        commitIn(sub, { 'b.c': 'int b = 1;\n' });
+        movePin(f.source, 'sub');
+        return f.commit({});
+      };
+      return { f, sub, first, next, gitDir: join(f.folder, '.git', 'modules', 'sub') };
+    }
+
+    it("keeps it across a second receive, so the repository's update succeeds and files it does not change keep their mtimes", () => {
+      const { f, sub, first, next, gitDir } = built();
+      const unchanged = statSync(join(f.folder, 'sub', 'a.c'), { bigint: true });
+      const top = statSync(join(f.folder, 'Makefile'), { bigint: true });
+
+      const second = next();
+      const received = f.receive(second, f.bundle(first));
+      expect(received.stderr).toBe('');
+      expect(received.status).toBe(0);
+      expect(readdirSync(gitDir).filter((name) => !moduleKept.test(name))).toEqual([]);
+      expect(readFileSync(join(f.folder, 'sub', '.git'), 'utf8')).toBe('gitdir: ../.git/modules/sub\n');
+      expect(git(f.root, 'config', '--file', join(gitDir, 'config'), '--get', 'remote.origin.url')).toBe(sub);
+      expect(existsSync(join(f.folder, '.git', 'openadlc-modules'))).toBe(false);
+
+      const updated = f.update();
+      expect(updated.status, updated.stderr).toBe(0);
+      expect(readFileSync(join(f.folder, 'sub', 'b.c'), 'utf8')).toBe('int b = 1;\n');
+      const after = statSync(join(f.folder, 'sub', 'a.c'), { bigint: true });
+      expect(after.ino).toBe(unchanged.ino);
+      expect(after.mtimeNs).toBe(unchanged.mtimeNs);
+      expect(statSync(join(f.folder, 'Makefile'), { bigint: true }).mtimeNs).toBe(top.mtimeNs);
+      expect(f.ran()).toEqual([]);
+    });
+
+    it('runs no filter, hook, fsmonitor, config.worktree, commondir or alternates an earlier run left in it', () => {
+      const { f, first, next, gitDir } = built();
+      const hooks = join(f.root, 'hooks');
+      mkdirSync(hooks);
+      for (const hook of ['post-checkout', 'reference-transaction']) {
+        writeFileSync(join(hooks, hook), `#!/bin/sh\ntouch "${f.marks}/${hook}"\n`);
+        chmodSync(join(hooks, hook), 0o755);
+        mkdirSync(join(gitDir, 'hooks'), { recursive: true });
+        writeFileSync(join(gitDir, 'hooks', hook), `#!/bin/sh\ntouch "${f.marks}/local-${hook}"\n`);
+        chmodSync(join(gitDir, 'hooks', hook), 0o755);
+      }
+      writeFileSync(
+        join(gitDir, 'config'),
+        `${readFileSync(join(gitDir, 'config'), 'utf8')}${f.filterConfig}[core]\n\tfsmonitor = ${f.planted}\n\thooksPath = ${hooks}\n[extensions]\n\tworktreeConfig = true\n`,
+      );
+      mkdirSync(join(gitDir, 'info'), { recursive: true });
+      writeFileSync(join(gitDir, 'info', 'attributes'), '* filter=planted\n');
+      writeFileSync(join(gitDir, 'config.worktree'), f.filterConfig);
+      const common = join(f.root, 'common');
+      mkdirSync(common);
+      git(common, 'init', '--quiet', '--bare', '.');
+      writeFileSync(join(common, 'config'), `[core]\n\trepositoryformatversion = 0\n\tbare = false\n${f.filterConfig}`);
+      writeFileSync(join(gitDir, 'commondir'), `${common}\n`);
+      mkdirSync(join(f.root, 'elsewhere'));
+      writeFileSync(join(gitDir, 'objects', 'info', 'alternates'), `${join(f.root, 'elsewhere')}\n`);
+
+      const second = next();
+      const received = f.receive(second, f.bundle(first));
+      expect(received.stderr).toBe('');
+      expect(received.status).toBe(0);
+      expect(readdirSync(gitDir).filter((name) => !moduleKept.test(name))).toEqual([]);
+      expect(readFileSync(join(gitDir, 'config'), 'utf8')).not.toContain('planted');
+      expect(readFileSync(join(gitDir, 'config'), 'utf8')).not.toContain(hooks);
+      expect(existsSync(join(gitDir, 'objects', 'info', 'alternates'))).toBe(false);
+
+      const updated = f.update();
+      expect(updated.status, updated.stderr).toBe(0);
+      expect(readFileSync(join(f.folder, 'sub', 'b.c'), 'utf8')).toBe('int b = 1;\n');
+      expect(f.ran()).toEqual([]);
+    });
+
+    it.each(['a directory with a planted config', 'a gitfile pointing at a planted repository', 'a symlink to a planted repository'])(
+      "writes the submodule folder's .git afresh when an earlier run left it as %s",
+      (kind) => {
+        const { f, first, next } = built();
+        const outside = join(f.root, 'outside');
+        mkdirSync(outside);
+        git(outside, 'init', '--quiet', '.');
+        const outsideGit = join(outside, '.git');
+        writeFileSync(join(outsideGit, 'config'), `${readFileSync(join(outsideGit, 'config'), 'utf8')}${f.filterConfig}[core]\n\tfsmonitor = ${f.planted}\n`);
+        mkdirSync(join(outsideGit, 'info'), { recursive: true });
+        writeFileSync(join(outsideGit, 'info', 'attributes'), '* filter=planted\n');
+        const outsideConfig = readFileSync(join(outsideGit, 'config'), 'utf8');
+        const dotGit = join(f.folder, 'sub', '.git');
+        rmSync(dotGit, { recursive: true, force: true });
+        if (kind.startsWith('a directory')) {
+          git(join(f.folder, 'sub'), 'init', '--quiet', '.');
+          writeFileSync(join(dotGit, 'config'), `${readFileSync(join(dotGit, 'config'), 'utf8')}${f.filterConfig}[core]\n\tfsmonitor = ${f.planted}\n`);
+          mkdirSync(join(dotGit, 'info'), { recursive: true });
+          writeFileSync(join(dotGit, 'info', 'attributes'), '* filter=planted\n');
+        } else if (kind.startsWith('a gitfile')) {
+          writeFileSync(dotGit, `gitdir: ${outsideGit}\n`);
+        } else {
+          symlinkSync(outsideGit, dotGit);
+        }
+
+        const second = next();
+        const received = f.receive(second, f.bundle(first));
+        expect(received.stderr).toBe('');
+        expect(received.status).toBe(0);
+        expect(lstatSync(dotGit).isFile()).toBe(true);
+        expect(readFileSync(dotGit, 'utf8')).toBe('gitdir: ../.git/modules/sub\n');
+        const updated = f.update();
+        expect(updated.status, updated.stderr).toBe(0);
+        expect(readFileSync(join(f.folder, 'sub', 'b.c'), 'utf8')).toBe('int b = 1;\n');
+        expect(f.ran()).toEqual([]);
+        expect(readFileSync(join(outsideGit, 'config'), 'utf8')).toBe(outsideConfig);
+      },
+    );
+
+    /** A head with a submodule `a` that has a submodule `b`, received and updated once. */
+    function nested() {
+      const f = fixture();
+      const inner = repository(f, 'innersrc', { 'x.c': 'int x;\n', 'y.c': 'int y;\n' });
+      const middle = repository(f, 'middlesrc', { 'm.c': 'int m;\n' });
+      addSubmodule(middle, inner, 'b');
+      commitIn(middle, {});
+      addSubmodule(f.source, middle, 'a');
+      const first = f.commit({ Makefile: 'host-ci:\n\ttrue\n' });
+      expect(f.receive(first, f.bundle()).status).toBe(0);
+      const updated = f.update();
+      expect(updated.status, updated.stderr).toBe(0);
+      expect(readFileSync(join(f.folder, 'a', 'b', 'y.c'), 'utf8')).toBe('int y;\n');
+      /** A second head whose `a` pins a commit that moves `b`, which changes `y.c` only. */
+      const next = () => {
+        commitIn(inner, { 'y.c': 'int y = 1;\n' });
+        movePin(middle, 'b');
+        commitIn(middle, {});
+        movePin(f.source, 'a');
+        return f.commit({});
+      };
+      return { f, first, next, innerGitDir: join(f.folder, '.git', 'modules', 'a', 'modules', 'b') };
+    }
+
+    it("cleans a nested submodule's git dir too, and points its folder at it", () => {
+      const { f, first, next, innerGitDir } = nested();
+      const unchanged = statSync(join(f.folder, 'a', 'b', 'x.c'), { bigint: true });
+      writeFileSync(join(innerGitDir, 'config'), `${readFileSync(join(innerGitDir, 'config'), 'utf8')}${f.filterConfig}`);
+      mkdirSync(join(innerGitDir, 'info'), { recursive: true });
+      writeFileSync(join(innerGitDir, 'info', 'attributes'), '* filter=planted\n');
+
+      const second = next();
+      const received = f.receive(second, f.bundle(first));
+      expect(received.stderr).toBe('');
+      expect(received.status).toBe(0);
+      expect(readdirSync(innerGitDir).filter((name) => !moduleKept.test(name))).toEqual([]);
+      expect(readFileSync(join(f.folder, 'a', 'b', '.git'), 'utf8')).toBe('gitdir: ../../.git/modules/a/modules/b\n');
+      const updated = f.update();
+      expect(updated.status, updated.stderr).toBe(0);
+      expect(readFileSync(join(f.folder, 'a', 'b', 'y.c'), 'utf8')).toBe('int y = 1;\n');
+      expect(statSync(join(f.folder, 'a', 'b', 'x.c'), { bigint: true }).mtimeNs).toBe(unchanged.mtimeNs);
+      expect(f.ran()).toEqual([]);
+    });
+
+    it("removes a planted .git inside a kept submodule's folder that its kept index leaves out", () => {
+      const { f, first, next } = nested();
+      // The middle module's index is the earlier run's: here it no longer
+      // lists `b`, whose folder now holds a git dir with a planted filter.
+      git(f.root, '--git-dir', join(f.folder, '.git', 'modules', 'a'), 'rm', '--quiet', '--cached', 'b');
+      const dotGit = join(f.folder, 'a', 'b', '.git');
+      rmSync(dotGit, { recursive: true, force: true });
+      git(join(f.folder, 'a', 'b'), 'init', '--quiet', '.');
+      writeFileSync(join(dotGit, 'config'), `${readFileSync(join(dotGit, 'config'), 'utf8')}${f.filterConfig}[core]\n\tfsmonitor = ${f.planted}\n`);
+      mkdirSync(join(dotGit, 'info'), { recursive: true });
+      writeFileSync(join(dotGit, 'info', 'attributes'), '* filter=planted\n');
+
+      const second = next();
+      const received = f.receive(second, f.bundle(first));
+      expect(received.stderr).toBe('');
+      expect(received.status).toBe(0);
+      expect(existsSync(dotGit)).toBe(false);
+      f.update();
+      expect(f.ran()).toEqual([]);
+    });
+
+    it.each(['ext::sh -c touch% /tmp/openadlc-planted', '-oProxyCommand=touch /tmp/openadlc-planted', 'https://example.com/a b'])(
+      'does not carry a remote.origin.url of %s over',
+      (url) => {
+        const { f, first, gitDir } = built();
+        git(f.root, 'config', '--file', join(gitDir, 'config'), 'remote.origin.url', url);
+        const received = f.receive(first, f.bundle());
+        expect(received.stderr).toBe('');
+        expect(received.status).toBe(0);
+        expect(readFileSync(join(gitDir, 'config'), 'utf8')).not.toContain('remote "origin"');
+      },
+    );
+
+    it('heals the layout the old receive left, a gitfile with no .git/modules, by cloning the submodule again', () => {
+      const { f, first, next } = built();
+      rmSync(join(f.folder, '.git', 'modules'), { recursive: true, force: true });
+      expect(f.update().status).not.toBe(0);
+
+      const second = next();
+      const received = f.receive(second, f.bundle(first));
+      expect(received.stderr).toBe('');
+      expect(received.status).toBe(0);
+      expect(readdirSync(join(f.folder, 'sub'))).toEqual([]);
+      const updated = f.update();
+      expect(updated.status, updated.stderr).toBe(0);
+      expect(readFileSync(join(f.folder, 'sub', 'b.c'), 'utf8')).toBe('int b = 1;\n');
+    });
+
+    it('leaves nothing of a submodule the head no longer has', () => {
+      const { f, first } = built();
+      git(f.source, 'rm', '--quiet', 'sub');
+      const second = f.commit({});
+      const received = f.receive(second, f.bundle(first));
+      // Git's own word that the folder, an untracked one now, stays.
+      expect(received.stderr).toBe("warning: unable to rmdir 'sub': Directory not empty\n");
+      expect(received.status).toBe(0);
+      expect(existsSync(join(f.folder, '.git', 'modules', 'sub'))).toBe(false);
+      expect(existsSync(join(f.folder, '.git', 'openadlc-modules'))).toBe(false);
+    });
+
+    it('stops, naming it, at a submodule path it cannot clean', () => {
+      const { f, first } = built();
+      const pin = git(f.folder, 'rev-parse', 'HEAD:sub');
+      git(f.source, 'update-index', '--add', '--cacheinfo', `160000,${pin},we"ird`);
+      git(f.source, '-c', 'user.name=t', '-c', 'user.email=t@example.com', 'commit', '--quiet', '-m', 'odd');
+      const second = git(f.source, 'rev-parse', 'HEAD');
+      git(f.source, 'update-ref', 'refs/openadlc/host-check/7', second);
+      const received = f.receive(second, f.bundle(first));
+      expect(received.status).not.toBe(0);
+      expect(received.stderr).toContain('cannot keep the submodule at "we');
+      expect(received.stderr).toContain('rename it');
+    });
+  });
 });
 
 describe('hostd’s own processes', () => {
@@ -667,6 +954,33 @@ describe('hostd’s own processes', () => {
       expect(Object.keys(env ?? {}).sort()).toEqual(['LANG', 'PATH']);
     }
   });
+
+  it('starts every process in /, which the account can enter, not in hostd’s own folder (#365)', async () => {
+    const seen: { command: string; cwd: unknown }[] = [];
+    const fake = ((command: string, _args: string[], options: SpawnOptions) => {
+      seen.push({ command, cwd: options.cwd });
+      return spawn('/usr/bin/true', [], { stdio: ['pipe', 'pipe', 'pipe'], detached: true }) as ChildProcess;
+    }) as never;
+    const processes = nodeProcesses(fake);
+    await processes.run(['sudo', '-n', '-u', ACCOUNT, '--', '/usr/bin/env', '-i', '/usr/bin/true']);
+    await processes.pipe({ argv: ['git', 'bundle', 'create', '-'] }, { argv: ['sudo', '-n', '-u', ACCOUNT, '--', '/usr/bin/env', '-i', '/bin/sh'] }, 5_000);
+    const child = processes.start(['sudo', '-n', '-u', ACCOUNT, '--', '/usr/bin/env', '-i', '/bin/sh', '-c', 'true'], () => undefined);
+    await child.exited;
+    await child.signalAll('TERM');
+    // run, both ends of the pipe, the build, and the killer `signalAll` sends as the account.
+    expect(seen).toHaveLength(5);
+    expect(seen.every((call) => call.cwd === '/')).toBe(true);
+  });
+
+  it('runs a command whose working folder is /, so the shell prints no getcwd error first', async () => {
+    const { start } = nodeProcesses();
+    let printed = '';
+    const child = start(['/bin/sh', '-c', 'pwd'], (chunk) => {
+      printed += chunk;
+    });
+    expect(await child.exited).toBe(0);
+    expect(printed).toBe('/\n');
+  });
 });
 
 function alive(pid: number): boolean {
@@ -679,11 +993,13 @@ function alive(pid: number): boolean {
 }
 
 describe('the receive script, shared with the release run (#343)', () => {
-  it('is the host check’s RECEIVE, byte for byte as it was before it was shared', () => {
+  it('is the host check’s RECEIVE, byte for byte as it was last changed on purpose', () => {
     expect(RECEIVE).toBe(receiveScript('host-check'));
-    // The sha256 of RECEIVE as it was written before `receiveScript`: a
-    // change to the host check's script has to change this test on purpose.
-    expect(createHash('sha256').update(RECEIVE).digest('hex')).toBe('fe7e32746094660b973079a3e3c7b44aa4f493e01b9e35188532f1d42f3a1db0');
+    // The sha256 of RECEIVE: a change to the host check's script has to
+    // change this test on purpose. Last changed by #365, which keeps and
+    // cleans each submodule's git dir and stops the fetch recursing into
+    // submodules (docs/adr/0079); it was fe7e3274… before.
+    expect(createHash('sha256').update(RECEIVE).digest('hex')).toBe('bf42cfe908dead00c04715b09770bb44a1aa1dea4ad86470e01c2491f532102e');
   });
 
   it('fetches only the release refs for a release, and keeps the same .git cleaning', () => {
