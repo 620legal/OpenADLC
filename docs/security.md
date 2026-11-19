@@ -1002,6 +1002,20 @@ Several things bound it.
   What is left to read is that fresh config, the `-c` flags, and the head's
   tracked `.gitattributes`, which can name a filter but not define one
   ([ADR 0067](adr/0067-a-host-checks-working-folder-keeps-only-gits-objects-refs-and-index.md)).
+  Each submodule's git dir under `.git/modules` is kept and cleaned the same
+  way, nested ones included. Its config and its folder's gitfile are written
+  fresh by the script, never kept, and any other `.git` inside a kept
+  submodule's folder is removed. Only the old `remote.origin.url` carries
+  over, read as data, and only when it has no `::` (no remote helper such as
+  `ext::`), no leading `-`, and nothing but printable ASCII. The fetch doesn't
+  recurse into submodules, and every old gitlink's `.git` is removed before
+  it. So nothing an earlier run left in a submodule's config, hooks,
+  `info/attributes`, `commondir` or alternates runs at the fetch, the
+  checkout, or the repository's own `git submodule update`
+  ([ADR 0079](adr/0079-a-submodules-git-dir-is-kept-and-cleaned-like-the-top-level-git.md)).
+  The build's own git still reads the account's `~/.gitconfig`, which an
+  earlier run can write. That file is part of the build's environment, and
+  this cleaning doesn't cover it.
 - **How its result counts.** Only the bridge writes the result, to
   `host_check_runs`, from hostd's report sent with the install's secret. The
   merge reads that table. It never reads the `host-check` commit status, which

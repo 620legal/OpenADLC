@@ -1,6 +1,6 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -37,7 +37,7 @@ import {
 import { createPublicKey, verify } from 'node:crypto';
 import { releaseSigningKeyRef, serializeReleaseKeyRecord, type SecretStore } from '@openadlc/github';
 import { DEFAULT_RELEASE_TAG, releaseMessage } from '@openadlc/shared';
-import type { HostProcesses, ProcessResult } from './account-probe.js';
+import { nodeProcesses, type HostProcesses, type ProcessResult } from './account-probe.js';
 import type { ReleaseAccountProbe } from './release-account.js';
 import { signRelease } from './release-sign.js';
 
@@ -472,6 +472,53 @@ describe('a release run', () => {
     const rm = world.asAccount.find((argv) => argv.includes('/bin/rm'));
     expect(rm?.slice(-4)).toEqual(['/bin/rm', '-rf', '--', join(home, 'openadlc', 'default', 'acme__app')]);
     expect(world.piped[1]?.from.argv.slice(-2)).toEqual(['-', 'refs/openadlc/release/build']);
+  });
+
+  it("builds a repository with a submodule twice without a clean build, its tree still incremental (#365)", async () => {
+    // The submodule's own repository, which the release repository pins.
+    const sub = remoteRepo();
+    sub.commit({ 'a.c': 'int a;\n', 'b.c': 'int b;\n' }, 'sub one');
+    remote.git('-c', 'protocol.file.allow=always', 'submodule', 'add', '--quiet', sub.dir, 'sub');
+    const one = remote.commit({}, 'add sub');
+
+    // The receive and the build run for real, as the account would run them:
+    // the `sudo` prefix goes, and `env -i` with the account's variables stays.
+    const world = machine();
+    const real = nodeProcesses();
+    const unsudo = (argv: string[]) => (argv[0] === 'sudo' ? argv.slice(argv.indexOf('/usr/bin/env')) : argv);
+    world.processes.pipe = (from, to, timeoutMs) => {
+      world.piped.push({ from, to });
+      return real.pipe(from, { argv: unsudo(to.argv) }, timeoutMs);
+    };
+    world.processes.start = (argv, onOutput) => real.start(unsudo(argv), onOutput);
+    const { releaseRuns, reports } = runs(world, { home });
+    const command = 'git -c protocol.file.allow=always submodule update --init sub';
+    const folder = join(home, 'openadlc', 'default', 'acme__app');
+
+    releaseRuns.start(request(one, { runId: 'run-1', command }));
+    await releaseRuns.settled();
+    expect(reports.at(-1)?.state, `${reports.at(-1)?.reason} ${reports.at(-1)?.logTail}`).toBe('built');
+    expect(readFileSync(join(folder, 'sub', 'b.c'), 'utf8')).toBe('int b;\n');
+    const unchanged = statSync(join(folder, 'sub', 'a.c'), { bigint: true });
+    const top = statSync(join(folder, 'Makefile'), { bigint: true });
+
+    // The second head moves the submodule's pin, which changes b.c only.
+    sub.commit({ 'b.c': 'int b = 1;\n' }, 'sub two');
+    execFileSync('git', ['-C', join(remote.dir, 'sub'), 'fetch', '--quiet', 'origin'], { env: { PATH: process.env.PATH ?? '', ...GIT_ID } });
+    execFileSync('git', ['-C', join(remote.dir, 'sub'), 'checkout', '--quiet', 'FETCH_HEAD'], { env: { PATH: process.env.PATH ?? '', ...GIT_ID } });
+    const two = remote.commit({ VERSION: '1.5.0\n' }, 'move sub');
+    releaseRuns.start(request(two, { runId: 'run-2', after: '1.4.0', command }));
+    await releaseRuns.settled();
+
+    expect(reports.at(-1)?.state, `${reports.at(-1)?.reason} ${reports.at(-1)?.logTail}`).toBe('built');
+    expect(world.piped[1]?.from.argv.slice(-3)).toEqual(['-', 'refs/openadlc/release/build', `^${one}`]);
+    expect(world.events).not.toContain('rm');
+    expect(readFileSync(join(folder, 'sub', 'b.c'), 'utf8')).toBe('int b = 1;\n');
+    const after = statSync(join(folder, 'sub', 'a.c'), { bigint: true });
+    expect(after.ino).toBe(unchanged.ino);
+    expect(after.mtimeNs).toBe(unchanged.mtimeNs);
+    expect(statSync(join(folder, 'Makefile'), { bigint: true }).mtimeNs).toBe(top.mtimeNs);
+    expect(readFileSync(join(folder, 'sub', '.git'), 'utf8')).toBe('gitdir: ../.git/modules/sub\n');
   });
 
   describe('leaves nothing of the account running', () => {

@@ -175,6 +175,18 @@ export function dockerSocketsOf(env: Record<string, string | undefined>, home: s
   return [...new Set(sockets.filter(Boolean))];
 }
 
+/**
+ * Where every process hostd starts begins. `sudo` keeps the caller's
+ * directory, which was hostd's own, and the account cannot enter it by
+ * design: `/bin/sh` printed `shell-init: error retrieving current directory:
+ * getcwd: …` as the first line of every release and host check log, which
+ * read as the cause of a failure (#365). `/` is the one folder every account
+ * can enter. Every path hostd gives git or the account is absolute — the
+ * mirror (`-C`), the working folder, the roots from config — so hostd's own
+ * git is unaffected.
+ */
+export const SPAWN_CWD = '/';
+
 /** `HostProcesses` on this machine, with node's `child_process`. */
 export function nodeProcesses(spawn: (command: string, args: string[], options: SpawnOptions) => ChildProcess = spawnChild): HostProcesses {
   const collect = (child: ChildProcess, timeoutMs: number | undefined): Promise<ProcessResult> =>
@@ -206,14 +218,14 @@ export function nodeProcesses(spawn: (command: string, args: string[], options: 
   return {
     run(argv, options = {}) {
       const [command = '', ...args] = argv;
-      const child = spawn(command, args, { env: { ...minimalEnv(), ...options.env }, stdio: ['ignore', 'pipe', 'pipe'] });
+      const child = spawn(command, args, { cwd: SPAWN_CWD, env: { ...minimalEnv(), ...options.env }, stdio: ['ignore', 'pipe', 'pipe'] });
       return collect(child, options.timeoutMs);
     },
     async pipe(from, to, timeoutMs) {
       const [fromCommand = '', ...fromArgs] = from.argv;
       const [toCommand = '', ...toArgs] = to.argv;
-      const source = spawn(fromCommand, fromArgs, { env: { ...minimalEnv(), ...from.env }, stdio: ['ignore', 'pipe', 'pipe'] });
-      const sink = spawn(toCommand, toArgs, { env: minimalEnv(), stdio: ['pipe', 'pipe', 'pipe'] });
+      const source = spawn(fromCommand, fromArgs, { cwd: SPAWN_CWD, env: { ...minimalEnv(), ...from.env }, stdio: ['ignore', 'pipe', 'pipe'] });
+      const sink = spawn(toCommand, toArgs, { cwd: SPAWN_CWD, env: minimalEnv(), stdio: ['pipe', 'pipe', 'pipe'] });
       if (source.stdout && sink.stdin) source.stdout.pipe(sink.stdin);
       sink.stdin?.on('error', () => undefined);
       const [made, taken] = await Promise.all([collect(source, timeoutMs), collect(sink, timeoutMs)]);
@@ -224,7 +236,7 @@ export function nodeProcesses(spawn: (command: string, args: string[], options: 
       // A process group of its own, which hostd may signal: `sudo` keeps
       // hostd's user as its real one. What the command starts runs as the
       // account, so `signalAll` also reaches it as the account.
-      const child = spawn(command, args, { env: minimalEnv(), stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+      const child = spawn(command, args, { cwd: SPAWN_CWD, env: minimalEnv(), stdio: ['ignore', 'pipe', 'pipe'], detached: true });
       child.stdout?.on('data', (chunk: Buffer) => onOutput(chunk.toString('utf8')));
       child.stderr?.on('data', (chunk: Buffer) => onOutput(chunk.toString('utf8')));
       const exited = new Promise<number>((resolve) => {
@@ -247,7 +259,7 @@ export function nodeProcesses(spawn: (command: string, args: string[], options: 
             // Every process the account runs, the build's background ones and
             // any that left the group included: the account runs nothing else.
             await new Promise<void>((resolve) => {
-              const killer = spawn(asAccount[0] as string, [...asAccount.slice(1), '/bin/kill', `-${signal}`, '-1'], { env: minimalEnv(), stdio: 'ignore' });
+              const killer = spawn(asAccount[0] as string, [...asAccount.slice(1), '/bin/kill', `-${signal}`, '-1'], { cwd: SPAWN_CWD, env: minimalEnv(), stdio: 'ignore' });
               killer.on('close', () => resolve());
               killer.on('error', () => resolve());
             });

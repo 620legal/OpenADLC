@@ -52,7 +52,9 @@ export { HOST_CHECK_PATH, dockerSocketsOf, nodeProcesses, type AccountProbe, typ
  *   no `~/.config/git/attributes`, run no hook and no fsmonitor, and start
  *   from the folder's `.git` emptied to its objects, refs and index, with a
  *   fresh config: an earlier run, of any repository, could have written any
- *   of them, and git ran what they named (`RECEIVE`).
+ *   of them, and git ran what they named (`RECEIVE`). Each submodule's git
+ *   dir is kept and cleaned the same way, so a repository with submodules
+ *   still builds incrementally (docs/adr/0079).
  *
  * No model runs it, so it spends nothing. What it printed reaches hostd
  * through a pipe, and its last `LOG_TAIL_BYTES` are reported to the bridge,
@@ -454,6 +456,111 @@ const GIT_ENV: Record<string, string> = { GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_G
 export const RECEIVE_KEEPS = ['objects', 'refs', 'packed-refs', 'HEAD', 'index', 'sharedindex.*', 'shallow'] as const;
 
 /**
+ * What RECEIVE keeps of every git dir in the folder, the top-level `.git` and
+ * each submodule's: `RECEIVE_KEEPS` and `modules`, the submodules' own git
+ * dirs, which are kept only to be cleaned the same way in turn. Without them a
+ * repository with a submodule could not build twice: its folder's gitfile
+ * pointed at a git dir that was gone, and only a Clean build got past it
+ * (#365, docs/adr/0079-a-submodules-git-dir-is-kept-and-cleaned-like-the-top-level-git.md).
+ */
+export const MODULE_KEEPS = [...RECEIVE_KEEPS, 'modules'] as const;
+
+/**
+ * The submodule pass, `modules <gitdir> <worktree> <staging>`, run once the
+ * head is checked out: for every gitlink in `<gitdir>`'s index, the module's
+ * kept git dir, found by its name in `<worktree>/.gitmodules`, is cleaned to
+ * `MODULE_KEEPS`, moved back under `<gitdir>/modules`, and given a config and
+ * a gitfile this script writes, then the pass goes into its own submodules.
+ * A module it cannot vouch for — no valid name, no kept git dir, a symlink on
+ * the way to it, a path that is not a folder — is emptied instead, so the
+ * repository's own `submodule update --init` clones it again. What is left
+ * in `<staging>` afterwards is modules the head no longer has, and goes.
+ *
+ * - A module's index is the earlier run's, so a nested level's gitlinks are
+ *   only what it says: one it left out would keep a planted `.git` at its
+ *   path, which the repository's `submodule update --recursive` runs in. So
+ *   every `.git` inside a kept module's folder goes before its gitfile is
+ *   written, and the pass writes back the ones it vouches for.
+ * - A path git would never check out (`..`, `.`, an empty or `.git` part) or
+ *   one with a symlink on the way stops the receive: only a planted index
+ *   holds one, and a Clean build starts the folder again.
+ * - The old config is read as data (`config --file`, which follows no
+ *   `include`), and only `remote.origin.url` is carried over, only in a shape
+ *   that names no remote helper and no option.
+ *
+ * Before the fetch, `unpin` removes the `.git` of every gitlink the kept
+ * index names, and the fetch does not recurse: git's on-demand fetch ran
+ * `git fetch` inside a populated submodule whose gitlink changed, with
+ * whatever config its `.git` held, and the checkout opened each one through
+ * a gitfile left dangling once `.git/modules` was staged away.
+ *
+ * Each call is a subshell, so the recursion's variables are its own.
+ */
+const MODULES_FUNCTIONS = [
+  `clean() { find "$1" -mindepth 1 -maxdepth 1 ${MODULE_KEEPS.map((name) => `! -name '${name}'`).join(' ')} -exec rm -rf {} +; rm -f "$1/objects/info/alternates" "$1/objects/info/http-alternates"; }`,
+  'stage() { rm -rf "$1/openadlc-modules"; if [ -L "$1/modules" ] || { [ -e "$1/modules" ] && [ ! -d "$1/modules" ]; }; then rm -f "$1/modules"; elif [ -d "$1/modules" ]; then mv "$1/modules" "$1/openadlc-modules"; fi; }',
+  'up() { u=../; q=$1; while :; do case $q in */*) q=${q#*/}; u=../$u;; *) break;; esac; done; printf %s "$u"; }',
+  'nolink() { b=$1; r=$2; while :; do b=$b/${r%%/*}; [ ! -L "$b" ] || return 1; case $r in */*) r=${r#*/};; *) return 0;; esac; done; }',
+  'refuse() { printf \'the receive script cannot keep the submodule at %s: %s\\n\' "$1" "$2" >&2; exit 1; }',
+  'gitlinks() { g -c core.quotePath=false --git-dir="$1" ls-files --stage > "$2.all"; grep \'^160000 \' "$2.all" > "$2" || [ $? -eq 1 ]; rm -f "$2.all"; }',
+  'unpin() (',
+  '  gitlinks .git .git/openadlc-gitlinks',
+  '  tab=$(printf \'\\t\')',
+  '  while IFS="$tab" read -r meta p <&3; do',
+  '    case $p in \'"\'*) continue;; esac',
+  '    case /$p/ in */../*|*/./*|*//*|*/[.][gG][iI][tT]/*) continue;; esac',
+  '    if nolink . "$p"; then rm -rf "$p/.git"; fi',
+  '  done 3< .git/openadlc-gitlinks',
+  '  rm -f .git/openadlc-gitlinks',
+  ')',
+  'modules() (',
+  '  gd=$1; wt=$2; st=$3; links=$1/openadlc-gitlinks; names=$1/openadlc-names',
+  '  gitlinks "$gd" "$links"',
+  '  : > "$names"',
+  '  if [ -f "$wt/.gitmodules" ] && [ ! -L "$wt/.gitmodules" ]; then g config --file "$wt/.gitmodules" --get-regexp \'^submodule\\..*\\.path$\' > "$names" || :; fi',
+  '  tab=$(printf \'\\t\')',
+  '  while IFS="$tab" read -r meta p <&3; do',
+  '    case $wt in .) P=$p;; *) P=$wt/$p;; esac',
+  '    case $p in \'"\'*) refuse "$P" "its path has a tab, newline, quote or backslash in it; rename it";; esac',
+  '    case /$p/ in */../*|*/./*|*//*|*/[.][gG][iI][tT]/*) refuse "$P" "git would not check out that path; cut a Clean build";; esac',
+  '    if [ -L "$P" ] || { [ -e "$P" ] && [ ! -d "$P" ]; }; then rm -f "$P"; fi',
+  '    nolink . "$P" || refuse "$P" "a symbolic link is on the way to it; cut a Clean build"',
+  '    rm -rf "$P/.git"',
+  '    name=',
+  '    while read -r key val <&4; do',
+  '      [ "$val" = "$p" ] || continue',
+  '      n=${key#submodule.}; n=${n%.path}',
+  '      if [ "submodule.$n.path" = "$key" ]; then name=$n; break; fi',
+  '    done 4< "$names"',
+  "    case $name in ''|/*|*[!_.@+/0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-]*) name=;; esac",
+  '    case /$name/ in */./*|*/../*|*//*) name=;; esac',
+  '    m=$gd/modules/$name; old=$st/$name',
+  '    if [ -n "$name" ] && [ -d "$P" ] && [ -d "$st" ] && nolink "$st" "$name" && [ -d "$old" ] && [ ! -e "$m" ] && [ ! -L "$m" ]; then',
+  '      url=',
+  '      if [ -f "$old/config" ] && [ ! -L "$old/config" ]; then url=$(g config --file "$old/config" --get remote.origin.url || :); fi',
+  '      case $url in *::*|-*) url=;; esac',
+  "      if [ -n \"$(printf %s \"$url\" | LC_ALL=C tr -d '\\041-\\176')\" ]; then url=; fi",
+  '      case $url in https://*|ssh://*|git://*|file://*|/*) ;; *:*) case ${url%%:*} in \'\'|*/*) url=;; esac;; *) url=;; esac',
+  '      clean "$old"',
+  '      mkdir -p "${m%/*}"',
+  '      mv "$old" "$m"',
+  '      g --git-dir="$m" init --quiet --template=',
+  '      g config --file "$m/config" core.bare false',
+  '      g config --file "$m/config" core.worktree "$(up "$m")$P"',
+  '      if [ -n "$url" ]; then g config --file "$m/config" remote.origin.url "$url"; g config --file "$m/config" remote.origin.fetch \'+refs/heads/*:refs/remotes/origin/*\'; fi',
+  '      find "$P" -mindepth 2 -iname .git -prune -exec rm -rf {} +',
+  '      printf \'gitdir: %s%s\\n\' "$(up "$P")" "$m" > "$P/.git"',
+  '      stage "$m"',
+  '      modules "$m" "$P" "$m/openadlc-modules"',
+  '    else',
+  '      rm -rf "$P"; mkdir -p "$P"',
+  '    fi',
+  '  done 3< "$links"',
+  '  rm -rf "$st" "$links" "$names"',
+  ')',
+];
+
+/**
  * Run as the account, with the bundle on stdin: the folder made once and kept,
  * the bundle written inside it, fetched, the head checked out detached and
  * forced over what a build changed in tracked files, and the bundle removed.
@@ -475,6 +582,13 @@ export const RECEIVE_KEEPS = ['objects', 'refs', 'packed-refs', 'HEAD', 'index',
  * leaves `.git` with only what it keeps and what `init` wrote
  * (docs/adr/0067-a-host-checks-working-folder-keeps-only-gits-objects-refs-and-index.md).
  *
+ * A submodule's git dir under `.git/modules` is kept and cleaned the same
+ * way, and its config and its folder's gitfile are written here, never
+ * trusted from the earlier run: a filter or hook there ran at the
+ * repository's own `submodule update`, and removing the dirs instead left
+ * every gitfile dangling, so a second build failed (`MODULES_FUNCTIONS`,
+ * docs/adr/0079-a-submodules-git-dir-is-kept-and-cleaned-like-the-top-level-git.md).
+ *
  * `namespace` is the refs the bundle carries, `refs/openadlc/<namespace>/*`:
  * a host check's, or a release's (`release-run.ts`), which runs the same
  * script as its own account.
@@ -484,25 +598,28 @@ export function receiveScript(namespace: 'host-check' | 'release'): string {
   'set -e',
   'export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1',
   'g() { git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c core.attributesFile=/dev/null -c core.logAllRefUpdates=false "$@"; }',
+  ...MODULES_FUNCTIONS,
   'dir="$1"; head="$2"',
   'mkdir -p "$dir"',
   'cd "$dir"',
   'if [ -L .git ] || { [ -e .git ] && [ ! -d .git ]; }; then rm -rf .git; fi',
-  `if [ -d .git ]; then find .git -mindepth 1 -maxdepth 1 ${RECEIVE_KEEPS.map((name) => `! -name '${name}'`).join(' ')} -exec rm -rf {} +; fi`,
-  'rm -f .git/objects/info/alternates .git/objects/info/http-alternates',
+  'if [ -d .git ]; then clean .git; stage .git; fi',
   'g init --quiet --template= .',
+  'unpin',
   'bundle=.git/openadlc-incoming.bundle',
   'cat > "$bundle"',
   'trap \'rm -f "$bundle"\' EXIT',
-  `g fetch --quiet --no-write-fetch-head "$bundle" '+refs/openadlc/${namespace}/*:refs/openadlc/${namespace}/*'`,
+  `g fetch --quiet --no-write-fetch-head --no-recurse-submodules "$bundle" '+refs/openadlc/${namespace}/*:refs/openadlc/${namespace}/*'`,
   'g -c advice.detachedHead=false checkout --quiet --force --detach "$head"',
+  'modules .git . .git/openadlc-modules',
   ].join('\n');
 }
 
 /**
- * The host check's receive. Unchanged byte for byte since the release run
- * (`release-run.ts`) began to share it: only the namespace of the refs it
- * fetches is a parameter, so the `.git` cleaning of ADR 0067 is one script.
+ * The host check's receive, shared with the release run (`release-run.ts`):
+ * only the namespace of the refs it fetches is a parameter, so the `.git`
+ * cleaning of ADR 0067, and of each submodule's git dir (ADR 0079), is one
+ * script.
  */
 export const RECEIVE = receiveScript('host-check');
 
