@@ -115,6 +115,58 @@ describe('a repository’s releases page', () => {
     expect(text).toContain('No release has been cut here yet.');
   });
 
+  it('offers Prepare next version with the suggestion in an editable field when the version is not above (#363)', async () => {
+    bridge.view = {
+      ...VIEW,
+      mayCut: false,
+      why: '1.4.0 is not above the last release, 1.4.0: raise it in VERSION',
+      version: { text: '1.4.0', after: '1.4.0' },
+      prepare: { suggested: '1.4.1', last: { version: '1.4.0', tag: 'v1.4.0' }, versionFile: 'VERSION', versionKey: null },
+      preparing: null,
+    };
+    bridge.runs = [];
+    const { html, text } = await page();
+    expect(html).toMatch(/<input[^>]*data-prepare-version[^>]*value="1.4.1"/);
+    expect(html).toMatch(/<button[^>]*data-prepare-send[^>]*>Send<\/button>/);
+    expect(text).toContain('Prepare next version');
+    expect(text).toContain('Once it merges, Cut release offers 1.4.1 after 1.4.0.');
+    expect(html).not.toMatch(/<button[^>]*data-cut=/);
+    expect(html).not.toContain('data-preparing');
+  });
+
+  it('shows the open preparation, its issue and pull request, instead of offering it again', async () => {
+    bridge.view = {
+      ...VIEW,
+      mayCut: false,
+      why: '1.4.0 is not above the last release, 1.4.0: raise it in VERSION',
+      prepare: null,
+      preparing: {
+        requestId: 'abcdef12-0000-4000-8000-000000000001',
+        subject: 'request:abcdef12',
+        state: 'filed',
+        version: '1.4.1',
+        issue: { number: 400, url: 'https://github.com/acme/mac-app/issues/400' },
+        pullRequest: { number: 401, url: 'https://github.com/acme/mac-app/pull/401', state: 'unknown' },
+        unknown: true,
+      },
+    };
+    bridge.runs = [];
+    const { html, text } = await page();
+    expect(html).not.toContain('data-prepare-send');
+    expect(text).toContain('Preparing 1.4.1');
+    expect(html).toContain('href="/?item=request%3Aabcdef12"');
+    expect(html).toContain('href="https://github.com/acme/mac-app/issues/400"');
+    expect(text).toContain('Pull request #401, state unknown');
+    expect(text).toContain('State unknown');
+  });
+
+  it('offers neither on a view without them, as from an older bridge', async () => {
+    bridge.view = { ...VIEW, mayCut: false, why: 'aaaaaaa does not contain v1.4.0, so it cannot be released after it.' };
+    bridge.runs = [];
+    const { html } = await page();
+    expect(html).not.toContain('data-prepare');
+  });
+
   it('says a first release', async () => {
     bridge.view = { ...VIEW, last: null, compare: { first: true }, version: { text: '1.0.0', after: null } };
     bridge.runs = [];

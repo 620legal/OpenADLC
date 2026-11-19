@@ -126,6 +126,9 @@ export const ROUTE_ROLES: Readonly<Record<string, Role>> = {
   'GET /v1/repos/:name/releases': 'user',
   'POST /v1/repos/:name/release/views': 'user',
   'POST /v1/repos/:name/release/cut': 'user',
+  // Prepare next version (#363, ADR 0078) files a console request; Approves is
+  // checked in the handler the same way as the cut's, and it starts no build.
+  'POST /v1/repos/:name/release/prepare': 'user',
   'GET /v1/repos/:name/release/flows/:flowId': 'user',
   'POST /v1/threads/:bot/messages': 'user',
   'POST /v1/items/:subject/messages': 'user',

@@ -120,6 +120,7 @@ import { asAutomation } from './automation-bot.js';
 import { livePersonGitHubDeps, PersonFlows, registerPersonGitHubRoutes } from './person-github.js';
 import { liveHeldMergeDecisions, liveHumanReviewDecisions, livePullCommands, registerPullRoutes } from './pull-routes.js';
 import { liveReleaseCuts, registerReleaseRoutes, type ReleaseReader } from './release-routes.js';
+import { liveReleasePrepare, registerReleasePrepareRoutes, type ReleasePrepare } from './release-prepare.js';
 import type { ReleaseService } from './release-service.js';
 import { DeployKnowledge, isTestingDeployChoice, testingDeployChoice, testingDeployStored } from './deploys.js';
 import { deploysNothingHere } from './deploy-pipeline.js';
@@ -1212,8 +1213,27 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
   // runs on every release route.
   let releaseSweep: ReturnType<typeof setInterval> | null = null;
   if (deps.releaseCuts) {
-    const cuts = liveReleaseCuts({ release: deps.releaseCuts.service, reader: deps.releaseCuts.reader, person: personGitHub, flows: personFlows });
+    // Prepare next version files a request for the crew to raise the version
+    // (#363, ADR 0078); it reads the view, and holds no handle on the service.
+    let prepare: ReleasePrepare | null = null;
+    const cuts = liveReleaseCuts({
+      release: deps.releaseCuts.service,
+      reader: deps.releaseCuts.reader,
+      person: personGitHub,
+      flows: personFlows,
+      preparing: async (repo) => (prepare ? prepare.preparing(repo) : null),
+    });
     registerReleaseRoutes(router, cuts);
+    prepare = liveReleasePrepare({
+      cuts,
+      isCrew: personGitHub.isCrew,
+      reader: deps.releaseCuts.reader,
+      file: async (request, identity) => {
+        const { record } = await fileRequest(request, identity);
+        return { id: record.id, state: record.state };
+      },
+    });
+    registerReleasePrepareRoutes(router, prepare);
     releaseSweep = setInterval(() => void cuts.sweepFlows().catch(() => undefined), 30_000);
     releaseSweep.unref?.();
   }
@@ -1959,8 +1979,16 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
     return { token: minted.token, expiresInSeconds: minted.expiresInSeconds };
   });
 
-  router.post('/v1/requests', async ({ body, identity }) => {
-    const input = await body<{ text: string; context?: string; repo?: string; kind?: string; attachments?: unknown }>();
+  /**
+   * Writes a console request and starts its triage from the queue, as
+   * `POST /v1/requests` answers it. Release's Prepare next version files
+   * through it too (`release-prepare.ts`, #363), so the request it files is
+   * queued and triaged exactly as a typed one is.
+   */
+  async function fileRequest(
+    input: { text: string; context?: string | null; repo?: string; kind?: string; attachments?: unknown },
+    identity: string,
+  ): Promise<{ record: requests.RequestRecord; answer: unknown }> {
     if (!input.text?.trim()) throw new HttpFailure(400, 'a request needs a line of text');
     const files = attachmentIds(input.attachments);
 
@@ -2001,7 +2029,7 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
     // While work is paused, across the install or in its repository, it is
     // kept and waits in line, started when work resumes.
     const paused = deps.dispatchGate?.paused(repo?.name) ?? null;
-    if (!afterwards) return answered(await triageFromQueue(queue, record.id, intake.name), paused);
+    if (!afterwards) return { record, answer: answered(await triageFromQueue(queue, record.id, intake.name), paused) };
 
     // Answered once it is saved. Waiting for the drain kept the dialog on
     // "Sending…" while intake's session was prepared and started, which takes
@@ -2024,9 +2052,14 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
       );
     });
     if (waits) {
-      return new WithStatus(202, { request, subject, queued: true, position: request!.queuePosition, bot: intake.name, ...(paused ? { paused } : {}) });
+      return { record, answer: new WithStatus(202, { request, subject, queued: true, position: request!.queuePosition, bot: intake.name, ...(paused ? { paused } : {}) }) };
     }
-    return { request, subject, task: null, bot: intake.name, starting: true };
+    return { record, answer: { request, subject, task: null, bot: intake.name, starting: true } };
+  }
+
+  router.post('/v1/requests', async ({ body, identity }) => {
+    const input = await body<{ text: string; context?: string; repo?: string; kind?: string; attachments?: unknown }>();
+    return (await fileRequest(input, identity)).answer;
   });
 
   router.post('/v1/requests/:id/triage', async ({ params }) => answered(await startTriage({ ...deps, requestQueue: queue }, params.id ?? '')));

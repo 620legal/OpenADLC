@@ -2529,9 +2529,45 @@ The page offers no cut, and says why, when:
 - a release of the repository is still in flight;
 - you have no linked account, or Approves is off for you.
 
+When the only refusal is a head version **at or below** the last release, a
+person who may cut also sees **Prepare next version**
+([ADR 0078](adr/0078-preparing-the-next-release-version-is-a-console-request-the-crew-builds.md)).
+It suggests the next version:
+
+- the label's number plus one when the last release has a label
+  (`156.0.8078.79-abc.29` → `156.0.8078.79-abc.30`);
+- otherwise the last number plus one (`1.4.0` → `1.4.1`).
+
+You can edit the suggestion before you press **Send**, for example to
+`156.0.8078.80-abc.1`. A version that would not follow the last release is
+refused beside the field, and nothing is filed.
+
+**Send** files a console request for intake in your name. The request asks
+the crew to:
+
+- raise the version file to exactly that value on the default branch;
+- change everything the repository's AGENTS.md, README, docs or CI say moves
+  with it.
+
+Intake turns the request into an issue, and the version reaches the default
+branch through a normal crew pull request, review, ci and the merge line.
+Prepare next version builds nothing, tags nothing and pushes nothing.
+
+While the request, its issue or its pull request is open, the page shows them
+in place of Prepare next version, and a second press is refused. If GitHub
+does not say whether one is open, it counts as open. Once the pull request
+merges, reload the page: Cut release is offered for the new version.
+
+Prepare next version is not offered for any other refusal, or while a release
+is in flight.
+
 The page's view of the head lasts 15 minutes and is used once. Reload the
-page to see the head again. Every cut, and every refused one, is in the audit
-log under `<owner/name>:release`.
+page to see the head again. The audit log keeps these under
+`<owner/name>:release`:
+
+- every cut, and every refused one;
+- every press of Prepare next version (`release.prepare_requested`), and every
+  refused one (`release.prepare_refused`).
 
 ### How a built release is published
 
