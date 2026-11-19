@@ -749,7 +749,35 @@ export interface ReleaseView {
   why?: string;
   url?: string;
   inFlight: ReleaseRunView | null;
+  /**
+   * Prepare next version (#363, docs/adr/0078): offered when the head's
+   * version is not above the last release, to a viewer who may cut, with
+   * nothing in flight or preparing. Absent from an older bridge.
+   */
+  prepare?: ReleasePrepareOffer | null;
+  /** The open preparation, shown instead of the offer. Absent from an older bridge. */
+  preparing?: ReleasePreparation | null;
   expiresInSeconds: number;
+}
+
+/** What Prepare next version offers: the suggested version, and what it follows. */
+export interface ReleasePrepareOffer {
+  suggested: string;
+  last: { version: string; tag: string };
+  versionFile: string;
+  versionKey: string | null;
+}
+
+/** An open Prepare next version: its request, and the issue and pull request the crew made of it. */
+export interface ReleasePreparation {
+  requestId: string;
+  subject: string;
+  state: 'queued' | 'draft' | 'questions' | 'filed' | 'abandoned';
+  version: string | null;
+  issue: { number: number; url: string } | null;
+  pullRequest: { number: number; url: string; state: 'open' | 'merged' | 'unknown' } | null;
+  /** Whether GitHub could not say a state, so it is counted as open. */
+  unknown: boolean;
 }
 
 /** Builds and pins a compare view: a POST, since each one is a new pin. */

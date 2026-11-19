@@ -488,6 +488,119 @@ describe('cutting a release', () => {
   });
 });
 
+describe('Prepare next version on the view (#363)', () => {
+  const OPEN = { requestId: 'abcdef12-0000-4000-8000-000000000000', subject: 'request:abcdef12', state: 'draft' as const, version: '1.4.1', issue: null, pullRequest: null, unknown: false };
+
+  it('offers it, with the suggestion, only for a version at or below the last release', async () => {
+    const same = rig();
+    same.state.version = '1.4.0';
+    expect(await same.cuts.view('app', JANE)).toMatchObject({
+      mayCut: false,
+      prepare: { suggested: '1.4.1', last: { version: '1.4.0', tag: 'v1.4.0' }, versionFile: 'VERSION', versionKey: null },
+      preparing: null,
+    });
+
+    const below = rig();
+    below.state.version = '1.3.0';
+    expect((await below.cuts.view('app', JANE)).prepare).toMatchObject({ suggested: '1.4.1' });
+
+    const labelled = rig();
+    labelled.state.last = { version: '156.0.8078.79-abc.29', tag: 'v156.0.8078.79-abc.29', url: null };
+    labelled.state.version = '156.0.8078.79-abc.29';
+    expect((await labelled.cuts.view('app', JANE)).prepare).toMatchObject({ suggested: '156.0.8078.79-abc.30', last: { tag: 'v156.0.8078.79-abc.29' } });
+
+    expect((await rig().cuts.view('app', JANE)).prepare).toBeNull();
+  });
+
+  it('does not offer it for any other refusal, or to a viewer who may not cut', async () => {
+    const cases: [string, (r: Rig) => void, Partial<ReleaseCutDeps>?][] = [
+      ['no tag', (r) => (r.state.compare = { status: 404 })],
+      ['diverged', (r) => (r.state.compare = { status: 200, body: { status: 'diverged', commits: [], files: [] } })],
+      ['behind', (r) => (r.state.compare = { status: 200, body: { status: 'behind', commits: [], files: [] } })],
+      [
+        'another label',
+        (r) => {
+          r.state.last = { version: '1.4.0-beta.2', tag: 'v1.4.0-beta.2', url: null };
+          r.state.version = '1.4.0-rc.1';
+        },
+      ],
+      ['no version file', (r) => (r.state.version = 'not a version')],
+      ['no link', (r) => (r.state.link = null)],
+      ['Approves off', (r) => r.state.approves.clear()],
+      ['in flight', () => undefined, { runsOf: async () => [run({ state: 'running' })] }],
+      ['already preparing', () => undefined, { preparing: async () => OPEN }],
+    ];
+    for (const [name, arrange, overrides] of cases) {
+      const r = rig(overrides);
+      if (name !== 'another label' && name !== 'no version file') r.state.version = '1.4.0';
+      arrange(r);
+      const view = await r.cuts.view('app', JANE);
+      expect({ name, prepare: view.prepare, mayCut: view.mayCut }).toEqual({ name, prepare: null, mayCut: false });
+    }
+  });
+
+  it('shows the open preparation, and says nothing of one it could not read', async () => {
+    const r = rig({ preparing: async () => OPEN });
+    r.state.version = '1.4.0';
+    expect(await r.cuts.view('app', JANE)).toMatchObject({ prepare: null, preparing: OPEN });
+    const failing = rig({ preparing: async () => Promise.reject(new Error('database down')) });
+    failing.state.version = '1.4.0';
+    expect(await failing.cuts.view('app', JANE)).toMatchObject({ prepare: { suggested: '1.4.1' }, preparing: null });
+  });
+
+  it('answers preparable for the view’s own viewer, never spending the view or starting a run', async () => {
+    const r = rig();
+    r.state.version = '1.4.0';
+    const view = await r.cuts.view('app', JANE);
+    const answer = await r.cuts.preparable(view.viewId, JANE, 'app');
+    expect(answer).toMatchObject({ ok: true, preparable: { repo: REPO, last: { version: { text: '1.4.0' }, tag: 'v1.4.0' }, versionFile: 'VERSION', versionKey: null, link: LINK } });
+    expect(JSON.stringify(answer)).not.toContain(A);
+    // Asked twice, still the same view, and it can still be pressed.
+    expect((await r.cuts.preparable(view.viewId, JANE, 'app')).ok).toBe(true);
+    expect(r.start).not.toHaveBeenCalled();
+    expect(r.requestCode).not.toHaveBeenCalled();
+    expect(r.audits).toEqual([]);
+  });
+
+  it('refuses preparable for a gone view, a view not offered, a release in flight, no link or Approves off', async () => {
+    const r = rig();
+    r.state.version = '1.4.0';
+    const view = await r.cuts.view('app', JANE);
+    expect(await r.cuts.preparable(view.viewId, 'bob@example.com', 'app')).toMatchObject({ ok: false, refusal: { status: 409, reason: 'view_gone' } });
+    expect(await r.cuts.preparable('no-such-view', JANE, 'app')).toMatchObject({ ok: false, refusal: { reason: 'view_gone' } });
+    expect(await r.cuts.preparable(view.viewId, JANE, 'other')).toMatchObject({ ok: false, refusal: { reason: 'view_gone' } });
+
+    const above = rig();
+    const cuttable = await above.cuts.view('app', JANE);
+    expect(await above.cuts.preparable(cuttable.viewId, JANE, 'app')).toMatchObject({ ok: false, refusal: { status: 409, reason: 'not_offered' } });
+
+    const label = rig();
+    label.state.last = { version: '1.4.0-beta.2', tag: 'v1.4.0-beta.2', url: null };
+    label.state.version = '1.4.0-rc.1';
+    const labelled = await label.cuts.view('app', JANE);
+    expect(await label.cuts.preparable(labelled.viewId, JANE, 'app')).toMatchObject({ ok: false, refusal: { reason: 'not_offered' } });
+
+    const runs: ReleaseRun[] = [];
+    const going = rig({ runsOf: async () => runs });
+    going.state.version = '1.4.0';
+    const goingView = await going.cuts.view('app', JANE);
+    runs.push(run({ state: 'running' }));
+    expect(await going.cuts.preparable(goingView.viewId, JANE, 'app')).toMatchObject({ ok: false, refusal: { status: 409, reason: 'in_flight' } });
+
+    const r2 = rig();
+    r2.state.version = '1.4.0';
+    const v2 = await r2.cuts.view('app', JANE);
+    r2.state.approves.clear();
+    expect(await r2.cuts.preparable(v2.viewId, JANE, 'app')).toMatchObject({ ok: false, refusal: { status: 403, reason: 'approves_off', url: '/settings#people' } });
+    r2.state.link = null;
+    expect(await r2.cuts.preparable(v2.viewId, JANE, 'app')).toMatchObject({ ok: false, refusal: { status: 403, reason: 'not_linked', url: '/settings#your-github' } });
+
+    r.clock.now += VIEW_TTL_MS;
+    expect(await r.cuts.preparable(view.viewId, JANE, 'app')).toMatchObject({ ok: false, refusal: { reason: 'view_gone' } });
+    for (const one of [r, above, label, going, r2]) expect(one.start).not.toHaveBeenCalled();
+  });
+});
+
 describe('the routes', () => {
   let server: Server | undefined;
   afterEach(async () => {

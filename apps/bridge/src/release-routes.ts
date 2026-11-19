@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { audit as writeAudit, people as peopleStore, releaseRuns, repos, type ReleaseRun, type ReleaseSetting } from '@openadlc/db';
-import { parseRepoVersion, repoVersionFrom, repoVersionGate } from '@openadlc/shared';
+import { parseRepoVersion, repoVersionFrom, repoVersionGate, repoVersionNotAbove, suggestNextRepoVersion, type RepoVersion } from '@openadlc/shared';
 import { LINK_ACCOUNT_URL, PEOPLE_URL } from './human-review-decide.js';
 import { personKey, type FlowView, type GitHubViewer, type PersonFlows, type PersonGitHubDeps } from './person-github.js';
+import type { Preparation } from './release-prepare.js';
 import type { LastRelease, ReleaseRepo, ReleaseService } from './release-service.js';
 import { HttpFailure, type Router } from './router.js';
 
@@ -105,7 +106,26 @@ export type CompareView =
 interface Blocked {
   reason: 'version_not_above' | 'compare_refused';
   message: string;
+  /**
+   * Only for a head version the gate refuses as at or below the last release
+   * (`repoVersionNotAbove`): the one refusal Prepare next version answers
+   * (#363, docs/adr/0078). A missing file, an unreadable last release or a
+   * label mismatch leave it unset.
+   */
+  notAbove?: { after: RepoVersion };
 }
+
+/** What a Prepare next version press may file, as `preparable` answers it: never the SHA, never the service. */
+export interface Preparable {
+  repo: ReleaseRepo;
+  last: { version: RepoVersion; tag: string };
+  versionFile: string;
+  versionKey: string | null;
+  link: { githubLogin: string; githubUserId: number };
+}
+
+/** Why `preparable` refused, with the status and the reason its audit row gives. */
+export type PreparableRefusal = { status: number; message: string; reason: 'view_gone' | 'not_offered' | 'not_linked' | 'approves_off' | 'in_flight'; url?: string };
 
 interface PinnedView {
   viewId: string;
@@ -115,6 +135,10 @@ interface PinnedView {
   last: LastRelease | null;
   version: string | null;
   blocked: Blocked | null;
+  /** The recipe's, kept for a Prepare press; a cut never reads them. */
+  versionFile: string;
+  versionKey: string | null;
+  releaseRepo: string;
   expiresAt: number;
   spent: boolean;
 }
@@ -190,6 +214,12 @@ export interface ReleaseCutDeps {
   isCrew(login: string): Promise<boolean>;
   /** Whether People has Approves on for the person this account is linked to. A failed read is a refusal. */
   approves(githubUserId: number): Promise<boolean>;
+  /**
+   * The open Prepare next version of a repository (`release-prepare.ts`), or
+   * null. Read for the view alone; a cut never reads it. A failed read says
+   * nothing, as null does.
+   */
+  preparing?(repo: ReleaseRepo): Promise<Preparation | null>;
   audit(entry: { actor: string; action: string; target: string; payload: Record<string, unknown> }): Promise<void>;
   now?(): number;
   newId?(): string;
@@ -332,6 +362,7 @@ export class ReleaseCuts {
 
     const inFlight = await this.inFlight(repo.id);
     const who = await this.viewer(identity);
+    const preparing = this.deps.preparing ? await this.deps.preparing(repo).catch(() => null) : null;
     const view: PinnedView = {
       viewId: (this.deps.newId ?? randomUUID)(),
       identity,
@@ -340,6 +371,9 @@ export class ReleaseCuts {
       last,
       version: version.text,
       blocked,
+      versionFile: setting.versionFile,
+      versionKey: setting.versionKey,
+      releaseRepo,
       expiresAt: this.now() + VIEW_TTL_MS,
       spent: false,
     };
@@ -352,6 +386,13 @@ export class ReleaseCuts {
         : inFlight
           ? { why: `A release of ${repo.name} is in flight (${inFlight.state}); wait for it to end.`, url: `/releases/${encodeURIComponent(repo.name)}#run-${inFlight.id}` }
           : null;
+    // Offered only where a cut is refused for a version at or below the last
+    // release, to a viewer who may cut, with nothing in flight or preparing.
+    const suggested = blocked?.notAbove && !who.why && !inFlight && !preparing ? suggestNextRepoVersion(blocked.notAbove.after) : null;
+    const prepare =
+      suggested && last && blocked?.notAbove
+        ? { suggested, last: { version: blocked.notAbove.after.text, tag: last.tag }, versionFile: setting.versionFile, versionKey: setting.versionKey }
+        : null;
     return {
       viewId: view.viewId,
       repo: repo.name,
@@ -365,6 +406,8 @@ export class ReleaseCuts {
       mayCut: why === null,
       ...(why ? { why: why.why, ...(why.url ? { url: why.url } : {}) } : {}),
       inFlight: inFlight ? runView(inFlight) : null,
+      prepare,
+      preparing,
       expiresInSeconds: Math.round(VIEW_TTL_MS / 1000),
     };
   }
@@ -440,7 +483,37 @@ export class ReleaseCuts {
     const after = last ? repoVersionFrom(last.version) : null;
     if (after && !after.ok) return { text: read.version.text, blocked: { reason: 'version_not_above', message: `the last release's version, ${last?.version}, cannot be read` } };
     const gate = repoVersionGate(read.version, after?.ok ? after.version : null, setting.versionFile);
-    return { text: read.version.text, blocked: gate ? { reason: 'version_not_above', message: gate } : null };
+    if (!gate) return { text: read.version.text, blocked: null };
+    const notAbove = after?.ok && repoVersionNotAbove(read.version, after.version) ? { notAbove: { after: after.version } } : {};
+    return { text: read.version.text, blocked: { reason: 'version_not_above', message: gate, ...notAbove } };
+  }
+
+  /**
+   * Whether a Prepare next version press may file from this view (#363,
+   * docs/adr/0078): the view is the identity's own, unexpired and unspent,
+   * its head is refused only as not above the last release, nothing is in
+   * flight, and the viewer passes the same `viewer()` check the view and the
+   * cut use. It reads only: it never spends the view, and what it answers
+   * carries no SHA and no handle on the service, so the prepare route cannot
+   * start, pin or sign anything.
+   */
+  async preparable(viewId: string, identity: string, repoName: string): Promise<{ ok: true; preparable: Preparable } | { ok: false; refusal: PreparableRefusal }> {
+    const view = this.live(viewId, identity, repoName);
+    if (!view) return { ok: false, refusal: { status: 409, message: VIEW_GONE, reason: 'view_gone' } };
+    const notAbove = view.blocked?.notAbove;
+    if (!notAbove || !view.last) {
+      return { ok: false, refusal: { status: 409, message: `Prepare next version is offered only when ${view.repo.name}'s version is not above the last release; reload to see the page again.`, reason: 'not_offered' } };
+    }
+    const going = await this.inFlight(view.repo.id);
+    if (going) return { ok: false, refusal: { status: 409, message: `A release of ${view.repo.name} is in flight (${going.state}); wait for it to end.`, reason: 'in_flight' } };
+    const who = await this.viewer(identity);
+    if (who.why || !who.link) {
+      return { ok: false, refusal: { status: 403, message: who.why ?? NOT_LINKED_FOR_RELEASE, reason: who.link ? 'approves_off' : 'not_linked', ...(who.url ? { url: who.url } : {}) } };
+    }
+    return {
+      ok: true,
+      preparable: { repo: view.repo, last: { version: notAbove.after, tag: view.last.tag }, versionFile: view.versionFile, versionKey: view.versionKey, link: who.link },
+    };
   }
 
   /**
@@ -683,9 +756,12 @@ export function liveReleaseCuts(input: {
   reader: (fullName: string) => Promise<ReleaseReader | null>;
   person: PersonGitHubDeps;
   flows: PersonFlows;
+  /** The open Prepare next version, read for the view (`ReleasePrepare.preparing`). */
+  preparing?: (repo: ReleaseRepo) => Promise<Preparation | null>;
 }): ReleaseCuts {
   return new ReleaseCuts({
     release: input.release,
+    ...(input.preparing ? { preparing: input.preparing } : {}),
     repo: async (name) => {
       const found = await repos.getRepoByName(name);
       return found ? { id: found.id, name: found.name, fullName: found.fullName, defaultBranch: found.defaultBranch } : null;

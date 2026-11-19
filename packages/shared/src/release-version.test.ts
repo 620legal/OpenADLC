@@ -1,5 +1,45 @@
 import { describe, expect, it } from 'vitest';
-import { compareRepoVersionsIgnoringLabel, compareRepoVersions, parseRepoVersion, repoVersionFrom, repoVersionFromTag, repoVersionGate, type RepoVersion } from './release-version.js';
+import {
+  compareRepoVersionsIgnoringLabel,
+  compareRepoVersions,
+  parseRepoVersion,
+  repoVersionFrom,
+  repoVersionFromTag,
+  repoVersionGate,
+  repoVersionNotAbove,
+  suggestNextRepoVersion,
+  type RepoVersion,
+} from './release-version.js';
+
+describe('the next version suggested on a release page (#363)', () => {
+  it.each([
+    ['156.0.8078.79-abc.29', '156.0.8078.79-abc.30'],
+    ['1.4.0', '1.4.1'],
+    ['7', '8'],
+    ['1.2.3.4-x.0', '1.2.3.4-x.1'],
+  ])('suggests the label’s number plus one, else the last number plus one: %s → %s', (last, next) => {
+    expect(suggestNextRepoVersion(v(last))).toBe(next);
+    // What it suggests, the gate lets follow.
+    expect(repoVersionGate(v(next), v(last), 'VERSION')).toBeNull();
+  });
+
+  it('suggests nothing when the next number would not be a safe integer', () => {
+    const max = Number.MAX_SAFE_INTEGER;
+    expect(suggestNextRepoVersion({ text: `1.${max}`, parts: [1, max], label: null, n: 0 })).toBeNull();
+    expect(suggestNextRepoVersion({ text: `1.0-abc.${max}`, parts: [1, 0], label: 'abc', n: max })).toBeNull();
+  });
+
+  it('marks only a version at or below the last release as not above, never a label mismatch', () => {
+    expect(repoVersionNotAbove(v('1.3.9'), v('1.4.0'))).toBe(true);
+    expect(repoVersionNotAbove(v('1.4.0'), v('1.4.0'))).toBe(true);
+    expect(repoVersionNotAbove(v('1.4'), v('1.4.0'))).toBe(true);
+    expect(repoVersionNotAbove(v('1.4.1'), v('1.4.0'))).toBe(false);
+    expect(repoVersionNotAbove(v('1.4.0-rc.3'), v('1.4.0-beta.2'))).toBe(false);
+    // A bare version against a labelled one is ordered, as n = 0.
+    expect(repoVersionNotAbove(v('1.4.0'), v('1.4.0-beta.2'))).toBe(true);
+    expect(repoVersionNotAbove(v('1.4.0'), null)).toBe(false);
+  });
+});
 
 const v = (text: string): RepoVersion => {
   const read = repoVersionFrom(text);

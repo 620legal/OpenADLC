@@ -119,3 +119,39 @@ export function repoVersionGate(version: RepoVersion, after: RepoVersion | null,
   if (order <= 0) return `${version.text} is not above the last release, ${after.text}: raise it in ${file}`;
   return null;
 }
+
+/**
+ * Whether `repoVersionGate` refuses `version` only because it is at or below
+ * `after`: the one refusal the release page answers with Prepare next version
+ * (#363, docs/adr/0078). A label mismatch is not it — a person chooses which
+ * label to release under, and a raised number would not settle that.
+ */
+export function repoVersionNotAbove(version: RepoVersion, after: RepoVersion | null): boolean {
+  if (!after) return false;
+  const order = compareRepoVersions(version, after);
+  return order === -1 || order === 0;
+}
+
+/**
+ * The version suggested to follow `last`: its `n` plus one when it carries a
+ * label (`156.0.8078.79-abc.29` → `-abc.30`), otherwise its last number plus
+ * one (`1.4.0` → `1.4.1`). Null when that would not be a version, a number
+ * past the safe integers being the only way. The person may edit it; what is
+ * sent is held to `repoVersionGate` all the same.
+ */
+export function suggestNextRepoVersion(last: RepoVersion): string | null {
+  let text: string;
+  if (last.label !== null) {
+    const n = last.n + 1;
+    if (!Number.isSafeInteger(n)) return null;
+    text = `${last.parts.join('.')}-${last.label}.${n}`;
+  } else {
+    const parts = [...last.parts];
+    const end = (parts[parts.length - 1] ?? 0) + 1;
+    if (!Number.isSafeInteger(end)) return null;
+    parts[parts.length - 1] = end;
+    text = parts.join('.');
+  }
+  const read = repoVersionFrom(text);
+  return read.ok ? read.version.text : null;
+}

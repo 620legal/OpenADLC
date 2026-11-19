@@ -2,6 +2,7 @@ import { notFound } from 'next/navigation';
 import { AppShell } from '@/components/app-header';
 import { BridgeDown } from '@/components/bridge-down';
 import { CutRelease } from '@/components/cut-release';
+import { PrepareVersion, Preparing } from '@/components/prepare-version';
 import { api, type ReleaseView } from '@/lib/api';
 import { BridgeAnswered } from '@/lib/bridge-answered';
 import { readHeader } from '@/lib/read-header';
@@ -16,6 +17,10 @@ export const dynamic = 'force-dynamic';
  * Opening the page pins a view in the bridge: the head is read once, and a
  * cut from this page builds that commit, whatever the branch does next.
  * Reloading pins a new one.
+ *
+ * Where the head's version is not above the last release, Prepare next
+ * version files a request for the crew to raise it (#363, docs/adr/0078),
+ * and while that is open the page shows it instead.
  */
 export default async function ReleasePage({ params }: { params: Promise<{ repo: string }> }) {
   const { repo: raw } = await params;
@@ -57,6 +62,11 @@ export default async function ReleasePage({ params }: { params: Promise<{ repo: 
             <Pinned view={view} />
             <section className="flex flex-col gap-2">
               <h2 className="text-[13px] font-semibold text-body">Cut release</h2>
+              {view.preparing ? (
+                <Preparing preparing={view.preparing} />
+              ) : view.prepare ? (
+                <PrepareVersion repo={repo} viewId={view.viewId} prepare={view.prepare} />
+              ) : null}
               <CutRelease repo={repo} viewId={view.viewId} mayCut={view.mayCut} why={view.why ?? null} url={view.url ?? null} runs={runs} />
             </section>
           </>
