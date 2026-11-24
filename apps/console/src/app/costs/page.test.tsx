@@ -57,4 +57,14 @@ describe('the costs page', () => {
     expect(html).toContain('At the monthly cap the dispatcher stops leasing new work');
     expect(html).not.toContain('At 90 percent');
   });
+
+  it('opens with what counts toward the caps, open, and a link to its ADR (#373)', async () => {
+    read.costs = costs({ period: '2026-10', capUsd: 1000, spentUsd: 10, state: 'ok' });
+    const { default: CostsPage } = await import('./page');
+    const html = renderToStaticMarkup(await CostsPage());
+    expect(html).toMatch(/data-how-this-works="costs"[\s\S]*<button[^>]*aria-expanded="true"[^>]*>[\s\S]*What counts toward the caps/);
+    expect(html).toContain('A run on a subscription is an estimate');
+    expect(html).toContain('href="https://github.com/620legal/OpenADLC/blob/main/docs/adr/0050-a-subscription-run-is-estimated-not-billed.md"');
+    expect(html.indexOf('data-how-this-works')).toBeLessThan(html.indexOf('month to date'));
+  });
 });

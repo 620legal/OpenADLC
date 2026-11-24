@@ -65,6 +65,17 @@ describe('a host check run’s page', () => {
     expect(text).toContain("xcodebuild: error: no such module 'Foo'");
   });
 
+  it('opens with how a host check works, open, and a link to its ADR (#373)', async () => {
+    bridge.answer = RUN;
+    const html = await page(RUN.id);
+    expect(html).toMatch(/data-how-this-works="host-checks"[\s\S]*<button[^>]*aria-expanded="true"[^>]*>[\s\S]*How a host check works/);
+    expect(html).toContain('The merge reads the bridge’s own record of the run');
+    expect(html).toContain(
+      'href="https://github.com/620legal/OpenADLC/blob/main/docs/adr/0064-a-host-check-runs-as-its-own-account-and-the-merge-reads-the-bridges-record.md"',
+    );
+    expect(html.indexOf('data-how-this-works')).toBeLessThan(html.indexOf('data-host-check-facts'));
+  });
+
   it('is not found for a run the bridge does not know', async () => {
     const { BridgeAnswered } = await import('@/lib/bridge-answered');
     bridge.answer = new BridgeAnswered('/v1/host-checks/nope', 404, 'no such host check run');
