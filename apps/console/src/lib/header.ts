@@ -90,8 +90,24 @@ export function boardHref(repo: string | null | undefined, hash = ''): string {
   return `/?board=1${query}${hash}`;
 }
 
-export const NAV: readonly { page: Exclude<Page, 'needs-you'>; label: string; href: (repo: string) => string }[] = [
+/** One of the console's pages, as every navigation names it and links to it. */
+export interface NavPage {
+  page: Page;
+  label: string;
+  href: (repo: string) => string;
+}
+
+/**
+ * The one list of the console's pages, in the order every list of them
+ * keeps: the header's navigation and its More, the phone's bar, and the
+ * command palette all read it (ADR 0080). Which of them a person sees in the
+ * bars is their browser's pins (`nav-pins.ts`); which they may see at all is
+ * `navFor`. A new page goes here and in `NAV_ICONS`.
+ */
+export const PAGES: readonly NavPage[] = [
   { page: 'board', label: 'Board', href: (repo) => boardHref(repo) },
+  // Its chip at the right of the header stays; this is the page as a place to pin.
+  { page: 'needs-you', label: 'Needs you', href: () => '/needs-you' },
   { page: 'crew', label: 'Crew', href: () => '/crew' },
   { page: 'costs', label: 'Costs', href: () => '/costs' },
   { page: 'insights', label: 'Insights', href: () => '/insights' },
@@ -101,15 +117,34 @@ export const NAV: readonly { page: Exclude<Page, 'needs-you'>; label: string; hr
 ];
 
 /**
- * The header's navigation for someone in this role: all of it, Settings
- * included. Settings used to be an admin's alone, and a user had no way to
- * Notifications, where they turn push on for their device. Their Settings is
- * Notifications alone, and `/settings` sends them there (ADR 0053); the
- * bridge still refuses them every admin route.
+ * The pages someone in this role may see, in the navigation or under its
+ * More: all of them, Settings included. Settings used to be an admin's alone,
+ * and a user had no way to Notifications, where they turn push on for their
+ * device. Their Settings is Notifications alone, and `/settings` sends them
+ * there (ADR 0053); the bridge still refuses them every admin route.
  */
-export function navFor(role: Role): typeof NAV {
+export function navFor(role: Role): readonly NavPage[] {
   void role;
-  return NAV;
+  return PAGES;
+}
+
+/**
+ * The pages the bars show: those `pins` names, in the order they were
+ * pinned. A pin for a page `pages` does not hold is skipped, so a page the
+ * person may not see is never drawn however it came to be pinned.
+ */
+export function pinnedNav(pages: readonly NavPage[], pins: readonly Page[]): NavPage[] {
+  const shown: NavPage[] = [];
+  for (const pin of pins) {
+    const page = pages.find((one) => one.page === pin);
+    if (page && !shown.includes(page)) shown.push(page);
+  }
+  return shown;
+}
+
+/** The pages under More that are not pinned, in `PAGES` order. */
+export function unpinnedNav(pages: readonly NavPage[], pins: readonly Page[]): NavPage[] {
+  return pages.filter((one) => !pins.includes(one.page));
 }
 
 /**
