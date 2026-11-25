@@ -979,7 +979,17 @@ describe('the codex engine', () => {
       OPENAI_BASE_URL: `${api.url}/v1`,
     };
     const local = ['-c', `openai_base_url=${JSON.stringify(`${api.url}/v1`)}`];
+    // The config home trusts the worktree outright, as an account's published
+    // config.toml may. The control used to rely on `codex exec` with a
+    // sandbox that may write trusting the project on its own (codex 0.155.1);
+    // codex 0.170.0 no longer does, and the control run started nothing.
+    // Written before every run, so a trust entry codex appends during one run
+    // does not change what the next starts from.
+    const trusted = [...new Set([worktree, realpathSync(worktree)])]
+      .map((path) => `[projects.${JSON.stringify(path)}]\ntrust_level = "trusted"\n`)
+      .join('\n');
     const codex = async (withArgs: string[]) => {
+      writeFileSync(join(home, 'config.toml'), trusted);
       rmSync(marker, { force: true });
       // Before the `-` that names stdin as the prompt.
       await api.run('codex', [...withArgs.slice(0, -1), ...local, ...withArgs.slice(-1)], { cwd: worktree, env });
@@ -988,7 +998,8 @@ describe('the codex engine', () => {
 
     expect(await codex(args)).toBe(false);
 
-    // The same run without the override starts the server, so this proves it.
+    // The same run without the override starts the server, so the override is
+    // what kept it from starting, over a home that trusts the worktree.
     const at = args.findIndex((arg) => arg.startsWith('projects='));
     expect(await codex(args.filter((_arg, index) => index !== at && index !== at - 1))).toBe(true);
   }, 60_000);

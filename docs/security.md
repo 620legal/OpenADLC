@@ -645,12 +645,15 @@ seat. Codex is started with its own config home, never the worktree's: the
 task's own home on a subscription, or `.codex` in the task's own home
 (`<slot>/home`, beside the worktree, not in it). It would still read a
 worktree's `.codex/config.toml` and spawn the `mcp_servers` listed there once it
-trusts the project, and `codex exec` with a sandbox that may write trusts it on
-its own. So every Codex invocation names the worktree untrusted
+trusts the project: codex 0.155.1's `codex exec` with a sandbox that may write
+trusted it on its own, and while codex 0.170.0's no longer does, a config home
+that marks the worktree `trusted` still loads it. So every Codex invocation
+names the worktree untrusted
 (`-c projects={"<worktree>"={trust_level="untrusted"}}`), and the repository's
-`.codex/` does not apply; measured with codex 0.155.1 in the bot image, on
-`exec` and `exec resume`, and in `packages/engines/src/engines.test.ts` where
-`codex` is installed. The config home's own `config.toml`, `AGENTS.md`,
+`.codex/` does not apply even when the config home trusts the worktree;
+measured with codex 0.155.1 in the bot image, on `exec` and `exec resume`, and
+with codex 0.170.0 in `packages/engines/src/engines.test.ts` where `codex` is
+installed, against a config home that trusts the worktree. The config home's own `config.toml`, `AGENTS.md`,
 `AGENTS.override.md` and `.env`, and Grok's `managed_config.toml` and
 `requirements.toml`, are, under the docker driver, read-only mounts of the
 account's published files rather than the shared login's, so a previous
