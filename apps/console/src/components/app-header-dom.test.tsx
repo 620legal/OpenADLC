@@ -218,6 +218,32 @@ describe('the pinned navigation', () => {
     expect(document.activeElement).toBe(more());
   });
 
+  it('closes on a click outside and gives the focus back to More', async () => {
+    await draw();
+    await click(more());
+    expect(document.activeElement?.getAttribute('aria-label')).toBe('Find a page');
+    await act(async () => {
+      document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+      await new Promise((done) => setTimeout(done, 0));
+    });
+    expect(more().getAttribute('aria-expanded')).toBe('false');
+    expect(panel().hidden).toBe(true);
+    expect(document.activeElement).toBe(more());
+  });
+
+  it('leaves the focus on a control clicked outside More, rather than taking it back', async () => {
+    await draw();
+    await click(more());
+    const board = wideNav().querySelector('[data-pinned] a') as HTMLAnchorElement;
+    await act(async () => {
+      board.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+      board.focus();
+      await new Promise((done) => setTimeout(done, 0));
+    });
+    expect(panel().hidden).toBe(true);
+    expect(document.activeElement).toBe(board);
+  });
+
   it('marks More as where the person is when their page is not pinned', async () => {
     await draw('costs');
     expect(classes(more())).toContain('bg-well');

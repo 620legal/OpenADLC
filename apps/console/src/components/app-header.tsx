@@ -109,7 +109,7 @@ function usePins(): readonly Page[] {
  * Every page this person may see (`navFor`), each with its pin, behind a
  * button named More, with a search box over them. Built like the repository
  * switcher: a button that opens a list, Escape or a click anywhere else
- * closing it, and every control a native button, input or link, so a
+ * closing it and giving the focus back to the button, and every control a native button, input or link, so a
  * keyboard and a screen reader already know them. A toggle leaves the list
  * open, to pin several in a row; following a link closes it.
  *
@@ -133,13 +133,23 @@ function MoreMenu({
   const root = useRef<HTMLDivElement>(null);
   const button = useRef<HTMLButtonElement>(null);
   const search = useRef<HTMLInputElement>(null);
+  const refocusTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const panel = useId();
 
   useEffect(() => {
     if (!open) return;
     search.current?.focus();
     const away = (event: PointerEvent) => {
-      if (!root.current?.contains(event.target as Node)) setOpen(false);
+      if (root.current?.contains(event.target as Node)) return;
+      setOpen(false);
+      // The focus was in the search box, which closing removes; left there it
+      // falls to the page's body and a keyboard starts again from the top. A
+      // click on a control of its own keeps the focus it takes. Anywhere else
+      // the browser's own mousedown, which follows this event, would blur the
+      // button again, so the focus goes back once that has run.
+      const target = event.target instanceof Element ? event.target : null;
+      if (target?.closest('a[href], button, input, select, textarea, [tabindex]')) return;
+      refocusTimer.current = setTimeout(() => button.current?.focus(), 0);
     };
     const escape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
@@ -153,6 +163,9 @@ function MoreMenu({
       document.removeEventListener('keydown', escape);
     };
   }, [open]);
+  // The cleanup above runs as soon as the menu closes, before the deferred
+  // focus is due, so the timer is cleared only when the header itself goes.
+  useEffect(() => () => clearTimeout(refocusTimer.current), []);
 
   const q = query.trim().toLowerCase();
   const found = q ? pages.filter((one) => one.label.toLowerCase().includes(q)) : pages;
