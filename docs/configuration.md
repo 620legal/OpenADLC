@@ -751,7 +751,9 @@ where an admin switches kinds off.
 navigation, after System, each a page of its own (`/settings/notifications`,
 `/settings/hosts`) drawn with the same navigation and itself marked: a column
 beside the page on a computer, a row of pills above it on a phone. Settings is
-in the header for everyone signed in. Someone who is not an admin sees
+in the header's navigation, or under its More, for everyone signed in
+([ADR 0080](adr/0080-the-consoles-navigation-is-pinned-per-browser-from-one-list-of-pages.md)).
+Someone who is not an admin sees
 Notifications as the only category, and `/settings` takes them there; every
 other Settings page, Hosts included, says it needs an admin, and the bridge
 refuses them every admin route, `PUT /v1/settings/notifications` among them

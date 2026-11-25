@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AttentionItem } from './api';
-import { headerData, NAV, navFor, spendLevel } from './header';
+import { headerData, navFor, PAGES, pinnedNav, spendLevel, unpinnedNav } from './header';
 
 const header = (budget: { spentUsd: number; capUsd: number; state: string }) =>
   headerData({ repos: [], crew: [], budget, needsYou: 0 });
@@ -83,11 +83,24 @@ describe('the work the tab’s alerts watch', () => {
   });
 });
 
-describe('the header’s navigation', () => {
-  it('has Settings for everyone signed in, a user too: their Settings is Notifications (ADR 0053)', () => {
+describe('the console’s pages', () => {
+  it('are one list, Needs you among them, in the palette’s order (ADR 0080)', () => {
+    expect(PAGES.map((item) => `${item.label} ${item.href('all')}`)).toEqual([
+      'Board /?board=1',
+      'Needs you /needs-you',
+      'Crew /crew',
+      'Costs /costs',
+      'Insights /insights',
+      'Releases /releases',
+      'Settings /settings',
+    ]);
+    expect(PAGES.find((item) => item.page === 'board')?.href('api')).toBe('/?board=1&repo=api');
+  });
+
+  it('are all there for everyone signed in, Settings too: a user’s Settings is Notifications (ADR 0053)', () => {
     for (const role of ['admin', 'user'] as const) {
-      expect(navFor(role).map((item) => item.page), role).toEqual(['board', 'crew', 'costs', 'insights', 'releases', 'settings']);
-      expect(navFor(role)).toBe(NAV);
+      expect(navFor(role).map((item) => item.page), role).toEqual(['board', 'needs-you', 'crew', 'costs', 'insights', 'releases', 'settings']);
+      expect(navFor(role)).toBe(PAGES);
     }
     expect(navFor('user').find((item) => item.page === 'settings')?.href('all')).toBe('/settings');
   });
@@ -95,5 +108,31 @@ describe('the header’s navigation', () => {
   it('has Releases for everyone, since anyone may watch a release (#345)', () => {
     expect(navFor('user').find((item) => item.page === 'releases')).toMatchObject({ label: 'Releases' });
     expect(navFor('user').find((item) => item.page === 'releases')?.href('all')).toBe('/releases');
+  });
+});
+
+describe('the pinned pages and the rest', () => {
+  const pages = (list: readonly { page: string }[]) => list.map((item) => item.page);
+
+  it('shows the pinned pages in the order they were pinned, and the rest in the list’s order', () => {
+    const pins = ['releases', 'board', 'costs'] as const;
+    expect(pages(pinnedNav(PAGES, pins))).toEqual(['releases', 'board', 'costs']);
+    expect(pages(unpinnedNav(PAGES, pins))).toEqual(['needs-you', 'crew', 'insights', 'settings']);
+  });
+
+  it('shows nothing but More when nothing is pinned', () => {
+    expect(pinnedNav(PAGES, [])).toEqual([]);
+    expect(unpinnedNav(PAGES, [])).toEqual([...PAGES]);
+  });
+
+  it('never shows a page the person may not see, however it came to be pinned', () => {
+    const withoutSettings = PAGES.filter((item) => item.page !== 'settings');
+    const pins = ['settings', 'crew'] as const;
+    expect(pages(pinnedNav(withoutSettings, pins))).toEqual(['crew']);
+    expect(pages(unpinnedNav(withoutSettings, pins))).not.toContain('settings');
+  });
+
+  it('draws a page once, whatever the pins repeat', () => {
+    expect(pages(pinnedNav(PAGES, ['crew', 'crew']))).toEqual(['crew']);
   });
 });
