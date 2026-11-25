@@ -8,7 +8,7 @@ import { DEFAULT_HOST_CHECK_ACCOUNT, DEFAULT_LOCAL_CI_TIMEOUT_MINUTES, loadHostd
 import { TerminalGateway } from './terminal-gateway.js';
 import { DockerDriver, docker } from './drivers/docker.js';
 import { EgressList, EgressProbe, egressProxyToAsk } from './egress.js';
-import { EngineUpdater, candidateCredential, candidateModels } from './engine-updates.js';
+import { EngineUpdater, candidateCredential, candidateModels, engineContainerPrefix } from './engine-updates.js';
 import { LocalDriver } from './drivers/local.js';
 import type { ExecDriver } from './drivers/types.js';
 import { LoginService, moveSignInsIntoPlace, removeAdoptCopies } from './logins.js';
@@ -218,7 +218,11 @@ async function main(): Promise<void> {
   // bot image, and the one that knows what a task on each bot would present.
   // `openadlc up` runs hostd from the repository, which is where the build
   // script is; the bridge decides when.
+  // One name for the updater and its models check, from this install's prefix,
+  // so a second install on the same Docker daemon never takes or removes ours.
+  const enginePrefix = engineContainerPrefix(config.botPrefix);
   const engineUpdates = new EngineUpdater({
+    containerPrefix: enginePrefix,
     driver: driver.kind,
     image: botImage,
     buildScript: process.env.OPENADLC_BOT_IMAGE_SCRIPT ?? join(process.cwd(), 'infra/local/build-bot-image.sh'),
@@ -228,7 +232,7 @@ async function main(): Promise<void> {
       const account = await modelAccounts.get(id);
       return account ? { id: account.id, provider: account.provider, kind: account.kind, label: account.label } : null;
     },
-    chooseModelFor: candidateModels((accountId, image, name) => logins.modelsIn(accountId, image, name), 'openadlc-engines'),
+    chooseModelFor: candidateModels((accountId, image, name) => logins.modelsIn(accountId, image, name), enginePrefix),
     credential: candidateCredential({
       store: secretStore,
       loginRoot: config.loginRoot,
