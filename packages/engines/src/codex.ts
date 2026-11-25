@@ -101,15 +101,19 @@ export function telemetryOverrides(env: Record<string, string | undefined> = {})
  * The worktree named untrusted, for this invocation only, so Codex loads
  * nothing from its `.codex/`.
  *
- * Codex reads a project's `.codex/config.toml` when it trusts the project, and
- * `codex exec` with a sandbox that may write trusts it on its own, writing
- * `trust_level = "trusted"` into the config home. Every session that runs
- * commands then spawned the `mcp_servers` a repository listed there, before
- * the first model call and with the session's GitHub token in its
- * environment: a builder could commit one to its branch for the reviewer that
- * came next. Marked untrusted, the project's layer is skipped whatever the
- * config home says, which leaves the home's settings and OpenADLC's flags.
- * Measured in the bot image, codex 0.155.1, on `exec` and `exec resume`. The
+ * Codex reads a project's `.codex/config.toml` when it trusts the project. In
+ * codex 0.155.1, `codex exec` with a sandbox that may write trusted it on its
+ * own, writing `trust_level = "trusted"` into the config home; in 0.170.0 it
+ * no longer does (nothing written, nothing started), but a config home that
+ * says `trusted` — an account's published config.toml may — still loads the
+ * layer. Every session that runs commands then spawned the `mcp_servers` a
+ * repository listed there, before the first model call and with the session's
+ * GitHub token in its environment: a builder could commit one to its branch
+ * for the reviewer that came next. Marked untrusted, the project's layer is
+ * skipped whatever the config home says, `trusted` included, which leaves the
+ * home's settings and OpenADLC's flags. Measured in the bot image, codex
+ * 0.155.1 on `exec` and `exec resume`, and codex 0.170.0 on `exec` against a
+ * home that trusts the worktree (engines.test.ts). The
  * sandbox and approval policy are unchanged: `exec` holds approvals at
  * `never` either way. One inline table, since a dotted `-c projects."<path>"`
  * key is not read as one. The path as given and as resolved, since Codex
