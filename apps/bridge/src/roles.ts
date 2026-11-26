@@ -143,6 +143,9 @@ export const ROUTE_ROLES: Readonly<Record<string, Role>> = {
   // checked in the handler the same way as the cut's, and it starts no build.
   'POST /v1/repos/:name/release/prepare': 'user',
   'GET /v1/repos/:name/release/flows/:flowId': 'user',
+  // The release page's readiness checklist (#371, ADR 0084): a read, the same
+  // for every viewer, which never starts, pins or signs anything.
+  'GET /v1/repos/:name/release/readiness': 'user',
   'POST /v1/threads/:bot/messages': 'user',
   'POST /v1/items/:subject/messages': 'user',
   // A file given with a request or a message, and looking at one.

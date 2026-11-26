@@ -2617,6 +2617,34 @@ page to see the head again. The audit log keeps these under
 - every press of Prepare next version (`release.prepare_requested`), and every
   refused one (`release.prepare_refused`).
 
+#### Before you cut: the readiness checklist
+
+Above **Cut release**, the page shows a checklist of what a cut needs
+([ADR 0084](adr/0084-a-releases-readiness-is-read-never-pinned-or-started.md)).
+Each item passes or fails, and a failing item says what to do. Without the
+checklist, a setup problem would show up only partway through a build, in its
+log. The page reads the checklist again every minute while it is open, and
+again when you come back to the tab. The bridge reads each item at most every
+30 seconds.
+
+| Item | What it checks | The fix when it fails |
+|---|---|---|
+| Release account | hostd's probe of the [release account](#the-release-account), the same probe a build runs | What the probe found, for example `chmod 700 <folder>`, or setting `OPENADLC_RELEASE_ACCOUNT` |
+| Signing key | That a key is filed for the repository. Only whether it is there is checked: the key is never read | Run on the host: `openadlc release-key import --repo <owner/name> --file <path>` |
+| Release recipe | That the command, the artifact and the version file are all set, and who set them | An admin sets it in Settings → the repository → Release |
+| Release tag | That no tag ruleset stops OpenADLC's app from creating `v<version at the head>`, in the repository and in its release repository if that is different. It uses the same judgement as the `release-tag-rules` card | Add the app to the ruleset's bypass list, set to Always, or install the app on the release repository |
+| Next version | That the version at the default branch's head is above the last release. A failing item shows both versions | Raise the version file, or use Prepare next version |
+| Last build | For information only: the last run's result, when it ran, and who cut it. A failed, cancelled or lost build leaves its build tree in the release account's home, and the next cut reuses it | Tick **Clean build** when you cut |
+
+When an item cannot be read, for example because hostd is down or GitHub
+fails, that item says **could not check** and why. The other items still
+show. If the whole checklist cannot be read, the page keeps the last items and
+marks them stale.
+
+The checklist only informs. It never disables, hides or changes **Cut
+release**, and reading it pins no view, so it never uses up the 15-minute view
+the page cuts from.
+
 ### How a built release is published
 
 Once a run is built, the bridge publishes it as OpenADLC's app, with no other

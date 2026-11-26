@@ -85,11 +85,13 @@ import {
   appClientSecretRef,
   appPrivateKeyRef,
   getSecretStore,
+  hasReleaseSigningKey,
   installedRepositories,
   pendingInvitationsFrom,
   redeliverLatestFailure,
   rulesAppliedPayload,
   type GitHubClient,
+  type RuleApi,
 } from '@openadlc/github';
 import { REPO_DEFAULTS, buildAppManifest, hasIgnoreLabel, hasNextLabel, hasPausedLabel, isGitHubLogin, loginCandidates, manifestPostUrl, sameLogin, shipsByRelease } from '@openadlc/shared';
 import { refuseWhilePaused } from './pause-work.js';
@@ -125,6 +127,7 @@ import { asAutomation } from './automation-bot.js';
 import { livePersonGitHubDeps, PersonFlows, registerPersonGitHubRoutes } from './person-github.js';
 import { liveHeldMergeDecisions, liveHumanReviewDecisions, livePullCommands, registerPullRoutes } from './pull-routes.js';
 import { liveReleaseCuts, registerReleaseRoutes, type ReleaseReader } from './release-routes.js';
+import { liveReleaseReadiness } from './release-readiness.js';
 import { liveReleasePrepare, registerReleasePrepareRoutes, type ReleasePrepare } from './release-prepare.js';
 import type { ReleaseService } from './release-service.js';
 import { DeployKnowledge, isTestingDeployChoice, testingDeployChoice, testingDeployStored } from './deploys.js';
@@ -249,7 +252,16 @@ export interface ApiDeps {
    * whose `start` the cut alone calls, and the client the compare view reads
    * GitHub with. Absent, no release route is registered.
    */
-  releaseCuts?: { service: Pick<ReleaseService, 'start' | 'lastRelease'>; reader: (fullName: string) => Promise<ReleaseReader | null> };
+  releaseCuts?: {
+    service: Pick<ReleaseService, 'start' | 'lastRelease'>;
+    reader: (fullName: string) => Promise<ReleaseReader | null>;
+    /**
+     * The app's own client, for the readiness checklist's tag check (#371),
+     * judged as the release-tag-rules card judges it. Absent, that item says
+     * it could not check.
+     */
+    app?: (fullName: string) => Promise<RuleApi | null>;
+  };
 }
 
 /** Where what runs after an answer belongs: the task it was for, or else a subject's thread. */
@@ -1234,7 +1246,18 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
       flows: personFlows,
       preparing: async (repo) => (prepare ? prepare.preparing(repo) : null),
     });
-    registerReleaseRoutes(router, cuts);
+    // The checklist above Cut release (#371, ADR 0084): reads only. The key is
+    // known to it as its ref in the store's list, never read.
+    const releaseCuts = deps.releaseCuts;
+    const readiness = liveReleaseReadiness({
+      version: (client, repo, setting, last, sha) => cuts.version(client, repo, setting, last, sha),
+      lastRelease: (releaseRepo) => releaseCuts.service.lastRelease(releaseRepo),
+      reader: releaseCuts.reader,
+      app: async (fullName) => (releaseCuts.app ? releaseCuts.app(fullName) : null),
+      releaseAccount: () => deps.hostd.releaseAccount(),
+      hasSigningKey: (fullName) => hasReleaseSigningKey(fullName, getSecretStore()),
+    });
+    registerReleaseRoutes(router, cuts, readiness);
     prepare = liveReleasePrepare({
       cuts,
       isCrew: personGitHub.isCrew,

@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
-import type { ReleaseRunView, ReleaseView } from '@/lib/api';
+import type { ReleaseReadiness, ReleaseRunView, ReleaseView } from '@/lib/api';
 import { BridgeAnswered } from '@/lib/bridge-answered';
 import { headerData } from '@/lib/header';
 
@@ -53,7 +53,28 @@ const RUN: ReleaseRunView = {
   publishedAt: '2026-11-14T10:31:00.000Z',
 };
 
-const bridge = vi.hoisted(() => ({ view: null as unknown, runs: [] as unknown }));
+/** Six items, every check passing or failing alike; the last build is informational. */
+function readiness(status: 'pass' | 'fail'): ReleaseReadiness {
+  const ids = ['account', 'signing_key', 'recipe', 'release_tag', 'version', 'last_build'] as const;
+  const titles = ['Release account', 'Signing key', 'Release recipe', 'Release tag', 'Next version', 'Last build'];
+  return {
+    repo: 'mac-app',
+    fullName: 'acme/mac-app',
+    checkedAt: '2026-11-26T08:00:00.000Z',
+    items: ids.map((id, index) => ({
+      id,
+      title: titles[index] ?? id,
+      status,
+      says: `${titles[index]} ${status === 'pass' ? 'is fine' : 'is not'}`,
+      ...(status === 'fail'
+        ? { fix: id === 'signing_key' ? 'Run on the host: openadlc release-key import --repo acme/mac-app --file <path>' : `Fix the ${id}` }
+        : {}),
+      ...(id === 'last_build' ? { informational: true as const } : {}),
+    })),
+  };
+}
+
+const bridge = vi.hoisted(() => ({ view: null as unknown, runs: [] as unknown, readiness: null as unknown }));
 
 vi.mock('@/lib/api', () => ({
   api: {
@@ -64,6 +85,10 @@ vi.mock('@/lib/api', () => ({
     releaseRuns: async () => {
       if (bridge.runs instanceof Error) throw bridge.runs;
       return bridge.runs;
+    },
+    releaseReadiness: async () => {
+      if (bridge.readiness instanceof Error) throw bridge.readiness;
+      return bridge.readiness;
     },
   },
 }));
@@ -195,6 +220,42 @@ describe('a repository’s releases page', () => {
       'href="https://github.com/620legal/OpenADLC/blob/main/docs/adr/0072-a-release-is-cut-by-an-approver-from-a-pinned-view-with-a-fresh-device-code-proof.md"',
     );
     expect(html.indexOf('data-how-this-works')).toBeLessThan(html.indexOf('data-cut'));
+  });
+
+  it('shows the readiness checklist above Cut release, with each failing item’s fix (#371)', async () => {
+    bridge.view = VIEW;
+    bridge.runs = [];
+    bridge.readiness = readiness('fail');
+    const { html, text } = await page();
+    expect(html.indexOf('data-readiness')).toBeGreaterThan(-1);
+    expect(html.indexOf('data-readiness')).toBeLessThan(html.indexOf('data-cut'));
+    expect(text).toContain('Signing key');
+    expect(text).toContain('Run on the host: openadlc release-key import --repo acme/mac-app --file <path>'.replace('<', '&lt;').replace('>', '&gt;'));
+    expect(html).toMatch(/data-readiness-item="last_build"/);
+    expect(text).toContain('For information');
+  });
+
+  it('draws Cut release the same whether every item passes or fails (#371)', async () => {
+    bridge.view = VIEW;
+    bridge.runs = [RUN];
+    const cutOf = (html: string) => html.slice(html.indexOf('<h2 class="text-[13px] font-semibold text-body">Cut release'));
+    bridge.readiness = readiness('fail');
+    const failing = (await page()).html;
+    bridge.readiness = readiness('pass');
+    const passing = (await page()).html;
+    bridge.readiness = new BridgeAnswered('/v1/repos/mac-app/release/readiness', 503, 'hostd is down');
+    const unread = (await page()).html;
+    expect(cutOf(failing)).toMatch(/<button[^>]*data-cut[^>]*>Cut release<\/button>/);
+    expect(cutOf(failing)).toBe(cutOf(passing));
+    expect(cutOf(unread)).toBe(cutOf(passing));
+  });
+
+  it('shows the checklist beside a refused view too', async () => {
+    bridge.view = new BridgeAnswered('/v1/repos/mac-app/release/views', 404, 'mac-app has no release recipe; an admin sets it in Settings → mac-app → Release.');
+    bridge.runs = [];
+    bridge.readiness = readiness('fail');
+    const { html } = await page();
+    expect(html).toContain('data-readiness-item="recipe"');
   });
 
   it('is not found for a repository the bridge does not have', async () => {

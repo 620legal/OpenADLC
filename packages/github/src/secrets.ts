@@ -238,6 +238,17 @@ export function releaseSigningKeyRef(repo: string): string {
 }
 
 /**
+ * Whether a repository's release signing key is filed, from the store's list
+ * of refs alone (#371, docs/adr/0084). The release page's readiness asks it;
+ * it never calls `get`, so nothing of the key is read, decrypted or loaded,
+ * and `signRelease` stays its only reader (ADR 0069). It lives here so the
+ * ref is still named in three files only.
+ */
+export async function hasReleaseSigningKey(repo: string, store: Pick<SecretStore, 'list'>): Promise<boolean> {
+  return (await store.list(RELEASE_SIGNING_KEY_PREFIX)).includes(releaseSigningKeyRef(repo));
+}
+
+/**
  * The raw 32-byte public key of an ed25519 key, from its SPKI DER (12 bytes of
  * header, then the key): what a client pins. One copy, for the import and the
  * signer, so the two can never print different keys for one record.
