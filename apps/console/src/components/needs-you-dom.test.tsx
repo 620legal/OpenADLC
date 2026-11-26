@@ -1478,3 +1478,19 @@ describe('a held approval that waits on someone else', () => {
     expect(document.body.textContent).toContain('You have not linked a GitHub account.');
   });
 });
+
+describe('how Needs you works (#373)', () => {
+  it('opens the page, open, above the tabs, with a link to its ADR', async () => {
+    const header = headerData({ repos: [], crew: [], budget: null, needsYou: 6, attention: MIXED });
+    await act(async () => root.render(<NeedsYouPage items={MIXED} crew={[]} header={header} now={NOW} tab="work" />));
+    const strip = document.querySelector('[data-how-this-works="needs-you"]')!;
+    expect(strip).not.toBeNull();
+    const toggle = strip.querySelector('button')!;
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    expect(toggle.textContent).toContain('How Needs you works');
+    expect(strip.querySelector('a')!.getAttribute('href')).toBe(
+      'https://github.com/620legal/OpenADLC/blob/main/docs/adr/0035-needs-you-items-follow-person-roles.md',
+    );
+    expect(strip.compareDocumentPosition(document.querySelector('[role="tablist"]')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+});

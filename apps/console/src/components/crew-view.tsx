@@ -8,6 +8,7 @@ import { RepoBadge } from '@/components/repo-badge';
 import { HealthDot, PauseControl, reconnectLink, SeatResults, seatTabs, StatusPill, TasksAtOnce, type SeatOpener } from '@/components/seat-controls';
 import { onControl, SeatTable } from '@/components/seat-table';
 import { ThreadPanel } from '@/components/thread-panel';
+import { CrewOffice } from '@/components/crew-office';
 import type { CrewMember, ModelAccountRef } from '@/lib/api';
 import { botLabel, findBot } from '@/lib/bot-label';
 import { cn } from '@/lib/cn';
@@ -41,8 +42,8 @@ import type { HeaderData } from '@/lib/header';
  * and whether it can work. It replaces the strip of bots that ran along the
  * bottom of the board.
  *
- * Cards to glance at, or a table to compare and change, as each person last
- * chose. The cards are one grid: they were a section per role, every role has
+ * Cards to glance at, a table to compare and change, or an office with a
+ * desk per bot, as each person last chose. The cards are one grid: they were a section per role, every role has
  * one seat, and a grid per section held one card — three-across became a long
  * single column. The role is on each card instead.
  *
@@ -88,6 +89,8 @@ export function CrewView({
   const unconnected = crew.filter((bot) => crewState(bot) === 'not-connected').length;
   // With one repository, every task is in it and a badge would say so each time.
   const showRepo = header.repos.length > 1;
+  // A crew with no bots says so in the cards' words, whatever this browser chose.
+  const shown: CrewLayout = crew.length === 0 ? 'cards' : layout;
   const choose = (next: CrewLayout): void => {
     setLayout(next);
     storeCrewLayout(next);
@@ -119,7 +122,7 @@ export function CrewView({
           </div>
           {crew.length > 0 && (
             <div role="group" aria-label="Show the crew as" className="flex shrink-0 overflow-hidden rounded-md border border-edge-strong text-[12.5px]">
-              {(['cards', 'table'] as const).map((value) => (
+              {(['cards', 'table', 'office'] as const).map((value) => (
                 <button
                   key={value}
                   type="button"
@@ -127,14 +130,22 @@ export function CrewView({
                   onClick={() => choose(value)}
                   className={cn('px-3 py-1', layout === value ? 'bg-body text-surface' : 'bg-panel text-soft hover:text-body')}
                 >
-                  {value === 'cards' ? 'Cards' : 'Table'}
+                  {LAYOUT_WORDS[value]}
                 </button>
               ))}
             </div>
           )}
         </div>
 
-        {layout === 'table' ? (
+        {shown === 'office' ? (
+          <CrewOffice
+            crew={crew}
+            now={now}
+            admin={admin}
+            onOpenItem={(item, role) => window.location.assign(itemOnBoard(item, role))}
+            onOpenSeat={openSeat}
+          />
+        ) : shown === 'table' ? (
           <SeatTable crew={crew} accounts={accounts} listings={listings} byBot={byBot} now={now} showRepo={showRepo} onOpen={openSeat} />
         ) : (
           <ul className="grid gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4" data-crew-grid>
@@ -168,6 +179,8 @@ export function CrewView({
     </AppShell>
   );
 }
+
+const LAYOUT_WORDS: Record<CrewLayout, string> = { cards: 'Cards', table: 'Table', office: 'Office' };
 
 function CrewCard({
   bot,

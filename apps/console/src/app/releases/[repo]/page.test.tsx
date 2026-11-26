@@ -185,6 +185,18 @@ describe('a repository’s releases page', () => {
     expect(text).toContain('GitHub refused the tag: a ruleset blocks it');
   });
 
+  it('opens with how a release is cut, open, and a link to its ADR (#373)', async () => {
+    bridge.view = VIEW;
+    bridge.runs = [];
+    const { html, text } = await page();
+    expect(html).toMatch(/data-how-this-works="releases"[\s\S]*<button[^>]*aria-expanded="true"[^>]*>[\s\S]*How a release is cut/);
+    expect(text).toContain('You approve a device code with your own GitHub account.');
+    expect(html).toContain(
+      'href="https://github.com/620legal/OpenADLC/blob/main/docs/adr/0072-a-release-is-cut-by-an-approver-from-a-pinned-view-with-a-fresh-device-code-proof.md"',
+    );
+    expect(html.indexOf('data-how-this-works')).toBeLessThan(html.indexOf('data-cut'));
+  });
+
   it('is not found for a repository the bridge does not have', async () => {
     bridge.view = new BridgeAnswered('/v1/repos/nope/release/views', 404, 'nope is not a repository this install manages.');
     bridge.runs = new BridgeAnswered('/v1/repos/nope/releases', 404, 'nope is not a repository this install manages.');

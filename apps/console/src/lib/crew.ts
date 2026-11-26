@@ -431,16 +431,25 @@ export function monthLine(bot: CrewMember, byBot: readonly { bot: string; costUs
   return money(spent);
 }
 
-/** How the crew page lays the crew out: a grid of cards to glance at, or a table to compare and change. */
-export type CrewLayout = 'cards' | 'table';
+/**
+ * How the crew page lays the crew out: a grid of cards to glance at, a table
+ * to compare and change, or an office with a desk per bot (`crew-office.tsx`).
+ * One choice with three values rather than an office switch beside it: two
+ * switches would leave turning the office off unsure of where it lands.
+ */
+export type CrewLayout = 'cards' | 'table' | 'office';
 
 /** Where each person's choice of layout is kept, in their own browser. */
 export const CREW_LAYOUT_KEY = 'openadlc.crew.layout';
 
-/** The layout this browser last chose, or cards. Storage can throw in a private window; then it is cards. */
+/**
+ * The layout this browser last chose, or cards: for nothing stored, for a value
+ * this console does not know, and when storage throws, as it can in a private window.
+ */
 export function storedCrewLayout(): CrewLayout {
   try {
-    return globalThis.localStorage?.getItem(CREW_LAYOUT_KEY) === 'table' ? 'table' : 'cards';
+    const stored = globalThis.localStorage?.getItem(CREW_LAYOUT_KEY);
+    return stored === 'table' || stored === 'office' ? stored : 'cards';
   } catch {
     return 'cards';
   }

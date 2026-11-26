@@ -18,6 +18,7 @@ import { KIND_WORDS } from '@/components/design-memory';
 import { megabytes, WHERE_FILES_GO } from '@/lib/attachments';
 import { botLabel } from '@/lib/bot-label';
 import { cn } from '@/lib/cn';
+import { HOW_THIS_WORKS, HowThisWorks } from '@/components/how-this-works';
 import { IssueControls } from '@/components/issue-controls';
 import { PullPanel } from '@/components/pull-panel';
 import {
@@ -541,7 +542,13 @@ function ItemHeader({
         </div>
       )}
       {/* Its pull request's declared commands and what its workflows posted, while it is open (#207). */}
-      {view?.pullRequest && !['merged', 'done'].includes(view.issue?.stage ?? '') && <PullPanel subject={view.key} />}
+      {/* What its merge waits on, beside the panel that shows where it stands, while it is open (#373). */}
+      {view?.pullRequest && !['merged', 'done'].includes(view.issue?.stage ?? '') && (
+        <>
+          <HowThisWorks {...HOW_THIS_WORKS['merge-state']} />
+          <PullPanel subject={view.key} />
+        </>
+      )}
       {view?.workItem && (view.links ?? []).length > 0 && <WorkItemLinks view={view} admin={admin} onChanged={onChanged} />}
       {/* An issue's pause, play next and cancel, in words; a request has none until it is filed,
           and finished work none, as on the board: a shipped item's cancel would close its merged pull request.
