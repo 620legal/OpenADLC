@@ -173,6 +173,7 @@ describe('the question a message asks', () => {
       planChange: null,
       decision: '',
       consequences: [],
+      recommended: null,
     });
   });
 
@@ -203,6 +204,7 @@ describe('the question a message asks', () => {
       planChange: null,
       decision: '',
       consequences: [],
+      recommended: null,
     });
     expect(parseQuestion('Which one? <!-- openadlc:{"event":"question"} -->')).toMatchObject({ question: 'Which one?', open: true, context: '' });
     // A question that is not words is no question: the message is.
@@ -240,6 +242,20 @@ describe('the question a message asks', () => {
 
   it('names no role for a plan change, which approvers decide whatever their role', () => {
     expect(parseQuestion('<!-- openadlc:{"event":"plan_change","paths":["a.ts"],"reason":"r","role":"Legal"} -->')?.role).toBeNull();
+  });
+
+  it('keeps the option it recommends only when it is one of its options, trimmed, case and all', () => {
+    const ask = (fields: object) => parseQuestion(`<!-- openadlc:${JSON.stringify({ event: 'question', question: 'Which?', options: ['A', 'B'], ...fields })} -->`)?.recommended;
+    expect(ask({ recommended: 'B' })).toBe('B');
+    expect(ask({ recommended: '  B ' })).toBe('B');
+    expect(ask({})).toBeNull();
+    expect(ask({ recommended: 'C' })).toBeNull();
+    expect(ask({ recommended: 'b' })).toBeNull();
+    expect(ask({ recommended: '' })).toBeNull();
+    expect(ask({ recommended: 2 })).toBeNull();
+    // An open question has no option to recommend, and a plan change is the bridge's to ask.
+    expect(parseQuestion('<!-- openadlc:{"event":"question","question":"What?","open":true,"recommended":"x"} -->')?.recommended).toBeNull();
+    expect(parseQuestion('<!-- openadlc:{"event":"plan_change","paths":["a.ts"],"reason":"r","recommended":"Approve"} -->')?.recommended).toBeNull();
   });
 
   it('is nothing at all in a message that asks nothing', () => {
@@ -309,6 +325,7 @@ describe('what a question decides, and what each choice leads to', () => {
       planChange: null,
       decision: '',
       consequences: [],
+      recommended: null,
     });
   });
 
@@ -425,6 +442,7 @@ describe('a plan change a task asks for', () => {
       planChange: { paths: ['apps/hostd/src/skill-runner.ts', 'docs/'], reason: 'it forwards nothing' },
       decision: '',
       consequences: [],
+      recommended: null,
     });
   });
 

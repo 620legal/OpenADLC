@@ -333,6 +333,22 @@ describe('a skill that can ask a person asks one question at a time', () => {
     }
   });
 
+  // Hands-off mode answers a question with the option its marker recommends
+  // (#383, ADR 0093). Only the skills whose questions it may answer say how;
+  // a reviewer's, a conflict's or a deploy's question always asks a person.
+  it.each(['triage', 'spec', 'implement'])('%s says when to recommend an answer, and every recommendation it shows is one of its options', (skill) => {
+    const prose = read(skill).replace(/\s+/g, ' ');
+    expect(prose).toContain('Set `recommended` to the exact text of the option you would take, when you would go on with it unasked');
+    expect(prose).toContain('Leave it out on an open question, a question about legal or product wording');
+    for (const marker of parseMarkers(read(skill)).filter((one) => one.event === 'question' && one.recommended !== undefined)) {
+      expect(parseQuestion(`<!-- openadlc:${JSON.stringify(marker)} -->`)?.recommended, `${skill}: ${JSON.stringify(marker)}`).toBe(marker.recommended);
+    }
+  });
+
+  it.each(['pr-review', 'resolve-conflict', 'deploy'])('%s recommends no answer, since hands-off mode never answers its questions', (skill) => {
+    expect(read(skill)).not.toContain('recommended`');
+  });
+
   it.each(asking)('%s asks for a decision with every question and a consequence for every choice', (skill) => {
     const prose = read(skill).replace(/\s+/g, ' ');
 

@@ -1,6 +1,6 @@
 import { heldBySeatPause, registerSeatPauseRoutes, seatPausedReason } from './seat-pause.js';
 import { createServer } from 'node:http';
-import { audit as auditEntry, bots, bridgeGaps, ciUsage, closePool, costs, deployRuns, inFlight, issues as issueStore, leases as leaseStore, people, recordEvent, repos, routines as routineStore, settings, tasks, threads as threadStore, waitForDatabase } from '@openadlc/db';
+import { audit as auditEntry, bots, bridgeGaps, ciUsage, closePool, costs, deployRuns, inFlight, issues as issueStore, leases as leaseStore, people, recordEvent, repos, routines as routineStore, settings, spendingLimits, tasks, threads as threadStore, waitForDatabase } from '@openadlc/db';
 import { registerPauseRoutes, restorePause } from './pause-work.js';
 import { accountOf, appPrivateKeyRef, appVisibility, ensureAlertsSecret, ensureConsoleSecret, ensureInternalSecret, getSecretStore, installationTokenFor, openadlcHome, redeliverFailedSince } from '@openadlc/github';
 import { sameLogin } from '@openadlc/shared';
@@ -29,6 +29,7 @@ import { DispatchGate } from './dispatch-gate.js';
 import { Gates, subjectClosed } from './gates.js';
 import { readAudienceFacts } from './needs-you-audience.js';
 import { standingCoverFor } from './plan-changes.js';
+import { liveHandsOff } from './hands-off.js';
 import { humanReviewReader } from './human-review-read.js';
 import { readDefaultBranch, syncDefaultBranches } from './default-branch.js';
 import { Notifier, retireOldChannels } from './notify.js';
@@ -186,6 +187,46 @@ async function main(): Promise<void> {
   // A question's role is resolved against the install's roles, and on a cloud
   // install its comment, card and notification follow who holds it (ADR 0035).
   gates.useAudience({ local: config.identityMode === 'local', facts: readAudienceFacts });
+  // A hands-off window on a repository answers its routine gates as they are
+  // asked, and only in `Gates.open` (#383, ADR 0093). It ends at its time, at
+  // a monthly cap (both found by the minute sweep below, and the cap again on
+  // every gate), or when a person turns it off.
+  const handsOff = liveHandsOff({
+    repoById: async (repoId) => {
+      const found = (await repos.listRepos({ includeRemoved: true })).find((one) => one.id === repoId);
+      return found ? { id: found.id, name: found.name, fullName: found.fullName, defaultBranch: found.defaultBranch } : null;
+    },
+    repositoryRefusal: (repo) =>
+      spendingLimits.repositoryRefusal({
+        monthlyCapUsd: config.costs.monthlyCapUsd,
+        onCap: config.costs.onCap,
+        period: costs.currentPeriod(),
+        repoId: repo.id,
+        repoLabel: repo.fullName,
+      }),
+    taskRefusal: async (task) => {
+      const bot = await bots.getBotById(task.botId);
+      if (!bot) throw new Error('the task has no bot, so its caps cannot be read');
+      const repo = task.repoId ? (await repos.listRepos({ includeRemoved: true })).find((one) => one.id === task.repoId) : null;
+      return spendingLimits.refusal({
+        monthlyCapUsd: config.costs.monthlyCapUsd,
+        onCap: config.costs.onCap,
+        period: costs.currentPeriod(),
+        repoId: repo?.id ?? null,
+        repoLabel: repo?.fullName ?? '',
+        botId: bot.id,
+        botName: bot.name,
+        engine: bot.engine,
+      });
+    },
+    humanReviewRules: humanReviewReader(actors, config),
+    issueFacts: async (repo, issueNumber) => {
+      const stored = await issueStore.getIssue(repo.id, issueNumber);
+      if (!stored) throw new Error(`${repo.name}#${issueNumber} is not known to OpenADLC yet`);
+      return { labels: stored.labels, declaredPaths: stored.declaredPaths };
+    },
+  });
+  gates.useHandsOff(handsOff.cover());
   const context = new Context(actors, config);
   // The one routine that renames a bot: when an account connects it takes
   // that account's handle, and everything named after it moves with it.
@@ -812,6 +853,8 @@ async function main(): Promise<void> {
   const requestQueue = new RequestQueue({ taskService, paused: (repo) => dispatchGate.paused(repo), seatPaused: (seat) => seatPausedReason(seat) });
   void requestQueue.drain();
   setInterval(() => void requestQueue.drain(), REQUEST_SWEEP_MS).unref();
+  // Hands-off windows past their time, or on a repository at a monthly cap, end here.
+  setInterval(() => void handsOff.sweep(), 60_000).unref();
   // Work items: every issue, pull request and request numbered. The first
   // start after the upgrade reads each repository's history, resumably, and
   // the timer picks it up again after a rate limit or a repository added.
@@ -879,6 +922,8 @@ async function main(): Promise<void> {
     // the compare view reads GitHub as the last release is read.
     // The readiness checklist judges the tag as the app, as the publish makes it.
     releaseCuts: { service: releaseRuns, reader: deployClient, app: (fullName: string) => appGate.client(fullName).catch(() => null) },
+    // Turning a hands-off window on and off from the console (`hands-off-routes.ts`).
+    handsOff,
     routines: routineService,
   };
   // Stops the look at Needs you for a waiting merge or a stopped review (`notify-waiting.ts`).

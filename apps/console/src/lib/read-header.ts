@@ -17,11 +17,13 @@ export async function readHeader(known: {
   costs?: Pick<CostsView, 'budget'> | null;
   attention?: readonly AttentionItem[] | null;
 } = {}): Promise<HeaderData> {
-  const [listed, crew, costs, attention] = await Promise.all([
+  const [listed, crew, costs, attention, handsOff] = await Promise.all([
     known.repos ? null : api.repos().then((body) => body.repos).catch(() => []),
     known.crew ?? api.crew().then((body) => body.bots).catch(() => [] as CrewMember[]),
     known.costs !== undefined ? known.costs : api.costs().catch(() => null),
     known.attention !== undefined ? known.attention : api.attention().then((body) => body.items).catch(() => null),
+    // The hands-off badge's windows (#383); a failed read leaves the badge out.
+    api.handsOff().catch(() => null),
   ]);
 
   return headerData({
@@ -32,5 +34,6 @@ export async function readHeader(known: {
     // What waits on the person; a notice that something was fixed does not.
     needsYou: attention ? waitingCount(attention) : null,
     attention,
+    handsOff,
   });
 }

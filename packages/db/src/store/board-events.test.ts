@@ -7,6 +7,7 @@ import {
   approvalsIn,
   askedIn,
   dbNow,
+  handsOffAuditIn,
   heldAuditIn,
   heldLineIn,
   liveTasks,
@@ -92,6 +93,21 @@ describe('the board feed’s reads', () => {
     expect(await heldAuditIn({ from: since })).toEqual([{ auditId: '42', at: since.toISOString(), actor: 'orzelig', target: '620legal/OpenADLC#231', why: 'an unsigned crew post' }]);
     expect(sql()).toMatch(/action = 'pull\.held'/);
     expectWindowed('at');
+  });
+
+  it('reads hands-off windows turned on and off, and the gates they answered, with each answer’s question', async () => {
+    vi.mocked(query).mockResolvedValue([
+      { id: '7', at: since, action: 'hands_off.on', actor: 'jane@example.com', repo: '620legal/OpenADLC', set_by_login: 'janedoe', duration: '8h', by: null, why: null, subject: null, question: null, answer: null },
+      { id: '8', at: since, action: 'gate.answer', actor: 'jane@example.com', repo: null, set_by_login: 'janedoe', duration: null, by: null, why: null, subject: 'OpenADLC#383', question: 'Which?', answer: 'B' },
+    ]);
+    expect(await handsOffAuditIn({ from: since })).toEqual([
+      { auditId: '7', at: since.toISOString(), action: 'hands_off.on', actor: 'jane@example.com', repo: '620legal/OpenADLC', setByLogin: 'janedoe', duration: '8h', by: null, why: null, subject: null, question: null, answer: null },
+      { auditId: '8', at: since.toISOString(), action: 'gate.answer', actor: 'jane@example.com', repo: null, setByLogin: 'janedoe', duration: null, by: null, why: null, subject: 'OpenADLC#383', question: 'Which?', answer: 'B' },
+    ]);
+    expect(sql()).toMatch(/a\.action in \('hands_off\.on', 'hands_off\.off'\)/);
+    expect(sql()).toMatch(/a\.action = 'gate\.answer' and a\.payload->>'channel' = 'hands_off'/);
+    expect(sql()).toMatch(/left join gates g/);
+    expectWindowed('a.at');
   });
 
   it('reads merge-line entries in merging, timed when their row last changed', async () => {

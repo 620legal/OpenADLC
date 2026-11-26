@@ -183,6 +183,70 @@ export async function heldAuditIn(window: EventWindow): Promise<HeldAuditRow[]> 
   return rows.map((row) => ({ auditId: row.id, at: row.at.toISOString(), actor: row.actor, target: row.target, why: row.why }));
 }
 
+export interface HandsOffAuditRow {
+  auditId: string;
+  at: string;
+  /** `hands_off.on`, `hands_off.off`, or `gate.answer` given by a hands-off window. */
+  action: 'hands_off.on' | 'hands_off.off' | 'gate.answer';
+  actor: string;
+  /** The repository's full name, on `on` and `off`; null on an answer. */
+  repo: string | null;
+  setByLogin: string | null;
+  duration: string | null;
+  /** On `off`: who ended it, and why (`expired`, `cap`, `turned_off`). */
+  by: string | null;
+  why: string | null;
+  /** On an answer: the subject it was asked on, the question, and the answer given. */
+  subject: string | null;
+  question: string | null;
+  answer: string | null;
+}
+
+/**
+ * Hands-off windows turned on and off, and the gates they answered, in the
+ * window: their audit rows (`apps/bridge/src/hands-off.ts`, `gates.ts`). An
+ * answer is a `gate.answer` row whose channel is `hands_off`, with its
+ * question read from the gate it closed.
+ */
+export async function handsOffAuditIn(window: EventWindow): Promise<HandsOffAuditRow[]> {
+  const rows = await windowed<{
+    id: string;
+    action: HandsOffAuditRow['action'];
+    actor: string;
+    repo: string | null;
+    set_by_login: string | null;
+    duration: string | null;
+    by: string | null;
+    why: string | null;
+    subject: string | null;
+    question: string | null;
+    answer: string | null;
+  }>(
+    `select a.id::text as id, a.at, a.action, a.actor, a.payload->>'repo' as repo,
+            coalesce(a.payload->>'setByLogin', a.payload->'handsOff'->>'setByLogin') as set_by_login,
+            a.payload->>'duration' as duration, a.payload->>'by' as by, a.payload->>'why' as why,
+            a.payload->>'subject' as subject, g.question, a.payload->>'answer' as answer
+     from audit a left join gates g on a.action = 'gate.answer' and g.id::text = a.target
+     where (a.action in ('hands_off.on', 'hands_off.off') or (a.action = 'gate.answer' and a.payload->>'channel' = 'hands_off'))
+       and ${windowWhere('a.at')}`,
+    window,
+  );
+  return rows.map((row) => ({
+    auditId: row.id,
+    at: row.at.toISOString(),
+    action: row.action,
+    actor: row.actor,
+    repo: row.repo,
+    setByLogin: row.set_by_login,
+    duration: row.duration,
+    by: row.by,
+    why: row.why,
+    subject: row.subject,
+    question: row.question,
+    answer: row.answer,
+  }));
+}
+
 export interface HeldLineRow {
   id: string;
   at: string;

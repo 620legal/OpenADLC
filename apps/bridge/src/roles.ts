@@ -164,6 +164,14 @@ export const ROUTE_ROLES: Readonly<Record<string, Role>> = {
   // checked in the handler the same way as the cut's, and it starts no build.
   'POST /v1/repos/:name/release/prepare': 'user',
   'GET /v1/repos/:name/release/flows/:flowId': 'user',
+  // Hands-off mode (#383, ADR 0093): anyone signed in sees the windows and
+  // may turn one off, which only tightens. Turning one on is a user's route
+  // too: Approves and a fresh sign-in are checked in `hands-off-routes.ts`,
+  // per person, as the release cut checks them.
+  'GET /v1/hands-off': 'user',
+  'POST /v1/repos/:name/hands-off': 'user',
+  'GET /v1/repos/:name/hands-off/flows/:flowId': 'user',
+  'DELETE /v1/repos/:name/hands-off': 'user',
   // The release page's readiness checklist (#371, ADR 0084): a read, the same
   // for every viewer, which never starts, pins or signs anything.
   'GET /v1/repos/:name/release/readiness': 'user',

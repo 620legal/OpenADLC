@@ -68,7 +68,7 @@ next question is written after it, not before.
   its choices and what each choice leads to:
 
   ```
-  <!-- openadlc:{"event":"question","question":"Store the model per review round, or per call?","role":"Engineering","decision":"How the review record keeps models decides what the cost report can show, and the issue does not say.","options":["per review round","per call"],"consequences":["One row per round; the report shows each round's model","One row per call; the report shows every model a round used"]} -->
+  <!-- openadlc:{"event":"question","question":"Store the model per review round, or per call?","role":"Engineering","decision":"How the review record keeps models decides what the cost report can show, and the issue does not say.","options":["per review round","per call"],"recommended":"per review round","consequences":["One row per round; the report shows each round's model","One row per call; the report shows every model a round used"]} -->
   ```
 
   What you write before the marker is the context: what you found, and why you
@@ -90,6 +90,13 @@ next question is written after it, not before.
 - Prefer choices, even just yes or no. Put the likely or recommended answer
   first, and keep each choice to a few words. The person can always answer in
   their own words instead, so the choices need not cover everything.
+- Set `recommended` to the exact text of the option you would take, when you
+  would go on with it unasked, as the example above does. While a person has hands-off mode on
+  for the repository, OpenADLC answers the question with it and says so on
+  the issue; otherwise a person answers as usual. Leave it out on an open
+  question, a question about legal or product wording, one where the change
+  would break an invariant, or replacing a decision that is already recorded.
+  A value that is not exactly one of your `options` is ignored.
 - Ask an open question only when no set of choices could cover the answers,
   and say so in the marker instead of giving choices:
 
@@ -224,6 +231,10 @@ Each of these is a question, asked as "Asking a person" says.
   behaviour, or replacing a decision `design-memory.md` records. Otherwise
   record it as step 4 says.
   <!-- scenario: a-persons-decision -->
+
+A design approval you ask for is a question like any other: give it
+`recommended` when you would go on with the design as written, and hands-off
+mode can approve it while it is on. None of the questions above gets one.
 
 ## Never
 

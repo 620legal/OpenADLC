@@ -281,6 +281,31 @@ export async function refusal(input: LeaseSpendInput): Promise<string | null> {
   });
 }
 
+/**
+ * Whether a repository as a whole is at a monthly cap: the global month total
+ * (when `stopLeasing`), or the repository's own. Null when neither is
+ * reached. The bot and provider caps are a seat's, not the repository's, and
+ * are left to `refusal`. Read by hands-off mode's sweep, which ends a
+ * repository's window at a cap (`apps/bridge/src/hands-off.ts`); it only reads.
+ */
+export async function repositoryRefusal(input: Pick<LeaseSpendInput, 'monthlyCapUsd' | 'onCap' | 'period' | 'repoLabel'> & { repoId: string }): Promise<string | null> {
+  const scope = repoScope(input.repoId);
+  const [savedMonth, repoMonth, monthSpent, repoSpent] = await Promise.all([
+    input.onCap.stopLeasing ? amountOf(GLOBAL_SCOPE, 'month_total') : Promise.resolve(null),
+    amountOf(scope, 'month_total'),
+    monthSpend(input.period),
+    spendForRepo(input.period, input.repoId),
+  ]);
+  const month = input.onCap.stopLeasing ? (savedMonth ?? input.monthlyCapUsd) : null;
+  return refusalReason({
+    repoLabel: input.repoLabel,
+    botName: '',
+    provider: null,
+    spent: { month: monthSpent, repoMonth: repoSpent, bot: 0, botInRepo: 0, provider: 0, providerInRepo: 0 },
+    caps: { month, repoMonth, bot: null, botInRepo: null, provider: null, providerInRepo: null },
+  });
+}
+
 /** One row a save writes, with what it held before, for the audit entry. */
 export interface LimitWrite {
   scope: string;

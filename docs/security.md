@@ -1109,6 +1109,44 @@ decides who may cut a release: the Approves check before and after the
 device-code proof, the match with the linked account, the crew refusal, and
 the pinned view whose SHA is built.
 
+### Hands-off mode
+
+A hands-off window lets OpenADLC answer gates in a person's name, so who may
+open one, and what it may answer, is fixed in code under Human review
+([ADR 0093](adr/0093-a-hands-off-window-answers-routine-gates-and-never-the-excluded-ones.md)).
+
+- **Who turns it on.** A console person whose linked GitHub account has
+  Approves on in People. Approves is asked before a fresh device-code
+  sign-in and again after it. The account that approves the code must have
+  the linked account id and login, and must not be one the crew uses. This is
+  the release cut's proof (`apps/bridge/src/hands-off-routes.ts`). Every
+  refusal is audited as `hands_off.refused`. Turning it off takes any console
+  sign-in, since that only tightens.
+- **What it answers.** Only `Gates.open` consults it, through an allow-list
+  (`apps/bridge/src/hands-off.ts`). Only gates opened while it is on:
+
+  | Gate | While the window is on |
+  |---|---|
+  | Plan change, no path under Human review on the base branch | Approved as it is asked |
+  | Plan change with a Human-review path, or rules unreadable | Asks a person |
+  | Question from intake, spec, implement or a request, on an issue or a request, with `recommended` equal to one of its options | Answered with that option |
+  | Question with no valid `recommended`, or an open question | Asks a person |
+  | Question for a role the setter does not hold, or addressed to someone else | Asks a person |
+  | Question on an issue with a Human-review Expected path, `scope:cross-cutting` or `openadlc:ignore` | Asks a person |
+  | Cost-cap question (raising a cap) | Asks a person |
+  | Any question on a pull request (review, patch, conflict, deploy) | Asks a person |
+  | Merge, held approvals, sign-offs, promotes, deploys, host checks, release cut, labels, Settings | Never consulted |
+
+  A read that fails answers nothing. `hands-off-exclusions.test.ts` fails when
+  anything outside the allow-list imports the window or its store.
+- **How it ends.** At its time, and no gate is answered after `ends_at` even
+  before the sweep records it. At a monthly cap. Or by anyone's Turn off. Each
+  start and end is audited as `hands_off.on` or `hands_off.off`, naming who
+  set it, when and when it ends. Each answer is a `gate.answer` row with
+  channel `hands_off`, and the issue says it was answered by hands-off mode,
+  set by `<login>` at `<time>`. The table is not backed up, so a restore
+  starts with every window off.
+
 ### The console
 
 Identity is load-bearing: it decides who may answer a gate, move a card and

@@ -656,6 +656,56 @@ A task that needs to write outside its lease's paths ends a message with a
   item's key once the install is numbered (the issue before), with the issue
   in `subjects`, as an item's own controls are.
 
+## Hands-off mode
+
+A person can let OpenADLC answer one repository's routine gates for a while,
+so a long run does not stall on questions they would approve anyway (#383,
+[ADR 0093](adr/0093-a-hands-off-window-answers-routine-gates-and-never-the-excluded-ones.md)).
+
+- **Turning it on.** Open the header's **Hands-off** button, pick a
+  repository and 1 hour, 8 hours, 24 hours or until turned off, then **Sign in
+  to turn on**. This button shows only to a person whose linked GitHub account
+  has Approves on. The bridge checks that before and after a fresh device-code
+  sign-in, as it does for a release cut (`apps/bridge/src/hands-off-routes.ts`).
+  A repository has at most one window (`hands_off_windows`, migration 0175).
+- **What it answers.** Only gates opened while it is on, and only through
+  `Gates.open` (`apps/bridge/src/hands-off.ts`):
+  - A plan change none of whose paths is under Human review is approved as it
+    is asked, as the standing approval above approves one.
+  - A question from intake, spec, implement or a request task, on an issue or a
+    console request, is answered with the option its marker recommended. The
+    `recommended` must be exactly one of its `options`
+    (`parseQuestion`, `packages/shared/src/markers.ts`). The person who set the
+    window must hold the role the question names, and it must not be addressed
+    to someone else. The issue must not be labelled `scope:cross-cutting` or
+    `openadlc:ignore`, and its Expected paths must name no Human-review path.
+
+  Each answer posts "**Answered by hands-off mode**, set by `login` at
+  `<time>`" on the issue, with the question and the answer. It writes a
+  `gate.answer` audit row with channel `hands_off` and appears in the activity
+  feed as `hands_off.answered`. Nothing else is asked or notified.
+- **What it never answers.** These ask a person as usual, and the window stays
+  on:
+  - a Human-review path, unreadable Human-review rules, and the cost-cap
+    question;
+  - any question on a pull request;
+  - a question with no valid `recommended`.
+
+  The merge, held approvals, promotes, deploys, host checks, the release cut,
+  labels and Settings never read the window.
+  `apps/bridge/src/hands-off-exclusions.test.ts` fails when something
+  outside the allow-list imports it.
+- **How it ends.**
+  - At its time: no gate is answered after `ends_at`, and the minute sweep
+    records the end.
+  - At a monthly cap: the global or the repository's month total, found by the
+    sweep, or any monthly cap refusing the bot whose gate opened.
+  - When anyone signed in presses **Turn off** on the header's badge.
+
+  Each start and end is audited as `hands_off.on` or `hands_off.off` and shows
+  in the activity feed. While a window is open, the header's amber badge shows
+  the soonest window's time left.
+
 ## Expected paths decide what runs together
 
 The dispatcher holds an issue back when its Expected paths overlap work in

@@ -9,6 +9,7 @@ import {
   repos,
   requests,
   type AskedRow,
+  type HandsOffAuditRow,
   type HeldAuditRow,
   type LiveTaskRow,
   type MergedRow,
@@ -145,6 +146,8 @@ export interface BoardEventStore {
   releasesPublishedIn(window: EventWindow): Promise<ReleasePublishedRow[]>;
   /** Merge-line entries in `merging` changed in the window: the history's holds. */
   heldLineIn(window: EventWindow): Promise<HeldLineRow[]>;
+  /** Hands-off windows turned on and off, and the gates they answered (#383). */
+  handsOffAuditIn(window: EventWindow): Promise<HandsOffAuditRow[]>;
   liveTasks(): Promise<LiveTaskRow[]>;
   mergeLine(): Promise<LineEntry[]>;
   facts(): Promise<BoardFacts>;
@@ -200,6 +203,7 @@ export function liveBoardEventStore(): BoardEventStore {
     approvalsIn: async (window) => boardEvents.approvalsIn(window, await crewLogins()),
     releasesPublishedIn: (window) => boardEvents.releasesPublishedIn(window),
     heldLineIn: (window) => boardEvents.heldLineIn(window),
+    handsOffAuditIn: (window) => boardEvents.handsOffAuditIn(window),
     liveTasks: () => boardEvents.liveTasks(),
     mergeLine: () => mergeLines.line(),
     facts: async () => {
@@ -236,7 +240,8 @@ export type RawEvent =
   | { type: 'pull_request.held'; source: 'merge-line'; entry: LineEntry; reason: string; at: string }
   | { type: 'pull_request.opened'; row: PullOpenedRow }
   | { type: 'pull_request.lead_approved'; row: ApprovalRow }
-  | { type: 'release.published'; row: ReleasePublishedRow };
+  | { type: 'release.published'; row: ReleasePublishedRow }
+  | { type: 'hands_off.on' | 'hands_off.off' | 'hands_off.answered'; row: HandsOffAuditRow };
 
 /**
  * Where every row event is read from, for a window: the live stream and the
@@ -257,6 +262,11 @@ export const SOURCES: readonly ((store: BoardEventStore, window: EventWindow) =>
   async (store, window) => (await store.pullsOpenedIn(window)).map((row) => ({ type: 'pull_request.opened' as const, row })),
   async (store, window) => (await store.approvalsIn(window)).map((row) => ({ type: 'pull_request.lead_approved' as const, row })),
   async (store, window) => (await store.releasesPublishedIn(window)).map((row) => ({ type: 'release.published' as const, row })),
+  async (store, window) =>
+    (await store.handsOffAuditIn(window)).map((row) => ({
+      type: row.action === 'gate.answer' ? ('hands_off.answered' as const) : row.action,
+      row,
+    })),
 ];
 
 /** The holds the history lists: entries waiting on a person now, timed when their row last changed, under the id the stream gives them. */
@@ -296,6 +306,10 @@ export function rawId(raw: RawEvent): string {
       return `pull_request.lead_approved:${raw.row.reviewId}`;
     case 'release.published':
       return `release.published:${raw.row.runId}`;
+    case 'hands_off.on':
+    case 'hands_off.off':
+    case 'hands_off.answered':
+      return `${raw.type}:${raw.row.auditId}`;
   }
 }
 
@@ -325,7 +339,21 @@ export function subjectOf(raw: RawEvent, facts: Pick<BoardFacts, 'repos'>): stri
       return `${raw.row.repoName}#${raw.row.prNumber}`;
     case 'release.published':
       return `release:${raw.row.repoName}@${raw.row.tag ?? raw.row.version ?? raw.row.runId}`;
+    case 'hands_off.answered':
+      return raw.row.subject ?? '';
+    case 'hands_off.on':
+    case 'hands_off.off':
+      return `hands-off:${raw.row.repo ?? ''}`;
   }
+}
+
+const HANDS_OFF_DURATION_WORDS: Record<string, string> = { '1h': 'for 1 hour', '8h': 'for 8 hours', '24h': 'for 24 hours', until_off: 'until turned off' };
+
+/** How a window's end is said: `expired`, `a cap was reached`, or `turned off by X`. */
+function handsOffEnd(row: HandsOffAuditRow): string {
+  if (row.why === 'expired') return 'expired';
+  if (row.why === 'cap') return 'a cap was reached';
+  return `turned off by ${row.by ?? row.actor}`;
 }
 
 /** A subject as an event or a live task carries it: the ref, the repository's full name, and a link. */
@@ -391,6 +419,16 @@ export function toBoardEvent(raw: RawEvent, facts: BoardFacts): BoardEvent {
     const name = raw.row.tag ?? raw.row.version ?? 'a release';
     return { id: rawId(raw), type: raw.type, at: rawAt(raw), bot: null, item, text: oneLine(`${raw.row.repoFullName} ${name} published, cut by @${raw.row.cutBy}`) };
   }
+  if (raw.type === 'hands_off.on' || raw.type === 'hands_off.off') {
+    const repo = raw.row.repo;
+    const item = { ref, repo, url: null };
+    const base = { id: rawId(raw), type: raw.type, at: rawAt(raw), bot: null, item };
+    if (raw.type === 'hands_off.on') {
+      const how = HANDS_OFF_DURATION_WORDS[raw.row.duration ?? ''] ?? '';
+      return { ...base, text: oneLine(`hands-off on for ${repo ?? 'a repository'}${how ? ` ${how}` : ''}, set by ${raw.row.setByLogin ?? raw.row.actor}`) };
+    }
+    return { ...base, text: oneLine(`hands-off off for ${repo ?? 'a repository'}: ${handsOffEnd(raw.row)}`) };
+  }
   const resolved = itemFor(ref, facts);
   // The pull request's own page: a subject the issues do not list resolves to an issue's address.
   const item = (raw.type === 'pull_request.opened' || raw.type === 'pull_request.lead_approved') && raw.row.url ? { ...resolved, url: raw.row.url } : resolved;
@@ -420,6 +458,8 @@ export function toBoardEvent(raw: RawEvent, facts: BoardFacts): BoardEvent {
     }
     case 'pull_request.lead_approved':
       return { ...base, bot: facts.leadSeat, text: oneLine(`${facts.leadSeat ?? 'the lead'} approved #${raw.row.prNumber}`) };
+    case 'hands_off.answered':
+      return { ...base, bot: null, text: oneLine(`hands-off mode answered ${raw.row.question ?? 'a question'} on ${label}: ${raw.row.answer ?? ''}`) };
   }
 }
 

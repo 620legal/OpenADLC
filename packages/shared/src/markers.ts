@@ -43,6 +43,12 @@ export interface Marker {
   addressedTo?: string;
   /** On a `question`: the person role it is for, by name (`Legal`), so Needs you shows it only to that role's people. */
   role?: string;
+  /**
+   * On a `question`: the exact text of the option the bot would take if it
+   * went on unasked. Hands-off mode answers with it (`apps/bridge/src/hands-off.ts`);
+   * a value that matches no option is ignored (`parseQuestion`).
+   */
+  recommended?: string;
   reason?: string;
   /** On `send_back`: the stage the work goes back to, and on the bridge's record, the stage it left. */
   to?: string;
@@ -387,6 +393,13 @@ export interface AskedQuestion {
    * an answer.
    */
   consequences: string[];
+  /**
+   * The option the bot recommends, as one of `options` exactly; null when the
+   * marker names none, names one that is not an option, or the question is
+   * open or a plan change. Hands-off mode answers with it, and nothing else
+   * reads it as an answer.
+   */
+  recommended: string | null;
 }
 
 /**
@@ -435,6 +448,7 @@ export function parseQuestion(body: string): AskedQuestion | null {
         planChange: null,
         decision: '',
         consequences: [],
+        recommended: null,
       };
     }
     return {
@@ -448,6 +462,7 @@ export function parseQuestion(body: string): AskedQuestion | null {
       planChange: { paths, reason },
       decision: '',
       consequences: [],
+      recommended: null,
     };
   }
 
@@ -466,7 +481,21 @@ export function parseQuestion(body: string): AskedQuestion | null {
     planChange: null,
     decision,
     consequences: markerConsequences(marker),
+    recommended: recommendedOption(marker.recommended, options),
   };
+}
+
+/**
+ * The option a question marker recommends, as that option's own text, or
+ * null. Only an exact match after trimming counts, case and all: hands-off
+ * mode answers with it, and a near miss is a different answer than the one
+ * the bot offered a person.
+ */
+export function recommendedOption(value: unknown, options: readonly string[]): string | null {
+  if (typeof value !== 'string') return null;
+  const wanted = value.trim();
+  if (!wanted) return null;
+  return options.find((option) => option === wanted) ?? null;
 }
 
 /**

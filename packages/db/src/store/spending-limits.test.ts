@@ -27,7 +27,7 @@ import {
   holdRevert,
   releaseRevert,
   spendHeldRevert,
-  botKind, effectiveTaskCap, refusal, refusalReason, saveLimits, seedGlobal } from './spending-limits.js';
+  botKind, effectiveTaskCap, refusal, refusalReason, repositoryRefusal, saveLimits, seedGlobal } from './spending-limits.js';
 
 beforeEach(() => {
   vi.mocked(query).mockReset();
@@ -137,6 +137,34 @@ describe('a lease the caps refuse', () => {
 
   it('allows the lease when every cap is still above the spend', () => {
     expect(refusalReason({ ...base, spent: { ...NONE, month: 10, repoMonth: 10 }, caps: { ...base.caps, repoMonth: 80 } })).toBeNull();
+  });
+});
+
+describe('a repository at a monthly cap, which ends its hands-off window', () => {
+  const input = { monthlyCapUsd: 1500, onCap: { stopLeasing: true }, period: '2026-11', repoId: 'repo-api', repoLabel: 'exampleco/api' };
+
+  it('names the global month when it is reached', async () => {
+    vi.mocked(queryOne).mockResolvedValueOnce({ amount_usd: '1500' }).mockResolvedValueOnce(null);
+    vi.mocked(monthSpend).mockResolvedValueOnce(1500);
+    await expect(repositoryRefusal(input)).resolves.toBe("this month's spend is $1500 of the $1500 monthly cap");
+  });
+
+  it('names the repository’s own month when it is reached', async () => {
+    vi.mocked(queryOne).mockResolvedValueOnce({ amount_usd: '1500' }).mockResolvedValueOnce({ amount_usd: '200' });
+    vi.mocked(spendForRepo).mockResolvedValueOnce(200);
+    await expect(repositoryRefusal(input)).resolves.toBe('exampleco/api has spent $200 of its $200 this month');
+    expect(spendForRepo).toHaveBeenLastCalledWith('2026-11', 'repo-api');
+  });
+
+  it('is null when neither is reached, and the global total is not read when a cap does not stop leasing', async () => {
+    vi.mocked(queryOne).mockResolvedValueOnce({ amount_usd: '1500' }).mockResolvedValueOnce({ amount_usd: '200' });
+    vi.mocked(monthSpend).mockResolvedValueOnce(10);
+    vi.mocked(spendForRepo).mockResolvedValueOnce(10);
+    await expect(repositoryRefusal(input)).resolves.toBeNull();
+
+    vi.mocked(queryOne).mockResolvedValueOnce(null);
+    vi.mocked(monthSpend).mockResolvedValueOnce(5000);
+    await expect(repositoryRefusal({ ...input, onCap: { stopLeasing: false } })).resolves.toBeNull();
   });
 });
 

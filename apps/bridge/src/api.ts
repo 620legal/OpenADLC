@@ -128,6 +128,8 @@ import { asAutomation } from './automation-bot.js';
 import { livePersonGitHubDeps, PersonFlows, registerPersonGitHubRoutes } from './person-github.js';
 import { liveHeldMergeDecisions, liveHumanReviewDecisions, livePullCommands, registerPullRoutes } from './pull-routes.js';
 import { liveReleaseCuts, registerReleaseRoutes, type ReleaseReader } from './release-routes.js';
+import type { HandsOff } from './hands-off.js';
+import { liveHandsOffRoutes, registerHandsOffRoutes } from './hands-off-routes.js';
 import { liveReleaseReadiness } from './release-readiness.js';
 import { liveReleasePrepare, registerReleasePrepareRoutes, type ReleasePrepare } from './release-prepare.js';
 import type { ReleaseService } from './release-service.js';
@@ -276,6 +278,11 @@ export interface ApiDeps {
      */
     app?: (fullName: string) => Promise<RuleApi | null>;
   };
+  /**
+   * Hands-off windows (#383, `hands-off.ts`): turned on by an approver with a
+   * fresh sign-in, off by anyone. Absent, no hands-off route is registered.
+   */
+  handsOff?: HandsOff;
 }
 
 /** Where what runs after an answer belongs: the task it was for, or else a subject's thread. */
@@ -1302,6 +1309,16 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
     registerReleasePrepareRoutes(router, prepare);
     releaseSweep = setInterval(() => void cuts.sweepFlows().catch(() => undefined), 30_000);
     releaseSweep.unref?.();
+  }
+  // A hands-off window turned on by an approver, proved by a fresh sign-in as
+  // the release cut is, and off by anyone (#383, ADR 0093). A sign-in that
+  // ends unapproved is audited by the sweep, which also runs on every route.
+  let handsOffSweep: ReturnType<typeof setInterval> | null = null;
+  if (deps.handsOff) {
+    const handsOffRoutes = liveHandsOffRoutes({ handsOff: deps.handsOff, person: personGitHub, flows: personFlows });
+    registerHandsOffRoutes(router, handsOffRoutes);
+    handsOffSweep = setInterval(() => void handsOffRoutes.sweepFlows().catch(() => undefined), 30_000);
+    handsOffSweep.unref?.();
   }
   // hostd signs a subscription in and checks an account, where the bots think.
   registerModelAccountRoutes(router, {
@@ -4047,6 +4064,7 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
   return () => {
     waitingNotices?.stop();
     if (releaseSweep) clearInterval(releaseSweep);
+    if (handsOffSweep) clearInterval(handsOffSweep);
   };
 }
 

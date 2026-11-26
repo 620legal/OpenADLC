@@ -623,6 +623,9 @@ async function main(): Promise<void> {
             // The person role it is for, by name: Needs you shows it only to
             // that role's people. Dropped here, every question went to everyone.
             ...(asking.role ? { role: asking.role } : {}),
+            // The option the bot would take, already matched against its
+            // options: hands-off mode answers with it, and nothing else does.
+            ...(asking.recommended ? { recommended: asking.recommended } : {}),
             ...(asking.planChange ? { planChange: asking.planChange } : {}),
           });
           asked = true;

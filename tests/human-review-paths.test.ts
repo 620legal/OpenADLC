@@ -43,6 +43,11 @@ const GUARDED = [
   // The cut's route, the one caller of ReleaseService.start: it alone decides
   // who may cut a release (docs/adr/0072).
   'apps/bridge/src/release-routes.ts',
+  // Hands-off mode: who may open a window, which gates it answers in a
+  // person's name, and the store that says whether one is open (docs/adr/0093).
+  'apps/bridge/src/hands-off.ts',
+  'apps/bridge/src/hands-off-routes.ts',
+  'packages/db/src/store/hands-off.ts',
 ];
 
 const skillTools = readdirSync(join(ROOT, 'crew', 'skills'))

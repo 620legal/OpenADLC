@@ -25,6 +25,7 @@ import {
   hasIgnoreLabel,
 } from '@openadlc/shared';
 import type { Actors } from './actors.js';
+import { utcMinute, type HandsOffCover, type HandsOffVerdict } from './hands-off.js';
 import { itemLink, type Notifier } from './notify.js';
 import { isCostCapGate, mayNotify, questionAudience, routedPeople, type AudienceFacts } from './needs-you-audience.js';
 import { acceptOnAnswer } from './design-memory.js';
@@ -146,6 +147,20 @@ export async function issueOfTask(task: { kind: TaskKind; subjectRef: string; le
  * was asked and who approved it, and in the thread as a line of OpenADLC's.
  */
 function decidedWords(decided: GateDecider, gate: GateRef): { comment: string; line: string } {
+  if (decided.by === 'hands_off') {
+    // The login is written without an `@`: every answer would notify the
+    // person who opened the window, which is the noise it is there to stop.
+    const when = utcMinute(decided.setAt);
+    const quoted = decided.question
+      .trim()
+      .split('\n')
+      .map((line) => `> ${inertMarkup(line)}`)
+      .join('\n');
+    return {
+      comment: `**Answered by hands-off mode**, set by \`${decided.setByLogin}\` at ${when}.\n\n${quoted}\n\nAnswer: ${inertMarkup(decided.reply)}`,
+      line: `answered by hands-off mode, set by ${decided.setByLogin} at ${when} (gate ${gate.id.slice(0, 8)})`,
+    };
+  }
   const why = decided.reason.trim() ? inertMarkup(decided.reason.trim()) : '';
   if (decided.by === 'standing_approval') {
     return {
@@ -176,9 +191,10 @@ interface GateRef {
  * composer, a bot's thread panel, a comment on GitHub, an approval that
  * waited on another lease and was applied once the paths were free, a
  * person's standing approval of the issue's plan changes, or the design
- * seat's judgement (`plan-changes.ts`).
+ * seat's judgement (`plan-changes.ts`), or a hands-off window on the
+ * repository (`hands-off.ts`).
  */
-export type GateChannel = 'console-gate' | 'item' | 'thread' | 'github' | 'held' | 'standing' | 'designer' | 'unknown';
+export type GateChannel = 'console-gate' | 'item' | 'thread' | 'github' | 'held' | 'standing' | 'designer' | 'hands_off' | 'unknown';
 
 /** What an answer granted, as its audit row records it. */
 export type GateGrant = 'plan_change_approved' | 'plan_change_refused' | 'cap_raised' | 'stopped' | null;
@@ -191,7 +207,12 @@ export type GateGrant = 'plan_change_approved' | 'plan_change_refused' | 'cap_ra
  */
 export type GateDecider =
   | { by: 'standing_approval'; setBy: string; setAt: string; reason: string; issue: number }
-  | { by: 'designer'; seat: string; taskId: string; askedBy: string; reason: string };
+  | { by: 'designer'; seat: string; taskId: string; askedBy: string; reason: string }
+  /**
+   * A hands-off window on the repository (#383): a plan change's `Approve`,
+   * or the exact option a question's marker recommended, and nothing else.
+   */
+  | { by: 'hands_off'; windowId: string; setBy: string; setByLogin: string; setAt: string; reply: string; question: string; issue: number };
 
 /** How an answer that claims its gate is audited, and whether its GitHub writes are left to the caller. */
 interface AnswerRecord {
@@ -301,6 +322,18 @@ export class Gates {
     this.standing = cover;
   }
 
+  private handsOff: HandsOffCover | null = null;
+
+  /**
+   * How a gate is checked against a hands-off window on its repository
+   * (`hands-off.ts`). Without one, nothing is answered that way. This is the
+   * only place the window is consulted: the merge line, held approvals,
+   * promotes, host checks and the release cut never read it.
+   */
+  useHandsOff(cover: HandsOffCover): void {
+    this.handsOff = cover;
+  }
+
   private audience: { local: boolean; facts(): Promise<AudienceFacts> } | null = null;
 
   /**
@@ -336,6 +369,12 @@ export class Gates {
     consequences?: string[];
     /** The person role the question is for, by name as the bot wrote it (`Legal`). Ignored on a plan change, which approvers decide. */
     role?: string | null;
+    /**
+     * The option the bot would take (`parseQuestion`'s `recommended`). Read
+     * only by a hands-off window, and only when it is exactly one of the
+     * options; never shown, and never an answer by itself.
+     */
+    recommended?: string | null;
   }): Promise<{ gateId: string; commentUrl: string | null }> {
     // A question can quote a failing command, token and all, and from here it
     // goes to the issue, the notifier, the gate row and the thread. Redacted
@@ -348,6 +387,8 @@ export class Gates {
       context: input.context == null ? input.context : redactSecrets(input.context),
       decision: input.decision == null ? input.decision : redactSecrets(input.decision),
       consequences: (input.consequences ?? []).map((consequence) => redactSecrets(consequence)),
+      // Matched against the redacted options, so it is redacted the same way.
+      recommended: input.recommended == null ? input.recommended : redactSecrets(input.recommended),
     };
     const task = await tasks.getTask(input.taskId);
     if (!task) throw new Error(`unknown task ${input.taskId}`);
@@ -442,17 +483,45 @@ export class Gates {
     let commentUrl: string | null = null;
     let ignored = false;
     let addedNeedsHuman = false;
+    const client = repo && issueNumber ? await this.actors.asBot(bot.name) : null;
+    // A person can add `openadlc:ignore` while a task is already working on
+    // the issue. The task is not stopped, but it writes nothing more to
+    // the issue: intake once asked its question and added `needs-human`
+    // after the issue was labelled to be left alone. The question stays in
+    // the thread, where the person can answer it or stop the task.
+    if (client && repo) ignored = await this.labelledIgnore(client, repo, issueNumber);
+
+    // A hands-off window on the repository settles what a standing approval
+    // has not: a plan change with no Human-review path, or a question whose
+    // recommended answer is one of its options. One that cannot be read
+    // settles nothing, and the person is asked as before.
+    const handsOff: HandsOffVerdict =
+      !settles && repo && this.handsOff
+        ? await this.handsOff({
+            task,
+            repo,
+            issueNumber,
+            planChange: request,
+            options,
+            recommended: request ? null : (input.recommended ?? null),
+            role: asked,
+            audience,
+            facts,
+            local: this.audience?.local ?? false,
+            addressedTo: request ? null : addressedTo,
+            ignored,
+          }).catch((error: unknown) => {
+            console.warn(`[bridge] ${task.subjectRef}: whether hands-off mode answers this could not be read, so a person is asked: ${error instanceof Error ? error.message : error}`);
+            return null;
+          })
+        : null;
+    const byHandsOff = handsOff?.covers ? handsOff : null;
+
     if (repo && issueNumber) {
-      const client = await this.actors.asBot(bot.name);
-      // A person can add `openadlc:ignore` while a task is already working on
-      // the issue. The task is not stopped, but it writes nothing more to
-      // the issue: intake once asked its question and added `needs-human`
-      // after the issue was labelled to be left alone. The question stays in
-      // the thread, where the person can answer it or stop the task.
-      ignored = client ? await this.labelledIgnore(client, repo, issueNumber) : false;
-      // A request the standing approval settles asks nobody: its record on
-      // the issue is the answer's comment, which says what was asked and why.
-      if (client && !ignored && !settles) {
+      // A request the standing approval or a hands-off window settles asks
+      // nobody: its record on the issue is the answer's comment, which says
+      // what was asked and who settled it.
+      if (client && !ignored && !settles && !byHandsOff) {
         const body = renderGateComment({
           bot: bot.displayName,
           taskId: task.id,
@@ -529,7 +598,7 @@ export class Gates {
         link: itemLink(this.consoleUrl, task.subjectRef),
       });
     };
-    if (!settles) await notify();
+    if (!settles && !byHandsOff) await notify();
 
     await threads.addMessage({
       threadId: thread.id,
@@ -551,6 +620,15 @@ export class Gates {
       },
       githubUrl: commentUrl,
     });
+    if (handsOff && !handsOff.covers) {
+      await threads.addMessage({
+        threadId: thread.id,
+        kind: 'sys',
+        author: 'openadlc',
+        text: `Hands-off is on for ${repo?.fullName ?? task.subjectRef}, but ${handsOff.why}, so a person answers this one`,
+        payload: { gateId: gate.id },
+      });
+    }
     if (ignored) {
       await threads.addMessage({
         threadId: thread.id,
@@ -567,7 +645,49 @@ export class Gates {
     // itself says it is waiting on the person who asked.
     await moveRequest(task, 'questions').catch((error: unknown) => requestNotMoved(task.subjectRef, error));
     if (settles && request) await this.settleByStanding(gate, request, settles, leaseIssue, notify);
+    else if (byHandsOff) await this.settleByHandsOff(gate, byHandsOff, { question: input.question, planChange: request !== null, issue: request ? leaseIssue : issueNumber }, notify);
     return { gateId: gate.id, commentUrl };
+  }
+
+  /**
+   * Answers a gate a hands-off window covers, as it is asked: a plan change's
+   * `Approve`, or the option the bot recommended, recorded as the window's
+   * and the person who opened it. One that cannot be applied leaves the
+   * question open, says why in the thread, and the person is asked after all.
+   */
+  private async settleByHandsOff(
+    gate: GateRef,
+    verdict: Extract<NonNullable<HandsOffVerdict>, { covers: true }>,
+    asked: { question: string; planChange: boolean; issue: number },
+    notify: () => Promise<unknown> | undefined,
+  ): Promise<void> {
+    const { window } = verdict;
+    const reply = asked.planChange ? PLAN_CHANGE_APPROVE : verdict.reply;
+    try {
+      await this.answer({
+        gateId: gate.id,
+        reply,
+        answeredBy: window.setBy,
+        via: 'hands_off',
+        decided: { by: 'hands_off', windowId: window.id, setBy: window.setBy, setByLogin: window.setByLogin, setAt: window.setAt, reply, question: asked.question, issue: asked.issue },
+      });
+    } catch (error) {
+      const why = error instanceof Error ? error.message : String(error);
+      console.warn(`[bridge] gate ${gate.id}: hands-off mode could not answer it, so a person is asked: ${why}`);
+      if (gate.threadId) {
+        await threads
+          .addMessage({
+            threadId: gate.threadId,
+            kind: 'sys',
+            author: 'openadlc',
+            text: `Hands-off mode, set by ${window.setByLogin}, could not answer this, so a person answers this one`,
+            note: why,
+            payload: { gateId: gate.id },
+          })
+          .catch(() => undefined);
+      }
+      await notify();
+    }
   }
 
   /**
@@ -687,9 +807,18 @@ export class Gates {
 
     const request = await this.planChangeOf(gate);
     // Nothing else is decided on a person's behalf: not a refusal, which
-    // stops the work, and not an answer to any other question.
-    if (input.decided && !(request && answer === PLAN_CHANGE_APPROVE)) {
-      throw new Error(`only a plan change's approval is given without a person answering; this gate was answered "${answer}"`);
+    // stops the work, and not an answer to any other question, except the
+    // exact option a hands-off window was given to answer with, on a gate
+    // that is neither a plan change nor the cost-cap question.
+    const handsOffAnswer =
+      input.decided?.by === 'hands_off' &&
+      !request &&
+      !isPlanChangeShaped(gate.options) &&
+      !gate.options.some((option) => costCapAnswer(option, gate.options) !== null) &&
+      gate.options.includes(input.decided.reply) &&
+      answer === input.decided.reply;
+    if (input.decided && !(request && answer === PLAN_CHANGE_APPROVE) && !handsOffAnswer) {
+      throw new Error(`only a plan change's approval, or the answer a hands-off window was given, is given without a person answering; this gate was answered "${answer}"`);
     }
     // A person already approved it and it waits on another lease: nothing is left to decide.
     if (input.decided && request?.held) return { answer, taskId: null, held: true };
@@ -765,7 +894,7 @@ export class Gates {
         return cap === null ? null : `The task's cap is now $${cap}.`;
       });
     }
-    return this.close(gate, answer, input.answeredBy, null, record(null));
+    return this.close(gate, answer, input.answeredBy, null, { ...record(null), ...(handsOffAnswer && input.decided ? { decided: input.decided } : {}) });
   }
 
   /**
@@ -1021,6 +1150,10 @@ export class Gates {
           ...(record.decided?.by === 'designer'
             ? { designer: { seat: record.decided.seat, taskId: record.decided.taskId, askedBy: record.decided.askedBy } }
             : {}),
+          // Every answer a hands-off window gave names the window and who opened it.
+          ...(record.decided?.by === 'hands_off'
+            ? { handsOff: { windowId: record.decided.windowId, setBy: record.decided.setBy, setByLogin: record.decided.setByLogin, setAt: record.decided.setAt } }
+            : {}),
         },
       });
     } catch (error) {
@@ -1092,7 +1225,7 @@ export class Gates {
     }
     // An approval no person typed says who gave it, and what was asked.
     const decided = record.decided ? decidedWords(record.decided, gate) : null;
-    if (record.decided) {
+    if (record.decided && record.grant === 'plan_change_approved') {
       await leases
         .notePlanChange(gate.id, 'decided', { ...record.decided, at: new Date().toISOString() })
         .catch((error: unknown) => console.warn(`[bridge] gate ${gate.id}: who decided it was not noted: ${error instanceof Error ? error.message : error}`));
