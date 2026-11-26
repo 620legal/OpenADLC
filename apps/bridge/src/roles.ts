@@ -135,6 +135,11 @@ export const ROUTE_ROLES: Readonly<Record<string, Role>> = {
   // A repository's project map: generated from its merged files, read by
   // every console user as the Releases view is (docs/adr/0088).
   'GET /v1/repos/:name/map': 'user',
+  // A repository's Checks view and a red pull request's failing job: read-only
+  // views of Actions and the bridge's own records, which run and write nothing
+  // (#372, docs/adr/0083).
+  'GET /v1/repos/:name/checks': 'user',
+  'GET /v1/items/:subject/ci-failure': 'user',
   'POST /v1/repos/:name/release/views': 'user',
   'POST /v1/repos/:name/release/cut': 'user',
   // Prepare next version (#363, ADR 0078) files a console request; Approves is
