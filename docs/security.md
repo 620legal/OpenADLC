@@ -1242,6 +1242,34 @@ for a minute; nothing is stored (docs/adr/0086).
   and Secret scanning alerts, each Read-only. They are optional: missing, they
   mark that type "not readable" and raise the `security-alerts` warning card.
 
+Beside the alerts, each repository lists the security seat's **unfixed review
+findings** (`GET /v1/security/findings`, a `user` route; docs/adr/0087):
+
+- **Recorded only from the seat's signed review.** The security seat ends
+  every review with a `review_posted` marker that carries a `findings` list:
+  severity, summary and file, with an optional line. The review webhook stores
+  the list in `security_reviews` only when the review's signature verifies to
+  the seat whose lens is `security`, on a non-fork pull request of a managed
+  repository. This holds in every attribution mode, `audit` included: anyone
+  who can comment can write a marker, and an unsigned list would plant
+  findings or clear real ones. A list with one bad entry is not stored at all,
+  and a malformed list never changes the verdict the merge line reads.
+- **The unfixed rule.** For each pull request, only the latest stored review
+  counts. Its findings are listed when the pull request merged or was closed,
+  as `work_item_links` records it. A pull request that is still open,
+  reopened, or has no link row lists nothing. A later list that leaves a
+  finding out clears it, so an empty list clears everything. A review with no
+  list clears nothing. Findings are not matched one by one across reviews.
+- **The levels.** The seat grades `blocker`, `major` and `minor`. The page
+  files them as high, medium and low, with the seat's word beside each, and
+  `critical` stays for GitHub's alerts.
+- **Text, not markup.** A summary and a file are the seat's words and are
+  drawn as text. A review link that is not on that pull request on GitHub is
+  replaced by the pull request's own link.
+- **Nothing is back-filled.** Only reviews posted after this change, with a
+  list, have findings. The merge line and the review gate read nothing from
+  the table.
+
 ### Attachments
 
 A person can give the crew files with a request or a message: screenshots,

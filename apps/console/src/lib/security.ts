@@ -1,4 +1,4 @@
-import type { AlertSeverity, AlertType, AlertTypeState, SecurityAlert, SecurityAlertsView } from './api';
+import type { AlertSeverity, AlertType, AlertTypeState, SecurityAlert, SecurityAlertsView, SecurityFinding, SecurityFindingsView } from './api';
 
 /**
  * The Security page's pure parts: its filters, kept in the URL as Insights
@@ -98,5 +98,43 @@ export function securityRequest(alert: SecurityAlert): { repo: string; kind: 'de
     kind: 'defect',
     text: `Fix the ${label} alert “${alert.title}” in ${alert.repo}`,
     details: lines.join('\n'),
+  };
+}
+
+/**
+ * The security seat's findings narrowed as the alerts are, by the same exact
+ * match: a finding is only ever high, medium or low, so `critical` and `none`
+ * keep none of them (#378, docs/adr/0087).
+ */
+export function filterFindings(view: SecurityFindingsView, filters: SecurityFilters): SecurityFindingsView {
+  return {
+    repos: view.repos
+      .filter((one) => !filters.repo || one.repo === filters.repo)
+      .map((one) => ({ ...one, findings: filters.severity ? one.findings.filter((finding) => finding.severity === filters.severity) : one.findings })),
+  };
+}
+
+/** How many findings the view holds, across every repository. */
+export function findingCount(view: SecurityFindingsView): number {
+  return view.repos.reduce((sum, one) => sum + one.findings.length, 0);
+}
+
+/** Where a finding is: its file, and its line when the seat gave one. */
+export function findingWhere(finding: SecurityFinding): string {
+  return finding.line ? `${finding.file}:${finding.line}` : finding.file;
+}
+
+/** What File as task fills the new-request dialog with for a finding. */
+export function findingRequest(finding: SecurityFinding): { repo: string; kind: 'defect'; text: string; details: string } {
+  return {
+    repo: finding.repo,
+    kind: 'defect',
+    text: `Fix the security review finding “${finding.summary}” in ${finding.repo}`,
+    details: [
+      `Severity: ${finding.severity} (seat: ${finding.seatSeverity})`,
+      `Where: ${findingWhere(finding)}`,
+      `From: pull request #${finding.pr} (${finding.prState})`,
+      `Review: ${finding.reviewUrl}`,
+    ].join('\n'),
   };
 }
