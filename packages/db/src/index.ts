@@ -91,6 +91,8 @@ export type { ReleaseRun, ReleaseRunState } from './store/release-runs.js';
 export { ReleaseAlreadyRunning } from './store/release-runs.js';
 export type { ReleaseSetting } from './store/repos.js';
 export * as securityReviews from './store/security-reviews.js';
+export * as routines from './store/routines.js';
+export type { Routine, RoutineFields, RoutineOutcome, RoutineOwner } from './store/routines.js';
 export * as discover from './store/discover-proposals.js';
 export type { DiscoverRun, DiscoverRunState, ProposalInput, StoredProposal } from './store/discover-proposals.js';
 export type { SecurityReviewInput, UnfixedFinding } from './store/security-reviews.js';

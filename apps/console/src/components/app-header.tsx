@@ -606,6 +606,20 @@ function SwitcherItem({
 }
 
 // Every page in `PAGES`, since any of them may be pinned to the phone's bar.
+/**
+ * Routines (#369): a clock, for requests that file themselves on a schedule.
+ * Drawn here at icons.tsx's stroke, not taken from an icon set; icons.tsx was
+ * outside the change that added the page.
+ */
+function RoutinesIcon({ size = 14 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 7v5l3 2" />
+    </svg>
+  );
+}
+
 const NAV_ICONS: Record<Page, (props: { size?: number }) => ReactNode> = {
   board: BoardIcon,
   'needs-you': NeedsYouIcon,
@@ -616,6 +630,7 @@ const NAV_ICONS: Record<Page, (props: { size?: number }) => ReactNode> = {
   releases: ShipIcon,
   map: MapIcon,
   activity: ActivityIcon,
+  routines: RoutinesIcon,
   settings: SettingsIcon,
 };
 

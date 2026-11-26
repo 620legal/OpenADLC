@@ -1968,6 +1968,54 @@ export type CiFailure =
     }
   | { state: 'unreachable'; reason: string };
 
+/** A routine's cadence: ISO weekday, 1 for Monday; a monthly day a month lacks falls on its last day. */
+export type RoutineCadence = { every: 'day' } | { every: 'week'; weekday: number } | { every: 'month'; day: number };
+
+/** A routine as `GET /v1/routines` lists it (#369, docs/adr/0090). */
+export interface RoutineView {
+  id: string;
+  repo: string;
+  repoFullName: string;
+  text: string;
+  details: string | null;
+  kind: string;
+  cadence: RoutineCadence;
+  /** `HH:MM` on the wall clock of `timeZone`. */
+  time: string;
+  timeZone: string;
+  paused: boolean;
+  /** The approver it files as: who last created or edited it. */
+  owner: { identity: string; login: string; githubId: number };
+  /** Null exactly when paused. */
+  nextRunAt: string | null;
+  lastRunAt: string | null;
+  lastRequestId: string | null;
+  lastRequestState: string | null;
+  lastOutcome: 'filed' | 'skipped' | 'failed' | null;
+  /** Why the last firing filed nothing, or why filing failed. */
+  lastSkipReason: string | null;
+}
+
+/** What a routine can start from; Blank fills nothing but a cadence. */
+export interface RoutineTemplateView {
+  id: string;
+  label: string;
+  text: string;
+  details: string | null;
+  kind: string;
+  cadence: RoutineCadence;
+  time: string;
+}
+
+export interface RoutinesView {
+  routines: RoutineView[];
+  templates: RoutineTemplateView[];
+  /** Whether this viewer may create, edit, pause, resume and delete routines; `why` says what to do when not. */
+  mayEdit: boolean;
+  why?: string;
+  url?: string;
+}
+
 export const api = {
   board: (repo: string) => get<Board>(`/v1/board?repo=${encodeURIComponent(repo)}`),
   /** A repository's Checks page: its ci jobs and host check, flaky ones first (#372). */
@@ -1989,6 +2037,8 @@ export const api = {
   pushDevices: () => get<PushDevicesView>('/v1/me/push'),
   hosts: () => get<HostsView>('/v1/hosts'),
   hostCheck: (id: string) => get<{ run: HostCheckRun }>(`/v1/host-checks/${encodeURIComponent(id)}`).then((body) => body.run),
+  /** Every routine, the templates a new one starts from, and whether this viewer may change them (#369). */
+  routines: () => get<RoutinesView>('/v1/routines'),
   /** The repositories set to release, each with its latest run (#345). */
   releases: () =>
     get<{ repos: { name: string; fullName: string; releaseRepo: string | null; latest: ReleaseRunView | null }[] }>('/v1/releases').then((body) => body.repos),

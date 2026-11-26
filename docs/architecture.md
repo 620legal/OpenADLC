@@ -441,6 +441,31 @@ stored makes the run `done`. One that ends `done` without them is failed with
 run with the task's reason. Try again on a discover task is refused: start a
 new run.
 
+### Routines
+
+A routine is a console request that files itself on a schedule: a
+repository, request text and details, a kind, and a cadence (daily, weekly
+on a day, or monthly on a day) at a time of day in an IANA time zone
+([docs/routines.md](routines.md),
+[ADR 0090](adr/0090-a-routine-files-a-console-request-as-its-owner-from-a-claimed-slot.md)).
+The console's Routines page lists them through `GET /v1/routines`; creating,
+editing, pausing, resuming and deleting one (`routine-routes.ts`, every
+route `user`) takes a linked GitHub account whose person has Approves on in
+People. Creating or editing one makes the caller its owner.
+
+**When it fires.** The bridge's `routines` job runs every minute
+(`OPENADLC_JOB_ROUTINES_MINUTES`) and reads the routines whose `next_run_at`
+has come (`routines` table, migration 0174). For each, `RoutineService`
+(`apps/bridge/src/routines.ts`) first claims the slot: a conditional update
+moves `next_run_at` to the first slot after this minute, so two ticks never
+both fire one slot and a bridge that was down fires once on its first tick,
+not once per missed slot. Then it skips, saying why on the routine, while
+work is paused, while the monthly cap stops leasing, while its owner no
+longer has Approves on, and while the request it filed last is still open.
+Otherwise it files one request through `fileRequest`, the function
+`POST /v1/requests` uses, as its owner, with `requests.routine_id` set
+server-side. Intake, gates, caps and leases treat that request as any other.
+
 ## How the parts trust each other
 
 - **Console → bridge.** On a local install the bridge takes the console user

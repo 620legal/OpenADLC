@@ -725,6 +725,44 @@ describe('abandoning a request', () => {
   });
 });
 
+describe('a request a routine files (docs/adr/0090)', () => {
+  it('is never marked as a routine’s from a request’s body', async () => {
+    const response = await fetch(`${bridgeUrl}/v1/requests`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text: 'Add a hello world page', repo: 'openadlc-testbed', routineId: '0b6f1d1c-6c55-4c1c-9a59-1f4a4b8f2a10' }),
+    });
+    expect(response.status).toBe(200);
+    expect(requests.createRequest).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(requests.createRequest).mock.calls[0]?.[0]).not.toHaveProperty('routineId');
+    await afterwards.settled();
+  });
+
+  it('goes through the same fileRequest, as its owner, queued and triaged, and records the routine', async () => {
+    const { registerConsoleApi } = await import('./api.js');
+    const { Router } = await import('./router.js');
+    let file: import('./routines.js').RoutineFile | null = null;
+    registerConsoleApi(new Router(), { ...apiDeps, routines: { useFiler: (given) => void (file = given) } });
+    expect(file).not.toBeNull();
+
+    const filed = await file!({ repo: 'openadlc-testbed', text: 'Review the dependencies', context: 'One change per pull request.', kind: 'chore' }, 'ada@example.com', {
+      routineId: '0b6f1d1c-6c55-4c1c-9a59-1f4a4b8f2a10',
+    });
+
+    expect(filed).toEqual({ id: 'req-1' });
+    expect(assertReady).toHaveBeenCalledWith(expect.objectContaining({ name: 'ottoexampleco' }), 'openadlc-testbed');
+    expect(vi.mocked(requests.createRequest).mock.calls[0]?.[0]).toMatchObject({
+      text: 'Review the dependencies',
+      context: 'One change per pull request.',
+      kind: 'chore',
+      requestedBy: 'ada@example.com',
+      state: 'queued',
+      routineId: '0b6f1d1c-6c55-4c1c-9a59-1f4a4b8f2a10',
+    });
+    await afterwards.settled();
+  });
+});
+
 describe('a request for a bot that cannot start yet', () => {
   it('is written and triaged when the intake bot is ready', async () => {
     const response = await ask();

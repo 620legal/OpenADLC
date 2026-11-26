@@ -115,6 +115,12 @@ describe('every console route says who may call it', () => {
     expect(roleFor('GET', '/v1/security/findings')).toBe('user');
   });
 
+  it('lets a user read and ask to change routines, which the bridge refuses without Approves on (#369)', () => {
+    for (const key of ['GET /v1/routines', 'POST /v1/routines', 'PATCH /v1/routines/:id', 'POST /v1/routines/:id/pause', 'POST /v1/routines/:id/resume', 'DELETE /v1/routines/:id']) {
+      expect(ROUTE_ROLES[key], key).toBe('user');
+    }
+  });
+
   it('needs an admin for a route nobody classified', () => {
     expect(roleFor('POST', '/v1/something/new')).toBe('admin');
   });

@@ -54,6 +54,10 @@ export const DEFAULT_INTERVALS: Record<Job, number> = {
   // this is what catches a person's merge on GitHub; one pass a day is forced
   // (`ProjectMapRefresher`), and the merge job nudges it after a merge.
   maps: 15,
+  // Which routines fall due (docs/adr/0090): their times are to the minute,
+  // and a look reads one indexed column, so every minute. A firing claims
+  // its slot, so one that comes late after downtime still files once.
+  routines: 1,
 };
 
 /** Reads `OPENADLC_JOB_<NAME>_MINUTES`; 0 turns a job off. */
