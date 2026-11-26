@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { aggregateInsights, median, parallelBuilds, withoutIgnored } from './insights.js';
+import { aggregateInsights, IMPLEMENT_INPUT_WEEKS, median, parallelBuilds, percentile, withoutIgnored } from './insights.js';
 
 const NOW = new Date('2026-10-02T12:00:00.000Z');
 const hoursAgo = (hours: number) => new Date(NOW.getTime() - hours * 60 * 60 * 1000).toISOString();
@@ -11,7 +11,7 @@ const REPOS = [
 ];
 
 function data(over: Partial<Parameters<typeof aggregateInsights>[0]> = {}): Parameters<typeof aggregateInsights>[0] {
-  return { repos: REPOS, moves: [], builds: [], requests: [], landed: [], events: [], ...over };
+  return { repos: REPOS, moves: [], builds: [], requests: [], landed: [], events: [], implementTasks: [], ...over };
 }
 
 describe('how fast work moves', () => {
@@ -203,5 +203,91 @@ describe('an issue labelled openadlc:ignore', () => {
     const back = aggregateInsights(withoutIgnored(all, issues([])), { days: 7, now: NOW }).overall;
     expect(back.merged).toBe(2);
     expect(back.overlap.waits).toBe(1);
+  });
+});
+
+describe('input tokens per implement task', () => {
+  // NOW is Friday 2026-10-02; its UTC week began Monday 2026-09-28.
+  const task = (startedAt: string, tokensIn: number, over: { repoId?: string; billed?: 'billed' | 'subscription' | 'mixed' } = {}) => ({
+    repoId: over.repoId ?? 'repo-a',
+    startedAt,
+    tokensIn,
+    billed: over.billed ?? ('billed' as const),
+  });
+
+  it('lists the current UTC week and the 11 before it, each starting Monday, oldest first, empty weeks included', () => {
+    const weeks = aggregateInsights(data(), { days: 7, now: NOW }).overall.implementInput;
+    expect(weeks).toHaveLength(IMPLEMENT_INPUT_WEEKS);
+    expect(weeks.at(-1)!.weekStart).toBe('2026-09-28T00:00:00.000Z');
+    expect(weeks[0]!.weekStart).toBe('2026-07-13T00:00:00.000Z');
+    for (const week of weeks) {
+      expect(new Date(week.weekStart).getUTCDay()).toBe(1);
+      expect(week).toMatchObject({ tasks: 0, p25: null, median: null, p75: null });
+    }
+  });
+
+  it('puts a task that started Sunday 23:59:59 UTC in the week before one that started Monday 00:00', () => {
+    const weeks = aggregateInsights(data({ implementTasks: [task('2026-09-27T23:59:59.000Z', 10), task('2026-09-28T00:00:00.000Z', 20)] }), {
+      days: 7,
+      now: NOW,
+    }).overall.implementInput;
+    expect(weeks.at(-2)).toMatchObject({ weekStart: '2026-09-21T00:00:00.000Z', tasks: 1 });
+    expect(weeks.at(-1)).toMatchObject({ weekStart: '2026-09-28T00:00:00.000Z', tasks: 1 });
+  });
+
+  it('gives a week’s quartiles as round(percentile_cont) does, whatever the page’s period', () => {
+    const odd = [10, 20, 30, 40, 50].map((tokens, index) => task(`2026-09-2${1 + index}T09:00:00.000Z`, tokens));
+    const even = [60, 10, 50, 20, 40, 30].map((tokens) => task('2026-09-29T09:00:00.000Z', tokens));
+    for (const days of [7, 30]) {
+      const weeks = aggregateInsights(data({ implementTasks: [...odd, ...even] }), { days, now: NOW }).overall.implementInput;
+      expect(weeks.at(-2)).toMatchObject({ tasks: 5, p25: 20, median: 30, p75: 40 });
+      expect(weeks.at(-1)).toMatchObject({ tasks: 6, p25: 23, median: 35, p75: 48 });
+    }
+  });
+
+  it('gives no figure for a week under 5 tasks, only its count', () => {
+    const few = [1, 2, 3, 4].map((tokens) => task('2026-09-29T09:00:00.000Z', tokens * 1000));
+    expect(aggregateInsights(data({ implementTasks: few }), { days: 7, now: NOW }).overall.implementInput.at(-1)).toMatchObject({
+      tasks: 4,
+      p25: null,
+      median: null,
+      p75: null,
+    });
+  });
+
+  it('counts billed, subscription and mixed tasks apart, adding up to the week’s tasks', () => {
+    const implementTasks = [
+      task('2026-09-29T09:00:00.000Z', 1, { billed: 'billed' }),
+      task('2026-09-29T09:00:00.000Z', 2, { billed: 'subscription' }),
+      task('2026-09-29T09:00:00.000Z', 3, { billed: 'subscription' }),
+      task('2026-09-29T09:00:00.000Z', 4, { billed: 'mixed' }),
+    ];
+    const week = aggregateInsights(data({ implementTasks }), { days: 7, now: NOW }).overall.implementInput.at(-1)!;
+    expect(week.byRun).toEqual({ billed: 1, subscription: 2, mixed: 1 });
+    expect(week.byRun.billed + week.byRun.subscription + week.byRun.mixed).toBe(week.tasks);
+  });
+
+  it('gives each repository its own series, and leaves out tasks older than the 12 weeks or after now', () => {
+    const implementTasks = [
+      task('2026-09-29T09:00:00.000Z', 100, { repoId: 'repo-a' }),
+      task('2026-09-29T09:00:00.000Z', 200, { repoId: 'repo-b' }),
+      task('2026-07-12T23:59:59.000Z', 300),
+      task('2026-10-02T13:00:00.000Z', 400),
+    ];
+    const result = aggregateInsights(data({ implementTasks }), { days: 7, now: NOW });
+    expect(result.overall.implementInput.reduce((total, week) => total + week.tasks, 0)).toBe(2);
+    expect(result.repos.find((repo) => repo.repo === 'api')!.implementInput.at(-1)!.tasks).toBe(1);
+    expect(result.repos.find((repo) => repo.repo === 'web')!.implementInput.at(-1)!.tasks).toBe(1);
+    expect(aggregateInsights(data({ implementTasks }), { days: 7, now: NOW, repo: 'web' }).overall.implementInput.at(-1)!.tasks).toBe(1);
+  });
+
+  it('interpolates a percentile between the two nearest values', () => {
+    expect(percentile([], 0.5)).toBeNull();
+    expect(percentile([7], 0.25)).toBe(7);
+    expect(percentile([30, 10, 20], 0.5)).toBe(20);
+    expect(percentile([10, 20, 30, 40, 50, 60], 0.25)).toBe(23);
+    expect(percentile([10, 20, 30, 40, 50, 60], 0.75)).toBe(48);
+    // The median it gives is the one Insights already used.
+    expect(percentile([4, 1, 3, 2], 0.5)).toBe(median([4, 1, 3, 2]));
   });
 });
