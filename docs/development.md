@@ -723,6 +723,18 @@ updates. A folder is listed only for files the change adds, and then the
 narrowest one. When an issue has a design pass, the design stage
 (`crew/skills/spec/SKILL.md`) replaces the list with the files its design names.
 
+This repository also shares `docs/**`, through its own `.github/openadlc.yml`:
+`docs/` is always inside a lease, and two edits to one page merge or resolve
+easily, so two builds naming the same page no longer wait on each other. A
+`shared` list in that file replaces the default rather than adding to it, so it
+repeats every entry of `DEFAULT_SHARED_PATHS`
+(`packages/shared/src/delivery-rules.ts`), and
+`tests/openadlc-path-policy.test.ts` fails when one is missing: a new default
+is added there too. The file also holds `testing.on: release`, because the file
+wins over the repository's stored rules, and without it a merged card would
+stop waiting in Ship for a release
+(docs/adr/0098-this-repository-shares-docs-in-its-path-policy.md).
+
 Every path on a line is read (`declaredPathsFrom`, `packages/shared/src/checks.ts`):
 `` `a.ts`, `a.test.ts` ``, `a.ts, a.test.ts` and `a.ts and a.test.ts` are two
 files each, a brace group such as `apps/bridge/src/{gates,send-back}.ts` is
