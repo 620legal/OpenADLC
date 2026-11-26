@@ -3776,3 +3776,48 @@ describe('a build that ended without its pull request', () => {
     expect(store.tasks.find((task) => task.id === 'continued')).toBeDefined();
   });
 });
+
+describe('the project maps job', () => {
+  const mapsScheduler = (advanced: string[]) => {
+    const scheduler = new Scheduler(
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      { advanceAll: async () => advanced } as never,
+      { resumeAnswered: async () => [] } as never,
+    );
+    scheduler.settleGates = async () => [];
+    // The status view reads GitHub; what is pinned here is the nudge beside it.
+    (scheduler as unknown as { refreshStatus: () => Promise<string[]> }).refreshStatus = async () => [];
+    const refreshAll = vi.fn(async () => ['acme/one: project map rebuilt at abc1234']);
+    scheduler.useProjectMaps({ refreshAll });
+    return { scheduler, refreshAll };
+  };
+
+  it('is a scheduled job, which refreshes every map', async () => {
+    expect(SCHEDULED_JOBS).toContain('maps');
+    const { scheduler, refreshAll } = mapsScheduler([]);
+    const result = await scheduler.run('maps');
+    expect(refreshAll).toHaveBeenCalledTimes(1);
+    expect(result.actions).toEqual(['acme/one: project map rebuilt at abc1234']);
+  });
+
+  it('is nudged by the merge job when it merged something, and not otherwise', async () => {
+    const quiet = mapsScheduler(['acme/one#3: waiting for CI']);
+    await quiet.scheduler.run('merge');
+    expect(quiet.refreshAll).not.toHaveBeenCalled();
+
+    const landed = mapsScheduler(['acme/one#3: merged into main']);
+    const result = await landed.scheduler.run('merge');
+    expect(landed.refreshAll).toHaveBeenCalledTimes(1);
+    // Not awaited, so its lines are the log's, not the merge job's.
+    expect(result.actions).toEqual(['acme/one#3: merged into main']);
+  });
+
+  it('says so when no refresher is wired', async () => {
+    const scheduler = new Scheduler({} as never, {} as never, {} as never, {} as never, {} as never, {} as never, {} as never);
+    expect((await scheduler.run('maps')).actions).toEqual(['project maps are not wired into this bridge']);
+  });
+});

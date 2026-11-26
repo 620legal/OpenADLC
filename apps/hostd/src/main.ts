@@ -24,7 +24,8 @@ import { LocalCi, bridgeReporter } from './local-ci.js';
 import { HostChecks, dockerSocketsOf, hostCheckReporter } from './host-check.js';
 import { ReleaseAccount } from './release-account.js';
 import { ReleaseRuns, releaseReporter } from './release-run.js';
-import { gitAuthEnv } from './worktree.js';
+import { gitAuthEnv, Worktrees } from './worktree.js';
+import { ProjectMaps } from './project-map.js';
 import { TokenClient } from './token-client.js';
 
 async function main(): Promise<void> {
@@ -265,16 +266,19 @@ async function main(): Promise<void> {
     workRoot: config.workRoot,
     dockerSockets: dockerSocketsOf(process.env, homedir()),
   };
+  // A repository's clone URL for the work hostd does outside a task: the
+  // host check, a release build and the project map read the same remote.
+  const remoteOf = (repoFullName: string): string =>
+    process.env[`OPENADLC_REMOTE_${repoFullName.replace(/[^A-Za-z0-9]/g, '_').toUpperCase()}`] ||
+    process.env.OPENADLC_SCRIPTED_REPO_PATH ||
+    `https://github.com/${repoFullName}.git`;
   const hostCheckAccount = config.hostCheckAccount ?? DEFAULT_HOST_CHECK_ACCOUNT;
   const hostChecks = new HostChecks({
     account: hostCheckAccount,
     installId: config.installId ?? 'default',
     ...guarded,
     mirrorRoot: join(config.workRoot, 'host-check'),
-    remote: (repoFullName) =>
-      process.env[`OPENADLC_REMOTE_${repoFullName.replace(/[^A-Za-z0-9]/g, '_').toUpperCase()}`] ||
-      process.env.OPENADLC_SCRIPTED_REPO_PATH ||
-      `https://github.com/${repoFullName}.git`,
+    remote: remoteOf,
     fetchAuth: async (bot, repoFullName, remote) => (bot ? gitAuthEnv(remote, (await tokens.tokenForTask(bot, repoFullName)).token) : {}),
     report: hostCheckReporter(config.bridgeUrl, secretStore),
   });
@@ -290,14 +294,22 @@ async function main(): Promise<void> {
         account: releaseAccount,
         installId: config.installId ?? 'default',
         workRoot: config.workRoot,
-        remote: (repoFullName) =>
-          process.env[`OPENADLC_REMOTE_${repoFullName.replace(/[^A-Za-z0-9]/g, '_').toUpperCase()}`] ||
-          process.env.OPENADLC_SCRIPTED_REPO_PATH ||
-          `https://github.com/${repoFullName}.git`,
+        remote: remoteOf,
         fetchAuth: async (bot, repoFullName, remote) => (bot ? gitAuthEnv(remote, (await tokens.tokenForTask(bot, repoFullName)).token) : {}),
         report: releaseReporter(config.bridgeUrl, secretStore),
       })
     : null;
+
+  // Each managed repository's project map, read from the tasks' own mirror
+  // (one lock per mirror is module-wide, so a task's fetch and the map's never
+  // overlap) and written under the work root, never into the repository
+  // (docs/adr/0087).
+  const projectMaps = new ProjectMaps({
+    workRoot: config.workRoot,
+    worktrees: new Worktrees(config.workRoot),
+    remote: remoteOf,
+    tokenFor: async (bot, repoFullName) => (await tokens.tokenForTask(bot, repoFullName)).token,
+  });
 
   const attachTokens = new AttachTokens();
   // The file a cloud host's unit starts hostd's image from, which the
@@ -353,6 +365,7 @@ async function main(): Promise<void> {
     hostChecks,
     releaseAccount,
     releaseRuns,
+    projectMaps,
     ...(restartOntoImage ? { restartOntoImage } : {}),
     egress: { probe: new EgressProbe(egressProxyToAsk()), list: egressList },
     ...(databases ? { taskDatabases: databases } : {}),
