@@ -261,7 +261,7 @@ export function commandRefusal(command, rest, ask = null) {
 // Codex applies no shell lists, so no engine rule can see those arguments;
 // this is where they are read. What follows runs only for such a skill, and
 // before anything runs the real git, alias lookups included
-// (docs/adr/0097-a-skill-that-writes-only-scratch-and-adrs-is-read-only-to-openadlcs-git-and-rg.md).
+// (docs/adr/0099-a-skill-that-writes-only-scratch-and-adrs-is-read-only-to-openadlcs-git-and-rg.md).
 
 const READ_ONLY = 'a task that writes nothing';
 

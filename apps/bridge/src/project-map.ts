@@ -14,7 +14,7 @@ export interface ProjectMapRefresherDeps {
 
 /**
  * Keeps hostd's project map of every managed repository current
- * (docs/adr/0087). The app is not subscribed to `push`, so a moved default
+ * (docs/adr/0100). The app is not subscribed to `push`, so a moved default
  * branch is found by asking: the `maps` job every quarter hour, the merge job
  * after it merged, and hostd rebuilds only when the commit changed. The first
  * pass after the bridge starts, and one a day after it, is forced, so a map

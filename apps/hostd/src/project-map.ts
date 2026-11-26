@@ -9,7 +9,7 @@ import { withMirrorLock, type Worktrees } from './worktree.js';
  * A generated summary of a managed repository's default branch — its areas and
  * packages, key ADRs and Human-review paths — kept at
  * `<workRoot>/maps/<owner>__<name>.md` and never committed
- * (docs/adr/0087-a-project-map-is-generated-by-hostd-from-its-mirror-and-kept-under-the-work-root.md).
+ * (docs/adr/0100-a-project-map-is-generated-by-hostd-from-its-mirror-and-kept-under-the-work-root.md).
  *
  * It is read from the tasks' own mirror with `ls-tree` and `cat-file`, never a
  * checkout: nothing of the repository runs, and no branch but the default one

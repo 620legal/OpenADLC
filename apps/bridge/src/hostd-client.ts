@@ -585,7 +585,7 @@ export class HostdClient {
 
   /**
    * Has hostd rebuild a repository's project map from its default branch
-   * (docs/adr/0087). `force` reads the tree even when the commit is the one
+   * (docs/adr/0100). `force` reads the tree even when the commit is the one
    * the map was built from; the bytes still change only when the map does.
    */
   async refreshProjectMap(repoFullName: string, input: { defaultBranch: string; bot: string; force?: boolean }): Promise<{ map: ProjectMapView }> {

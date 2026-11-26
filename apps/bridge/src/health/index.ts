@@ -503,7 +503,7 @@ export function defaultChecks(wiring: HealthWiring): HealthCheck[] {
       lastVersion: lastVersionOnGitHub((repoFullName) => releaseApp.client(repoFullName).catch(() => null)),
     }),
     // Each managed repository's project map, as hostd's last attempt left it
-    // (docs/adr/0087): a failed build keeps the old map and raises this card.
+    // (docs/adr/0100): a failed build keeps the old map and raises this card.
     projectMapCheck({
       repositories: repos,
       maps: async () => (await hostd.projectMaps()).maps,
