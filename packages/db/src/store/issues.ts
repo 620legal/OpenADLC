@@ -309,6 +309,12 @@ export interface WorkInFlight {
   number: number;
   /** The files it said it would touch and the files its pull request does. */
   paths: string[];
+  /**
+   * The files its open pull request changes; empty with no pull request. Kept
+   * apart from `paths` because a plan change waits on an issue that is not
+   * being built only for what its pull request really touches (`Gates.blockers`).
+   */
+  changedPaths: string[];
   /** Whether a build or a patch round of it is queued, running or waiting on a person now. */
   building: boolean;
 }
@@ -321,8 +327,14 @@ export interface WorkInFlight {
  * merges, closes or leaves those stages is simply not in the list.
  */
 export async function workInFlight(repoId: string): Promise<WorkInFlight[]> {
-  const rows = await query<{ number: number; declared_paths: string[] | null; pr_changed_paths: string[] | null; building: boolean }>(
-    `select i.number, i.declared_paths, i.pr_changed_paths,
+  const rows = await query<{
+    number: number;
+    declared_paths: string[] | null;
+    pr_changed_paths: string[] | null;
+    pr_number: number | null;
+    building: boolean;
+  }>(
+    `select i.number, i.declared_paths, i.pr_changed_paths, i.pr_number,
             exists (select 1 from tasks t
                      where t.state in ('queued', 'running', 'paused')
                        and ((t.kind = 'implement' and t.subject_ref = r.name || '#' || i.number)
@@ -341,6 +353,9 @@ export async function workInFlight(repoId: string): Promise<WorkInFlight[]> {
   return rows.map((row) => ({
     number: row.number,
     paths: [...new Set([...(row.declared_paths ?? []), ...(row.pr_changed_paths ?? [])])],
+    // Only with a pull request: a closed one can leave its files behind on the
+    // row, and those would hold paths for work nobody is doing.
+    changedPaths: row.pr_number == null ? [] : (row.pr_changed_paths ?? []),
     building: row.building,
   }));
 }

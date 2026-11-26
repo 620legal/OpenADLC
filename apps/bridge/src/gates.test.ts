@@ -49,7 +49,7 @@ const store = vi.hoisted(() => ({
     prNumber: null,
   } as Record<string, unknown> | null,
   otherLeases: [] as { issueNumber: number; declaredPaths: string[] }[],
-  working: [] as { number: number; paths: string[] }[],
+  working: [] as { number: number; paths: string[]; building?: boolean; changedPaths?: string[] }[],
   gate: null as Record<string, unknown> | null,
   planChange: null as Record<string, unknown> | null,
   messages: [] as Record<string, unknown>[],
@@ -78,7 +78,7 @@ vi.mock('@openadlc/db', () => ({
     ]),
   },
   issues: {
-    workInFlight: vi.fn(async () => store.working.map((work) => ({ ...work, building: true }))),
+    workInFlight: vi.fn(async () => store.working.map((work) => ({ building: true, changedPaths: [], ...work }))),
     getIssue: vi.fn(async () => ({ number: 78, body: store.issueBody, labels: store.storedLabels, vouched: store.vouched })),
     setVouched: vi.fn(async () => undefined),
   },
@@ -1282,13 +1282,68 @@ describe('a path another lease holds', () => {
     expect(store.messages).toContainEqual(expect.objectContaining({ kind: 'sys', text: expect.stringContaining('waiting for #80') }));
   });
 
-  it('is held by work in build or review that declared or changed it, whose lease has gone', async () => {
+  it('is held by work being built that declared or changed it, whose lease has gone', async () => {
     store.working = [{ number: 81, paths: ['docs/x.md', 'apps/hostd/src/skill-runner.ts'] }];
 
     const answered = await gates.answer({ gateId: 'gate-1', reply: '1', answeredBy: 'alexsmith' });
 
     expect(answered).toMatchObject({ taskId: null, held: true });
     expect(leases.holdPlanChange).toHaveBeenCalledWith('gate-1', { approvedBy: 'alexsmith', blockedBy: [81] }, null);
+  });
+
+  it('is not held by an issue in build that is only waiting its turn, even after a failed build', async () => {
+    // #377 and #374 on 2026-11-26: #374 declared the paths and had a failed
+    // implement task, and the dispatcher would not start it while #377 was
+    // being built. Holding the approval for #374 left each waiting on the other.
+    store.working = [{ number: 81, paths: ['apps/hostd/src/skill-runner.ts'], building: false, changedPaths: [] }];
+
+    const answered = await gates.answer({ gateId: 'gate-1', reply: '1', answeredBy: 'alexsmith' });
+
+    expect(answered).toEqual({ answer: 'Approve', taskId: 'task-1' });
+    expect(leases.widenPaths).toHaveBeenCalledWith('lease-1', ['apps/hostd/src/skill-runner.ts']);
+    expect(leases.holdPlanChange).not.toHaveBeenCalled();
+  });
+
+  it('is held by an open pull request that changes the path, though it is not being built', async () => {
+    store.working = [
+      { number: 81, paths: ['apps/hostd/src/skill-runner.ts'], building: false, changedPaths: ['apps/hostd/src/skill-runner.ts'] },
+    ];
+
+    const answered = await gates.answer({ gateId: 'gate-1', reply: '1', answeredBy: 'alexsmith' });
+
+    expect(answered).toMatchObject({ taskId: null, held: true });
+    expect(leases.holdPlanChange).toHaveBeenCalledWith('gate-1', { approvedBy: 'alexsmith', blockedBy: [81] }, null);
+  });
+
+  it('is held by an issue being built that only declared the path', async () => {
+    store.working = [{ number: 81, paths: ['apps/hostd/src/skill-runner.ts'], building: true, changedPaths: [] }];
+
+    const answered = await gates.answer({ gateId: 'gate-1', reply: '1', answeredBy: 'alexsmith' });
+
+    expect(answered).toMatchObject({ taskId: null, held: true });
+    expect(leases.holdPlanChange).toHaveBeenCalledWith('gate-1', { approvedBy: 'alexsmith', blockedBy: [81] }, null);
+  });
+
+  it('is not held by an open pull request that is not being built and changes only other files', async () => {
+    store.working = [
+      { number: 81, paths: ['apps/hostd/src/skill-runner.ts', 'docs/x.md'], building: false, changedPaths: ['docs/x.md'] },
+    ];
+
+    const answered = await gates.answer({ gateId: 'gate-1', reply: '1', answeredBy: 'alexsmith' });
+
+    expect(answered).toEqual({ answer: 'Approve', taskId: 'task-1' });
+    expect(leases.holdPlanChange).not.toHaveBeenCalled();
+  });
+
+  it('is granted when approved again after the work holding it stopped being built, with no pull request', async () => {
+    store.working = [{ number: 81, paths: ['apps/hostd/src/skill-runner.ts'], building: true, changedPaths: [] }];
+    expect(await gates.answer({ gateId: 'gate-1', reply: '1', answeredBy: 'alexsmith' })).toMatchObject({ held: true });
+    store.working = [{ number: 81, paths: ['apps/hostd/src/skill-runner.ts'], building: false, changedPaths: [] }];
+
+    const answered = await gates.answer({ gateId: 'gate-1', reply: '1', answeredBy: 'alexsmith' });
+
+    expect(answered).toEqual({ answer: 'Approve', taskId: 'task-1' });
+    expect(leases.widenPaths).toHaveBeenCalledWith('lease-1', ['apps/hostd/src/skill-runner.ts']);
   });
 
   it('names every issue that holds one, once each and in order', async () => {

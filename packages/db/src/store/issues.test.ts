@@ -149,10 +149,25 @@ describe('work in flight', () => {
     // Sent back from review, an issue is in build with its lease and its pull
     // request, and its patch round is filed under the pull request: read only
     // by the issue's own subject, it looked like build nobody had started.
-    vi.mocked(query).mockResolvedValueOnce([{ number: 7, declared_paths: ['a.ts'], pr_changed_paths: ['b.ts'], building: true }]);
-    expect(await workInFlight('repo-1')).toEqual([{ number: 7, paths: ['a.ts', 'b.ts'], building: true }]);
+    vi.mocked(query).mockResolvedValueOnce([{ number: 7, declared_paths: ['a.ts'], pr_changed_paths: ['b.ts'], pr_number: 12, building: true }]);
+    expect(await workInFlight('repo-1')).toEqual([{ number: 7, paths: ['a.ts', 'b.ts'], changedPaths: ['b.ts'], building: true }]);
     const sql = String(vi.mocked(query).mock.calls.at(-1)?.[0]);
     expect(sql).toContain("t.kind = 'patch' and i.pr_number is not null and t.subject_ref = r.name || '#' || i.pr_number");
+  });
+});
+
+describe('the files an issue’s pull request changes', () => {
+  it('are told apart from its declared paths, so a plan change can wait only on what a pull request touches', async () => {
+    vi.mocked(query).mockResolvedValueOnce([
+      { number: 7, declared_paths: ['a.ts', 'b.ts'], pr_changed_paths: ['b.ts', 'c.ts'], pr_number: 12, building: false },
+    ]);
+    expect(await workInFlight('repo-1')).toEqual([{ number: 7, paths: ['a.ts', 'b.ts', 'c.ts'], changedPaths: ['b.ts', 'c.ts'], building: false }]);
+    expect(String(vi.mocked(query).mock.calls.at(-1)?.[0])).toContain('i.pr_number,');
+  });
+
+  it('are none with no pull request, even when a closed one left its files on the row', async () => {
+    vi.mocked(query).mockResolvedValueOnce([{ number: 8, declared_paths: ['a.ts'], pr_changed_paths: ['old.ts'], pr_number: null, building: false }]);
+    expect(await workInFlight('repo-1')).toEqual([{ number: 8, paths: ['a.ts', 'old.ts'], changedPaths: [], building: false }]);
   });
 });
 
