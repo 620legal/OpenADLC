@@ -550,6 +550,9 @@ export class ProjectMaps {
         const existing = this.readExisting(file);
         const header = existing ? readProjectMapHeader(existing) : null;
         const same = header && header.format === PROJECT_MAP_FORMAT && header.commit === commit && header.defaultBranch === request.defaultBranch;
+        // An unforced pass trusts the header and reads no tree, so a change to
+        // what renderProjectMap writes reaches existing maps only through a
+        // PROJECT_MAP_FORMAT bump or the bridge's daily forced pass.
         if (same && !request.force) return this.settle(request.repo, { state: 'unchanged', error: null, triedAt });
 
         const body = renderProjectMap(await this.read(mirror, request.repo, commit));

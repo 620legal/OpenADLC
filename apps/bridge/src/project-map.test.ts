@@ -54,6 +54,21 @@ describe('ProjectMapRefresher', () => {
     expect(hostd.refreshProjectMap.mock.calls[0]?.[1]).toMatchObject({ defaultBranch: 'main' });
   });
 
+  it('forces the next pass again when hostd did not answer the forced one', async () => {
+    const { refresher, hostd, advance } = setup({ repos: [{ fullName: 'acme/one', defaultBranch: 'main' }] });
+    const forced = () => hostd.refreshProjectMap.mock.calls.map((call) => Boolean(call[1].force));
+    hostd.refreshProjectMap.mockRejectedValueOnce(new Error('hostd is not running'));
+
+    const lines = await refresher.refreshAll();
+    expect(lines[0]).toContain('could not ask hostd');
+    advance(15 * 60_000);
+    await refresher.refreshAll();
+    advance(15 * 60_000);
+    await refresher.refreshAll();
+
+    expect(forced()).toEqual([true, true, false]);
+  });
+
   it('says which maps were rebuilt and which failed, and nothing for one unchanged', async () => {
     const { refresher, hostd } = setup({
       repos: [

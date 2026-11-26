@@ -46,10 +46,14 @@ export class ProjectMapRefresher {
   private async pass(options: { force?: boolean }): Promise<string[]> {
     const now = this.now();
     const force = Boolean(options.force) || this.lastForcedAt === null || now - this.lastForcedAt >= PROJECT_MAP_FORCE_EVERY_MS;
-    if (force) this.lastForcedAt = now;
     const repos = await this.deps.repositories.listRepos();
     const bot = await this.deps.bot();
     const lines: string[] = [];
+    // The clock moves only after a forced pass hostd answered for every
+    // repository: set before the pass, a first pass that met a hostd still
+    // starting would put the next forced rebuild a day away, and a map from an
+    // older generator would keep its stale bytes all that time.
+    let answeredAll = true;
     for (const repo of repos) {
       try {
         const { map } = await this.deps.hostd.refreshProjectMap(repo.fullName, {
@@ -60,9 +64,11 @@ export class ProjectMapRefresher {
         const line = describe(map);
         if (line) lines.push(line);
       } catch (error) {
+        answeredAll = false;
         lines.push(`${repo.fullName}: could not ask hostd for its project map: ${error instanceof Error ? error.message : error}`);
       }
     }
+    if (force && answeredAll) this.lastForcedAt = now;
     // A map of a repository OpenADLC no longer manages goes with it.
     const managed = new Set(repos.map((repo) => repo.fullName.toLowerCase()));
     try {
