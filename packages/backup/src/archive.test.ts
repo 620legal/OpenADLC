@@ -762,6 +762,34 @@ describe('the issues a request in a history was filed as', () => {
   });
 });
 
+describe('the cache counts of a cost in a history', () => {
+  const current = {
+    ...install,
+    manifest: {
+      ...install.manifest,
+      version: 3,
+      includes: { install: true, repositories: true, bots: 'all', botSignIns: false, accounts: 'none', accountSignIns: false, history: true },
+    },
+  } as BackupContents;
+  const cached = { ...HISTORY.ledger[0]!, tokensIn: 1000, cacheRead: 700, cacheWrite: 200 };
+
+  it('round-trip with the row', () => {
+    const back = readPlain(writePlain({ ...current, history: { ...HISTORY, ledger: [cached] } }));
+    expect(back.history?.ledger).toEqual([cached]);
+  });
+
+  it('are absent from an archive written before them, which restores them as 0', () => {
+    const back = readPlain(writePlain({ ...current, history: HISTORY }));
+    expect(back.history?.ledger[0]).not.toHaveProperty('cacheRead');
+    expect(back.history?.ledger[0]).not.toHaveProperty('cacheWrite');
+  });
+
+  it('refuse one that is not a number', async () => {
+    const odd = { ...cached, cacheRead: 'seven hundred' };
+    expect((await refusal(() => readPlain(writePlain({ ...current, history: { ...HISTORY, ledger: [odd as never] } })))).message).toContain('ledger row 0 cacheRead');
+  });
+});
+
 describe('the work items in a history', () => {
   // History is in archives from version 2 on.
   const current = {

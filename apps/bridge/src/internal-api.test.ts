@@ -1690,7 +1690,15 @@ describe('a task’s session reporting its usage', () => {
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ stop: false, spent: 1.25, cap: 15, stepUsd: 15 });
-    expect(recordUsage).toHaveBeenCalledWith({ taskId: 'task-mine', ...report });
+    // Field by field: an older hostd sends no cache counts, and they are 0.
+    expect(recordUsage).toHaveBeenCalledWith({ taskId: 'task-mine', ...report, cacheRead: 0, cacheWrite: 0 });
+  });
+
+  it('passes the cache counts on with the rest', async () => {
+    const response = await post('/internal/tasks/task-mine/usage', { ...report, cacheRead: 900, cacheWrite: 100 });
+
+    expect(response.status).toBe(200);
+    expect(recordUsage).toHaveBeenCalledWith({ taskId: 'task-mine', ...report, cacheRead: 900, cacheWrite: 100 });
   });
 
   it('answers 400, naming the field, and records nothing, for a negative cost, "NaN", Infinity, bad tokens or a bad model', async () => {
@@ -1707,6 +1715,9 @@ describe('a task’s session reporting its usage', () => {
       [{ tokensOut: 1.5 }, /tokensOut must be a whole number/],
       [{ modelAlias: 'gpt-5.5' }, /modelAlias must be a newest: alias/],
       [{ model: '' }, /model must be the resolved model id/],
+      [{ cacheRead: -1 }, /cacheRead must be a whole number at least 0/],
+      [{ cacheWrite: 0.5 }, /cacheWrite must be a whole number at least 0/],
+      [{ cacheRead: 1000, cacheWrite: 300 }, /cacheRead and cacheWrite are part of tokensIn/],
     ];
     for (const [fields, said] of bad) {
       const response = await post('/internal/tasks/task-mine/usage', { ...report, ...fields });

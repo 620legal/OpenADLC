@@ -161,7 +161,12 @@ An engine is how a provider's model is reached, behind one interface in
 events, and `usage()`. Two rules come with it:
 
 - **Usage as it happens.** Emit `usage` as each turn reports it, cached input
-  included. The runner writes each one to the ledger before the engine's next
+  included in `tokensIn`. When the provider says how much of that input was
+  read from its cache and written to it, put those on the event as `cacheRead`
+  and `cacheWrite`: they are parts of `tokensIn`, never added to it, so
+  together they are at most it, and the bridge refuses a report where they are
+  not. Leave out what the provider does not say; absent is 0. Codex reports
+  only cached input, so it sets `cacheRead` alone. The runner writes each one to the ledger before the engine's next
   turn, which is where a cap trips; totals reported once at the end would let a
   task run past it. Claude Code and Grok Build report each message, so their
   cap is checked during a run. Codex reports usage only when each `codex exec`

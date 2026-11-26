@@ -1035,6 +1035,32 @@ describe('a bridge that does not take the usage', () => {
     expect(to('state').at(-1)?.body).toEqual({ state: 'done', reason: 'complete' });
   }, 30_000);
 
+  it('sends the cache counts with the rest, on the retry too, and each once', async () => {
+    failing = { usage: 1 };
+    const cached = (id: string, text: string, read: number, write: number) => {
+      const line = assistant(id, text, 100, 40);
+      return { ...line, message: { ...line.message, usage: { ...line.message.usage, cache_read_input_tokens: read, cache_creation_input_tokens: write } } };
+    };
+    const bin = fakeClaude([
+      cached('msg-1', 'Reading the request in request.md.', 0, 3000),
+      cached('msg-2', 'Filing the issue now.', 3000, 200),
+      { ...result(0.25), usage: { input_tokens: 200, output_tokens: 160, cache_read_input_tokens: 3000, cache_creation_input_tokens: 3200 } },
+    ]);
+
+    expect(await runTriage(bin, QUICK)).toBe(0);
+
+    const usage = to('usage').map((call) => call.body);
+    // The first report, refused, then the same again, taken, cache counts and all.
+    expect(usage[0]).toMatchObject({ tokensIn: 3100, cacheRead: 0, cacheWrite: 3000 });
+    expect(usage[1]).toEqual(usage[0]);
+    // Once taken, they start again from 0: the second message's are its own.
+    expect(usage[2]).toMatchObject({ tokensIn: 3300, cacheRead: 3000, cacheWrite: 200 });
+    const taken = usage.slice(1);
+    expect(taken.reduce((sum, body) => sum + Number(body.cacheRead), 0)).toBe(3000);
+    expect(taken.reduce((sum, body) => sum + Number(body.cacheWrite), 0)).toBe(3200);
+    for (const body of usage) expect(Number(body.cacheRead) + Number(body.cacheWrite)).toBeLessThanOrEqual(Number(body.tokensIn));
+  }, 30_000);
+
   it('does not start the engine when the bridge cannot say how much headroom is left', async () => {
     failing = { headroom: Number.POSITIVE_INFINITY };
     const prompt = join(dir, 'prompt.txt');

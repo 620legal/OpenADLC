@@ -54,8 +54,29 @@ describe('a usage row', () => {
 
     const [sql, params] = vi.mocked(query).mock.calls[0] ?? [];
     expect(String(sql)).toContain('model_alias');
-    expect(params).toEqual(['task-1', 'bot-1', 'claude', 'claude-opus-5', 'newest:opus', null, 10, 4, 0.02, true]);
+    // A caller that says nothing of the cache records none.
+    expect(params).toEqual(['task-1', 'bot-1', 'claude', 'claude-opus-5', 'newest:opus', null, 10, 4, 0.02, true, 0, 0]);
     expect(String(params?.[3])).not.toMatch(/^newest:/);
+  });
+
+  it('stores the cache read and written beside tokens in', async () => {
+    vi.mocked(query).mockResolvedValueOnce([]);
+
+    await recordUsage({ taskId: 'task-1', botId: 'bot-1', engine: 'claude', model: 'claude-opus-5', tokensIn: 100, tokensOut: 4, cacheRead: 70, cacheWrite: 30, costUsd: 0.02 });
+
+    const [sql, params] = vi.mocked(query).mock.calls[0] ?? [];
+    expect(String(sql)).toContain('tokens_cache_read, tokens_cache_write');
+    expect((params as unknown[]).slice(-2)).toEqual([70, 30]);
+    expect((params as unknown[])[6]).toBe(100);
+  });
+
+  it('refuses a negative or fractional cache count, or cache counts above tokens in, before any query runs', async () => {
+    const row = { taskId: 'task-1', botId: 'bot-1', engine: 'claude' as const, model: 'claude-opus-5', tokensIn: 10, tokensOut: 4, costUsd: 0.02 };
+    for (const bad of [{ cacheRead: -1 }, { cacheWrite: 0.5 }]) {
+      await expect(recordUsage({ ...row, ...bad }), JSON.stringify(bad)).rejects.toThrow(/0 or more/);
+    }
+    await expect(recordUsage({ ...row, cacheRead: 6, cacheWrite: 5 })).rejects.toThrow(/cache tokens as part of tokens in/);
+    expect(query).not.toHaveBeenCalled();
   });
 
   it('stores no alias for a pinned id', async () => {
@@ -90,6 +111,24 @@ describe('a usage row', () => {
     ).rejects.toBeInstanceOf(LedgerAliasError);
 
     expect(vi.mocked(query)).not.toHaveBeenCalled();
+  });
+
+  it('reads the cache counts back with the row', async () => {
+    const at = new Date('2026-11-25T12:00:00.000Z');
+    const base = { task_id: 'task-1', bot_id: 'bot-1', engine: 'claude', model: 'claude-opus-5', model_alias: null, tokens_out: 4, cost_usd: '0.0200', billed: true, at };
+    vi.mocked(query).mockResolvedValueOnce([
+      { ...base, id: '10', tokens_in: 100, tokens_cache_read: 70, tokens_cache_write: 30 },
+      // A row from before 0171 reads 0 in both, as its default.
+      { ...base, id: '9', tokens_in: 10, tokens_cache_read: 0, tokens_cache_write: 0 },
+    ]);
+
+    const rows = await listLedger();
+
+    expect(rows.map((row) => [row.tokensIn, row.cacheRead, row.cacheWrite])).toEqual([
+      [100, 70, 30],
+      [10, 0, 0],
+    ]);
+    expect(String(vi.mocked(query).mock.calls[0]?.[0])).toContain('tokens_cache_read, tokens_cache_write');
   });
 
   it('reads the alias back with the row', async () => {
