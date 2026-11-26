@@ -1165,9 +1165,8 @@ export class Gates {
 
   /**
    * A person's approval: held when other work holds a path it asks for now
-   * (`blockers`), which
-   * leaves the gate open, or else the work that carries it out, for the answer
-   * that claims the gate to run. That widens the lease and the issue together,
+   * (`blockers`), which leaves the gate open, or else the work that carries it
+   * out, for the answer that claims the gate to run. That widens the lease and the issue together,
    * and writes the paths into the issue's Expected paths on GitHub, which is
    * where a person reads them; the lease is what the merge line holds the
    * pull request to (`mergeDecision`). Every step can be repeated, so an
