@@ -1,0 +1,16 @@
+# A Discover run reads a detached snapshot of the default branch and proposes
+# work; it writes nothing to GitHub, pushes nothing and builds nothing
+# (docs/adr/0089). `gh` is not allowed at all, so the session makes no GitHub
+# call: its proposals reach the bridge through hostd, from its own marker.
+allow:
+  # Reading only. Each entry is a command prefix: `git` alone would allow a
+  # commit or a push, so only git's readers are named.
+  shell: [rg, jq, cat, ls, wc, git rev-parse, git log, git show, git ls-files, git grep]
+  files:
+    # Notes the session keeps while it reads. Never committed, and never
+    # evidence: hostd checks evidence against the snapshot's commit.
+    write_within: [".openadlc-scratch/**"]
+
+deny:
+  shell: [curl, wget, ssh, docker, sudo, make, pnpm, npm, gh, git push, git commit, git switch, git checkout, git add]
+  github: ["pr create", "pr merge", "pr review", "workflow run", "run rerun"]

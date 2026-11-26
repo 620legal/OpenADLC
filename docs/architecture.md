@@ -389,6 +389,58 @@ reviewer
   the worktree is right where they differ. No map, or a read that fails, adds
   nothing: the task starts as it did before maps.
 
+### Discover
+
+A Discover run reads a repository as it is and proposes new work from its own
+code. A person starts one with `openadlc discover owner/name`, or
+`POST /v1/repos/:name/discover` (role `user`); `GET
+/v1/repos/:name/discover/runs/:id` reads it back with its proposals
+([ADR 0089](adr/0089-a-discover-run-is-an-intake-task-whose-proposals-hostd-checks-against-its-snapshot.md)).
+
+**What runs.** A run is an ordinary intake-seat task with no issue: kind
+`intake`, subject `discover:<first 8 of the run id>`, skill `discover`, opened
+through `TaskService.open`, so the spending caps, the per-task cap, the ledger
+and the busy checks apply to it as to any task. A console request that finds
+intake busy with a run queues, and the run's end drains the queue. A run
+refused at the start (intake busy, a cap, a restart owed) leaves no row. hostd
+gives the task, which has no branch, a clone detached at the default branch.
+An empty repository, for which GitHub answers 409 for the default branch, is
+recorded as a `done` run with no proposals and the note "the default branch
+has no commits", and no task starts.
+
+**Read-only.** `crew/skills/discover/tools.yaml` allows reading commands and
+writes under `.openadlc-scratch/**` only. It allows no `gh` at all, and no
+`git` but its readers, so the session makes no call to GitHub, pushes nothing
+and opens no branch or pull request. Its thread stays in the bridge.
+
+**The lens.** `improve` ("Improve what you have") is the only lens: half-built
+features, flags left off, clusters of TODO and FIXME, dead code, and docs
+that promise what the code lacks. A start names its lenses, or gets all of
+them.
+
+**How proposals get stored.** The session ends by saying one
+`discover_proposals` marker. hostd's skill runner reads it from that session's
+own output, and only from a `discover` session; the same marker from any other
+skill is narration. It reads the clone's `HEAD` before the model runs, keeps a
+`file:line` only when the file is a file at that commit and the line is within
+it (`apps/hostd/src/discover-evidence.ts`, `git` run with `execFile`), drops a
+proposal left with no evidence, and posts what survives to
+`POST /internal/tasks/:id/discover` with the task's token. The bridge checks
+the body again (`checkProposals`, the same function the runner used), and
+stores it once in `discover_runs` and `discover_proposals` (migration 0173).
+Each proposal has a lens, a key, a title, a description, a status (`missing`,
+`partial` or `already there`), its evidence, and a fingerprint,
+`sha256(lens + "\n" + key)`. The session is given the last done run's keys in
+`earlier-proposals.md` to reuse for the same thing, so `(repo_id,
+fingerprint)` finds a proposal across runs. At most 30 proposals are kept,
+and every proposal dropped is counted on the run.
+
+**How a run ends.** With its task. A task that ends `done` with its proposals
+stored makes the run `done`. One that ends `done` without them is failed with
+"the Discover run ended without its proposals", and every other end fails the
+run with the task's reason. Try again on a discover task is refused: start a
+new run.
+
 ## How the parts trust each other
 
 - **Console → bridge.** On a local install the bridge takes the console user

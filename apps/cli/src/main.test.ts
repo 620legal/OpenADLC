@@ -136,6 +136,27 @@ describe('openadlc ls and watch', () => {
   });
 });
 
+describe('openadlc discover', () => {
+  it('prints its own help, and nothing else, and starts nothing', async () => {
+    expect(await runUntil('openadlc discover', 'discover', '--help')).toBeUndefined();
+    const help = printed.join('\n');
+    expect(help).toContain('openadlc discover OWNER/NAME [--lens LIST] [--detach] [--json]');
+    expect(help).toContain('openadlc discover OWNER/NAME --run ID [--json]');
+    expect(help).not.toContain('openadlc init');
+  });
+
+  it('refuses a flag it does not read, before reaching for the bridge', async () => {
+    expect(await run('discover', '620legal/OpenADLC', '--bogus')).toBe(2);
+    expect(printed.join('\n')).toContain('openadlc discover does not take --bogus');
+  });
+
+  it('is not a command that opens the database', () => {
+    const source = readFileSync(new URL('./main.ts', import.meta.url), 'utf8');
+    const listed = /const DATABASE_COMMANDS = new Set\(\[([^\]]*)\]\)/.exec(source)?.[1] ?? '';
+    expect(listed).not.toContain("'discover'");
+  });
+});
+
 describe('an install.json that is not JSON', () => {
   it('still lets help and config answer, and names the file to every other command', async () => {
     writeFileSync(join(home, 'install.json'), '{"driver": "local",}');

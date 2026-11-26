@@ -78,7 +78,7 @@ vi.mock('@openadlc/db', async (importOriginal) => {
       sendBackOfTask: vi.fn(async (taskId: string) => (taskId === 'task-sent' ? { repoId: 'repo-1', issueNumber: 78, from: 'build', to: 'spec', kind: 'send_back' } : null)),
     },
     tasks: {
-      getTask: vi.fn(async (id: string) => (id === 'task-gone' ? null : { id, state: id === 'task-done' ? 'done' : id === 'task-paused' ? 'paused' : 'running', kind: id === 'task-review' ? 'review' : id === 'task-qa' ? 'qa' : id === 'task-spec' || id === 'task-judge' ? 'spec' : id === 'task-deploy' ? 'deploy' : id === 'task-request' ? 'intake' : 'implement', skill: id === 'task-judge' ? 'plan-change-review' : null, repoId: 'repo-1', branch: 'agent/builder/78-issue-78', subjectRef: id === 'task-request' ? 'request:aaaaaaaa' : 'openadlc#78' })),
+      getTask: vi.fn(async (id: string) => (id === 'task-gone' ? null : { id, state: id === 'task-done' ? 'done' : id === 'task-paused' ? 'paused' : 'running', kind: id === 'task-review' ? 'review' : id === 'task-qa' ? 'qa' : id === 'task-spec' || id === 'task-judge' ? 'spec' : id === 'task-deploy' ? 'deploy' : id === 'task-request' ? 'intake' : 'implement', skill: id === 'task-judge' ? 'plan-change-review' : id === 'task-discover' ? 'discover' : null, repoId: 'repo-1', branch: 'agent/builder/78-issue-78', subjectRef: id === 'task-request' ? 'request:aaaaaaaa' : 'openadlc#78' })),
       listTasksOnSubjects: vi.fn(async () => []),
       pausedWithAnswer: vi.fn(async () => []),
       listTasksSince: vi.fn(async () => limitWorld.tasks),
@@ -91,7 +91,7 @@ vi.mock('@openadlc/db', async (importOriginal) => {
         botId: 'bot-builder',
         repoId: 'repo-1',
         kind: id === 'task-judge' ? 'spec' : 'implement',
-        skill: id === 'task-judge' ? 'plan-change-review' : null,
+        skill: id === 'task-judge' ? 'plan-change-review' : id === 'task-discover' ? 'discover' : null,
         subjectType: 'issue',
         subjectRef: 'openadlc#78',
         leaseId: 'lease-78',
@@ -155,6 +155,9 @@ const hostCheckRecord = vi.fn(async (_report: unknown) => true);
 const SHARED_CLAUDE = { id: 'acct-1', provider: 'anthropic' as const, kind: 'subscription' as const, label: 'Shared Claude', createdAt: '2026-10-01T00:00:00.000Z' };
 const ON_SHARED = { id: 'bot-builder', name: 'builder', slot: 'builder', role: 'implement', engine: 'claude', githubLogin: null, modelAccountId: 'acct-1' };
 const releaseRecord = vi.fn(async (_report: unknown) => true);
+const discoverRecord = vi.fn(async (_taskId: string, _body: unknown) => ({ stored: 1, dropped: 0 }));
+const discoverMissing = vi.fn(async (_task: unknown): Promise<string | null> => null);
+const discoverEnded = vi.fn(async (_task: unknown, _state: string, _reason: string | null) => undefined);
 
 
 let bridge: Server;
@@ -222,6 +225,7 @@ beforeEach(async () => {
     pauseHolds: { paused: pauseHeld, forget: pauseForget },
     hostChecks: { record: hostCheckRecord },
     releases: { record: releaseRecord },
+    discoverRuns: { record: discoverRecord, missing: discoverMissing, ended: discoverEnded },
     health: healthRegistry,
   });
   bridge = createServer((request, response) => void router.handle(request, response));
@@ -1931,6 +1935,51 @@ describe('a designer’s task that ends without its verdict', () => {
 
     await post('/internal/tasks/task-1/state', { state: 'done', reason: 'complete' });
     expect(missingVerdict).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('a Discover run’s proposals (#370)', () => {
+  const report = { commit: 'a'.repeat(40), proposals: [{ lens: 'improve', key: 'k', title: 't', description: 'd', status: 'missing', evidence: [{ file: 'a.ts', line: 1 }] }], dropped: 0, note: null };
+
+  it('are taken from the running task’s own token, and from no other task’s', async () => {
+    const { taskTokenFor } = await import('@openadlc/github');
+    const as = (task: string, id = 'task-discover') =>
+      fetch(`${bridgeUrl}/internal/tasks/${id}/discover`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-openadlc-task-token': taskTokenFor(task, SECRET) },
+        body: JSON.stringify(report),
+      });
+
+    const taken = await as('task-discover');
+    expect(taken.status).toBe(200);
+    expect(await taken.json()).toEqual({ stored: 1, dropped: 0 });
+    expect(discoverRecord).toHaveBeenCalledWith('task-discover', report);
+    expect((await as('task-1')).status).toBe(401);
+    // A token copied out of a session that has ended reports nothing.
+    expect((await as('task-done', 'task-done')).status).toBe(409);
+    expect(discoverRecord).toHaveBeenCalledTimes(1);
+  });
+
+  it('fail a discover task that ended done without them, and end its run with it', async () => {
+    const { tasks } = await import('@openadlc/db');
+    discoverMissing.mockResolvedValueOnce('the Discover run ended without its proposals');
+
+    expect((await post('/internal/tasks/task-discover/state', { state: 'done', reason: 'complete' })).status).toBe(200);
+
+    expect(discoverMissing).toHaveBeenCalledWith(expect.objectContaining({ id: 'task-discover', skill: 'discover' }));
+    expect(tasks.updateTaskState).toHaveBeenCalledWith('task-discover', 'failed', { exitReason: 'the Discover run ended without its proposals' });
+    expect(discoverEnded).toHaveBeenCalledWith(expect.objectContaining({ id: 'task-discover' }), 'failed', 'the Discover run ended without its proposals');
+  });
+
+  it('end the run done with a task that stored them, and ask nothing of any other task', async () => {
+    expect((await post('/internal/tasks/task-discover/state', { state: 'done', reason: 'stored 1 proposal' })).status).toBe(200);
+    expect(discoverEnded).toHaveBeenCalledWith(expect.objectContaining({ id: 'task-discover' }), 'done', 'stored 1 proposal');
+
+    discoverEnded.mockClear();
+    discoverMissing.mockClear();
+    await post('/internal/tasks/task-1/state', { state: 'done', reason: 'complete' });
+    expect(discoverMissing).not.toHaveBeenCalled();
+    expect(discoverEnded).not.toHaveBeenCalled();
   });
 });
 

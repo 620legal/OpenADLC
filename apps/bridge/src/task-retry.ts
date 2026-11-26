@@ -1,7 +1,8 @@
 import { audit, bots, issues, leases, repos, requests, spendingLimits, tasks } from '@openadlc/db';
-import { botAtStart, envInt, type TaskKind, type TaskState } from '@openadlc/shared';
+import { botAtStart, DISCOVER_SKILL, envInt, type TaskKind, type TaskState } from '@openadlc/shared';
 import type { Started } from './build-start.js';
 import { continuesBranch, type BranchFacts } from './build-left.js';
+import { discoverRetryRefusal } from './discover.js';
 import { requestPrefixOf } from './request-context.js';
 import { resolutionRetry } from './conflict-round.js';
 import { HttpFailure } from './router.js';
@@ -114,6 +115,12 @@ export async function retryTask(taskId: string, actor: string, deps: RetryDeps, 
   if (paused) throw new HttpFailure(409, `nothing new starts: ${paused}`);
   const task = await tasks.getTask(taskId);
   if (!task) throw new HttpFailure(404, 'there is no such task');
+  // A Discover run ended with its task, failed, and running the task again
+  // would write to that ended run: a new run is a new start (`discover.ts`).
+  if (task.skill === DISCOVER_SKILL) {
+    const repo = task.repoId ? (await repos.listRepos({ includeRemoved: true }).catch(() => [])).find((one) => one.id === task.repoId) : undefined;
+    throw new HttpFailure(409, discoverRetryRefusal(repo?.fullName ?? null));
+  }
   // A build that ended `done` without opening its pull request is not
   // finished, whatever its state says: Try again, a person's comment
   // and the sweep after it ended all go on from its branch. Whether it has a

@@ -23,6 +23,8 @@ export const OPENADLC_EVENTS = [
   'send_back',
   /** The design seat's judgement of one plan change (`plan-change-review.ts`). */
   'plan_change_verdict',
+  /** A Discover run's proposals, said once as the session's last message and read only by hostd's runner (`discover.ts`). */
+  'discover_proposals',
 ] as const;
 export type MarkerEvent = (typeof OPENADLC_EVENTS)[number];
 
@@ -612,6 +614,8 @@ export function messageKindFor(event: MarkerEvent): 'sys' | 'bot' | 'gate' | 'dr
     case 'send_back':
     // The designer's answer to a plan change: the bridge acts on it, and says what it did.
     case 'plan_change_verdict':
+    // A Discover run's result: the bridge stores it, and the run's page shows it.
+    case 'discover_proposals':
       return 'sys';
     default:
       return 'bot';
@@ -633,6 +637,7 @@ const HEADLINES: Record<MarkerEvent, string> = {
   design_memory: 'proposed what the repository should remember',
   send_back: 'sent the work back',
   plan_change_verdict: 'judged a plan change',
+  discover_proposals: 'proposed new work',
 };
 
 export function headlineFor(event: MarkerEvent): string {

@@ -70,6 +70,17 @@ describe('openadlc ls and watch', () => {
   });
 });
 
+describe('openadlc discover', () => {
+  it('takes its repository and --lens, --detach, --run and --json, and refuses anything else', () => {
+    expect(unknownFlag('discover', ['620legal/OpenADLC', '--lens', 'improve', '--detach', '--json'])).toBeNull();
+    expect(unknownFlag('discover', ['620legal/OpenADLC', '--run', '0b6f1d1c-6c55-4c1c-9a59-1f4a4b8f2a10'])).toBeNull();
+    expect(unknownFlag('discover', ['--lens=improve', '620legal/OpenADLC'])).toBeNull();
+    expect(unknownFlag('discover', ['620legal/OpenADLC', '--bogus'])).toBe('--bogus');
+    expect(refusal('discover', '--bogus', '620legal/OpenADLC')).toBe('openadlc discover does not take --bogus; it takes --lens, --detach, --run, --json');
+    expect(strayArgument('discover', ['620legal/OpenADLC'])).toBeNull();
+  });
+});
+
 describe('a flag a sibling subcommand reads', () => {
   // Listed by command, `github apply --repo acme/one` was taken and ignored, and
   // apply wrote rulesets and templates to every repository.

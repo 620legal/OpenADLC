@@ -42,7 +42,7 @@ be read, and so does `openadlc config`, which prints that file's path.
 | `openadlc self-update apply --checkout DIR --staging DIR --tag TAG --from SHA --to SHA` | What Settings → System runs, detached, to restart onto a release it has prepared and checked, once no task runs: stops the services, fast-forwards the checkout, swaps in the built output, installs offline, migrates and starts. It refuses to stop anything unless the checkout is clean, on `main` and at `--from`, and puts back what was if a step before the migration fails. Not for running by hand ([self-hosting](self-hosting.md#updating-openadlc)) |
 | `openadlc attribution rotate [--drop-old]` | A new key for signing the crew's posts, made by the running bridge through `POST /v1/attribution/rotate` (an admin's route), which signs with it at once and records the rotation in the audit log by key id. The old key keeps checking posts signed before it for 30 days. After a leak, `--drop-old` stops the old key and every earlier one checking at once; with signatures enforced, crew reviews already posted under them stop counting toward a merge ([security](security.md#secrets)). Take a new backup afterwards: an older one restores the old key. Exits 1 when the bridge does not answer |
 
-`openadlc status`, `doctor`, `ls`, `watch`, `attach` and `attribution rotate` ask the bridge's `/v1`, which a local
+`openadlc status`, `doctor`, `ls`, `watch`, `discover`, `attach` and `attribution rotate` ask the bridge's `/v1`, which a local
 install serves only beside the console secret; they read it from the secret
 store, as they read the internal secret, so they need nothing set.
 
@@ -50,6 +50,13 @@ A service that exits on its own is started again after a second, then two,
 doubling to thirty. Five exits in a row within ten seconds of starting and the
 keeper gives up and says so in the service's log; `openadlc up` starts it again
 once the cause is fixed.
+
+## Discover
+
+| Command | What it does |
+|---|---|
+| `openadlc discover OWNER/NAME [--lens LIST] [--detach] [--json]` | Starts a Discover run on a managed repository through the bridge's `POST /v1/repos/:name/discover` ([architecture](architecture.md#discover)). The intake seat reads a detached snapshot of the default branch and proposes work from the repository's own code; the run writes nothing to GitHub. The command waits for it, asking every 5 seconds, then prints a line with the commit read and the counts, and each proposal as `[status] title`, its description, and its `file:line` evidence. `--lens` names the lenses, comma-separated; `improve` ("Improve what you have") is the only one, and every lens is used when it is not given. `--detach` prints the run's id and how to follow it, and exits 0. `--json` prints the bridge's `{run, proposals}` (with `--detach`, the run) and nothing else on stdout. A run with nothing to propose, an empty repository included, prints `No proposals: <note>` and exits 0. A failed run prints its reason and exits 1. A refusal — a repository the install does not manage, an unknown lens, a run already going on the repository, the intake seat busy, a spending cap — prints the bridge's words and exits 1. Ctrl-C stops the waiting, not the run, and prints how to follow it. Exits 1 with `Run: openadlc up` when the bridge does not answer |
+| `openadlc discover OWNER/NAME --run ID [--json]` | Follows a run already started (`GET /v1/repos/:name/discover/runs/:id`), waits for it to end, and prints it as above. It starts nothing |
 
 ## The repositories on GitHub
 

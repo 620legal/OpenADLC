@@ -664,3 +664,60 @@ describe('every skill that runs openadlc-ci says what its exit 3 means', () => {
     }
   });
 });
+
+/**
+ * A Discover run reads a snapshot and proposes work; it writes nothing to
+ * GitHub and builds nothing (#370, docs/adr/0089). Its tools.yaml is what
+ * holds that, so it is held to a fixed read-only list: a write tool added to
+ * it, `git push` or `gh` among them, fails here.
+ */
+describe('the discover skill reads, and writes nothing but its notes', () => {
+  const policy = loadToolsPolicy(join(SKILLS_ROOT, 'discover', 'tools.yaml'));
+  const READERS = ['rg', 'jq', 'cat', 'ls', 'wc', 'git rev-parse', 'git log', 'git show', 'git ls-files', 'git grep'];
+
+  it('allows only reading commands, from a fixed list', () => {
+    expect(policy.allow.shell.length).toBeGreaterThan(0);
+    for (const entry of policy.allow.shell) expect(READERS, `crew/skills/discover/tools.yaml allows ${entry}`).toContain(entry);
+  });
+
+  it('writes only under .openadlc-scratch/', () => {
+    expect(policy.allow.files?.writeWithin).toEqual(['.openadlc-scratch/**']);
+    expect(resolveWriteScope(policy, ['apps/**'])).toEqual(['.openadlc-scratch/**']);
+  });
+
+  it('may run no write, network, build or GitHub command', () => {
+    const refused = [
+      'gh pr create',
+      'gh issue create',
+      'gh api repos/x/y',
+      'git push origin HEAD',
+      'git commit -m x',
+      'git checkout main',
+      'curl https://example.com',
+      'wget x',
+      'ssh host',
+      'docker ps',
+      'sudo ls',
+      'make ci',
+      'pnpm install',
+      'npm install',
+      'openadlc-ci',
+    ];
+    for (const command of refused) expect(isShellAllowed(policy, command), command).toBe(false);
+    // `isShellAllowed` reads the binary; each engine holds git to the
+    // prefixes listed (`Bash(git log:*)`), which the fixed list above checks.
+    for (const command of ['rg -n TODO', 'cat README.md', 'wc -l README.md']) expect(isShellAllowed(policy, command), command).toBe(true);
+    expect(policy.allow.shell).not.toContain('git');
+  });
+
+  it('denies the GitHub commands the issue names, and the network and build tools', () => {
+    expect(policy.deny.github).toEqual(expect.arrayContaining(['pr create', 'pr merge', 'pr review', 'workflow run', 'run rerun']));
+    expect(policy.deny.shell).toEqual(expect.arrayContaining(['curl', 'wget', 'ssh', 'docker', 'sudo', 'make', 'pnpm', 'npm', 'gh', 'git push']));
+  });
+
+  it('asks nobody, so its prose never reads as a skill that does', () => {
+    const text = readFileSync(join(SKILLS_ROOT, 'discover', 'SKILL.md'), 'utf8');
+    expect(text).not.toMatch(/\bask|question|\bstop/i);
+    expect(text).not.toContain('## Stop and ask when');
+  });
+});

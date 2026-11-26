@@ -20,7 +20,8 @@ import {
 import { TASK_TOKEN_HEADER } from '@openadlc/github';
 import type { EngineName } from '@openadlc/shared';
 import { chooseEngine } from './engine-choice.js';
-import { costCapGate, parseMarker, parseQuestion, parseSendBack, withoutMarker } from '@openadlc/shared';
+import { costCapGate, DISCOVER_SKILL, parseDiscoverProposals, parseMarker, parseQuestion, parseSendBack, withoutMarker } from '@openadlc/shared';
+import { checkEvidence, snapshotCommit } from './discover-evidence.js';
 
 interface RunnerEnv {
   taskId: string;
@@ -383,6 +384,13 @@ async function main(): Promise<void> {
   let unasked: string | null = null;
   /** Where the work went, once the session sent it back; why not, when the bridge refused. */
   let sentBack: { to: string } | { refused: string } | null = null;
+  /**
+   * A Discover run's proposals, once its session said them: how many the
+   * bridge stored, or why none were. The session ends there, as on a send-back.
+   */
+  let discovered: { stored: number } | { refused: string } | null = null;
+  /** The commit a Discover run reads, from its clone's HEAD before the model runs: its evidence is checked against it. */
+  let snapshot: string | null = null;
   /** The last thing the engine said, for a question that arrives as a bare marker. */
   let lastSaid = '';
   /**
@@ -514,7 +522,7 @@ async function main(): Promise<void> {
    */
   const nextTurn = async (): Promise<string | null> => {
     if (paused || failed) throw new Error(`the session stops here: ${failed || 'the task paused'}`);
-    if (asked || sentBack) return null;
+    if (asked || sentBack || discovered) return null;
     const left = await postLedger(env.bridgeUrl, `/internal/tasks/${env.taskId}/headroom`, () => ({ estimateUsd: 0.5 }), env.ledgerRetryMs);
     if (left) noteCap(left);
     if (!left || left.stop === true) {
@@ -541,6 +549,16 @@ async function main(): Promise<void> {
   // this take runs on every engine; only `nextTurn`, a turn after the first,
   // is for an engine that takes messages. Taken only once the engine will
   // run, so it is not taken and lost.
+  // Read before the model runs, so nothing the session does — a commit, a
+  // checkout — moves what its evidence is checked against. A run that cannot
+  // say what it read has nothing to check its evidence with, so it does not run.
+  if (env.skill === DISCOVER_SKILL && !paused && !failed) {
+    snapshot = await snapshotCommit(env.workdir).catch((error: unknown) => {
+      failed = `the Discover run could not read the commit of its snapshot: ${error instanceof Error ? error.message : String(error)}`;
+      return null;
+    });
+  }
+
   const waiting = paused || failed ? [] : await takeInbox();
   if (!waiting) failed = INBOX_NOT_TAKEN;
   const prompt = buildPrompt(env, skillDir, policy, fence, waiting ?? [], cap);
@@ -565,7 +583,7 @@ async function main(): Promise<void> {
     // carried it, and before the run's own totals, so those are still taken:
     // the question cost what it cost. Anything else is the engine carrying on
     // past a question it is meant to wait on, and it stops there.
-    if ((asked || sentBack) && event.type !== 'usage') break;
+    if ((asked || sentBack || discovered) && event.type !== 'usage') break;
 
     switch (event.type) {
       case 'text': {
@@ -636,6 +654,39 @@ async function main(): Promise<void> {
           break;
         }
 
+        // A Discover run's proposals, from this session's own output and only
+        // a `discover` session's: the same marker said by any other skill is
+        // narration. Each `file:line` is kept only if it exists at the commit
+        // read before the model ran, then what is left goes to the bridge with
+        // this task's token, which checks it again and stores it. Nothing here
+        // reaches GitHub.
+        const discovery = env.skill === DISCOVER_SKILL ? parseDiscoverProposals(event.text) : null;
+        if (discovery === 'malformed') {
+          const said = withoutMarker(event.text);
+          if (said) await post(env.bridgeUrl, `/internal/tasks/${env.taskId}/message`, { kind: 'bot', text: said });
+          discovered = { refused: 'its discover_proposals marker could not be read: it is not JSON, or its proposals is not a list' };
+          await post(env.bridgeUrl, `/internal/tasks/${env.taskId}/message`, { kind: 'sys', text: `the Discover run's proposals were not stored: ${discovered.refused}` });
+          break;
+        }
+        if (discovery) {
+          const said = withoutMarker(event.text);
+          if (said) await post(env.bridgeUrl, `/internal/tasks/${env.taskId}/message`, { kind: 'bot', text: said });
+          discovered = await (async () => {
+            if (!snapshot) return { refused: 'the commit of its snapshot was never read' };
+            const checked = await checkEvidence(env.workdir, snapshot, discovery.proposals);
+            const posted = await postChecked(env.bridgeUrl, `/internal/tasks/${env.taskId}/discover`, {
+              commit: snapshot,
+              proposals: checked.proposals,
+              dropped: discovery.dropped + checked.dropped,
+              note: discovery.note,
+            });
+            if (!posted.ok) return { refused: `the bridge did not store its proposals: ${posted.error}` };
+            return { stored: Number(posted.body.stored ?? checked.proposals.length) };
+          })().catch((error: unknown) => ({ refused: `its evidence could not be checked: ${error instanceof Error ? error.message : String(error)}` }));
+          console.log('stored' in discovered ? `[skill] stored ${discovered.stored} proposal(s)` : `[skill] no proposals stored: ${discovered.refused}`);
+          break;
+        }
+
         // A skill declares what a comment *is* by carrying a `openadlc:` marker in
         // it. Without one this is narration, which is what it was before — an
         // operator's own words are never reinterpreted.
@@ -697,7 +748,7 @@ async function main(): Promise<void> {
         // usage Codex reports). The next run's headroom check asks instead.
         if (result.stop === true && event.final) {
           console.log(`[skill] the run's totals reached the $${cap.usd} cap after it finished; $${spent.toFixed(2)} spent this session`);
-        } else if (result.stop === true && !asked && !sentBack) {
+        } else if (result.stop === true && !asked && !sentBack && !discovered) {
           console.log(`[skill] paused at the $${cap.usd} cap after $${spent.toFixed(2)} spent this session`);
           failed = await askAtCap(spent, result);
           paused = !failed;
@@ -735,10 +786,12 @@ async function main(): Promise<void> {
 
   if (unasked) failed ??= unasked;
   else if (asked) paused = true;
+  // After the usage still to come, which the loop read on.
+  if (discovered && 'refused' in discovered) failed ??= discovered.refused;
   // Every engine ends a turn it finished with `done`. A stream that just
   // stops — an engine killed under it, a cancel — was reported complete, and
   // its stage was handed on with nothing done.
-  if (!failed && !paused && !sentBack && !finishedTurn) failed = 'the engine ended without finishing its turn';
+  if (!failed && !paused && !sentBack && !discovered && !finishedTurn) failed = 'the engine ended without finishing its turn';
 
   if (failed) {
     // `stopped` is the event with no GitHub trace of its own: a task that ends
@@ -768,6 +821,11 @@ async function main(): Promise<void> {
 
   if (sentBack) {
     await reportState(env, 'done', `sent back to ${sentBack.to}`);
+    return;
+  }
+
+  if (discovered && 'stored' in discovered) {
+    await reportState(env, 'done', `stored ${discovered.stored} proposal${discovered.stored === 1 ? '' : 's'}`);
     return;
   }
 
