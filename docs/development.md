@@ -238,6 +238,15 @@ The Terraform module runs when `infra/gcp/` changed. A pull request from an
 `agent/` branch runs once the merge line labels it `adlc:ci`, and a push to
 main whose tree already passed on its pull request runs nothing more.
 
+Of those jobs, only `check` runs `make ci`, so a builder's `openadlc-ci` pass
+covers it and no other. The console's Checks page (`/checks/<repo>`) marks
+every other job "differs from GitHub". The rule is in `coveredByLocalCi`
+(`packages/shared/src/ci-workflow.ts`): a job is covered only when one of its
+`run:` lines calls `make` (or `$(MAKE)`) with a target that the Makefile's
+`ci` target reaches, through its prerequisites or a recursive `make` call.
+A job that runs the suites directly, such as `integration`, is not covered,
+however much it overlaps.
+
 ## Running a bot for real
 
 Scripted engines prove the plumbing, not the work. A task that calls a model

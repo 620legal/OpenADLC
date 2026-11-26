@@ -268,6 +268,39 @@ desk's accessible name holds the bot, its state and its full task. The poses
 differ by shape, so under `prefers-reduced-motion` the two animations
 (`office-busy`, `office-wave` in `globals.css`) stop and the states still read.
 
+### The Checks page
+
+Each repository has a Checks page (`/checks/<repo>`, linked from its row in
+Settings → Repositories), read from `GET /v1/repos/:name/checks`
+(`apps/bridge/src/checks-view.ts`). It lists the jobs of the workflow named
+`ci`, as its file on the default branch declares them
+(`packages/shared/src/ci-workflow.ts`), and the host check when the repository
+has a command set. Each row says where it runs, GitHub or this machine. A
+GitHub job is marked "differs from GitHub" unless one of its `run:` lines calls
+`make` with a target the Makefile's `ci` target reaches, so `make ci`
+(`openadlc-ci`) has already run it. Each row also shows its last result on the
+default branch: for a `ci` job, from the newest completed push run there; for
+the host check, from the bridge's record (`host_check_runs`) for the pull
+request behind the newest default-branch commit, never the `host-check` status.
+Flaky jobs are ranked first. A job is flaky when it failed and then passed on
+the same head within the last 30 runs; this is worked out on each read and
+never stored, with at most 40 attempts' jobs read per refresh. A flaky row's
+File as task opens the New request form filled in, kind `defect`. Above the
+table the page says whatever it could not read: a missing or unparseable
+workflow, a missing Makefile, GitHub unreachable, or a partial flake scan.
+
+An item whose pull request's `ci` is red shows the failing jobs, the step each
+failed at, and up to 20 redacted lines of the error, read from
+`GET /v1/items/:subject/ci-failure` (`apps/bridge/src/ci-failure.ts`). The job
+log is fetched from GitHub's redirect without the token (`GitHubClient.jobLog`).
+When GitHub no longer has the log, the section says so and links to the job.
+
+Both reads go to GitHub only through `GitHubReads`, which can GET and read a
+job log and nothing else. Neither reads nor writes anything the merge line
+reads
+([ADR 0083](adr/0083-the-checks-page-reads-actions-and-the-bridges-records-and-writes-nothing.md)).
+Each repository's view is kept for a minute.
+
 ### The project map
 
 Every managed repository has a project map: one Markdown file that summarises

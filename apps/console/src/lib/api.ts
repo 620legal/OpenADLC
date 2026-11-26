@@ -1888,8 +1888,55 @@ export interface HostsView {
   hosts: HostRow[];
 }
 
+/** A repository's Checks page, as the bridge answers it (`GET /v1/repos/:name/checks`, apps/bridge/src/checks-view.ts). Read-only. */
+export interface ChecksView {
+  repo: string;
+  fullName: string;
+  defaultBranch: string;
+  workflow: { state: 'read' | 'missing' | 'unparseable' | 'unreachable'; detail: string | null; path: string | null };
+  makefile: { state: 'read' | 'missing' | 'unreachable'; detail: string | null };
+  runs: { state: 'read' | 'unreachable'; detail: string | null };
+  flakes: { state: 'read' | 'partial' | 'unreachable'; detail: string | null };
+  rows: CheckRow[];
+  localCi: { sha: string; ok: boolean; at: string } | null;
+  readAt: string;
+}
+
+export type CheckResult = 'pass' | 'fail' | 'skipped' | 'cancelled' | 'none yet';
+
+export interface CheckRow {
+  key: string;
+  name: string;
+  runsOn: 'github' | 'this machine';
+  /** Absent on the host check row, which is never marked. */
+  covered?: boolean | 'unknown';
+  last: { result: CheckResult; url: string | null; at: string | null; detail: string | null };
+  flaky: { count: number; heads: { sha: string; runUrl: string; passedAt: string | null }[] } | null;
+  command?: string;
+}
+
+/** Why an item's pull request is red (`GET /v1/items/:subject/ci-failure`, apps/bridge/src/ci-failure.ts). */
+export type CiFailure =
+  | { state: 'none' }
+  | { state: 'running' | 'green'; headSha: string; runUrl: string }
+  | {
+      state: 'red';
+      headSha: string;
+      runUrl: string;
+      jobs: {
+        name: string;
+        url: string | null;
+        step: string | null;
+        excerpt: string[] | null;
+        excerptMissing: 'expired' | 'too_large' | 'unreachable' | 'no_lines' | null;
+      }[];
+    }
+  | { state: 'unreachable'; reason: string };
+
 export const api = {
   board: (repo: string) => get<Board>(`/v1/board?repo=${encodeURIComponent(repo)}`),
+  /** A repository's Checks page: its ci jobs and host check, flaky ones first (#372). */
+  checks: (repo: string) => get<ChecksView>(`/v1/repos/${encodeURIComponent(repo)}/checks`),
   crew: () => get<{ bots: CrewMember[] }>('/v1/bots'),
   item: (subject: string) => get<ItemView>(`/v1/items/${encodeURIComponent(subject)}`),
   designMemory: (repo: string) =>

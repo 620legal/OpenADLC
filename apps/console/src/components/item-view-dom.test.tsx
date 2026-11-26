@@ -75,12 +75,14 @@ afterEach(() => {
 });
 
 /**
- * The pull panel reads `/api/item/<subject>/pull` once it mounts. The tests
- * below count reads of the item itself, so that read is answered on its own,
- * as an item with no open pull request.
+ * The pull panel reads `/api/item/<subject>/pull` once it mounts, and the CI
+ * failure section `/ci-failure`. The tests below count reads of the item
+ * itself, so those reads are answered on their own, as an item with no open
+ * pull request.
  */
 function isPullRead(input: unknown): boolean {
-  return String(input instanceof Request ? input.url : input).includes('/pull');
+  const url = String(input instanceof Request ? input.url : input);
+  return url.includes('/pull') || url.includes('/ci-failure');
 }
 
 const noPull = (): Response => Response.json({ error: 'no open pull request' }, { status: 404 });
@@ -331,5 +333,38 @@ describe('what the item’s pull request needs to merge (#373)', () => {
     item = { ...ITEM, stage: 'merged', issue: { ...ITEM.issue!, stage: 'merged' } };
     await mount();
     expect(strip()).toBeNull();
+  });
+});
+
+describe('why the item’s pull request is red (#372)', () => {
+  const answering = (ci: unknown) =>
+    vi.fn(async (input: unknown) => {
+      const url = String(input instanceof Request ? input.url : input);
+      if (url.includes('/ci-failure')) return Response.json(ci);
+      if (url.includes('/pull')) return noPull();
+      return Response.json(item);
+    });
+
+  it('shows the failing job, step and the first lines of the error on a red pull request', async () => {
+    vi.stubGlobal(
+      'fetch',
+      answering({
+        state: 'red',
+        headSha: 'a'.repeat(40),
+        runUrl: 'https://github.com/acme/api/actions/runs/9/attempts/1',
+        jobs: [{ name: 'check', url: null, step: 'make ci', excerpt: ['FAIL src/x.test.ts'], excerptMissing: null }],
+      }),
+    );
+    await mount();
+    const section = container.querySelector('[data-ci-failure]');
+    expect(section?.textContent).toContain('check');
+    expect(section?.querySelector('[data-failing-step]')?.textContent).toBe('make ci');
+    expect(section?.querySelector('[data-excerpt]')?.textContent).toBe('FAIL src/x.test.ts');
+  });
+
+  it('shows nothing on a green head', async () => {
+    vi.stubGlobal('fetch', answering({ state: 'green', headSha: 'a'.repeat(40), runUrl: 'x' }));
+    await mount();
+    expect(container.querySelector('[data-ci-failure]')).toBeNull();
   });
 });

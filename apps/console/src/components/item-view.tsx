@@ -21,6 +21,7 @@ import { cn } from '@/lib/cn';
 import { HOW_THIS_WORKS, HowThisWorks } from '@/components/how-this-works';
 import { IssueControls } from '@/components/issue-controls';
 import { PullPanel } from '@/components/pull-panel';
+import { CiFailureSection } from '@/components/ci-failure';
 import {
   addressedRole,
   itemComposer,
@@ -547,6 +548,8 @@ function ItemHeader({
         <>
           <HowThisWorks {...HOW_THIS_WORKS['merge-state']} />
           <PullPanel subject={view.key} />
+          {/* Why its ci is red, when it is: the failing job, step and error (#372). */}
+          <CiFailureSection subject={view.key} repo={view.repo ?? null} refreshKey={`${view.pullRequest.number}:${view.timeline.length}`} />
         </>
       )}
       {view?.workItem && (view.links ?? []).length > 0 && <WorkItemLinks view={view} admin={admin} onChanged={onChanged} />}

@@ -83,6 +83,10 @@ describe('a repository’s settings', () => {
     expect(settings(REPO, 2)).not.toMatch(/aria-label="More" disabled=""/);
   });
 
+  it('links to its Checks page beside its GitHub link (#372)', () => {
+    expect(settings()).toMatch(/<a data-checks-link="true" href="\/checks\/openadlc-testbed"[^>]*>Checks<\/a>/);
+  });
+
   it('offers a choice only on Design, and says the rest run on its own, and why', () => {
     // Ship is stored as assist here, which is on its own now: it never waited.
     expect(controls(settings())).toEqual([{ stage: 'Design', choices: ['Always', 'When it matters'], chosen: 'When it matters' }]);
