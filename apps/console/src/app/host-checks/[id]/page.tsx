@@ -1,6 +1,7 @@
 import { notFound } from 'next/navigation';
 import { AppShell } from '@/components/app-header';
 import { BridgeDown } from '@/components/bridge-down';
+import { HOW_THIS_WORKS, HowThisWorks } from '@/components/how-this-works';
 import { api, type HostCheckRun } from '@/lib/api';
 import { BridgeAnswered } from '@/lib/bridge-answered';
 import { readHeader } from '@/lib/read-header';
@@ -68,6 +69,7 @@ export default async function HostCheckPage({ params }: { params: Promise<{ id: 
         <h1 className="text-[16px] font-semibold text-body">
           Host check on {run.repoName}#{run.prNumber}
         </h1>
+        <HowThisWorks {...HOW_THIS_WORKS['host-checks']} />
         <dl data-host-check-facts className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-[12.5px]">
           {facts.map(([term, value]) => (
             <div key={term} className="contents">
