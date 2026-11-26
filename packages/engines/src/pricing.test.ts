@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { costOf, loadModelPrices, MODEL_PRICES_ENV, modelPricesEnv, readModelPrices, resetModelPrices } from './pricing.js';
+import { cacheReadSavingsUsd, costOf, loadModelPrices, MODEL_PRICES_ENV, modelPricesEnv, readModelPrices, resetModelPrices, setModelPrice } from './pricing.js';
 
 /**
  * Where a session's prices come from. A session runs in the task's clone of a
@@ -110,5 +110,38 @@ describe('the install’s models.yaml', () => {
     expect(readModelPrices(models(dir, 'models:\n  mock:\n    inPerMtok: 0\n    outPerMtok: 0\n'))).toEqual({
       mock: { inPerMtok: 0, outPerMtok: 0 },
     });
+  });
+});
+
+/**
+ * What the Costs page calls the cache's savings (docs/adr/0091): cache-read
+ * tokens at the input rate less the cache-read rate `exactCost` charges.
+ */
+describe('cache-read savings', () => {
+  it('prices a claude-* model at nine tenths of its input rate by default', () => {
+    // claude-opus-5 is $5 in; a read is $0.50, so a million read saves $4.50.
+    expect(cacheReadSavingsUsd('claude-opus-5', 1_000_000)).toBeCloseTo(4.5, 10);
+    expect(cacheReadSavingsUsd('claude-opus-5', 1_000_000)).toBeCloseTo(
+      costOf('claude-opus-5', 1_000_000, 0) - costOf('claude-opus-5', 1_000_000, 0, 1_000_000),
+      4,
+    );
+  });
+
+  it('uses an explicit cache-read rate, from the defaults or the install', () => {
+    // gpt-5-codex: $1.25 in, $0.125 cached.
+    expect(cacheReadSavingsUsd('gpt-5-codex', 2_000_000)).toBeCloseTo(2.25, 10);
+    setModelPrice('claude-opus-5', { inPerMtok: 6, outPerMtok: 30, cachedInPerMtok: 1 });
+    expect(cacheReadSavingsUsd('claude-opus-5', 1_000_000)).toBeCloseTo(5, 10);
+  });
+
+  it('is $0 for a model other than claude-* with no cache-read rate, and for no tokens', () => {
+    expect(cacheReadSavingsUsd('grok-4.7', 1_000_000)).toBe(0);
+    expect(cacheReadSavingsUsd('claude-opus-5', 0)).toBe(0);
+    expect(cacheReadSavingsUsd('claude-opus-5', -5)).toBe(0);
+  });
+
+  it('is never below 0, even where a cache read is priced above input', () => {
+    setModelPrice('odd-model', { inPerMtok: 1, outPerMtok: 1, cachedInPerMtok: 2 });
+    expect(cacheReadSavingsUsd('odd-model', 1_000_000)).toBe(0);
   });
 });

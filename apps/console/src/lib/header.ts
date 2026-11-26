@@ -185,3 +185,21 @@ export function spendLevel(spend: { spentUsd: number; capUsd: number; state?: st
   if (spend.state) return { percent, width, tone: 'signal' };
   return { percent, width, tone: percent >= 100 ? 'alarm' : percent >= 90 ? 'attention' : 'signal' };
 }
+
+/** Where the header's spend chip goes: the Costs page, by the same href the navigation gives it. */
+export const COSTS_HREF = (PAGES.find((one) => one.page === 'costs') as NavPage).href('all');
+
+/**
+ * What the header's spend chip draws. With a cap, "$x of $y" and a bar in
+ * `spendLevel`'s colour, which follows the bridge's budget state: amber at
+ * `warningAt`, never a threshold of its own (docs/adr/0091). With none
+ * (`capUsd <= 0`) the spend alone, neutral and with no bar: there is no
+ * fraction to show, and the bridge's `$spent >= $cap` would call any spend
+ * against a $0 cap `stopped` and draw it red and full.
+ */
+export function spendChip(spend: { spentUsd: number; capUsd: number; state?: string }):
+  | { capped: false }
+  | { capped: true; percent: number; width: number; tone: 'signal' | 'attention' | 'alarm' } {
+  if (!(spend.capUsd > 0)) return { capped: false };
+  return { capped: true, ...spendLevel(spend) };
+}

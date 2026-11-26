@@ -2,6 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { cacheReadSavingsUsd, modelPrice, resetModelPrices } from '@openadlc/engines';
 import { parseYamlFile, reviewRulesSchema } from '@openadlc/shared';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_REVIEW, eventRetentionDaysFrom, identityModeFrom, loadBridgeConfig, RETIRED_WEBHOOK_WARNING, retiredEnvWarning } from './config.js';
@@ -144,6 +145,26 @@ describe('the install’s models.yaml', () => {
     } finally {
       vi.unstubAllEnvs();
       rmSync(root, { recursive: true, force: true });
+      resetModelPrices();
+    }
+  });
+
+  it('is what the bridge prices at once the config is read, not the defaults', () => {
+    // The bridge read the file only for its refusal, so its cache savings were
+    // priced at the defaults while the sessions charged the install's prices.
+    const root = mkdtempSync(join(tmpdir(), 'openadlc-bridge-config-'));
+    try {
+      resetModelPrices();
+      expect(modelPrice('claude-opus-5').inPerMtok).toBe(5);
+      writeFileSync(join(root, 'models.yaml'), 'models:\n  claude-opus-5:\n    inPerMtok: 7\n    outPerMtok: 30\n    cachedInPerMtok: 1\n');
+      vi.stubEnv('OPENADLC_CONFIG_ROOT', root);
+      loadBridgeConfig();
+      expect(modelPrice('claude-opus-5')).toEqual({ inPerMtok: 7, outPerMtok: 30, cachedInPerMtok: 1 });
+      expect(cacheReadSavingsUsd('claude-opus-5', 1_000_000)).toBeCloseTo(6, 10);
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(root, { recursive: true, force: true });
+      resetModelPrices();
     }
   });
 });

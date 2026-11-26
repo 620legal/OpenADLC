@@ -31,7 +31,7 @@ import { labelIn } from '@/lib/bot-label';
 import { cn } from '@/lib/cn';
 import { crewLine, needsYouLine } from '@/lib/crew';
 import type { Brand, Role } from '@/lib/api';
-import { boardHref, navFor, pinnedNav, spendLevel, type HeaderData, type NavPage, type Page } from '@/lib/header';
+import { boardHref, COSTS_HREF, navFor, pinnedNav, spendChip, type HeaderData, type NavPage, type Page } from '@/lib/header';
 import { NAV_PIN_DEFAULTS, onPinsChange, pin, storedPins, unpin } from '@/lib/nav-pins';
 import type { RepoColorMap } from '@/lib/repo-colors';
 import { consoleName } from '@/lib/needs-you-alerts';
@@ -411,13 +411,28 @@ function Estimate({ usd }: { usd: number }) {
   return <span title="estimated on subscriptions, not billed"> · {money(usd)} est.</span>;
 }
 
+/**
+ * This month's billed spend against the cap, a link to Costs (#368). Its
+ * colour is the bridge's budget state, through `spendChip`; with no cap it is
+ * the spend alone, neutral, with no bar.
+ */
 function Spend({ spend }: { spend: NonNullable<HeaderData['spend']> }) {
-  const { percent, width, tone } = spendLevel(spend);
+  const chip = spendChip(spend);
+  const linkClass =
+    'hidden items-center gap-2 rounded-md text-[12.5px] text-soft hover:text-body focus-visible:outline-2 focus-visible:outline-link lg:flex';
+  if (!chip.capped) {
+    return (
+      <Link href={COSTS_HREF} data-spend="uncapped" className={linkClass} title="this month's billed spend; no monthly cap is set">
+        <span>
+          {money(spend.spentUsd, { whole: spend.spentUsd === 0 })} this month
+          {spend.estimateUsd ? <Estimate usd={spend.estimateUsd} /> : null}
+        </span>
+      </Link>
+    );
+  }
+  const { percent, width, tone } = chip;
   return (
-    <span
-      className="hidden items-center gap-2 text-[12.5px] text-soft lg:flex"
-      title={`${percent.toFixed(1)} percent of this month's cap`}
-    >
+    <Link href={COSTS_HREF} data-spend={tone} className={linkClass} title={`${percent.toFixed(1)} percent of this month's cap`}>
       <span>
         {money(spend.spentUsd, { whole: spend.spentUsd === 0 })} of {money(spend.capUsd, { whole: true })}
         {spend.estimateUsd ? <Estimate usd={spend.estimateUsd} /> : null}
@@ -433,7 +448,7 @@ function Spend({ spend }: { spend: NonNullable<HeaderData['spend']> }) {
           style={{ width: spend.spentUsd > 0 ? `max(2px, ${width}%)` : '0' }}
         />
       </span>
-    </span>
+    </Link>
   );
 }
 

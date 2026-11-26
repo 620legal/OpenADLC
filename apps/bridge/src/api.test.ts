@@ -3108,6 +3108,94 @@ describe('the month’s costs, as the console reads them', () => {
   });
 });
 
+describe('the Costs page’s range, from /v1/costs/usage', () => {
+  let server: Server;
+  let url: string;
+  const usageByModel = vi.fn(async (_since: Date | null) => [
+    { model: 'claude-opus-5', engine: 'claude', billed: true, costUsd: 3, tokensIn: 1_000_000, tokensOut: 10, cacheRead: 1_000_000, cacheWrite: 0, invocations: 2 },
+    { model: 'claude-opus-5', engine: 'claude', billed: false, costUsd: 7, tokensIn: 100, tokensOut: 10, cacheRead: 0, cacheWrite: 0, invocations: 1 },
+  ]);
+  const usageSeries = vi.fn(async (_since: Date | null, _bucket: string) => []);
+  const spendByBotSince = vi.fn(async (_since: Date | null) => []);
+  const listLedger = vi.fn(async (_limit?: number, _since?: Date | null) => []);
+  const refreshBudget = vi.fn();
+  const ensureBudget = vi.fn();
+
+  beforeEach(async () => {
+    const { HostdClient } = await import('./hostd-client.js');
+    const { registerConsoleApi } = await import('./api.js');
+    const { Router } = await import('./router.js');
+    for (const mock of [usageByModel, usageSeries, spendByBotSince, listLedger, refreshBudget, ensureBudget]) mock.mockClear();
+    Object.assign(costs, { usageByModel, usageSeries, spendByBotSince, listLedger, refreshBudget, ensureBudget });
+    const router = new Router();
+    registerConsoleApi(router, {
+      config: { costs: { monthlyCapUsd: 1500, perTaskCapUsd: 15, warningAt: 0.9 } } as never,
+      hostd: new HostdClient('http://127.0.0.1:1', 'secret'),
+      actors: {} as never,
+      invitations: {} as never,
+      automation: {} as never,
+      gates: {} as never,
+      taskService: {} as never,
+      threadStream: { subscribe: () => () => undefined, watching: 0 } as never,
+      onboarding: {} as never,
+      webhookSetup: {} as never,
+      repoSetup: {} as never,
+    });
+    server = createServer((request, response) => void router.handle(request, response));
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  });
+
+  afterEach(async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  it('answers each of the five ranges from its own start, hourly for 24h and daily otherwise', async () => {
+    const spans: Record<string, number | null> = { '24h': 1, '7d': 7, '30d': 30, '90d': 90, all: null };
+    for (const [range, days] of Object.entries(spans)) {
+      usageByModel.mockClear();
+      usageSeries.mockClear();
+      const response = await fetch(`${url}/v1/costs/usage?range=${range}`);
+      expect(response.status, range).toBe(200);
+      const body = (await response.json()) as { range: string; bucket: string; since: string | null; until: string };
+      expect(body.range).toBe(range);
+      expect(body.bucket).toBe(range === '24h' ? 'hour' : 'day');
+      const since = usageByModel.mock.calls[0]?.[0] ?? null;
+      if (days === null) {
+        expect(since, range).toBeNull();
+        expect(body.since).toBeNull();
+      } else {
+        expect(Date.parse(body.until) - (since as Date).getTime(), range).toBe(days * 24 * 60 * 60 * 1000);
+        expect(body.since).toBe((since as Date).toISOString());
+      }
+      expect(usageSeries.mock.calls[0]?.[1]).toBe(body.bucket);
+    }
+    expect(listLedger.mock.calls.every((call) => call[0] === 50)).toBe(true);
+  });
+
+  it('reads 30 days when no range is named, and refuses any other, naming the five', async () => {
+    const plain = (await (await fetch(`${url}/v1/costs/usage`)).json()) as { range: string };
+    expect(plain.range).toBe('30d');
+    for (const range of ['1y', '30', 'ALL']) {
+      const response = await fetch(`${url}/v1/costs/usage?range=${range}`);
+      expect(response.status, range).toBe(400);
+      expect(await response.text()).toContain('24h, 7d, 30d, 90d, all');
+    }
+  });
+
+  it('keeps billed and estimated apart, prices the cache’s savings, and writes no budget', async () => {
+    const body = (await (await fetch(`${url}/v1/costs/usage?range=7d`)).json()) as {
+      totals: { billedUsd: number; estimateUsd: number; cacheSavings: { billedUsd: number; estimateUsd: number } };
+    };
+    expect(body.totals.billedUsd).toBe(3);
+    expect(body.totals.estimateUsd).toBe(7);
+    expect(body.totals.cacheSavings.billedUsd).toBeCloseTo(4.5, 6);
+    expect(body.totals.cacheSavings.estimateUsd).toBe(0);
+    expect(refreshBudget).not.toHaveBeenCalled();
+    expect(ensureBudget).not.toHaveBeenCalled();
+  });
+});
+
 describe('a bot’s sessions on the crew page', () => {
   const BUILDER = { id: 'bot-1', name: 'openadlc-atlas-janedoe', slot: 'builder', role: 'implement' };
   const SESSION = { id: 's-1', name: 'implement-1', cmd: 'claude', state: 'working', pid: 7, lastLine: 'export GH_TOKEN=ghp_secret', observedAt: '2026-10-04T10:00:00Z' };

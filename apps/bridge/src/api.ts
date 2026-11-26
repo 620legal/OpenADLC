@@ -5,6 +5,7 @@ import { readSecurityFindings } from './security-findings.js';
 import { insights } from '@openadlc/db';
 import { heldForPerson } from './merge-line.js';
 import { monthStart, parseCap, summarize as summarizeCi } from './ci-usage.js';
+import { bucketOf, parseRange, sinceOf, summarizeUsage, USAGE_RANGES } from './cost-usage.js';
 import { readHolds } from './item-hold.js';
 import { readProjectMap } from './project-map.js';
 import type { Attribution } from './attribution.js';
@@ -2381,6 +2382,23 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
         .map((task) => ({ id: task.id, subjectRef: task.subjectRef, costUsd: task.costUsd })),
       ci: summarizeCi(ciRuns, { since: ciSince, cap: parseCap(ciCap) }),
     };
+  });
+
+  // What the Costs page shows for a range, beside the month's /v1/costs that
+  // every page's header reads (docs/adr/0091). Reads only: nothing here
+  // writes a budget or feeds a cap.
+  router.get('/v1/costs/usage', async ({ query }) => {
+    const range = parseRange(query.get('range'));
+    if (!range) throw new HttpFailure(400, `range is one of ${USAGE_RANGES.join(', ')}`);
+    const now = new Date();
+    const since = sinceOf(range, now);
+    const [rows, series, bots, ledger] = await Promise.all([
+      costs.usageByModel(since),
+      costs.usageSeries(since, bucketOf(range)),
+      costs.spendByBotSince(since),
+      costs.listLedger(50, since),
+    ]);
+    return summarizeUsage({ range, now, rows, series, bots, ledger });
   });
 
   // The month's cap on GitHub Actions minutes: a whole number, or null for none.
