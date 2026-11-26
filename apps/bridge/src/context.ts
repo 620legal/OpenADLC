@@ -24,6 +24,7 @@ import { actsForOn } from './people.js';
 import type { BridgeConfig } from './config.js';
 import type { DeliveryKnowledge } from './delivery-rules.js';
 import { intakeDocument, openWorkDocument, openWorkDocumentFor, requestDocument } from './request-context.js';
+import { mapDocument, type ProjectMapRead } from './project-map.js';
 
 /** Long conversations cost more than they inform; the recent turns carry the thread. */
 const MAX_COMMENTS = 20;
@@ -38,6 +39,9 @@ const DESCRIPTION_TIMEOUT_MS = 5_000;
  * already on the item by then.
  */
 const READS_ISSUE_IMAGES: ReadonlySet<TaskKind> = new Set<TaskKind>(['intake', 'spec', 'implement']);
+
+/** The work given the repository's project map: design and the build, which explore before they write. */
+const READS_PROJECT_MAP: ReadonlySet<TaskKind> = new Set<TaskKind>(['spec', 'implement']);
 
 function renderComments(comments: { user: string; body: string; at: string }[], leftOut: number): string {
   // Said, so a bot does not take a conversation it was not shown for one that
@@ -114,6 +118,26 @@ export class Context {
 
   useDelivery(delivery: Pick<DeliveryKnowledge, 'get'>): void {
     this.delivery = delivery;
+  }
+
+  /** Reads a repository's project map from hostd's work root; set once hostd's client exists (`main.ts`). */
+  private projectMaps: ((repoFullName: string) => Promise<ProjectMapRead | null>) | null = null;
+
+  useProjectMaps(read: (repoFullName: string) => Promise<ProjectMapRead | null>): void {
+    this.projectMaps = read;
+  }
+
+  /**
+   * The repository's map as `project-map.md`, or null: no reader, no map, or
+   * a read that failed — the task then starts as it did before maps.
+   */
+  private async projectMapFor(input: SubjectContextInput): Promise<ContextDocument | null> {
+    if (!this.projectMaps) return null;
+    const read = await this.projectMaps(input.repoFullName).catch((error: unknown) => {
+      console.warn(`[bridge] ${input.repoFullName}: its project map could not be read: ${error instanceof Error ? error.message : error}`);
+      return null;
+    });
+    return read ? mapDocument(read, { consoleUrl: this.config.consoleUrl ?? null }) : null;
   }
 
   /**
@@ -265,6 +289,15 @@ export class Context {
           await admit([author]);
           return heard(author);
         });
+      }
+
+      // The repository's map, after the subject: a design and a build begin
+      // by finding their way around, and every one of them repeated it.
+      // Read from hostd's work root, never the worktree, which a pull request
+      // could change to brief its own builder (docs/adr/0088).
+      if (READS_PROJECT_MAP.has(input.kind)) {
+        const map = await this.projectMapFor(input);
+        if (map) documents.push(map);
       }
 
       // Design reads what intake learned, whole: the issue is its summary, and

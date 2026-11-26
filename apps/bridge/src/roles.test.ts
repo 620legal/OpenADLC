@@ -103,6 +103,10 @@ describe('every console route says who may call it', () => {
     expect(roleFor('PATCH', '/v1/repos/:name')).toBe('admin');
   });
 
+  it('lets a user read any managed repository’s project map, for the Map page (#380)', () => {
+    expect(roleFor('GET', '/v1/repos/:name/map')).toBe('user');
+  });
+
   it('lets a user read the Security page, whose route keeps secret scanning an admin’s (#377)', () => {
     expect(roleFor('GET', '/v1/security/alerts')).toBe('user');
   });

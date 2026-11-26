@@ -129,6 +129,9 @@ export const ROUTE_ROLES: Readonly<Record<string, Role>> = {
   'GET /v1/releases': 'user',
   'GET /v1/releases/:id': 'user',
   'GET /v1/repos/:name/releases': 'user',
+  // A repository's project map: generated from its merged files, read by
+  // every console user as the Releases view is (docs/adr/0088).
+  'GET /v1/repos/:name/map': 'user',
   'POST /v1/repos/:name/release/views': 'user',
   'POST /v1/repos/:name/release/cut': 'user',
   // Prepare next version (#363, ADR 0078) files a console request; Approves is

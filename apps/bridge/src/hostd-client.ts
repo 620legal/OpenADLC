@@ -150,6 +150,8 @@ const HOST_CHECK_CALL_TIMEOUT_MS = 30_000;
 /** A project map's first build fetches the whole repository into hostd's mirror, which for a large one is slow. */
 const PROJECT_MAP_REFRESH_TIMEOUT_MS = 5 * 60_000;
 const PROJECT_MAP_CALL_TIMEOUT_MS = 30_000;
+/** Reading one map is a file read; a task's start and a console page wait on it. */
+const PROJECT_MAP_READ_TIMEOUT_MS = 10_000;
 
 /** One repository's project map as hostd holds it (`apps/hostd/src/project-map.ts`). */
 export interface ProjectMapView {
@@ -593,6 +595,14 @@ export class HostdClient {
   /** Every project map hostd holds, and every repository whose last attempt failed. */
   async projectMaps(): Promise<{ maps: ProjectMapView[] }> {
     return this.call('GET', '/project-maps', { timeoutMs: PROJECT_MAP_CALL_TIMEOUT_MS });
+  }
+
+  /**
+   * One repository's map, whole, from hostd's work root (docs/adr/0088);
+   * `content` is null where there is none yet.
+   */
+  async projectMap(repoFullName: string): Promise<{ map: ProjectMapView; content: string | null }> {
+    return this.call('GET', `/project-maps/${projectMapPath(repoFullName)}`, { timeoutMs: PROJECT_MAP_READ_TIMEOUT_MS });
   }
 
   /** Deletes the map of a repository OpenADLC no longer manages. */
