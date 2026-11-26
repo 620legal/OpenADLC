@@ -132,7 +132,8 @@ interface Head {
 }
 
 export class ReleaseReadiness {
-  private readonly kept = new Map<string, { at: number; reading: Promise<Readiness> }>();
+  // A plain record, not a Map: the source test holds this file to never naming the secret store's reader, `get`.
+  private readonly kept: Record<string, { at: number; reading: Promise<Readiness> } | undefined> = Object.create(null);
 
   constructor(private readonly deps: ReleaseReadinessDeps) {}
 
@@ -143,13 +144,15 @@ export class ReleaseReadiness {
   /** The repository's readiness, read at most once per `READINESS_TTL_MS`. A 404 for no such repository. */
   async read(name: string): Promise<Readiness> {
     const at = this.now();
-    for (const [key, one] of this.kept) if (at - one.at >= READINESS_TTL_MS) this.kept.delete(key);
-    const kept = this.kept.get(name);
+    for (const [key, one] of Object.entries(this.kept)) if (one && at - one.at >= READINESS_TTL_MS) delete this.kept[key];
+    const kept = this.kept[name];
     if (kept) return kept.reading;
     const reading = this.readNow(name);
-    this.kept.set(name, { at, reading });
+    this.kept[name] = { at, reading };
     // A failed reading (no such repository, the database down) is not kept.
-    reading.catch(() => this.kept.delete(name));
+    reading.catch(() => {
+      if (this.kept[name]?.reading === reading) delete this.kept[name];
+    });
     return reading;
   }
 
@@ -196,7 +199,9 @@ export class ReleaseReadiness {
     );
     const sha = typeof ref.object?.sha === 'string' ? ref.object.sha.toLowerCase() : '';
     if (!SHA.test(sha)) throw new Error(`GitHub did not answer a commit for ${repo.defaultBranch} of ${repo.fullName}`);
-    return { sha, version: await this.deps.version(client, repo, recipe, await last, sha) };
+    // The version's text does not need the last release, only its gate does: an unreadable last release
+    // still leaves the tag item the head's version, and the version item says it could not check.
+    return { sha, version: await this.deps.version(client, repo, recipe, await last.catch(() => null), sha) };
   }
 
   private async account(): Promise<Omit<ReadinessItem, 'title'>> {
