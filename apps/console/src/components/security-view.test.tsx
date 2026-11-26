@@ -105,7 +105,8 @@ describe('the Security page', () => {
     await render({ repo: 'app', severity: 'low' });
     expect([...container.querySelectorAll('section')].map((one) => one.getAttribute('aria-label'))).toEqual(['app']);
     expect(container.querySelector('[data-alert="dependabot:3"]')).toBeNull();
-    expect(block('app', 'dependabot').textContent).toContain('No open alerts of low');
+    expect(block('app', 'dependabot').textContent).toContain('No open alerts of low severity');
+    expect(container.querySelector('[role="status"]')?.textContent).toMatch(/^0 open alerts of low severity, read from GitHub/);
     const severity = container.querySelector('[role="group"][aria-label="Severity"]')!;
     expect(severity.querySelector('[aria-current="true"]')?.textContent).toBe('Low');
     expect([...severity.querySelectorAll('a')].find((one) => one.textContent === 'High')?.getAttribute('href')).toBe('/security?repo=app&severity=high');

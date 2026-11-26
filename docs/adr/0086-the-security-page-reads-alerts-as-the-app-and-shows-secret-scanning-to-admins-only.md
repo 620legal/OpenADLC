@@ -33,7 +33,12 @@ rather than an obvious build.
   `SecurityReads`, whose one read is `GitHubClient.getPaged`. That method sends
   GETs, follows `Link: rel="next"` (Dependabot pages by cursor) and stops at 10
   pages with `truncated: true`. Answers are memoised for 60 seconds per
-  repository and type. There is no table.
+  repository and type. There is no table. A token is kept until shortly
+  before it expires, one mint shared by the reads waiting on it, but a read
+  refused with "Resource not accessible by integration" drops it and asks
+  once more with a fresh one: a token carries the permissions the
+  installation had when it was minted, so a kept one would hide a permission
+  granted since for up to an hour.
 - **Allowlisted entries.** Each entry is built field by field: type,
   repository, number, title, severity, link, created at, where, and a note.
   GitHub's object is never spread. The secret-scanning read also asks

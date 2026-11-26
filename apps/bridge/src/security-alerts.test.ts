@@ -1,6 +1,6 @@
 import { GitHubApiError } from '@openadlc/github';
 import { describe, expect, it } from 'vitest';
-import { SecurityAlertsReader, alertsPath, classify, probeType, severityOf, toAlert, type SecurityReads } from './security-alerts.js';
+import { SecurityAlertsReader, alertsPath, classify, probeType, securityReadsAsApp, severityOf, toAlert, type SecurityReads } from './security-alerts.js';
 
 const LEAKED = 'ghp_abcdefghijklmnopqrstuvwxyz0123456789';
 
@@ -234,5 +234,62 @@ describe('a probe of one type', () => {
     expect(await probeType(reads, { name: 'app', fullName: 'acme/app' }, 'code-scanning')).toEqual({ state: 'unreadable', permission: 'Code scanning alerts' });
     expect(calls).toEqual([{ method: 'GET', path: alertsPath('code-scanning', 'acme/app', 1), token: 'token-acme/app' }]);
     expect(await probeType(reads, { name: 'app', fullName: 'acme/app' }, 'dependabot')).toMatchObject({ state: 'read' });
+  });
+});
+
+describe('the app’s installation tokens', () => {
+  /** An app whose permission for code scanning a person can grant between reads, counting its mints. */
+  function app() {
+    const state = { granted: false, mints: 0, now: 0 };
+    // A token carries the permissions the installation had when it was minted.
+    const minted = new Map<string, boolean>();
+    const reads = securityReadsAsApp({
+      credentials: async () => ({ appId: '1', privateKey: 'k' }) as never,
+      api: {} as never,
+      repositories: async () => [{ name: 'app', fullName: 'acme/app' }],
+      now: () => state.now,
+      mint: async () => {
+        const token = `token-${++state.mints}`;
+        minted.set(token, state.granted);
+        return { token, expiresAt: new Date(60 * 60 * 1000).toISOString() };
+      },
+      client: (token) => ({
+        getPaged: async <T,>(path: string) => {
+          if (path.includes('/code-scanning/') && !minted.get(token)) throw refused(403, 'Resource not accessible by integration');
+          return { items: [] as T[], truncated: false };
+        },
+      }),
+    });
+    return { state, reads };
+  }
+  const repo = { name: 'app', fullName: 'acme/app' };
+
+  it('mints a fresh token when a held one is refused, so a permission granted since is seen at once', async () => {
+    const { state, reads } = app();
+    expect(await probeType(reads, repo, 'dependabot')).toMatchObject({ state: 'read' });
+    expect(state.mints).toBe(1);
+
+    state.granted = true;
+    state.now = 60_000;
+    // The held token predates the grant: refused, dropped, and asked again with a new one.
+    expect(await probeType(reads, repo, 'code-scanning')).toMatchObject({ state: 'read' });
+    expect(state.mints).toBe(2);
+    // The new token is kept from then on.
+    expect(await probeType(reads, repo, 'code-scanning')).toMatchObject({ state: 'read' });
+    expect(state.mints).toBe(2);
+  });
+
+  it('asks only once more while the permission is still missing', async () => {
+    const { state, reads } = app();
+    expect(await probeType(reads, repo, 'code-scanning')).toEqual({ state: 'unreadable', permission: 'Code scanning alerts' });
+    expect(state.mints).toBe(2);
+  });
+
+  it('shares a mint in flight among the types read in parallel', async () => {
+    const { state, reads } = app();
+    state.granted = true;
+    const view = await new SecurityAlertsReader(reads).view({ role: 'admin' });
+    expect(Object.values(view.repos[0]!.types).every((one) => one.state === 'read')).toBe(true);
+    expect(state.mints).toBe(1);
   });
 });

@@ -70,6 +70,13 @@ export interface SecurityReads {
   repositories(): Promise<SecurityRepo[]>;
   /** An installation token for the one repository, or null when the app is not installed on it. Throws when GitHub could not be asked. */
   tokenFor(fullName: string): Promise<string | null>;
+  /**
+   * Forgets a token GitHub refused for want of a permission, so the next
+   * `tokenFor` mints one. An installation token carries the installation's
+   * permissions as they were when it was minted: kept, it would go on being
+   * refused for up to an hour after the permission was added and accepted.
+   */
+  dropToken?(fullName: string, token: string): void;
   /** A GET of a list endpoint, following its next links; throws GitHub's refusal (`GitHubApiError`). */
   getPaged<T>(token: string, path: string, options: { maxPages: number }): Promise<{ items: T[]; truncated: boolean }>;
 }
@@ -77,7 +84,8 @@ export interface SecurityReads {
 /** 10 pages of 100: the most of one type the page shows for one repository. */
 export const MAX_PAGES = 10;
 export const MEMO_MS = 60_000;
-const CONCURRENCY = 4;
+/** How many repositories the page and the health check read at once. */
+export const CONCURRENCY = 4;
 
 /**
  * GitHub's words for an app that lacks the permission. The status cannot tell
@@ -189,7 +197,7 @@ export function toAlert(type: AlertType, repo: string, raw: unknown): SecurityAl
 }
 
 /** Runs `work` over `items`, at most `limit` at a time, in order. */
-async function inBatches<T, R>(items: readonly T[], limit: number, work: (item: T) => Promise<R>): Promise<R[]> {
+export async function inBatches<T, R>(items: readonly T[], limit: number, work: (item: T) => Promise<R>): Promise<R[]> {
   const results: R[] = new Array(items.length);
   let next = 0;
   const lanes = Array.from({ length: Math.min(limit, items.length) }, async () => {
@@ -255,19 +263,40 @@ export class SecurityAlertsReader {
   }
 
   private async readNow(repo: SecurityRepo, type: AlertType): Promise<Read> {
-    let token: string | null;
     try {
-      token = await this.reads.tokenFor(repo.fullName);
+      return await readType(this.reads, repo, type, { maxPages: MAX_PAGES, perPage: 100 }, (raw) => toAlert(type, repo.name, raw));
     } catch (error) {
+      // Only the token could not be had: GitHub was not reached.
       return { state: 'failed', reason: reasonOf(error) };
     }
+  }
+}
+
+/**
+ * One read of one type on one repository. A refusal for want of a permission
+ * is asked once more with a fresh token: the held one may predate a permission
+ * a person has since added and accepted, and without the retry the page and
+ * the health card kept saying "not readable" until it expired, up to an hour.
+ * Throws only when no token could be had.
+ */
+async function readType(
+  reads: SecurityReads,
+  repo: SecurityRepo,
+  type: AlertType,
+  size: { maxPages: number; perPage: number },
+  shape: (raw: unknown) => SecurityAlert | null,
+): Promise<Read> {
+  for (let attempt = 0; ; attempt++) {
+    const token = await reads.tokenFor(repo.fullName);
     if (!token) return { state: 'not-installed' };
     try {
-      const { items, truncated } = await this.reads.getPaged<unknown>(token, alertsPath(type, repo.fullName), { maxPages: MAX_PAGES });
-      const alerts = items.flatMap((raw) => toAlert(type, repo.name, raw) ?? []);
-      return { state: 'read', alerts, truncated };
+      const { items, truncated } = await reads.getPaged<unknown>(token, alertsPath(type, repo.fullName, size.perPage), { maxPages: size.maxPages });
+      return { state: 'read', alerts: items.flatMap((raw) => shape(raw) ?? []), truncated };
     } catch (error) {
-      return classify(type, error);
+      const state = classify(type, error);
+      if (state.state !== 'unreadable' || !reads.dropToken) return state;
+      reads.dropToken(repo.fullName, token);
+      if (attempt > 0) return state;
     }
   }
 }
@@ -277,14 +306,7 @@ export class SecurityAlertsReader {
  * one alert's page of the same endpoint, classified as the page classifies it.
  */
 export async function probeType(reads: SecurityReads, repo: SecurityRepo, type: AlertType): Promise<Read> {
-  const token = await reads.tokenFor(repo.fullName);
-  if (!token) return { state: 'not-installed' };
-  try {
-    await reads.getPaged<unknown>(token, alertsPath(type, repo.fullName, 1), { maxPages: 1 });
-    return { state: 'read', alerts: [], truncated: false };
-  } catch (error) {
-    return classify(type, error);
-  }
+  return readType(reads, repo, type, { maxPages: 1, perPage: 1 }, () => null);
 }
 
 /** How long before its expiry an installation token is minted again. */
@@ -292,37 +314,62 @@ const TOKEN_MARGIN_MS = 5 * 60 * 1000;
 
 /**
  * `SecurityReads` as the app, with an installation token scoped to each
- * repository, kept until shortly before it expires. Minting it is a POST to
- * the app's own installation, which writes nothing to a repository; every
- * repository read is `getPaged`'s GET.
+ * repository, kept until shortly before it expires or until GitHub refuses it
+ * for want of a permission (`dropToken`). Minting it is a POST to the app's
+ * own installation, which writes nothing to a repository; every repository
+ * read is `getPaged`'s GET.
+ *
+ * A mint in flight is shared: the page reads a repository's types in
+ * parallel, and on a cold open each minted a token of its own.
  */
 export function securityReadsAsApp(deps: {
   credentials: () => Promise<AppCredentials | null>;
   api: AppApi;
   repositories: () => Promise<SecurityRepo[]>;
   now?: () => number;
+  /** Mints the installation token: `installationTokenFor`, but in tests. */
+  mint?: typeof installationTokenFor;
+  /** The client a token reads with: `GitHubClient`, but in tests. */
+  client?: (token: string) => Pick<GitHubClient, 'getPaged'>;
 }): SecurityReads {
   const tokens = new Map<string, { token: string; until: number }>();
+  const minting = new Map<string, Promise<string | null>>();
   const now = () => deps.now?.() ?? Date.now();
+  const mint = deps.mint ?? installationTokenFor;
+
+  async function mintFor(fullName: string): Promise<string | null> {
+    const credentials = await deps.credentials();
+    if (!credentials) return null;
+    try {
+      const minted = await mint(deps.api, credentials, fullName);
+      const expires = minted.expiresAt ? Date.parse(minted.expiresAt) : now() + 30 * 60 * 1000;
+      tokens.set(fullName, { token: minted.token, until: expires - TOKEN_MARGIN_MS });
+      return minted.token;
+    } catch (error) {
+      // The installation lookup answers 404 where the app is not installed.
+      if (error instanceof GitHubApiError && error.status === 404) return null;
+      if (error instanceof Error && /is not installed on/.test(error.message)) return null;
+      throw error;
+    }
+  }
+
   return {
     repositories: deps.repositories,
     async tokenFor(fullName) {
       const held = tokens.get(fullName);
       if (held && held.until > now()) return held.token;
-      const credentials = await deps.credentials();
-      if (!credentials) return null;
-      try {
-        const minted = await installationTokenFor(deps.api, credentials, fullName);
-        const expires = minted.expiresAt ? Date.parse(minted.expiresAt) : now() + 30 * 60 * 1000;
-        tokens.set(fullName, { token: minted.token, until: expires - TOKEN_MARGIN_MS });
-        return minted.token;
-      } catch (error) {
-        // The installation lookup answers 404 where the app is not installed.
-        if (error instanceof GitHubApiError && error.status === 404) return null;
-        if (error instanceof Error && /is not installed on/.test(error.message)) return null;
-        throw error;
-      }
+      const inFlight = minting.get(fullName);
+      if (inFlight) return inFlight;
+      const minted = mintFor(fullName).finally(() => minting.delete(fullName));
+      minting.set(fullName, minted);
+      return minted;
     },
-    getPaged: (token, path, options) => new GitHubClient({ token, actingAs: 'openadlc-app' }).getPaged(path, options),
+    dropToken(fullName, token) {
+      // Only the token that was refused: a parallel read may already have
+      // minted its successor, which is not to be thrown away.
+      if (tokens.get(fullName)?.token === token) tokens.delete(fullName);
+    },
+    getPaged: (token, path, options) =>
+      (deps.client?.(token) ?? new GitHubClient({ token, actingAs: 'openadlc-app' })).getPaged(path, options),
   };
 }

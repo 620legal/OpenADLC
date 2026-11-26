@@ -1,5 +1,5 @@
 import { appPermissionsUrl } from '@openadlc/shared';
-import { ALERT_PERMISSIONS, ALERT_TYPES, probeType, type AlertType, type SecurityReads } from '../../security-alerts.js';
+import { ALERT_PERMISSIONS, ALERT_TYPES, CONCURRENCY, inBatches, probeType, type AlertType, type SecurityReads } from '../../security-alerts.js';
 import type { CheckResult, HealthCheck } from '../types.js';
 
 /**
@@ -37,12 +37,18 @@ export function securityAlertsCheck(deps: SecurityAlertsCheckDeps): HealthCheck 
       if (repositories.length === 0) return [];
       const page = appPermissionsUrl(app.slug, app.organization);
 
+      // Repositories a few at a time and a repository's types together, as
+      // the page reads them: one at a time, a run took repositories × 3 round
+      // trips, which grows past a check's interval on a large install.
+      const probed = await inBatches(repositories, CONCURRENCY, (repo) =>
+        Promise.all(ALERT_TYPES.map(async (type) => ({ repo, type, state: await probeType(deps.reads, repo, type) }))),
+      );
+
       const results: CheckResult[] = [];
       for (const type of ALERT_TYPES) {
         const { label } = ALERT_PERMISSIONS[type];
         const unreadable: string[] = [];
-        for (const repo of repositories) {
-          const state = await probeType(deps.reads, repo, type);
+        for (const { repo, state } of probed.flat().filter((one) => one.type === type)) {
           // GitHub not answering is a run that could not complete: thrown, so
           // the rows stand as they were rather than clearing a card unproved.
           if (state.state === 'failed') throw new Error(`GitHub did not answer for ${label} on ${repo.fullName}: ${state.reason}`);

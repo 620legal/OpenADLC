@@ -22,6 +22,11 @@ export const SEVERITY_LABELS: Record<AlertSeverity, string> = {
   none: 'No severity',
 };
 
+/** A severity filter as the end of a sentence about alerts: "of critical severity", or "with no severity". */
+export function severityPhrase(severity: AlertSeverity): string {
+  return severity === 'none' ? 'with no severity' : `of ${SEVERITY_LABELS[severity].toLowerCase()} severity`;
+}
+
 export interface SecurityFilters {
   repo: string | null;
   severity: AlertSeverity | null;

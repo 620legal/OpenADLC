@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import type { SecurityAlert, SecurityAlertsView } from './api';
-import { alertCount, filterAlerts, filtersFrom, securityHref, securityRequest } from './security';
+import { alertCount, filterAlerts, filtersFrom, securityHref, securityRequest, severityPhrase } from './security';
+
+describe('a severity filter in a sentence', () => {
+  it('names the level as a severity, and none as no severity', () => {
+    expect(severityPhrase('critical')).toBe('of critical severity');
+    expect(severityPhrase('none')).toBe('with no severity');
+  });
+});
 
 const high: SecurityAlert = {
   type: 'dependabot',

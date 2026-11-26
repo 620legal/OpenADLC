@@ -12,6 +12,7 @@ import {
   SEVERITIES,
   SEVERITY_LABELS,
   TYPE_LABELS,
+  severityPhrase,
   alertCount,
   filterAlerts,
   securityHref,
@@ -62,7 +63,7 @@ export function SecurityBody({ view, repos, filters }: { view: SecurityAlertsVie
 
       <p className="text-[12px] text-muted" role="status">
         {alertCount(shown)} open {alertCount(shown) === 1 ? 'alert' : 'alerts'}
-        {filters.severity ? ` of ${SEVERITY_LABELS[filters.severity].toLowerCase()}` : ''}, read from GitHub at{' '}
+        {filters.severity ? ` ${severityPhrase(filters.severity)}` : ''}, read from GitHub at{' '}
         {new Date(view.readAt).toLocaleTimeString()}.
       </p>
 
@@ -119,7 +120,7 @@ function TypeBlock({
 export function stateLine(state: AlertTypeState | undefined, severity: AlertSeverity | null = null): React.ReactNode {
   switch (state?.state) {
     case 'read':
-      return severity ? `No open alerts of ${SEVERITY_LABELS[severity].toLowerCase()}` : 'No open alerts';
+      return severity ? `No open alerts ${severityPhrase(severity)}` : 'No open alerts';
     case 'off':
       return 'Not switched on for this repository';
     case 'unreadable':

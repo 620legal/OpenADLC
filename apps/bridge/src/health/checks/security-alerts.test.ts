@@ -64,6 +64,29 @@ describe('the security-alerts check', () => {
     await expect(check.run(new Date())).rejects.toThrow(/Dependabot alerts/);
   });
 
+  it('probes repositories a few at a time rather than one read after another', async () => {
+    let inFlight = 0;
+    let most = 0;
+    const repositories = Array.from({ length: 10 }, (_, index) => ({ name: `r${index}`, fullName: `acme/r${index}` }));
+    const check = securityAlertsCheck({
+      reads: {
+        repositories: async () => repositories,
+        tokenFor: async () => 'token',
+        getPaged: async () => {
+          most = Math.max(most, ++inFlight);
+          await new Promise((resolve) => setTimeout(resolve, 1));
+          inFlight--;
+          return { items: [], truncated: false };
+        },
+      },
+      app: async () => ({ slug: 'openadlc-acme', organization: 'acme' }),
+    });
+    const results = await check.run(new Date());
+    expect(results.map((one) => one.ok)).toEqual([true, true, true]);
+    // Four repositories at once, each with its three types together.
+    expect(most).toBe(12);
+  });
+
   it('says nothing while there is no app to act as', async () => {
     const check = securityAlertsCheck({
       reads: { repositories: async () => [{ name: 'app', fullName: 'acme/app' }], tokenFor: async () => 'token', getPaged: async () => ({ items: [], truncated: false }) },
