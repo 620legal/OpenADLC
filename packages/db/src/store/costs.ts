@@ -110,11 +110,15 @@ export async function recordUsage(input: {
   );
 }
 
-export async function listLedger(limit = 200): Promise<LedgerEntry[]> {
+/** The latest `limit` rows, or the latest of those at or after `since` when it is given. */
+export async function listLedger(limit = 200, since: Date | null = null): Promise<LedgerEntry[]> {
   const rows = await query<LedgerRow>(
-    `select id, task_id, bot_id, engine, model, model_alias, tokens_in, tokens_out, tokens_cache_read, tokens_cache_write, cost_usd, billed, at
-     from ledger order by at desc limit $1`,
-    [limit],
+    since
+      ? `select id, task_id, bot_id, engine, model, model_alias, tokens_in, tokens_out, tokens_cache_read, tokens_cache_write, cost_usd, billed, at
+         from ledger where at >= $2 order by at desc limit $1`
+      : `select id, task_id, bot_id, engine, model, model_alias, tokens_in, tokens_out, tokens_cache_read, tokens_cache_write, cost_usd, billed, at
+         from ledger order by at desc limit $1`,
+    since ? [limit, since] : [limit],
   );
   return rows.map((row) => ({
     id: Number(row.id),
@@ -280,6 +284,140 @@ export async function spendByDay(period: string): Promise<{ day: string; costUsd
       [period],
     )
   ).map((row) => ({ day: row.day, costUsd: Number(row.cost_usd) }));
+}
+
+/**
+ * The ledger since a moment (or ever, for null), summed per model, engine and
+ * whether it was billed. Read for the Costs page's range, never for a cap:
+ * `monthSpend` and `refreshBudget` are what the caps count
+ * (docs/adr/0091-the-costs-page-reads-usage-by-range-and-the-header-chip-follows-the-budget-state.md).
+ * `tokensIn` is all the input, cache included, as the ledger records it.
+ */
+export interface UsageRow {
+  model: string;
+  engine: EngineName;
+  billed: boolean;
+  costUsd: number;
+  tokensIn: number;
+  tokensOut: number;
+  cacheRead: number;
+  cacheWrite: number;
+  invocations: number;
+}
+
+export async function usageByModel(since: Date | null): Promise<UsageRow[]> {
+  return (
+    await query<{
+      model: string;
+      engine: EngineName;
+      billed: boolean;
+      cost_usd: string;
+      tokens_in: string;
+      tokens_out: string;
+      cache_read: string;
+      cache_write: string;
+      invocations: string;
+    }>(
+      `select model, engine, billed,
+              coalesce(sum(cost_usd), 0)::text as cost_usd,
+              coalesce(sum(tokens_in), 0)::text as tokens_in,
+              coalesce(sum(tokens_out), 0)::text as tokens_out,
+              coalesce(sum(tokens_cache_read), 0)::text as cache_read,
+              coalesce(sum(tokens_cache_write), 0)::text as cache_write,
+              count(*)::text as invocations
+       from ledger where ($1::timestamptz is null or at >= $1)
+       group by model, engine, billed order by model, engine, billed`,
+      [since],
+    )
+  ).map((row) => ({
+    model: row.model,
+    engine: row.engine,
+    billed: row.billed,
+    costUsd: Number(row.cost_usd),
+    tokensIn: Number(row.tokens_in),
+    tokensOut: Number(row.tokens_out),
+    cacheRead: Number(row.cache_read),
+    cacheWrite: Number(row.cache_write),
+    invocations: Number(row.invocations),
+  }));
+}
+
+export type UsageBucket = 'hour' | 'day';
+
+/** One bucket of the range: billed and estimated cost apart, and the token sums as the ledger keeps them. */
+export interface UsageBucketRow {
+  at: string;
+  billedUsd: number;
+  estimateUsd: number;
+  tokensIn: number;
+  tokensOut: number;
+  cacheRead: number;
+  cacheWrite: number;
+}
+
+/**
+ * Every hour or UTC day from `since` (or the ledger's first row, for null) to
+ * now, a quiet one a row of zeros, as `spendByDay` does for the month. Rows are
+ * held to `since` itself, not to the start of its bucket, so the chart adds up
+ * to the range's totals.
+ */
+export async function usageSeries(since: Date | null, bucket: UsageBucket): Promise<UsageBucketRow[]> {
+  // Spliced in, not a parameter: it names a unit and an interval, and only these two.
+  if (bucket !== 'hour' && bucket !== 'day') throw new Error(`a usage bucket is an hour or a day; refusing ${String(bucket)}`);
+  const step = `interval '1 ${bucket}'`;
+  return (
+    await query<{
+      at: string;
+      billed_usd: string;
+      estimate_usd: string;
+      tokens_in: string;
+      tokens_out: string;
+      cache_read: string;
+      cache_write: string;
+    }>(
+      `with bounds as (
+         select date_trunc('${bucket}', coalesce($1::timestamptz, (select min(at) from ledger), now()) at time zone 'UTC') as first,
+                date_trunc('${bucket}', now() at time zone 'UTC') as last
+       )
+       select to_char(b, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as at,
+              coalesce(sum(l.cost_usd) filter (where l.billed), 0)::text as billed_usd,
+              coalesce(sum(l.cost_usd) filter (where not l.billed), 0)::text as estimate_usd,
+              coalesce(sum(l.tokens_in), 0)::text as tokens_in,
+              coalesce(sum(l.tokens_out), 0)::text as tokens_out,
+              coalesce(sum(l.tokens_cache_read), 0)::text as cache_read,
+              coalesce(sum(l.tokens_cache_write), 0)::text as cache_write
+       from bounds, generate_series(bounds.first, bounds.last, ${step}) as b
+       left join ledger l
+         on l.at >= b at time zone 'UTC' and l.at < (b + ${step}) at time zone 'UTC'
+        and ($1::timestamptz is null or l.at >= $1)
+       group by b order by b`,
+      [since],
+    )
+  ).map((row) => ({
+    at: row.at,
+    billedUsd: Number(row.billed_usd),
+    estimateUsd: Number(row.estimate_usd),
+    tokensIn: Number(row.tokens_in),
+    tokensOut: Number(row.tokens_out),
+    cacheRead: Number(row.cache_read),
+    cacheWrite: Number(row.cache_write),
+  }));
+}
+
+/** Each bot's billed and estimated cost since a moment (or ever), apart, with how many tasks it ran. */
+export async function spendByBotSince(since: Date | null): Promise<{ bot: string; billedUsd: number; estimateUsd: number; tasks: number }[]> {
+  return (
+    await query<{ bot: string; billed_usd: string; estimate_usd: string; tasks: string }>(
+      `select b.name as bot,
+              coalesce(sum(l.cost_usd) filter (where l.billed), 0)::text as billed_usd,
+              coalesce(sum(l.cost_usd) filter (where not l.billed), 0)::text as estimate_usd,
+              count(distinct l.task_id)::text as tasks
+       from bots b
+       left join ledger l on l.bot_id = b.id and ($1::timestamptz is null or l.at >= $1)
+       group by b.name order by b.name`,
+      [since],
+    )
+  ).map((row) => ({ bot: row.bot, billedUsd: Number(row.billed_usd), estimateUsd: Number(row.estimate_usd), tasks: Number(row.tasks) }));
 }
 
 export async function ensureBudget(period: string, capUsd: number, warningAt: number): Promise<BudgetState> {

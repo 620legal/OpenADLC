@@ -138,6 +138,28 @@ describe('the header', () => {
     expect(html).toMatch(/<a[^>]*href="\/needs-you"[^>]*>Nothing needs you<\/a>/);
   });
 
+  /** The spend chip alone, from its link to the link's end. */
+  const chip = (html: string) => /<a data-spend[\s\S]*?<\/a>/.exec(html)?.[0] ?? '';
+
+  it('makes the month’s spend a link to Costs, coloured by the bridge’s state (#368)', () => {
+    const html = chip(wide(header('board', { budget: { spentUsd: 900, capUsd: 1000, state: 'warning' } })));
+    expect(html).toMatch(/^<a data-spend="attention"[^>]*href="\/costs"><span>\$900.00 of \$1,000<\/span>/);
+    expect(html).toContain('bg-attention');
+    expect(html).toContain('title="90.0 percent of this month&#x27;s cap"');
+    // At 92 percent with the bridge saying ok, it stays green.
+    const fine = chip(wide(header('board', { budget: { spentUsd: 920, capUsd: 1000, state: 'ok' } })));
+    expect(fine).toContain('data-spend="signal"');
+    expect(fine).toContain('bg-signal');
+    expect(fine).not.toContain('bg-attention');
+  });
+
+  it('shows the spend alone, neutral and with no bar, when no cap is set', () => {
+    const html = chip(wide(header('board', { budget: { spentUsd: 40, capUsd: 0, state: 'stopped' } })));
+    expect(html).toMatch(/^<a data-spend="uncapped"[^>]*href="\/costs"><span>\$40.00 this month<\/span><\/a>$/);
+    expect(html).not.toContain(' of $0');
+    expect(html).not.toContain('bg-alarm');
+  });
+
   it('says a month with nothing spent as $0, not $0.00', () => {
     expect(wide(header('board', { budget: { spentUsd: 0, capUsd: 1500 } }))).toContain('$0 of $1,500');
   });

@@ -1,7 +1,7 @@
 import { join } from 'node:path';
 import { DEFAULT_PORTS, envBool, envInt, envOr, loadYamlFile, costsFileSchema, reviewRulesSchema, type CostsConfig, type ReviewRules } from '@openadlc/shared';
 import { existsSync } from 'node:fs';
-import { readModelPrices } from '@openadlc/engines';
+import { readModelPrices, setModelPrice } from '@openadlc/engines';
 import type { IdentityMode } from './identity.js';
 
 export interface BridgeConfig {
@@ -90,11 +90,12 @@ export function loadBridgeConfig(): BridgeConfig {
   const costsPath = join(configRoot, 'costs.yaml');
   const reviewPath = join(configRoot, 'review.yaml');
   const webhookSecret = envOr('OPENADLC_WEBHOOK_SECRET', '');
-  // Read for its refusal, not its prices: the sessions charge at them (hostd
-  // hands them over), and a malformed file, or a price below 0, stops the
-  // bridge here as config/models.example.yaml says, rather than at the first
-  // task a session prices wrongly.
-  readModelPrices(configRoot);
+  // A malformed file, or a price below 0, stops the bridge here as
+  // config/models.example.yaml says, rather than at the first task a session
+  // prices wrongly. Its prices are also the bridge's own: the Costs page's
+  // cache savings are priced in the bridge, and with only the defaults they
+  // disagreed with what the sessions charged (docs/adr/0091).
+  for (const [model, price] of Object.entries(readModelPrices(configRoot))) setModelPrice(model, price);
   const identityMode = identityModeFrom(process.env.OPENADLC_IDENTITY_MODE);
   // Cloud Run sets K_SERVICE. Local mode there made every name it did not know
   // an admin, so whoever reached the bridge could download every credential
