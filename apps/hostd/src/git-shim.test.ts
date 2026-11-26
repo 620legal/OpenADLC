@@ -1,7 +1,7 @@
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -19,6 +19,10 @@ const check = (await import(join(BIN, 'git-check.mjs'))) as {
   withoutQuiet: (args: string[]) => string[];
   dryRunRefusal: (args: string[], known?: string[]) => string | null;
   porcelainDone: (stdout: string) => boolean;
+  readOnlyGlobalsRefusal: (args: string[]) => string | null;
+  readOnlyEnvRefusal: (env: Record<string, string>) => string | null;
+  readOnlyEnv: (env: Record<string, string>) => Record<string, string>;
+  readOnlyCommandRefusal: (command: string, rest: string[]) => string | null;
   porcelainRefs: (stdout: string) => Array<{ flag: string; from: string; to: string }>;
   pushRefusal: (refs: Array<{ flag: string; to: string }>, policy: unknown) => string | null;
   localCiPushRefusal: (
@@ -31,6 +35,8 @@ const check = (await import(join(BIN, 'git-check.mjs'))) as {
 
 const BUILDER = { pushBranchPrefix: 'agent/', forcePush: false, denyGithub: [] };
 const REVIEWER = { pushBranchPrefix: null, forcePush: false, denyGithub: ['pr merge', 'push'] };
+/** What `toolsPolicyEnv` writes for a skill that writes nothing but scratch and ADRs. */
+const READ_ONLY = { ...REVIEWER, readOnly: true };
 
 describe('reading a git command before it runs', () => {
   it('finds the command past the options git takes before it, the valued ones included', () => {
@@ -573,5 +579,311 @@ describe('OpenADLC’s git, pushing a commit local CI has not passed', () => {
     const pushed = await run(['push', '-q', 'origin', 'agent/12'], env);
     expect(pushed.stderr).toBe('');
     expect(pushed.status).toBe(0);
+  });
+});
+
+describe('OpenADLC’s git, for a skill that writes nothing', () => {
+  // A read-only skill could still write a file or start a program through the
+  // read commands it is allowed — `git log --output=x`, `git -c
+  // diff.external=x diff` — and no engine rule sees those arguments.
+  it('refuses every -c and --config-env, and the options that move the repository or git’s programs', () => {
+    for (const args of [
+      ['-c', 'core.pager=sh x', 'log'],
+      ['-c', 'core.editor=./x', 'commit'],
+      ['-c', 'diff.external=./x', 'diff'],
+      ['-c', 'diff.x.textconv=./x', 'diff'],
+      ['-c', 'diff.x.command=./x', 'diff'],
+      ['-c', 'core.fsmonitor=./x', 'status'],
+      ['-c', 'core.sshCommand=./x', 'fetch'],
+      ['-c', 'core.hooksPath=.', 'log'],
+      ['-c', 'core.askPass=./x', 'fetch'],
+      ['-c', 'credential.helper=!./x', 'fetch'],
+      ['-c', 'filter.x.smudge=./x', 'checkout'],
+      ['-c', 'pager.log=./x', 'log'],
+      ['-c', 'include.path=../x', 'log'],
+      ['-c', 'user.name=x', 'log'],
+      ['-C', '/w', '--config-env', 'core.pager=PAGER_CMD', 'log'],
+      ['--config-env=core.pager=PAGER_CMD', 'log'],
+    ]) {
+      expect(check.readOnlyGlobalsRefusal(args), args.join(' ')).toMatch(
+        /does not set git configuration on the command line \((-c|--config-env) [\w.]+=…\): a setting can name a program to run/,
+      );
+    }
+    for (const args of [['--work-tree', '.git/hooks', 'checkout'], ['--work-tree=.git/hooks', 'checkout'], ['--git-dir', 'x', 'log'], ['--git-dir=x', 'log']]) {
+      expect(check.readOnlyGlobalsRefusal(args), args.join(' ')).toMatch(/does not point git at another repository or work tree/);
+    }
+    expect(check.readOnlyGlobalsRefusal(['--exec-path=/tmp/x', 'log'])).toMatch(/--exec-path/);
+    // What a read-only skill does run.
+    expect(check.readOnlyGlobalsRefusal(['-C', '/w', '--no-pager', 'log', '-c'])).toBeNull();
+    expect(check.readOnlyGlobalsRefusal(['--exec-path'])).toBeNull();
+    expect(check.readOnlyGlobalsRefusal(['log', '--git-dir=x'])).toBeNull();
+  });
+
+  const HOSTD_CONFIG = {
+    GIT_CONFIG_COUNT: '5',
+    GIT_CONFIG_KEY_0: 'gpg.format',
+    GIT_CONFIG_VALUE_0: 'ssh',
+    GIT_CONFIG_KEY_1: 'user.signingkey',
+    GIT_CONFIG_VALUE_1: 'key::ssh-ed25519 AAAA',
+    GIT_CONFIG_KEY_2: 'commit.gpgsign',
+    GIT_CONFIG_VALUE_2: 'true',
+    GIT_CONFIG_KEY_3: 'gpg.ssh.program',
+    GIT_CONFIG_VALUE_3: '/usr/bin/ssh-keygen',
+    GIT_CONFIG_KEY_4: 'credential.https://github.com.helper',
+    GIT_CONFIG_VALUE_4: '!gh auth git-credential',
+  };
+
+  it('lets through the GIT_CONFIG_* entries hostd gives every session, and refuses any other', () => {
+    expect(check.readOnlyEnvRefusal({})).toBeNull();
+    expect(check.readOnlyEnvRefusal(HOSTD_CONFIG)).toBeNull();
+    // Section and name compare as git compares them; the subsection keeps its case.
+    expect(
+      check.readOnlyEnvRefusal({
+        GIT_CONFIG_COUNT: '2',
+        GIT_CONFIG_KEY_0: 'GPG.Format',
+        GIT_CONFIG_VALUE_0: 'ssh',
+        GIT_CONFIG_KEY_1: 'Credential.https://github.com.Helper',
+        GIT_CONFIG_VALUE_1: '!gh auth git-credential',
+      }),
+    ).toBeNull();
+    // What guardedEnv adds, as a git that this git runs sees it.
+    expect(check.readOnlyEnvRefusal({ GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'help.autocorrect', GIT_CONFIG_VALUE_0: '0' })).toBeNull();
+
+    const one = (key: string, value: string) => ({ ...HOSTD_CONFIG, GIT_CONFIG_COUNT: '6', GIT_CONFIG_KEY_5: key, GIT_CONFIG_VALUE_5: value });
+    for (const key of ['core.pager', 'diff.external', 'diff.x.textconv', 'core.fsmonitor', 'credential.helper', 'alias.l', 'user.name']) {
+      expect(check.readOnlyEnvRefusal(one(key, './x')), key).toMatch(new RegExp(`does not set ${key.replace(/\./g, '\\.')} through GIT_CONFIG_KEY_5`));
+    }
+    expect(check.readOnlyEnvRefusal({ ...HOSTD_CONFIG, GIT_CONFIG_VALUE_4: '!sh ./x' })).toMatch(
+      /does not change credential\.https:\/\/github\.com\.helper from the value hostd gives it/,
+    );
+    expect(check.readOnlyEnvRefusal({ ...HOSTD_CONFIG, GIT_CONFIG_VALUE_3: './ssh-keygen' })).toMatch(/gpg\.ssh\.program/);
+    expect(check.readOnlyEnvRefusal({ ...HOSTD_CONFIG, GIT_CONFIG_VALUE_3: '/tmp/x' })).toMatch(/gpg\.ssh\.program/);
+    expect(check.readOnlyEnvRefusal({ GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'help.autocorrect', GIT_CONFIG_VALUE_0: 'immediate' })).toMatch(/help\.autocorrect/);
+  });
+
+  it('runs git with every variable that names a program set to one that does nothing, or taken out', () => {
+    const env = check.readOnlyEnv({
+      PATH: '/bin',
+      GIT_PAGER: 'sh x',
+      PAGER: 'sh x',
+      GIT_EDITOR: 'sh x',
+      GIT_SEQUENCE_EDITOR: 'sh x',
+      GIT_EXTERNAL_DIFF: 'x',
+      GIT_SSH: 'x',
+      GIT_SSH_COMMAND: 'x',
+      GIT_ASKPASS: 'x',
+      SSH_ASKPASS: 'x',
+      GIT_EXEC_PATH: '/tmp',
+    });
+    expect(env).toEqual({ PATH: '/bin', GIT_PAGER: 'cat', PAGER: 'cat', GIT_EDITOR: 'true', GIT_SEQUENCE_EDITOR: 'true' });
+  });
+
+  it('refuses the options that write a file, abbreviated too, and the commands that run a tool', () => {
+    for (const command of ['log', 'show', 'diff', 'format-patch', 'diff-tree', 'range-diff', 'archive']) {
+      for (const rest of [['--output=x'], ['--output', 'x'], ['-1', '--outp=x'], ['--ou', 'x']]) {
+        expect(check.readOnlyCommandRefusal(command, rest), `${command} ${rest.join(' ')}`).toMatch(new RegExp(`git ${command} --o\\w* writes a file`));
+      }
+    }
+    for (const rest of [['-o', 'd'], ['-od'], ['-ko', 'd'], ['--output-directory', 'd'], ['--output-dir=d']]) {
+      expect(check.readOnlyCommandRefusal('format-patch', rest), rest.join(' ')).toMatch(/git format-patch -\S+ writes a file/);
+    }
+    expect(check.readOnlyCommandRefusal('archive', ['-o', 'x.tar', 'HEAD'])).toMatch(/git archive -o writes a file/);
+    for (const command of ['difftool', 'mergetool', 'instaweb']) {
+      expect(check.readOnlyCommandRefusal(command, [])).toMatch(new RegExp(`git ${command} runs a tool program`));
+    }
+    // What a read-only skill does run.
+    expect(check.readOnlyCommandRefusal('diff', ['--output-indicator-new=+'])).toBeNull();
+    expect(check.readOnlyCommandRefusal('log', ['--oneline', '-5'])).toBeNull();
+    expect(check.readOnlyCommandRefusal('log', ['--', '--output=x'])).toBeNull();
+    expect(check.readOnlyCommandRefusal('grep', ['-o', 'x'])).toBeNull();
+    expect(check.readOnlyCommandRefusal('ls-files', ['-o'])).toBeNull();
+    expect(check.readOnlyCommandRefusal('format-patch', ['-1', '--stdout'])).toBeNull();
+  });
+
+  it('lets git config read and refuses it writing or opening an editor', () => {
+    for (const rest of [
+      ['core.pager', 'sh x'],
+      ['--global', 'core.pager', 'sh x'],
+      ['--file', '.git/config', 'core.pager', 'x'],
+      ['-e'],
+      ['--edit'],
+      ['--ed'],
+      ['--add', 'core.pager', 'x'],
+      ['--ad', 'core.pager', 'x'],
+      ['--unset', 'core.pager'],
+      ['--unset-all', 'core.pager'],
+      ['--replace-all', 'core.pager', 'x'],
+      ['--rename-section', 'a', 'b'],
+      ['--remove-section', 'a'],
+      ['set', 'core.pager', 'x'],
+      ['unset', 'core.pager'],
+      ['edit'],
+      [],
+    ]) {
+      expect(check.readOnlyCommandRefusal('config', rest), rest.join(' ')).toMatch(/only reads git configuration/);
+    }
+    for (const rest of [
+      ['--get', 'user.name'],
+      ['--get-all', 'remote.origin.fetch'],
+      ['--get-regexp', '^remote\\.', 'x'],
+      ['--list'],
+      ['-l'],
+      ['--show-origin', '--list'],
+      ['get', 'user.name'],
+      ['list'],
+      ['user.name'],
+      ['--file', '.gitmodules', '--get-regexp', 'path'],
+      ['-f', '.gitmodules', 'submodule.x.path'],
+    ]) {
+      expect(check.readOnlyCommandRefusal('config', rest), rest.join(' ')).toBeNull();
+    }
+  });
+});
+
+describe('OpenADLC’s git, for a skill that writes nothing, in a real repository', () => {
+  let dir: string;
+  let work: string;
+  let recorder: string;
+  let record: string;
+
+  const git = (args: string[], policy: unknown, extra: Record<string, string> = {}) =>
+    spawnSync(SHIM, args, {
+      cwd: work,
+      env: { ...process.env, PATH: `${BIN}:${process.env.PATH ?? ''}`, OPENADLC_TOOLS_POLICY: policy ? JSON.stringify(policy) : '', ...extra },
+      encoding: 'utf8',
+    });
+  const ran = () => existsSync(record);
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'openadlc-git-read-only-'));
+    work = join(dir, 'work');
+    record = join(dir, 'ran');
+    recorder = join(dir, 'recorder.sh');
+    writeFileSync(recorder, `#!/bin/sh\necho "$*" >> '${record}'\n`);
+    chmodSync(recorder, 0o755);
+    execFileSync('git', ['init', '-q', '-b', 'main', work]);
+    writeFileSync(join(work, 'a.txt'), 'one\n');
+    execFileSync('git', ['add', 'a.txt'], { cwd: work });
+    execFileSync('git', ['-c', 'user.name=Jane', '-c', 'user.email=j@example.com', 'commit', '-q', '-m', 'one'], { cwd: work });
+    writeFileSync(join(work, 'a.txt'), 'two\n');
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const writesAFile = (out: string) => [
+    ['log', `--output=${out}`],
+    ['log', '--output', out],
+    ['show', `--output=${out}`],
+    ['show', '--output', out],
+    ['diff', `--output=${out}`],
+    ['diff', '--output', out],
+    ['format-patch', '-1', `--output=${out}`],
+    ['format-patch', '-1', '--output', out],
+    ['format-patch', '-1', '-o', out],
+    ['format-patch', '-1', `-o${out}`],
+  ];
+
+  it('refuses --output and format-patch -o, and writes no file', () => {
+    const out = join(dir, 'out');
+    // An abbreviation is refused too, though the git here does not take one.
+    for (const args of [...writesAFile(out), ['log', `--outp=${out}`]]) {
+      const refused = git(args, READ_ONLY);
+      expect(refused.status, args.join(' ')).toBe(1);
+      expect(refused.stderr).toMatch(/^git: not running — git (log|show|diff|format-patch) -[-\w]* writes a file, and a task that writes nothing writes none\n$/);
+      expect(existsSync(out), args.join(' ')).toBe(false);
+    }
+  });
+
+  it('writes the file for a skill with a write scope, and for a policy written before readOnly', () => {
+    const out = join(dir, 'out');
+    for (const policy of [BUILDER, REVIEWER, { ...REVIEWER, readOnly: false }]) {
+      for (const args of writesAFile(out)) {
+        const ran = git(args, policy);
+        expect(ran.stderr, `${JSON.stringify(policy)} ${args.join(' ')}`).not.toMatch(/not running/);
+        expect(ran.status).toBe(0);
+        expect(existsSync(out)).toBe(true);
+        rmSync(out, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it('starts no program named in -c, --config-env or GIT_CONFIG_*', () => {
+    const refusals: Array<[string[], Record<string, string>]> = [
+      [['-c', `diff.external=${recorder}`, 'diff'], {}],
+      [['-c', `core.pager=${recorder}`, '-p', 'log'], {}],
+      [['-c', `core.fsmonitor=${recorder}`, 'status'], {}],
+      [['--config-env', 'diff.external=RECORDER', 'diff'], { RECORDER: recorder }],
+      [['--config-env=diff.external=RECORDER', 'diff'], { RECORDER: recorder }],
+      [['diff'], { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'diff.external', GIT_CONFIG_VALUE_0: recorder }],
+      [['status'], { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.fsmonitor', GIT_CONFIG_VALUE_0: recorder }],
+    ];
+    for (const [args, extra] of refusals) {
+      const refused = git(args, READ_ONLY, extra);
+      expect(refused.status, args.join(' ')).toBe(1);
+      expect(refused.stderr).toMatch(/^git: not running — a task that writes nothing does not set /);
+      expect(ran(), args.join(' ')).toBe(false);
+    }
+    // The same for a builder starts the program, so the refusal is what stopped it.
+    expect(git(['-c', `diff.external=${recorder}`, 'diff'], BUILDER).status).toBe(0);
+    expect(ran()).toBe(true);
+    rmSync(record);
+    expect(git(['diff'], BUILDER, { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'diff.external', GIT_CONFIG_VALUE_0: recorder }).status).toBe(0);
+    expect(ran()).toBe(true);
+  });
+
+  it('runs a diff with GIT_EXTERNAL_DIFF taken out, so the program it names never starts', () => {
+    const diffed = git(['diff'], READ_ONLY, { GIT_EXTERNAL_DIFF: recorder });
+    expect(diffed.status).toBe(0);
+    expect(diffed.stdout).toContain('+two');
+    expect(ran()).toBe(false);
+
+    expect(git(['diff'], BUILDER, { GIT_EXTERNAL_DIFF: recorder }).status).toBe(0);
+    expect(ran()).toBe(true);
+  });
+
+  it('refuses a config write, leaving the configuration as it was', () => {
+    for (const args of [['config', 'core.pager', recorder], ['config', '--add', 'core.pager', recorder], ['config', '-e']]) {
+      const refused = git(args, READ_ONLY, { EDITOR: recorder });
+      expect(refused.status, args.join(' ')).toBe(1);
+      expect(refused.stderr).toMatch(/only reads git configuration/);
+    }
+    expect(spawnSync('git', ['config', '--get', 'core.pager'], { cwd: work }).status).toBe(1);
+    expect(ran()).toBe(false);
+  });
+
+  it('refuses --work-tree, --git-dir, difftool and mergetool', () => {
+    for (const [args, refusal] of [
+      [['--work-tree=.git/hooks', 'checkout', 'HEAD', '--', 'a.txt'], /another repository or work tree \(--work-tree\)/],
+      [['--git-dir', '.git', 'log'], /another repository or work tree \(--git-dir\)/],
+      [['difftool', '-y', `--extcmd=${recorder}`], /git difftool runs a tool program/],
+      [['mergetool'], /git mergetool runs a tool program/],
+    ] as const) {
+      const refused = git([...args], READ_ONLY);
+      expect(refused.status, args.join(' ')).toBe(1);
+      expect(refused.stderr).toMatch(refusal);
+    }
+    expect(existsSync(join(work, '.git', 'hooks', 'a.txt'))).toBe(false);
+    expect(ran()).toBe(false);
+  });
+
+  it('runs what a read-only skill reads, with hostd’s own settings in its environment', () => {
+    const hostd = {
+      GIT_CONFIG_COUNT: '3',
+      GIT_CONFIG_KEY_0: 'gpg.format',
+      GIT_CONFIG_VALUE_0: 'ssh',
+      GIT_CONFIG_KEY_1: 'commit.gpgsign',
+      GIT_CONFIG_VALUE_1: 'true',
+      GIT_CONFIG_KEY_2: 'credential.https://github.com.helper',
+      GIT_CONFIG_VALUE_2: '!gh auth git-credential',
+    };
+    expect(git(['log', '--format=%s'], READ_ONLY, hostd).stdout).toBe('one\n');
+    expect(git(['diff', '--output-indicator-new=>'], READ_ONLY, hostd).stdout).toContain('>two');
+    expect(git(['grep', '-o', 'tw'], READ_ONLY, hostd).stdout).toBe('a.txt:tw\n');
+    expect(git(['--no-pager', 'log', '--oneline', '-1'], READ_ONLY, hostd).status).toBe(0);
+    execFileSync('git', ['config', 'user.name', 'Jane'], { cwd: work });
+    expect(git(['config', '--get', 'user.name'], READ_ONLY, hostd).stdout).toBe('Jane\n');
+    expect(git(['config', 'user.name'], READ_ONLY, hostd).stdout).toBe('Jane\n');
   });
 });

@@ -253,6 +253,192 @@ export function commandRefusal(command, rest, ask = null) {
   return null;
 }
 
+// A skill that writes nothing but scratch and ADRs (`readOnly` in the policy,
+// `isReadOnly` in packages/engines/src/tools.ts) could still write a file or
+// start a program through the read commands it is allowed: `git log
+// --output=x`, `git -c core.pager='sh x' log -p`, `git -c diff.x.textconv=…
+// diff`. Claude's and Grok's rules match only a command's first words and
+// Codex applies no shell lists, so no engine rule can see those arguments;
+// this is where they are read. What follows runs only for such a skill, and
+// before anything runs the real git, alias lookups included
+// (docs/adr/0097-a-skill-that-writes-only-scratch-and-adrs-is-read-only-to-openadlcs-git-and-rg.md).
+
+const READ_ONLY = 'a task that writes nothing';
+
+/**
+ * Why a read-only task's global options may not run, or null. Every `-c` and
+ * `--config-env` is refused, not a list of keys: the list of settings that name
+ * a program is open-ended (`include.path`, `gpg.program`, `sequence.editor`),
+ * and no read-only skill sets one. `--git-dir` and `--work-tree` are refused
+ * too: `--work-tree=.git/hooks checkout HEAD -- x.sh` writes a hook git then
+ * runs. So is `--exec-path=`, which points git at its own `git-<cmd>` programs.
+ * An option `readGlobals` does not know is left to it, which refuses it.
+ */
+export function readOnlyGlobalsRefusal(args) {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (!arg.startsWith('-')) return null;
+    if (arg === '-c' || arg === '--config-env' || arg.startsWith('--config-env=')) {
+      const assignment = arg.startsWith('--config-env=') ? arg.slice('--config-env='.length) : (args[i + 1] ?? '');
+      const name = arg.startsWith('--config-env') ? '--config-env' : '-c';
+      return `${READ_ONLY} does not set git configuration on the command line (${name} ${configKey(assignment)}=…): a setting can name a program to run`;
+    }
+    for (const option of ['--git-dir', '--work-tree']) {
+      if (arg === option || arg.startsWith(`${option}=`)) {
+        return `${READ_ONLY} does not point git at another repository or work tree (${option}): checked out into .git/hooks, a file is a program git runs`;
+      }
+    }
+    if (arg.startsWith('--exec-path=')) {
+      return `${READ_ONLY} does not change where git finds its own programs (--exec-path=…)`;
+    }
+    if (VALUED.has(arg)) i += 1;
+  }
+  return null;
+}
+
+/** A config key with its section and name lowercased, as git compares them; a subsection keeps its case. */
+function normalKey(key) {
+  const first = key.indexOf('.');
+  const last = key.lastIndexOf('.');
+  if (first < 0) return key.toLowerCase();
+  return `${key.slice(0, first).toLowerCase()}${key.slice(first, last)}${key.slice(last).toLowerCase()}`;
+}
+
+/**
+ * The GIT_CONFIG_* entries hostd itself puts in every session's environment
+ * (apps/hostd/src/session-env.ts), and the one this guard adds for the git it
+ * runs: what a read-only task's environment may carry. The two that name a
+ * program are held to the value hostd gives them.
+ */
+const READ_ONLY_ENV_CONFIG = {
+  'gpg.format': () => true,
+  'user.signingkey': () => true,
+  'commit.gpgsign': () => true,
+  'help.autocorrect': (value) => value === '0',
+  'gpg.ssh.program': (value) => value.startsWith('/') && value.split('/').at(-1) === 'ssh-keygen',
+  // That gh is OpenADLC's, first on the session's PATH.
+  'credential.https://github.com.helper': (value) => value === '!gh auth git-credential',
+};
+
+/**
+ * Why a read-only task's GIT_CONFIG_* entries may not run, or null. Read from
+ * the environment the session gave, before `guardedEnv` adds its own: anything
+ * but hostd's own settings, with hostd's values, is refused rather than
+ * dropped, so the task hears why.
+ */
+export function readOnlyEnvRefusal(env) {
+  const count = Number(env.GIT_CONFIG_COUNT ?? 0) || 0;
+  for (let i = 0; i < count; i++) {
+    const key = env[`GIT_CONFIG_KEY_${i}`];
+    if (key === undefined) continue;
+    const allowed = READ_ONLY_ENV_CONFIG[normalKey(key)];
+    if (!allowed) {
+      return `${READ_ONLY} does not set ${key} through GIT_CONFIG_KEY_${i}: only the settings hostd gives every session pass, since a setting can name a program to run`;
+    }
+    if (!allowed(env[`GIT_CONFIG_VALUE_${i}`] ?? '')) {
+      return `${READ_ONLY} does not change ${key} from the value hostd gives it (GIT_CONFIG_VALUE_${i}): it names a program git runs`;
+    }
+  }
+  return null;
+}
+
+/**
+ * The environment git runs under for a read-only task: every variable that
+ * names a program for git to start is set to one that does nothing, or taken
+ * out. Overridden rather than refused, because engines set some of them
+ * themselves (Claude Code sets GIT_EDITOR), and they would refuse every git
+ * command the session ran.
+ */
+export function readOnlyEnv(env) {
+  const out = { ...env, GIT_PAGER: 'cat', PAGER: 'cat', GIT_EDITOR: 'true', GIT_SEQUENCE_EDITOR: 'true' };
+  for (const name of ['GIT_EXTERNAL_DIFF', 'GIT_SSH', 'GIT_SSH_COMMAND', 'GIT_ASKPASS', 'SSH_ASKPASS', 'GIT_EXEC_PATH']) delete out[name];
+  return out;
+}
+
+/** Commands that run a tool program of their own by design. */
+const RUNS_A_TOOL = new Set(['difftool', 'mergetool', 'instaweb']);
+
+/** `git config` options that write, or open an editor. */
+const CONFIG_WRITES = ['--edit', '--add', '--unset', '--unset-all', '--replace-all', '--rename-section', '--remove-section'];
+/** `git config` options that only read. */
+const CONFIG_READS = new Set(['--get', '--get-all', '--get-regexp', '--get-urlmatch', '--get-color', '--get-colorbool', '-l', '--list']);
+/** `git config` options that take their value as the next argument. */
+const CONFIG_VALUED = new Set(['-f', '--file', '--blob', '--type', '--default', '--comment', '--value', '--url']);
+/** `git config`'s subcommands (git 2.46 on). */
+const CONFIG_SUBCOMMAND_READS = new Set(['get', 'list']);
+const CONFIG_SUBCOMMAND_WRITES = new Set(['set', 'unset', 'edit', 'rename-section', 'remove-section', 'rename', 'remove']);
+
+/**
+ * Why `git config` may not run for a read-only task, or null when it only
+ * reads. `git config core.pager x` makes the next `git log -p` run `x`, so only
+ * a reading form passes: a reading option, the `get` or `list` subcommand, or a
+ * single key with no value. Anything else fails closed.
+ */
+function configRefusal(rest) {
+  const refused = `${READ_ONLY} only reads git configuration, and git config`;
+  const positional = [];
+  let reads = false;
+  for (let i = 0; i < rest.length; i++) {
+    const arg = rest[i];
+    if (arg === '--') {
+      positional.push(...rest.slice(i + 1));
+      break;
+    }
+    if (arg.startsWith('--')) {
+      const name = arg.split('=')[0];
+      if (CONFIG_READS.has(name)) {
+        reads = true;
+        continue;
+      }
+      // Git takes a unique prefix of a long option, so `--ad` is `--add`.
+      if (name.length > 2 && CONFIG_WRITES.some((option) => option.startsWith(name))) return `${refused} ${name} writes it`;
+      if (CONFIG_VALUED.has(name) && !arg.includes('=')) i += 1;
+      continue;
+    }
+    if (/^-[a-zA-Z]/.test(arg)) {
+      if (arg === '-l') {
+        reads = true;
+        continue;
+      }
+      if (arg.slice(1).includes('e')) return `${refused} -e opens an editor`;
+      if (CONFIG_VALUED.has(arg)) i += 1;
+      continue;
+    }
+    positional.push(arg);
+  }
+  const [first] = positional;
+  if (CONFIG_SUBCOMMAND_WRITES.has(first)) return `${refused} ${first} writes it`;
+  if (reads || CONFIG_SUBCOMMAND_READS.has(first) || positional.length === 1) return null;
+  return `${refused} ${positional.join(' ')} reads as a write: ask with git config --get <key>`;
+}
+
+/**
+ * Why a read-only task's command may not run, or null. `--output`, and any
+ * prefix of it git would take, is refused on every command (log, show, diff,
+ * format-patch and the rest of the diff family, archive), so the family needs
+ * no list; `--output-indicator-new` and `--oneline` are not such prefixes.
+ * `-o` is refused only where it means an output: `grep -o` and `ls-files -o`
+ * mean other things. Nothing after `--` is an option.
+ */
+export function readOnlyCommandRefusal(command, rest) {
+  if (RUNS_A_TOOL.has(command)) return `git ${command} runs a tool program, and ${READ_ONLY} does not start one`;
+  if (command === 'config') return configRefusal(rest);
+  for (const arg of rest) {
+    if (arg === '--') break;
+    if (arg.startsWith('--')) {
+      const name = arg.split('=')[0];
+      if (name.length >= 3 && ['--output', '--output-directory'].some((option) => option.startsWith(name))) {
+        return `git ${command} ${name} writes a file, and ${READ_ONLY} writes none`;
+      }
+      continue;
+    }
+    if ((command === 'format-patch' || command === 'archive') && /^-[a-zA-Z0-9]/.test(arg) && arg.includes('o')) {
+      return `git ${command} ${arg.slice(0, arg.indexOf('o') + 1)} writes a file, and ${READ_ONLY} writes none`;
+    }
+  }
+  return null;
+}
+
 /**
  * The refs a dry run said it would change: `{ flag, from, to }` for each line
  * of `--porcelain` output, whose lines are `<flag>\t<from>:<to>\t<summary>`.
@@ -449,18 +635,9 @@ export function withoutForce(pushArgs) {
 
 async function main() {
   const [real, ...args] = process.argv.slice(2);
-  const env = guardedEnv(process.env);
-  const ask = (argv) => {
-    const asked = spawnSync(real, argv, { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'ignore'] });
-    return asked.status === 0 ? asked.stdout : null;
-  };
   const refuse = (refusal) => {
     process.stderr.write(`git: not running — ${refusal}\n`);
     process.exit(1);
-  };
-  const run = (argv) => {
-    const ran = spawnSync(real, argv, { stdio: 'inherit', env });
-    process.exit(ran.status ?? 1);
   };
 
   let policy = null;
@@ -469,10 +646,34 @@ async function main() {
   } catch {
     refuse("could not read this task's rules (OPENADLC_TOOLS_POLICY)");
   }
+  // A policy written before `readOnly` existed has none, and reads as a skill
+  // with a write scope: apps/hostd/bin is mounted live into running containers,
+  // and a missing field read as read-only would refuse `-c` to every build
+  // started before an update.
+  const readOnly = policy?.readOnly === true;
+  if (readOnly) {
+    const refusal = readOnlyGlobalsRefusal(args) ?? readOnlyEnvRefusal(process.env);
+    if (refusal) refuse(refusal);
+  }
+
+  const env = readOnly ? readOnlyEnv(guardedEnv(process.env)) : guardedEnv(process.env);
+  const ask = (argv) => {
+    const asked = spawnSync(real, argv, { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'ignore'] });
+    return asked.status === 0 ? asked.stdout : null;
+  };
+  const run = (argv) => {
+    const ran = spawnSync(real, argv, { stdio: 'inherit', env });
+    process.exit(ran.status ?? 1);
+  };
 
   const resolved = resolveAliases(args, ask);
   if (resolved.refusal) refuse(resolved.refusal);
   const { args: expanded, globals, at } = resolved;
+  // An alias in a file the repository already had can bring options of its own.
+  if (readOnly) {
+    const refusal = readOnlyGlobalsRefusal(globals) ?? (at < 0 ? null : readOnlyCommandRefusal(expanded[at], expanded.slice(at + 1)));
+    if (refusal) refuse(refusal);
+  }
   if (at < 0) run(expanded);
 
   const command = expanded[at];
