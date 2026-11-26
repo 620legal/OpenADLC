@@ -27,6 +27,17 @@ into it ends as (#395).
     `HealthRegistry.raise`. That goes through the registry's chain and
     `nextRow` like a check run. A raise on an account already held keeps its
     `failingSince` and `facts.since`, so a second hold cannot exist.
+  - **On the account the task ran on.** Each task records its session's
+    account, read from its bot in the same write that marks it running and
+    again on a resume (`tasks.model_account_id`, migration 0176). The hold is
+    raised on that account, never on the one its bot thinks with when the
+    task ends: a seat moved from A to B while its task ran would otherwise
+    hold B for A's limit, and leave A to be leased to. A task with no account
+    recorded ends `failed`, as before.
+  - **Bounded when it is wrong.** `usageLimit` reads the whole exit reason,
+    so a session whose output only quoted a limit phrase could hold its
+    account. The `model-limit` check clears such a hold within 15 minutes,
+    on the account's first passing verify.
   - **Cleared only by a passing check of the account.** The `model-limit`
     check (`apps/bridge/src/health/checks/model-limit.ts`) runs the account's
     one-line prompt with the session's credential (`verifyModelAccount`), or
@@ -37,7 +48,7 @@ into it ends as (#395).
     `blockersOf` read it under scripted engines too, because the limit comes
     from the engine's own output, not from GitHub.
 - **A task that ends on a recognised limit ends `held`.** Migration 0176
-  widens `tasks.state` to allow it.
+  widens `tasks.state` to allow it, and adds the account the task ran on.
   - **Its reason** is the bridge's own words, `held on model account <id>:
     <words>`, which is how the recovery names the row it waits on.
   - **It is an end.** `held` belongs to `TASK_ENDINGS`, and it is never written

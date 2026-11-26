@@ -1951,21 +1951,40 @@ describe('a task that ends on its model account’s usage limit (#395, ADR 0096)
   const INCIDENT =
     "engine exited 1: You've hit your org's monthly spend limit · ask your admin to raise it at https://claude.ai/admin-settings/usage · your weekly limit resets 11am (UTC)";
 
-  /** Puts the builder on the shared account for one test, and back after. */
-  async function onSharedAccount<T>(body: () => Promise<T>): Promise<T> {
-    const { bots, modelAccounts } = await import('@openadlc/db');
+  const OTHER_CLAUDE = { ...SHARED_CLAUDE, id: 'acct-2', label: 'Other Claude' };
+
+  /**
+   * Puts the builder on an account for one test, and back after: `thinksWith`
+   * is its bot's account now, `ranOn` the one its tasks were recorded running on.
+   */
+  async function onSharedAccount<T>(
+    body: () => Promise<T>,
+    accounts: { thinksWith?: string; ranOn?: string | null } = {},
+  ): Promise<T> {
+    const { bots, modelAccounts, tasks } = await import('@openadlc/db');
+    const thinksWith = accounts.thinksWith ?? 'acct-1';
+    const ranOn = accounts.ranOn === undefined ? 'acct-1' : accounts.ranOn;
+    const seat = { ...ON_SHARED, modelAccountId: thinksWith };
     const byId = vi.mocked(bots.getBotById).getMockImplementation();
     const list = vi.mocked(bots.listBots).getMockImplementation();
     const get = vi.mocked(modelAccounts.get).getMockImplementation();
-    vi.mocked(bots.getBotById).mockImplementation((async () => ON_SHARED) as never);
-    vi.mocked(bots.listBots).mockImplementation((async () => [ON_SHARED]) as never);
-    vi.mocked(modelAccounts.get).mockImplementation((async (id: string) => (id === 'acct-1' ? SHARED_CLAUDE : null)) as never);
+    const task = vi.mocked(tasks.getTask).getMockImplementation()! as (id: string) => Promise<Record<string, unknown> | null>;
+    vi.mocked(bots.getBotById).mockImplementation((async () => seat) as never);
+    vi.mocked(bots.listBots).mockImplementation((async () => [seat]) as never);
+    vi.mocked(modelAccounts.get).mockImplementation(
+      (async (id: string) => (id === 'acct-1' ? SHARED_CLAUDE : id === 'acct-2' ? OTHER_CLAUDE : null)) as never,
+    );
+    vi.mocked(tasks.getTask).mockImplementation((async (id: string) => {
+      const row = await task(id);
+      return row ? { ...row, botId: 'bot-builder', modelAccountId: ranOn } : null;
+    }) as never);
     try {
       return await body();
     } finally {
       vi.mocked(bots.getBotById).mockImplementation(byId as never);
       vi.mocked(bots.listBots).mockImplementation(list as never);
       vi.mocked(modelAccounts.get).mockImplementation(get as never);
+      vi.mocked(tasks.getTask).mockImplementation(task as never);
     }
   }
 
@@ -2052,6 +2071,40 @@ describe('a task that ends on its model account’s usage limit (#395, ADR 0096)
       await post('/internal/tasks/task-1/state', { state: 'failed', reason: 'engine exited 1: 429 Too Many Requests: rate_limit_error' });
       expect(vi.mocked(tasks.updateTaskState)).toHaveBeenLastCalledWith('task-1', 'failed', expect.anything());
     });
+    expect(limitWorld.rows.size).toBe(0);
+  });
+
+  it('holds the account the task ran on, not the one its seat was moved to while it ran', async () => {
+    const { tasks } = await import('@openadlc/db');
+    const { holdFor } = await import('@openadlc/dispatcher');
+
+    // Started on acct-1; a person moved the seat to acct-2 before the limit came back.
+    await onSharedAccount(
+      async () => {
+        await post('/internal/tasks/task-1/state', { state: 'failed', reason: INCIDENT });
+        expect(vi.mocked(tasks.updateTaskState)).toHaveBeenLastCalledWith('task-1', 'held', {
+          exitReason: `held on model account acct-1: ${INCIDENT}`,
+        });
+        expect([...limitWorld.rows.keys()]).toEqual(['model-limit:acct-1']);
+        // The seat on acct-2, which works, is not held back for acct-1's limit.
+        const rows = (await healthRegistry.rows()) as never;
+        expect(holdFor({ ...ON_SHARED, modelAccountId: 'acct-2' }, 'openadlc', rows)).toBeNull();
+        expect(holdFor(ON_SHARED, 'openadlc', rows)).toMatch(/at its spend limit/);
+      },
+      { thinksWith: 'acct-2', ranOn: 'acct-1' },
+    );
+  });
+
+  it('stays failed for a task with no account recorded, even when its bot thinks with one now', async () => {
+    const { tasks } = await import('@openadlc/db');
+
+    await onSharedAccount(
+      async () => {
+        await post('/internal/tasks/task-1/state', { state: 'failed', reason: INCIDENT });
+        expect(vi.mocked(tasks.updateTaskState)).toHaveBeenLastCalledWith('task-1', 'failed', { exitReason: INCIDENT });
+      },
+      { thinksWith: 'acct-1', ranOn: null },
+    );
     expect(limitWorld.rows.size).toBe(0);
   });
 });

@@ -511,6 +511,25 @@ describe('moving a task from one state to another', () => {
     expect(params?.[8]).toEqual(['queued', 'running', 'paused', 'held']);
   });
 
+  it('records the account its session runs on as hostd marks it running, so a hold is raised on that account', async () => {
+    vi.mocked(queryOne).mockResolvedValueOnce({ ...ROW, state: 'running', model_account_id: 'acct-1' });
+
+    const task = await updateTaskState('task-1', 'running', { tmuxSession: 'atlas/implement-task1' });
+
+    const [sql] = vi.mocked(queryOne).mock.calls.at(-1) ?? [];
+    const flat = String(sql).replace(/\s+/g, ' ');
+    // Read from the bot in the same write, on the way into running only:
+    // the runner's own running afterwards, and an ending, keep it.
+    expect(flat).toContain(
+      "model_account_id = case when $2 = 'running' and state <> 'running' then (select b.model_account_id from bots b where b.id = tasks.bot_id) else model_account_id end",
+    );
+    expect(flat).toContain('returning id, bot_id');
+    expect(flat).toContain('paused_at, model_account_id');
+    expect(task?.modelAccountId).toBe('acct-1');
+    vi.mocked(queryOne).mockResolvedValueOnce({ ...ROW, state: 'running' });
+    expect((await updateTaskState('task-1', 'running'))?.modelAccountId).toBeNull();
+  });
+
   it('decides in the write itself, so nothing can end the task between a read and the write', async () => {
     vi.mocked(queryOne).mockResolvedValueOnce(null);
 

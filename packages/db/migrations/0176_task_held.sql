@@ -8,9 +8,19 @@
 -- once a check of the account passes; the hold itself is the health row
 -- `model-limit:<accountId>`, so no table is added.
 --
--- Only the check constraint from 0001_init.sql is widened. No data changes:
--- tasks that failed on that limit stay `failed`.
+-- The check constraint from 0001_init.sql is widened, and each task records
+-- the account it ran on. No data changes: tasks that failed on that limit
+-- stay `failed`.
 
 alter table tasks drop constraint if exists tasks_state_check;
 alter table tasks add constraint tasks_state_check
   check (state in ('queued', 'running', 'paused', 'stopped', 'done', 'failed', 'held'));
+
+-- The model account a task's session ran on, written as hostd marks it
+-- running (`updateTaskState`). A hold is raised on this account, not on the
+-- one its bot thinks with when the task ends: a seat moved from account A to
+-- B while its task ran would otherwise hold B for A's limit and leave A,
+-- the account at its limit, free to be leased to. Null for a task that
+-- never ran, or whose bot had no account; such a task is never held.
+alter table tasks add column if not exists model_account_id uuid
+  references model_accounts (id) on delete set null;

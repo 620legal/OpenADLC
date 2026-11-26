@@ -31,6 +31,7 @@ interface TaskRow {
   base_ref?: string | null;
   base_context?: ContextDocument[] | null;
   takes_messages?: boolean | null;
+  model_account_id?: string | null;
 }
 
 export interface TaskRecord extends Task {
@@ -69,11 +70,19 @@ export interface TaskRecord extends Task {
    * from (`builderOn`, `PAUSED_BUILDER_HOLD_MS`).
    */
   pausedAt?: string | null;
+  /**
+   * The model account its session ran on, as its bot's row said when hostd
+   * marked it running; null before then, and for a bot on no account.
+   * Optional so a fixture typed as a task need not name it. What a usage
+   * limit is held on (ADR 0096): the bot's account at the task's end may be
+   * another one, if a person moved the seat while the task ran.
+   */
+  modelAccountId?: string | null;
 }
 
 const COLUMNS = `id, bot_id, repo_id, kind, subject_type, subject_ref, lease_id, state, skill,
          worktree, branch, tmux_session, container, cost_cap_usd, cost_usd, billed, unbilled_usd, round,
-         started_at, ended_at, exit_reason, created_at, auto_retried_at, base_ref, base_context, host_id, takes_messages, paused_at`;
+         started_at, ended_at, exit_reason, created_at, auto_retried_at, base_ref, base_context, host_id, takes_messages, paused_at, model_account_id`;
 
 const SELECT = `
   select ${COLUMNS}
@@ -110,6 +119,7 @@ function toTask(row: TaskRow): TaskRecord {
     baseContext: row.base_context ?? [],
     takesMessages: row.takes_messages ?? null,
     pausedAt: row.paused_at?.toISOString() ?? null,
+    modelAccountId: row.model_account_id ?? null,
   };
 }
 
@@ -525,6 +535,14 @@ export async function updateTaskState(
        -- Kept across a second running that does not say (hostd's own),
        -- and forgotten on the way out: a resumed session says again.
        takes_messages = case when $2 = 'running' then coalesce($10::boolean, takes_messages) else null end,
+       -- The account its session runs on, read from its bot in this same
+       -- write as hostd marks it running, and again on each resume, which
+       -- starts a session with the bot's account of then. The runner's own
+       -- running, sent once the task is running, leaves it. A hold is raised
+       -- on this account, not on the bot's at the task's end (ADR 0096).
+       model_account_id = case when $2 = 'running' and state <> 'running'
+         then (select b.model_account_id from bots b where b.id = tasks.bot_id)
+         else model_account_id end,
        updated_at = now()
      where id = $1 and state = any($9::text[])
      returning ${COLUMNS}`,

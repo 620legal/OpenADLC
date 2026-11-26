@@ -1581,21 +1581,29 @@ async function targetsOfTask(
 }
 
 /**
- * The model account a failed task's bot thinks with, when the task's reason
+ * The model account a failed task's session ran on, when the task's reason
  * says that account is at its usage or spend limit (`usageLimit`), with the
- * bots that think with it; null for a bot on no account, or any other reason.
+ * bots that think with it; null for a task that ran on no account, or any
+ * other reason.
+ *
+ * The account is the one recorded on the task as it started running
+ * (`tasks.model_account_id`), never its bot's account now: a seat moved from
+ * account A to B while its task ran would otherwise hold B, which works, for
+ * A's limit, and leave A to be leased to and fail the next task the same way.
  */
 async function limitOf(taskId: string, reason: string | null): Promise<{ account: ModelAccount; users: Bot[]; limit: UsageLimit } | null> {
   if (!reason) return null;
   const task = await tasks.getTask(taskId);
-  const bot = task ? await bots.getBotById(task.botId) : null;
-  if (!bot?.modelAccountId) return null;
-  const account = await modelAccounts.get(bot.modelAccountId);
+  if (!task?.modelAccountId) return null;
+  const account = await modelAccounts.get(task.modelAccountId);
   if (!account) return null;
   const limit = usageLimit(reason, account.provider, new Date());
   if (!limit) return null;
   const users = (await bots.listBots()).filter((one) => one.modelAccountId === account.id);
-  return { account, users: users.length > 0 ? users : [bot], limit };
+  if (users.length > 0) return { account, users, limit };
+  // Nobody thinks with it any more: the card still names the bot it held.
+  const bot = await bots.getBotById(task.botId);
+  return { account, users: bot ? [bot] : [], limit };
 }
 
 /**
