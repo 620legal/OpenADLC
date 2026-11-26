@@ -199,6 +199,36 @@ session's screen is an admin's, a command line can hold a token, and the board
 is read by every user. A step it has no phrase for, or a task that has printed
 none yet, says its kind of work instead ("writing the change").
 
+### The Crew page's layouts
+
+The Crew page shows the crew in one of three layouts: **Cards** (the default),
+**Table** or **Office**. Each person's choice is kept in their own browser, in
+`localStorage` under `openadlc.crew.layout` (`storedCrewLayout` in
+`apps/console/src/lib/crew.ts`). The page reads it after it mounts, so the
+server always draws cards. Nothing stored, a value the console does not know,
+or storage that throws gives cards. A crew with no bots shows the cards' empty
+state, whatever is stored.
+
+The office (`components/crew-office.tsx`) has one desk per bot, in pipeline
+order. Each character is posed by `crewState` alone
+(`apps/console/src/lib/crew-office.ts`), so the office reads nothing new from
+the bridge:
+
+| State | Pose |
+|---|---|
+| idle, on duty | at rest |
+| working | busy, with a bubble holding the task's title, cut at 40 characters |
+| waiting | a raised hand, a button that opens the item it asked about |
+| attention | stopped, labelled "needs attention", a button that opens the failed task's item, or the seat for a check alone |
+| not connected | an empty, dimmed desk, with "Connect its account" for an admin |
+
+`attention` covers a cap stop, a failed last task and a blocking check alike,
+and the bridge does not say which, so it is never worded as a cap. The art is
+inline SVG coloured only by theme tokens and hidden from screen readers. Each
+desk's accessible name holds the bot, its state and its full task. The poses
+differ by shape, so under `prefers-reduced-motion` the two animations
+(`office-busy`, `office-wave` in `globals.css`) stop and the states still read.
+
 ## How the parts trust each other
 
 - **Console → bridge.** On a local install the bridge takes the console user

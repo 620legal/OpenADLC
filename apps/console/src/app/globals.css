@@ -319,6 +319,44 @@ body {
 }
 
 /*
+ * The crew office (`crew-office.tsx`): a busy bot's hands and screen flicker
+ * as it types, and a waiting bot's raised hand waves. The poses differ by
+ * shape, so stopping both under reduced motion loses nothing a person needs.
+ */
+.office-busy {
+  animation: office-type 0.9s steps(2, end) infinite;
+}
+.office-wave {
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+  animation: office-wave 1.6s ease-in-out infinite;
+}
+@keyframes office-type {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.75;
+  }
+}
+@keyframes office-wave {
+  0%,
+  100% {
+    transform: rotate(0deg);
+  }
+  50% {
+    transform: rotate(-12deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .office-busy,
+  .office-wave {
+    animation: none !important;
+  }
+}
+
+/*
  * A control a card reveals on hover or focus, such as the move list. On a
  * device with no hover it is simply shown: there is no pointer to reveal it
  * with, and a control that only a hover can find is one a thumb never will.
