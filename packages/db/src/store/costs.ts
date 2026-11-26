@@ -10,6 +10,8 @@ interface LedgerRow {
   model_alias: string | null;
   tokens_in: number;
   tokens_out: number;
+  tokens_cache_read: number;
+  tokens_cache_write: number;
   cost_usd: string;
   billed: boolean;
   at: Date;
@@ -67,6 +69,9 @@ export async function recordUsage(input: {
   promptHash?: string | null;
   tokensIn: number;
   tokensOut: number;
+  /** The parts of `tokensIn` read from and written to the cache, never added to it (docs/adr/0092). Left out, 0. */
+  cacheRead?: number;
+  cacheWrite?: number;
   costUsd: number;
   /** False for a run on a subscription seat, as the task was when its session started. */
   billed?: boolean;
@@ -75,14 +80,19 @@ export async function recordUsage(input: {
   // The caps sum this column: a negative amount cancels real spend, and NaN
   // sorts above every number in Postgres and stops the budget for good.
   if (!Number.isFinite(input.costUsd) || input.costUsd < 0) throw new Error(`the ledger records a cost of 0 or more; refusing ${input.costUsd}`);
-  for (const tokens of [input.tokensIn, input.tokensOut]) {
+  const cacheRead = input.cacheRead ?? 0;
+  const cacheWrite = input.cacheWrite ?? 0;
+  for (const tokens of [input.tokensIn, input.tokensOut, cacheRead, cacheWrite]) {
     if (!Number.isInteger(tokens) || tokens < 0) throw new Error(`the ledger records whole token counts of 0 or more; refusing ${tokens}`);
+  }
+  if (cacheRead + cacheWrite > input.tokensIn) {
+    throw new Error(`the ledger records cache tokens as part of tokens in; refusing ${cacheRead} read and ${cacheWrite} written of ${input.tokensIn}`);
   }
   const alias = input.modelAlias && input.modelAlias.startsWith('newest:') ? input.modelAlias : null;
 
   await query(
-    `insert into ledger (task_id, bot_id, engine, model, model_alias, prompt_hash, tokens_in, tokens_out, cost_usd, billed)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+    `insert into ledger (task_id, bot_id, engine, model, model_alias, prompt_hash, tokens_in, tokens_out, cost_usd, billed, tokens_cache_read, tokens_cache_write)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
     [
       input.taskId,
       input.botId,
@@ -94,13 +104,15 @@ export async function recordUsage(input: {
       input.tokensOut,
       input.costUsd,
       input.billed ?? true,
+      cacheRead,
+      cacheWrite,
     ],
   );
 }
 
 export async function listLedger(limit = 200): Promise<LedgerEntry[]> {
   const rows = await query<LedgerRow>(
-    `select id, task_id, bot_id, engine, model, model_alias, tokens_in, tokens_out, cost_usd, billed, at
+    `select id, task_id, bot_id, engine, model, model_alias, tokens_in, tokens_out, tokens_cache_read, tokens_cache_write, cost_usd, billed, at
      from ledger order by at desc limit $1`,
     [limit],
   );
@@ -113,6 +125,8 @@ export async function listLedger(limit = 200): Promise<LedgerEntry[]> {
     modelAlias: row.model_alias,
     tokensIn: row.tokens_in,
     tokensOut: row.tokens_out,
+    cacheRead: row.tokens_cache_read,
+    cacheWrite: row.tokens_cache_write,
     costUsd: Number(row.cost_usd),
     billed: row.billed,
     at: row.at.toISOString(),

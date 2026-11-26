@@ -248,6 +248,13 @@ export interface ArchivedLedgerEntry {
    * spend against the caps.
    */
   billed?: boolean;
+  /**
+   * The parts of `tokensIn` read from and written to the provider's cache.
+   * Absent from an archive written before #367, which restores as 0: all
+   * input uncached, as the row then read.
+   */
+  cacheRead?: number;
+  cacheWrite?: number;
   at: string;
 }
 
@@ -974,6 +981,8 @@ function asHistory(value: unknown): ArchivedHistory | null {
         tokensOut: asNumber(row.tokensOut, `ledger row ${index} tokensOut`),
         costUsd: asNumber(row.costUsd, `ledger row ${index} costUsd`),
         ...(row.billed === undefined ? {} : { billed: asBoolean(row.billed, `ledger row ${index} billed`) }),
+        ...(row.cacheRead === undefined ? {} : { cacheRead: asNumber(row.cacheRead, `ledger row ${index} cacheRead`) }),
+        ...(row.cacheWrite === undefined ? {} : { cacheWrite: asNumber(row.cacheWrite, `ledger row ${index} cacheWrite`) }),
         at: asString(row.at, `ledger row ${index} at`),
       };
     }),

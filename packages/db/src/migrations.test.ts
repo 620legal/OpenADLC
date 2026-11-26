@@ -240,6 +240,30 @@ describe('0040, which checks what the ledger and a task are charged', () => {
   });
 });
 
+describe('0171, which records cache tokens as parts of tokens in', () => {
+  const sql = statements('0171_ledger_cache_tokens.sql');
+
+  it('adds both columns as whole counts that read 0 on the rows already there, without failing on an install that has them', () => {
+    for (const column of ['tokens_cache_read', 'tokens_cache_write']) {
+      expect(sql, column).toContain(`alter table ledger add column if not exists ${column} integer not null default 0`);
+    }
+  });
+
+  it('refuses a negative count, or a pair above tokens in, on new rows without validating old ones', () => {
+    // 0040 left old rows unchecked, so an install can hold one with negative
+    // tokens in, which a validated check would fail inside `openadlc up`.
+    expect(sql).toContain('alter table ledger drop constraint if exists ledger_cache_tokens_counted');
+    const check = sql.find((statement) => statement.includes('add constraint ledger_cache_tokens_counted'));
+    expect(check).toBeDefined();
+    expect(check).toContain('tokens_cache_read >= 0 and tokens_cache_write >= 0 and tokens_cache_read + tokens_cache_write <= tokens_in');
+    expect(check).toMatch(/not valid$/);
+  });
+
+  it('touches no other table, and no row', () => {
+    expect(sql.every((statement) => statement.startsWith('alter table ledger '))).toBe(true);
+  });
+});
+
 describe('0041, which keeps the text a person vouched for on a stranger’s issue', () => {
   const sql = statements('0041_issue_vouched_text.sql');
 

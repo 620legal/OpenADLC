@@ -60,12 +60,24 @@ export type EngineEvent =
   /** A decision the engine cannot make: the skill turns this into a gate. */
   | { type: 'question'; question: string; options: string[] }
   /**
-   * `cachedTokensIn`, when the engine reports it, is the part of `tokensIn`
-   * served from the provider's cache. `final` marks the top-up to a finished
-   * run's own totals: the run is over, so reaching the cap there stops
-   * nothing, and the next run's headroom check is what asks.
+   * `tokensIn` is all the input the model processed, cached included.
+   * `cacheRead` and `cacheWrite`, when the provider says them, are the parts of
+   * it read from and written to the provider's cache: never added to it, so
+   * together they are at most `tokensIn`, and absent means 0. The ledger keeps
+   * them as `tokens_cache_read` and `tokens_cache_write` (docs/adr/0092).
+   * `final` marks the top-up to a finished run's own totals: the run is over,
+   * so reaching the cap there stops nothing, and the next run's headroom check
+   * is what asks.
    */
-  | { type: 'usage'; tokensIn: number; tokensOut: number; costUsd: number; cachedTokensIn?: number; final?: boolean }
+  | {
+      type: 'usage';
+      tokensIn: number;
+      tokensOut: number;
+      costUsd: number;
+      cacheRead?: number;
+      cacheWrite?: number;
+      final?: boolean;
+    }
   | { type: 'done'; reason: 'complete' | 'cap' | 'cancelled' }
   | { type: 'error'; message: string };
 

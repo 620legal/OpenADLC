@@ -250,7 +250,7 @@ export class StreamJsonParser {
       cacheWrite: this.seen.cacheWrite + delta.cacheWrite,
       output: this.seen.output + delta.output,
     };
-    return this.record(inputOf(delta), delta.output, exactCost(this.model, delta));
+    return this.record(delta, exactCost(this.model, delta));
   }
 
   /**
@@ -273,15 +273,32 @@ export class StreamJsonParser {
     };
     const reported = count(event.total_cost_usd);
     const cost = reported > 0 ? Math.max(0, reported - this.exact) : exactCost(this.model, missing);
-    return this.record(inputOf(missing), missing.output, cost, true);
+    return this.record(missing, cost, true);
   }
 
-  private record(tokensIn: number, tokensOut: number, cost: number, final = false): EngineEvent[] {
+  /**
+   * One usage event for `tokens`. Its cache counts are the same `tokens`'
+   * cache read and write, so they are always parts of its `tokensIn`, which
+   * the bridge holds them to.
+   */
+  private record(tokens: TokenCounts, cost: number, final = false): EngineEvent[] {
+    const tokensIn = inputOf(tokens);
+    const tokensOut = tokens.output;
     this.exact += cost;
     const costUsd = Math.max(0, roundCost(roundCost(this.exact) - this.recorded.costUsd));
     if (tokensIn <= 0 && tokensOut <= 0 && costUsd <= 0) return [];
     this.recorded = addUsage(this.recorded, { tokensIn, tokensOut, costUsd });
-    return [{ type: 'usage', tokensIn, tokensOut, costUsd, ...(final ? { final: true } : {}) }];
+    return [
+      {
+        type: 'usage',
+        tokensIn,
+        tokensOut,
+        costUsd,
+        ...(tokens.cacheRead > 0 ? { cacheRead: tokens.cacheRead } : {}),
+        ...(tokens.cacheWrite > 0 ? { cacheWrite: tokens.cacheWrite } : {}),
+        ...(final ? { final: true } : {}),
+      },
+    ];
   }
 }
 

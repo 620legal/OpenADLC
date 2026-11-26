@@ -20,7 +20,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import { ClaudeEngine } from './claude.js';
 import { CodexEngine, GET_ON_WITH_IT } from './codex.js';
 import { GrokEngine } from './grok.js';
-import { MockEngine } from './mock.js';
+import { MockEngine, type MockScript } from './mock.js';
 import {
   costOf,
   exactCost,
@@ -857,7 +857,8 @@ describe('the codex engine', () => {
         type: 'usage',
         tokensIn: 27_688,
         tokensOut: 200,
-        cachedTokensIn: 13_696,
+        // Codex's cached input is a cache read within the input; it reports no write.
+        cacheRead: 13_696,
         costUsd: costOf('gpt-5-codex', 27_688, 200, 13_696),
         // `turn.completed` is the end of the turn: there is nothing left to
         // stop, so the runner asks no cap question of it.
@@ -865,6 +866,22 @@ describe('the codex engine', () => {
       },
     ]);
     expect(costOf('gpt-5-codex', 27_688, 200, 13_696)).toBeLessThan(costOf('gpt-5-codex', 27_688, 200));
+  });
+
+  it('holds a cached count above the input to the input, so the bridge never refuses the report', async () => {
+    const binary = fakeCodex(dir, [
+      { type: 'thread.started', thread_id: 'thr_1' },
+      { type: 'item.started', item: { id: 'item_1', type: 'command_execution', command: 'make ci' } },
+      { type: 'turn.completed', usage: { input_tokens: 1000, cached_input_tokens: 4000, output_tokens: 10 } },
+    ]);
+
+    const events = await runAll(new CodexEngine(binary), { workdir: dir, model: 'gpt-5-codex' });
+
+    const usage = events.filter((event) => event.type === 'usage');
+    expect(usage).toEqual([
+      expect.objectContaining({ tokensIn: 1000, cacheRead: 1000, costUsd: costOf('gpt-5-codex', 1000, 10, 4000) }),
+    ]);
+    expect(usage[0]).not.toHaveProperty('cacheWrite');
   });
 
   it('marks final only the usage that comes with the end of a turn', async () => {
@@ -2239,7 +2256,64 @@ describe('the grok engine', () => {
   });
 });
 
+describe('Grok\'s cache tokens', () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'openadlc-grok-cache-'));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('says the cache read and written within tokens in, as Claude\'s stream does', async () => {
+    const cached = (id: string, read: number, write: number) => {
+      const line = grokAssistant(id, [{ type: 'text', text: `step ${id}` }], 0, 30);
+      return { ...line, message: { ...line.message, usage: { input_tokens: 100, output_tokens: 30, cache_read_input_tokens: read, cache_creation_input_tokens: write } } };
+    };
+    const run = [
+      GROK_INIT,
+      cached('msg_0', 0, 4000),
+      cached('msg_1', 4000, 500),
+      {
+        type: 'result',
+        subtype: 'success',
+        is_error: false,
+        result: 'done',
+        total_cost_usd: 0,
+        usage: { input_tokens: 200, output_tokens: 60, cache_read_input_tokens: 4000, cache_creation_input_tokens: 4500 },
+      },
+    ].map((line) => JSON.stringify(line));
+
+    const events = await runAll(new GrokEngine({ binary: fakeGrok(dir, run) }), { workdir: dir, model: 'grok-4' });
+
+    const usage = events.filter((event) => event.type === 'usage');
+    expect(usage).toEqual([
+      expect.objectContaining({ tokensIn: 4100, cacheWrite: 4000 }),
+      expect.objectContaining({ tokensIn: 4600, cacheRead: 4000, cacheWrite: 500 }),
+    ]);
+    expect(usage[0]).not.toHaveProperty('cacheRead');
+    expect(usageOf(events)).toMatchObject({ tokensIn: 200 + 4000 + 4500, tokensOut: 60 });
+  });
+});
+
 describe('mock engine', () => {
+  it('puts the cache counts its script gives on its usage, and none when it gives none', async () => {
+    const run = async (script: MockScript) => {
+      const events: EngineEvent[] = [];
+      for await (const event of new MockEngine(script).run({ contextFiles: [], prompt: 'go', workdir: '/tmp', env: {}, model: 'mock', tools: policy, costHeadroomUsd: 15 })) {
+        events.push(event);
+      }
+      return events.find((event) => event.type === 'usage');
+    };
+
+    expect(await run({ say: [], tokensIn: 18000, cacheRead: 12000, cacheWrite: 2000 })).toMatchObject({ tokensIn: 18000, cacheRead: 12000, cacheWrite: 2000 });
+    const plain = await run({ say: [] });
+    expect(plain).not.toHaveProperty('cacheRead');
+    expect(plain).not.toHaveProperty('cacheWrite');
+  });
+
   it('streams text, records usage and reports a question as a gate', async () => {
     const engine = new MockEngine({
       say: ['reading the issue'],

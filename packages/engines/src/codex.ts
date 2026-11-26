@@ -365,6 +365,10 @@ export class CodexEngine implements Engine {
       const tokensOut = event.usage.output_tokens ?? 0;
       const cachedTokensIn = event.usage.cached_input_tokens ?? 0;
       const costUsd = costOf(model, tokensIn, tokensOut, cachedTokensIn);
+      // Codex reports cached input as part of `input_tokens`, and no cache
+      // write. Held within the input: the bridge refuses a cache read above
+      // `tokensIn`, and a malformed line refused there would fail the task.
+      const cacheRead = Math.max(0, Math.min(cachedTokensIn, tokensIn));
       this.totals = {
         tokensIn: this.totals.tokensIn + tokensIn,
         tokensOut: this.totals.tokensOut + tokensOut,
@@ -375,7 +379,7 @@ export class CodexEngine implements Engine {
         tokensIn,
         tokensOut,
         costUsd,
-        ...(cachedTokensIn > 0 ? { cachedTokensIn } : {}),
+        ...(cacheRead > 0 ? { cacheRead } : {}),
         ...(endsTurn ? { final: true } : {}),
       });
     }

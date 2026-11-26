@@ -112,6 +112,33 @@ describe('a run\'s usage', () => {
     expect(usage.slice(0, -1).some((event) => event.final)).toBe(false);
   });
 
+  it('says the cache read and written within tokens in, adding up to the run\'s totals', () => {
+    // The result says more was cached than the messages showed, so its top-up
+    // carries the difference of each kind as well.
+    const run = CLAUDE_RUN.map((line) =>
+      line.type === 'result'
+        ? { ...line, usage: { input_tokens: 6, cache_creation_input_tokens: 7000, cache_read_input_tokens: 50_000, output_tokens: 950 } }
+        : line,
+    );
+    const events = read(claude(), run);
+    const usage = events.filter((event) => event.type === 'usage');
+
+    for (const event of usage) {
+      expect((event.cacheRead ?? 0) + (event.cacheWrite ?? 0)).toBeLessThanOrEqual(event.tokensIn);
+    }
+    expect(usage.reduce((sum, event) => sum + (event.cacheRead ?? 0), 0)).toBe(50_000);
+    expect(usage.reduce((sum, event) => sum + (event.cacheWrite ?? 0), 0)).toBe(7000);
+    expect(usage[0]).toMatchObject({ tokensIn: 3 + 2048 + 14_000, cacheRead: 14_000, cacheWrite: 2048 });
+    expect(usage.at(-1)).toMatchObject({ final: true, cacheRead: 8000, cacheWrite: 856 });
+    // Tokens in and cost are what they were before the cache was said apart.
+    const total = recorded(events);
+    expect(total.tokensIn).toBe(6 + 7000 + 50_000);
+    expect(total.costUsd).toBeCloseTo(0.1234, 4);
+    // A message repeated for its next block adds no input, so says no cache.
+    const again = usage.filter((event) => event.tokensIn === 0);
+    expect(again.every((event) => event.cacheRead === undefined && event.cacheWrite === undefined)).toBe(true);
+  });
+
   it('counts as the run goes, so a cap can trip before the run ends', () => {
     const parser = claude();
     const first = CLAUDE_RUN[1];

@@ -372,6 +372,12 @@ export interface UsageReport {
   tokensIn: number;
   tokensOut: number;
   costUsd: number;
+  /**
+   * The parts of `tokensIn` read from and written to the provider's cache,
+   * never added to it; left out, 0. An older hostd sends neither.
+   */
+  cacheRead?: number;
+  cacheWrite?: number;
   engine: string;
   model: string;
   modelAlias?: string | null;
@@ -386,6 +392,13 @@ export function usageProblem(input: Record<string, unknown>): string | null {
   const count = (value: unknown) => typeof value === 'number' && Number.isInteger(value) && value >= 0;
   if (!count(input.tokensIn)) return 'tokensIn must be a whole number at least 0';
   if (!count(input.tokensOut)) return 'tokensOut must be a whole number at least 0';
+  if (input.cacheRead !== undefined && !count(input.cacheRead)) return 'cacheRead must be a whole number at least 0';
+  if (input.cacheWrite !== undefined && !count(input.cacheWrite)) return 'cacheWrite must be a whole number at least 0';
+  // A cache count is part of `tokensIn`, not more input: a pair above it is
+  // a report no engine call made, and the ledger's row refuses it too (0171).
+  if (((input.cacheRead as number | undefined) ?? 0) + ((input.cacheWrite as number | undefined) ?? 0) > (input.tokensIn as number)) {
+    return 'cacheRead and cacheWrite are part of tokensIn, so together they are at most it';
+  }
   if (typeof input.costUsd !== 'number' || !Number.isFinite(input.costUsd) || input.costUsd < 0) return 'costUsd must be a number at least 0';
   if (typeof input.engine !== 'string' || input.engine.trim() === '') return 'engine must name the engine that ran';
   if (typeof input.model !== 'string' || input.model.trim() === '') return 'model must be the resolved model id';
@@ -1940,6 +1953,8 @@ export class TaskService {
       modelAlias: input.modelAlias ?? null,
       tokensIn: input.tokensIn,
       tokensOut: input.tokensOut,
+      cacheRead: input.cacheRead ?? 0,
+      cacheWrite: input.cacheWrite ?? 0,
       costUsd: input.costUsd,
       // As hostd read the bot's account when this session started; never
       // from the report, or a session could turn its own cap off.

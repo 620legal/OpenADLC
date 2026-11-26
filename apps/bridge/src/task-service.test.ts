@@ -2716,6 +2716,38 @@ describe('usage a task’s session reports', () => {
     expect(costs.recordUsage).toHaveBeenCalledTimes(1);
   });
 
+  it('records the cache counts within tokens in, 0 when left out, and answers the same as without them', async () => {
+    const plain = await reporting().recordUsage(usage());
+    expect(costs.recordUsage).toHaveBeenLastCalledWith(expect.objectContaining({ tokensIn: 1200, cacheRead: 0, cacheWrite: 0, costUsd: 0.5 }));
+    const cached = await reporting().recordUsage(usage({ cacheRead: 900, cacheWrite: 300 }));
+    expect(costs.recordUsage).toHaveBeenLastCalledWith(expect.objectContaining({ tokensIn: 1200, cacheRead: 900, cacheWrite: 300, costUsd: 0.5, billed: true }));
+    // Nothing that prices or caps reads them.
+    expect(cached).toEqual(plain);
+    expect(vi.mocked(tasks.addTaskCost).mock.calls.map((call) => call.slice(1))).toEqual([
+      [0.5, true],
+      [0.5, true],
+    ]);
+  });
+
+  it('is refused with a negative or fractional cache count, or cache counts above tokens in, and nothing is written', async () => {
+    const bad: [Record<string, unknown>, RegExp][] = [
+      [{ cacheRead: -1 }, /cacheRead must be a whole number at least 0/],
+      [{ cacheRead: 1.5 }, /cacheRead must be a whole number at least 0/],
+      [{ cacheWrite: -1 }, /cacheWrite must be a whole number at least 0/],
+      [{ cacheWrite: 'NaN' }, /cacheWrite must be a whole number at least 0/],
+      [{ cacheRead: 1000, cacheWrite: 201 }, /cacheRead and cacheWrite are part of tokensIn, so together they are at most it/],
+      [{ cacheRead: 1201 }, /part of tokensIn/],
+    ];
+    for (const [fields, said] of bad) {
+      await expect(reporting().recordUsage(usage(fields)), JSON.stringify(fields)).rejects.toThrow(said);
+    }
+    expect(costs.recordUsage).not.toHaveBeenCalled();
+    expect(tasks.addTaskCost).not.toHaveBeenCalled();
+    // All of tokens in from the cache is a report one call can make.
+    await reporting().recordUsage(usage({ cacheRead: 1000, cacheWrite: 200 }));
+    expect(costs.recordUsage).toHaveBeenCalledTimes(1);
+  });
+
   describe('on a key seat and on a subscription seat', () => {
     const on = (billed: boolean, costCapUsd = 15) =>
       vi.mocked(tasks.getTask).mockResolvedValue({ id: 'task-1', botId: 'bot-1', repoId: null, state: 'running', costCapUsd, billed, kind: 'implement', subjectRef: 'openadlc#285' } as never);
