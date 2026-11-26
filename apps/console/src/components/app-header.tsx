@@ -12,6 +12,7 @@ import {
   CostsIcon,
   CrewIcon,
   InsightsIcon,
+  MapIcon,
   SecurityIcon,
   MoreIcon,
   NeedsYouIcon,
@@ -608,6 +609,7 @@ const NAV_ICONS: Record<Page, (props: { size?: number }) => ReactNode> = {
   insights: InsightsIcon,
   security: SecurityIcon,
   releases: ShipIcon,
+  map: MapIcon,
   settings: SettingsIcon,
 };
 

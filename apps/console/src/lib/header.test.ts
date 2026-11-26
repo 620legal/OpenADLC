@@ -93,6 +93,7 @@ describe('the console’s pages', () => {
       'Insights /insights',
       'Security /security',
       'Releases /releases',
+      'Map /map',
       'Settings /settings',
     ]);
     expect(PAGES.find((item) => item.page === 'board')?.href('api')).toBe('/?board=1&repo=api');
@@ -100,7 +101,7 @@ describe('the console’s pages', () => {
 
   it('are all there for everyone signed in, Settings too: a user’s Settings is Notifications (ADR 0053)', () => {
     for (const role of ['admin', 'user'] as const) {
-      expect(navFor(role).map((item) => item.page), role).toEqual(['board', 'needs-you', 'crew', 'costs', 'insights', 'security', 'releases', 'settings']);
+      expect(navFor(role).map((item) => item.page), role).toEqual(['board', 'needs-you', 'crew', 'costs', 'insights', 'security', 'releases', 'map', 'settings']);
       expect(navFor(role)).toBe(PAGES);
     }
     expect(navFor('user').find((item) => item.page === 'settings')?.href('all')).toBe('/settings');
@@ -116,6 +117,16 @@ describe('the console’s pages', () => {
     expect(navFor('user').find((item) => item.page === 'releases')).toMatchObject({ label: 'Releases' });
     expect(navFor('user').find((item) => item.page === 'releases')?.href('all')).toBe('/releases');
   });
+
+  it('has Map after Releases, opening the chosen repository’s map or the list of them (#380)', () => {
+    const pages = navFor('user').map((item) => item.page);
+    expect(pages.indexOf('map')).toBe(pages.indexOf('releases') + 1);
+    const map = navFor('user').find((item) => item.page === 'map');
+    expect(map).toMatchObject({ label: 'Map' });
+    expect(map?.href('acme/widgets')).toBe('/map/acme%2Fwidgets');
+    expect(map?.href('all')).toBe('/map');
+    expect(map?.href('')).toBe('/map');
+  });
 });
 
 describe('the pinned pages and the rest', () => {
@@ -124,7 +135,7 @@ describe('the pinned pages and the rest', () => {
   it('shows the pinned pages in the order they were pinned, and the rest in the list’s order', () => {
     const pins = ['releases', 'board', 'costs'] as const;
     expect(pages(pinnedNav(PAGES, pins))).toEqual(['releases', 'board', 'costs']);
-    expect(pages(unpinnedNav(PAGES, pins))).toEqual(['needs-you', 'crew', 'insights', 'security', 'settings']);
+    expect(pages(unpinnedNav(PAGES, pins))).toEqual(['needs-you', 'crew', 'insights', 'security', 'map', 'settings']);
   });
 
   it('shows nothing but More when nothing is pinned', () => {

@@ -218,6 +218,8 @@ let pauseGate: import('./dispatch-gate.js').DispatchGate;
 let asked: { method: string; url: string; secret: string | undefined }[];
 /** What the hostd answers with; a test sets 500 for a hostd that is up and refuses. */
 let hostdStatus: number;
+/** What hostd answers for a project map's read. */
+let hostdMap: Record<string, unknown>;
 const assertReady = vi.fn(async (_bot: unknown, _repo: unknown): Promise<void> => undefined);
 const open = vi.fn(async (_input: Record<string, unknown>) => ({ taskId: 'task-1', session: 's' }));
 /** The GitHub client a bot acts through; a test gives one. */
@@ -236,6 +238,7 @@ beforeEach(async () => {
   afterwards = new Afterwards();
   asked = [];
   hostdStatus = 200;
+  hostdMap = {};
   prerequisites.lease = { id: 'lease-1', state: 'leased' };
   prerequisites.startBuildError = null;
   assertReady.mockReset().mockResolvedValue(undefined);
@@ -283,7 +286,9 @@ beforeEach(async () => {
     }
     const answer = request.url?.endsWith('/models')
       ? { models: [{ id: 'grok-4.7', createdAt: null, isDefault: true }] }
-      : { ok: true, message: 'answered: OK', checkedAt: '2026-09-24T08:00:00.000Z' };
+      : request.url?.startsWith('/project-maps/')
+        ? hostdMap
+        : { ok: true, message: 'answered: OK', checkedAt: '2026-09-24T08:00:00.000Z' };
     response.end(JSON.stringify(answer));
   });
   await new Promise<void>((resolve) => hostd.listen(0, '127.0.0.1', resolve));
@@ -338,6 +343,54 @@ describe('a promote held for a person, as its card reads it (ADR 0037)', () => {
       title: 'Rate-limit the webhook route',
     });
     expect(heldPromoteOf({ ...run, prNumber: null, promoteHeldAt: null, detail: null }, { name: 'www' }, null, known)).toMatchObject({ pr: null, title: null, since: run.createdAt, reason: '', fileGoverned: false });
+  });
+});
+
+describe('a repository’s project map, for the Map page', () => {
+  const SHA = 'abc1234def5678abc1234def5678abc1234def56';
+  const VIEW = { repo: 'acme/widgets', path: '/w/maps/acme__widgets.md', commit: SHA, builtAt: '2026-11-25T10:00:00.000Z', state: 'written', error: null, triedAt: '2026-11-25T10:00:00.000Z' };
+  const managed = () => vi.mocked(repos.getRepoByName).mockImplementation((async (name: string) => (name === 'widgets' ? { id: 'repo-1', name: 'widgets', fullName: 'acme/widgets' } : null)) as never);
+
+  it('passes hostd’s view and the map through, read from its work root', async () => {
+    managed();
+    hostdMap = { map: VIEW, content: '# Project map: acme/widgets\n' };
+    const response = await fetch(`${bridgeUrl}/v1/repos/widgets/map`);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      repo: 'acme/widgets',
+      commit: SHA,
+      builtAt: '2026-11-25T10:00:00.000Z',
+      state: 'written',
+      error: null,
+      triedAt: '2026-11-25T10:00:00.000Z',
+      content: '# Project map: acme/widgets\n',
+    });
+    expect(asked).toEqual([{ method: 'GET', url: '/project-maps/acme/widgets', secret: 'install-secret-for-the-test' }]);
+  });
+
+  it('answers no content where hostd has no map yet', async () => {
+    managed();
+    hostdMap = { map: { ...VIEW, commit: null, builtAt: null, state: 'never', triedAt: null }, content: null };
+    const body = (await (await fetch(`${bridgeUrl}/v1/repos/widgets/map`)).json()) as Record<string, unknown>;
+    expect(body).toMatchObject({ repo: 'acme/widgets', state: 'never', commit: null, content: null });
+  });
+
+  it('is 404 for a repository OpenADLC does not manage, and asks hostd nothing', async () => {
+    managed();
+    const response = await fetch(`${bridgeUrl}/v1/repos/gadgets/map`);
+    expect(response.status).toBe(404);
+    expect(((await response.json()) as { error: string }).error).toContain('not a repository OpenADLC manages: gadgets');
+    expect(asked).toEqual([]);
+  });
+
+  it('is 502 with what to run when hostd does not answer', async () => {
+    managed();
+    hostdStatus = 500;
+    const response = await fetch(`${bridgeUrl}/v1/repos/widgets/map`);
+    expect(response.status).toBe(502);
+    const { error } = (await response.json()) as { error: string };
+    expect(error).toContain('hostd did not answer for the project map');
+    expect(error).toContain('Run: openadlc doctor');
   });
 });
 

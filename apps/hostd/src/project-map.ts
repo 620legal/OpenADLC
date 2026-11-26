@@ -555,7 +555,7 @@ export class ProjectMaps {
         // PROJECT_MAP_FORMAT bump or the bridge's daily forced pass.
         if (same && !request.force) return this.settle(request.repo, { state: 'unchanged', error: null, triedAt });
 
-        const body = renderProjectMap(await this.read(mirror, request.repo, commit));
+        const body = renderProjectMap(await this.readTree(mirror, request.repo, commit));
         if (existing && header && same && composeProjectMap({ ...request, commit, builtAt: header.builtAt, body }) === existing) {
           return this.settle(request.repo, { state: 'unchanged', error: null, triedAt });
         }
@@ -581,7 +581,7 @@ export class ProjectMaps {
   }
 
   /** The tree at the commit, and the blobs the map is built from. */
-  private async read(mirror: string, repo: string, commit: string): Promise<ProjectMapInput> {
+  private async readTree(mirror: string, repo: string, commit: string): Promise<ProjectMapInput> {
     const listed = await git(mirror, ['ls-tree', '-r', '-z', '--long', commit]);
     const entries = new Map<string, { object: string; size: number }>();
     for (const record of listed.split('\0')) {
@@ -647,6 +647,16 @@ export class ProjectMaps {
       error: attempt?.error ?? null,
       triedAt: attempt?.triedAt ?? null,
     };
+  }
+
+  /**
+   * One repository's map as it is on disk, whole, with its view; `content` is
+   * null where there is none. The file is written by rename, so it is never
+   * read half-written, and the mirror is not fetched: a read waits on nothing.
+   */
+  read(repo: string): { view: ProjectMapView; content: string | null } {
+    if (!isProjectMapRepo(repo)) throw new Error(`${repo} is not a repository's owner/name`);
+    return { view: this.view(repo), content: this.readExisting(this.pathOf(repo)) };
   }
 
   /** Every map on disk, and every repository whose only attempt since hostd started failed. */

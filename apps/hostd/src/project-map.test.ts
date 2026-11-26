@@ -7,6 +7,7 @@ import {
   MAX_ADRS,
   MAX_AREAS,
   ProjectMaps,
+  composeProjectMap,
   projectMapRefreshFrom,
   readProjectMapHeader,
   renderProjectMap,
@@ -253,6 +254,17 @@ describe('ProjectMaps against a real repository', () => {
     expect(text).not.toContain(source);
   });
 
+  it('reads a map whole from the work root, and nothing where there is none', async () => {
+    expect(maps.read('acme/demo')).toEqual({ view: expect.objectContaining({ repo: 'acme/demo', state: 'never', commit: null }), content: null });
+    await refresh();
+    const read = maps.read('acme/demo');
+    expect(read.content).toBe(readFileSync(mapFile(), 'utf8'));
+    expect(read.view).toEqual(expect.objectContaining({ repo: 'acme/demo', state: 'written', commit: git(source, 'rev-parse', 'HEAD') }));
+    expect(maps.read('acme/other').content).toBeNull();
+    expect(() => maps.read('../x')).toThrow(/owner\/name/);
+    expect(() => maps.read('acme/..')).toThrow(/owner\/name/);
+  });
+
   it('lists maps on disk and removes one', async () => {
     await refresh();
     const fresh = make();
@@ -274,6 +286,46 @@ describe('ProjectMaps against a real repository', () => {
 
     expect(walk(workRoot, (path) => path.startsWith(mirrorPath))).toEqual(before);
   });
+});
+
+/**
+ * The map of the repository this test runs in, from its own checkout's tree
+ * and with the generator only: no mirror, no fetch. It must fit the cut the
+ * bridge makes before a session reads it (`MAP_CONTEXT_BYTES` in
+ * apps/bridge/src/project-map.ts, 48 KiB), so this repository's map always
+ * reaches a spec or implement session whole. The size is printed, for the
+ * pull request that reports what the map adds to every such prompt.
+ */
+describe('this repository’s own map', () => {
+  const MAP_CONTEXT_BYTES = 48 * 1024;
+
+  it('fits the cut the bridge makes for a session’s context', () => {
+    const top = execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim();
+    const commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: top, encoding: 'utf8' }).trim();
+    const files = execFileSync('git', ['ls-tree', '-r', '-z', '--name-only', 'HEAD'], { cwd: top, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
+      .split('\0')
+      .filter(Boolean)
+      .filter((path) => !/[\u0000-\u001f\u007f]/.test(path));
+    const show = (path: string): string | undefined => {
+      try {
+        const text = execFileSync('git', ['show', `HEAD:${path}`], { cwd: top, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+        return Buffer.byteLength(text) <= 256 * 1024 ? text : undefined;
+      } catch {
+        return undefined;
+      }
+    };
+    const agents = show('AGENTS.md') ?? null;
+    const blobs = new Map<string, string>();
+    for (const path of wantedBlobs(files, agents)) {
+      const text = show(path);
+      if (text !== undefined) blobs.set(path, text);
+    }
+    const body = renderProjectMap({ repo: '620legal/OpenADLC', files, blobs });
+    const map = composeProjectMap({ repo: '620legal/OpenADLC', commit, defaultBranch: 'main', builtAt: new Date(0).toISOString(), body });
+    const bytes = Buffer.byteLength(map, 'utf8');
+    console.log(`[project map] this repository at ${commit}: ${bytes} bytes, ${map.split('\n').length} lines, about ${Math.round(bytes / 4)} tokens (bytes ÷ 4)`);
+    expect(bytes).toBeLessThanOrEqual(MAP_CONTEXT_BYTES);
+  }, 60_000);
 });
 
 describe('renderProjectMap', () => {

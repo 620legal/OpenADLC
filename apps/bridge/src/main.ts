@@ -17,7 +17,7 @@ import { retryTask } from './task-retry.js';
 import { AppReach } from './app-reach.js';
 import { capReason as ciCapReason, monthStart as ciMonthStart, parseCap as parseCiCap, recordRun as recordCiRun, everyJob } from './ci-usage.js';
 import { asAutomation, automationBotName } from './automation-bot.js';
-import { ProjectMapRefresher } from './project-map.js';
+import { ProjectMapRefresher, readProjectMap } from './project-map.js';
 import { accountIdOf, accountTypeOf } from './github-accounts.js';
 import { defaultBackupDeps, registerBackupRoutes } from './backup.js';
 import { sweepExpiredUndo } from './restore-into.js';
@@ -438,6 +438,9 @@ async function main(): Promise<void> {
   mergeLine.useRedChecks((head) => webhooks.ciRedAt(head));
   // A QA task's testing.md names the URL these rules resolve to; see `Context.forQa`.
   context.useDelivery(delivery);
+  // Spec and implement tasks start with the repository's project map, read
+  // from hostd's work root (docs/adr/0088).
+  context.useProjectMaps((repo) => readProjectMap(hostd, repo));
   // A closed pull request's reviews stop the way a card's Stop stops them.
   webhooks.useStopTask(stopFreeing);
   webhooks.useConflictRounds(conflictRounds);

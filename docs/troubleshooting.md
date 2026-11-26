@@ -1821,6 +1821,13 @@ repository or all of them, over the last 7 or 30 days:
 - **Builds at once**: the most at one moment, and the average while any ran. A
   maximum of 1 with work waiting is a repository whose `concurrency`, or whose
   files, keep it to one build.
+- **Input tokens per implement task**, by the UTC week a task started, for
+  the current week and the 11 before it whatever the period: the number of
+  completed implement tasks (billed, subscription and mixed apart when more
+  than one kind ran) and their p25, median and p75 input tokens, cache reads
+  and writes included. A week under 5 tasks shows its count and no figure. To
+  compare the weeks before and after one change, run
+  [the runbook's query](runbooks/compare-implement-input-tokens.md).
 
 Waiting and conflicts are read from the `overlap.*` and `conflict.*` events the
 dispatcher and the merge line write; an install older than them shows none.
@@ -1939,8 +1946,12 @@ grep -E 'paused on a question' "$(openadlc logs bridge)" | tail -n 20
 ## An approved plan change waits on another issue
 
 A builder that asks to add paths to its lease (`plan_change`) and is approved
-while another issue's lease or work in build or review holds an overlapping
-path stays paused, and its question stays open ([development.md](development.md#plan-changes)).
+while other work holds an overlapping path stays paused, and its question
+stays open ([development.md](development.md#plan-changes)). Work holds a path
+when it is another active lease (its declared paths), an issue whose build or
+patch round is queued, running or paused (its declared and changed paths), or
+an open pull request (the files it changes); an issue in build only waiting
+its turn holds nothing, even after a failed build.
 Needs you shows it as waiting, not as the question again: "The builder (…)
 waits for #71 to let go of the approved paths", naming who approved it, the
 paths, and each issue that holds them with its pull request, with a button to

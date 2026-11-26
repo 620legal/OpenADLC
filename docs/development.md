@@ -556,9 +556,15 @@ A task that needs to write outside its lease's paths ends a message with a
 - **Refuse** stops the task and releases its lease. `needs-human` stays on the
   issue, because taking it off would hand the issue to the dispatcher, which
   would lease it again and ask for the same paths.
-- **A path another lease holds** is not granted. Another active lease, or an
-  issue in build or review that declared or changed an overlapping path, holds
-  it, whatever the repository's path policy says. The approval is kept, the issue is
+- **A path another lease holds** is not granted. What holds a path is work on
+  it now: another active lease, by its declared paths; an issue whose build or
+  patch round is queued, running or paused, by its declared and changed paths;
+  or an open pull request, by the files it changes. An issue in build that is
+  only waiting its turn holds nothing, even after an earlier build failed, so
+  that this rule and the dispatcher's, which waits only on work being built,
+  cannot wait on each other (`Gates.blockers`;
+  [ADR 0095](adr/0095-an-approved-plan-change-waits-only-on-work-that-holds-its-paths-now.md)).
+  This holds whatever the repository's path policy says. The approval is kept, the issue is
   told which issues hold the paths, and the task stays paused. Needs you shows
   it as waiting on them, with no Approve or Refuse on the card's face
   (`plan_change_waiting`, `apps/bridge/src/attention.ts`; [troubleshooting.md](troubleshooting.md#an-approved-plan-change-waits-on-another-issue)),

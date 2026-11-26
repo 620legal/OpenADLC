@@ -144,6 +144,13 @@ export const SecurityIcon = (props: Props) => (
   </Icon>
 );
 
+/** Map: a sheet folded in three, for the project map. Drawn here, not taken from an icon set. */
+export const MapIcon = (props: Props) => (
+  <Icon {...props}>
+    <path d="M3 6l6-2 6 2 6-2v14l-6 2-6-2-6 2zM9 4v14M15 6v14" />
+  </Icon>
+);
+
 /** Insights: bars of different heights, for how fast work moves. */
 export const InsightsIcon = (props: Props) => (
   <Icon {...props}>

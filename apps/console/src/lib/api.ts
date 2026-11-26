@@ -732,6 +732,22 @@ export async function saveRelease(repo: string, release: ReleaseSetting | null):
 export type ReleaseRunState = 'running' | 'built' | 'failed' | 'cancelled' | 'refused' | 'lost' | 'publishing' | 'published' | 'publish_failed';
 
 /** A release run as the bridge shows it (`runView` in `release-routes.ts`). The reason and log tail were redacted by hostd. */
+/**
+ * A repository's project map as the bridge reads it from hostd's work root
+ * (docs/adr/0088): the commit it was built from, when, how its last rebuild
+ * went, and the map itself, null where there is none yet.
+ */
+export interface ProjectMapRead {
+  repo: string;
+  commit: string | null;
+  builtAt: string | null;
+  state: 'written' | 'unchanged' | 'failed' | 'never';
+  /** Why the last rebuild failed, redacted by hostd. */
+  error: string | null;
+  triedAt: string | null;
+  content: string | null;
+}
+
 export interface ReleaseRunView {
   id: string;
   runId: string;
@@ -1561,6 +1577,19 @@ export interface InsightSummary {
   conflicts: { resolvedLeadOnly: number; resolvedFull: number; sentBack: number; resolving: number };
   sendBacks: Record<string, number>;
   parallel: { max: number; average: number };
+  /** Input tokens per completed implement task, by UTC week, oldest first (the bridge's `ImplementInputWeek`). */
+  implementInput: ImplementInputWeek[];
+}
+
+export interface ImplementInputWeek {
+  /** Monday 00:00 UTC, ISO. */
+  weekStart: string;
+  tasks: number;
+  byRun: { billed: number; subscription: number; mixed: number };
+  /** Null for a week under 5 tasks. */
+  p25: number | null;
+  median: number | null;
+  p75: number | null;
 }
 
 export interface InsightsView {
@@ -1896,6 +1925,8 @@ export const api = {
     get<{ repos: { name: string; fullName: string; releaseRepo: string | null; latest: ReleaseRunView | null }[] }>('/v1/releases').then((body) => body.repos),
   /** A repository's release runs, newest first. */
   releaseRuns: (repo: string) => get<{ runs: ReleaseRunView[] }>(`/v1/repos/${encodeURIComponent(repo)}/releases`).then((body) => body.runs),
+  /** A repository's project map, whole, with the commit it was built from (docs/adr/0088). */
+  projectMap: (repo: string) => get<ProjectMapRead>(`/v1/repos/${encodeURIComponent(repo)}/map`),
   /** Pins a new compare view of a repository's default branch. */
   releaseView: (repo: string) => pinReleaseView(repo),
   attention: () => get<{ items: AttentionItem[] }>('/v1/attention'),
