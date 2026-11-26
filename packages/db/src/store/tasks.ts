@@ -224,6 +224,25 @@ export async function listTasksSince(since: Date): Promise<TaskRecord[]> {
 }
 
 /**
+ * Tasks that ended since a moment — done, failed or stopped — newest first,
+ * at most `limit`: the console's side panel's Recent tab (ADR 0085).
+ * `ended_at` is set on each of those three ways out (`updateTaskState`,
+ * `stopIfRunning`, `failIfRunning`, `failUnstarted`), so no other column says
+ * a task finished. Ties on the same instant are broken by id, so two reads of
+ * the same rows list them in the same order.
+ */
+export async function listFinishedSince(since: Date, limit: number): Promise<TaskRecord[]> {
+  const rows = await query<TaskRow>(
+    `${SELECT}
+     where state in ('done','failed','stopped') and ended_at >= $1
+     order by ended_at desc, id desc
+     limit $2`,
+    [since, limit],
+  );
+  return rows.map(toTask);
+}
+
+/**
  * How many of this bot's tasks are queued or running (paused ones are not
  * counted): whether a rename, a restore or retiring its old container would
  * pull work out from under it.

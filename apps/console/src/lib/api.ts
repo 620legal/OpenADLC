@@ -307,6 +307,40 @@ export interface RunningTask {
   since: string | null;
 }
 
+/** A task as the side panel names it: `RunningTask` with no since (the bridge's `NamedTask`). */
+export type PanelTask = Omit<RunningTask, 'since'>;
+
+/** A task running or paused, in the side panel's Running tab (`GET /v1/board/panel`, ADR 0085). */
+export interface PanelRunning extends PanelTask {
+  /** `working` is running; `waiting` is paused on a person's gate; `paused` is any other pause. */
+  state: 'working' | 'waiting' | 'paused';
+  /** When it came into that state: what "12 min" is counted from. */
+  since: string | null;
+  costUsd: number;
+  /** False on a subscription seat: the spend is an estimate (ADR 0050). */
+  billed: boolean;
+}
+
+/** A task that ended in the last 24 hours, in the side panel's Recent tab. */
+export interface PanelRecent extends PanelTask {
+  outcome: 'done' | 'failed' | 'stopped';
+  endedAt: string;
+  costUsd: number;
+  billed: boolean;
+}
+
+/** What `GET /v1/board/panel` answers. */
+export interface BoardPanel {
+  running: PanelRunning[];
+  recent: PanelRecent[];
+}
+
+/** What the console's `/api/panel` answers: each part null when its read failed or an older bridge has none. */
+export interface PanelRead {
+  tasks: BoardPanel | null;
+  attention: AttentionItem[] | null;
+}
+
 export interface Board {
   repo: string;
   repos: string[];

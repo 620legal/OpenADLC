@@ -114,6 +114,9 @@ database's now and reads ten seconds back each time, sending each event once.
 `openadlc ls` reads `GET /v1/board/tasks`, the tasks queued, running or paused,
 each timed the way the card is
 ([ADR 0021](adr/0021-board-events-are-read-from-the-tables-they-happen-in.md)).
+The console's side panel reads `GET /v1/board/panel`, the tasks running or
+paused with their state and spend, and those that ended in the last day (see
+[the crew panel](#the-crew-panel-beside-every-page)).
 
 A card in Intake, Design or Build with nothing going on it says why, on what,
 and for how long (`waitingOf` in `apps/bridge/src/waiting.ts`, sent as each
@@ -198,6 +201,42 @@ turns the newest step into one of a fixed set of phrases (`activityOf` in
 session's screen is an admin's, a command line can hold a token, and the board
 is read by every user. A step it has no phrase for, or a task that has printed
 none yet, says its kind of work instead ("writing the change").
+
+### The crew panel beside every page
+
+The root layout draws a panel beside every page for someone the install
+knows (`SidePanel`, `components/side-panel.tsx`), so a person can watch the
+crew without switching between the board and Needs you
+([ADR 0085](adr/0085-the-side-panel-reads-needs-you-from-attention-and-tasks-from-one-bridge-read.md)).
+It has three tabs:
+
+- **Needs you** is `GET /v1/attention`, the read the Needs you page makes, as
+  the person looking. It is counted by `waiting()`, the function behind that
+  page's count, so the two always agree.
+- **Running** is every task running or paused, each with its bot, title,
+  repository, state, minutes in that state and spend so far ("est." on a
+  subscription seat). The states are "working", "waiting on a person" (paused
+  on an open gate) and "paused" (any other pause).
+- **Recent** is the tasks that ended (done, failed or stopped) in the last 24
+  hours by `tasks.ended_at`, newest first, up to 20.
+
+Running and Recent are one bridge read, `GET /v1/board/panel`
+(`apps/bridge/src/board-panel.ts`). Its rows are named by `nameTask` and
+`namingFacts` in `board-work.ts`, which name the board's running list too, so
+a row reads the same on both. The console's `/api/panel` makes both reads
+side by side. Each part is null when its read fails, and the panel draws
+nothing until it has the bridge's panel data: a bridge that does not answer,
+or one older than the panel, leaves the page as it is. A later read that
+fails keeps what was last drawn.
+
+The panel reads every fifteen seconds (`PANEL_EVERY_MS`, the board's own
+interval), only while the page is on screen and only from Tailwind's `md`
+width up. Below `md` it is hidden by its class and never reads, so the phone
+layout and the installed app are unchanged. Collapsed, it is a narrow rail
+with the Needs you and Running counts as badges. Whether it is open is kept
+in this browser's local storage as `openadlc.sidePanel.<encoded identity>`,
+keyed by the person `/v1/me` names (ADR 0082). Missing, unreadable or with no
+identity, it reads open.
 
 ### The Crew page's layouts
 
