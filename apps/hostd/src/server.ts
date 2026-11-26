@@ -23,6 +23,7 @@ import { hostCheckRequestFrom, type HostChecks } from './host-check.js';
 import type { ReleaseAccount } from './release-account.js';
 import { ReleaseBusy, ReleaseSignRefused, releaseRunRequestFrom, type ReleaseRuns } from './release-run.js';
 import type { ImageRestart } from './restart-onto-image.js';
+import { isProjectMapRepo, projectMapRefreshFrom, type ProjectMaps } from './project-map.js';
 import type { TaskDatabases } from './task-db.js';
 import { ATTACH_SUBPROTOCOL_PREFIX } from './terminal-gateway.js';
 
@@ -127,6 +128,8 @@ export function createHostdServer(input: {
   egress?: { probe: Pick<EgressProbe, 'ask'>; list: Pick<EgressList, 'available' | 'apply'> };
   /** The host's task database server, under the docker driver (`task-db.ts`). Absent, its route answers `none`. */
   taskDatabases?: Pick<TaskDatabases, 'status' | 'ensure'>;
+  /** Builds and keeps each managed repository's project map (`project-map.ts`). Absent, its routes answer 501. */
+  projectMaps?: Pick<ProjectMaps, 'refresh' | 'list' | 'remove'>;
 }): Server {
   const { config, driver, runner, attachTokens } = input;
 
@@ -723,6 +726,30 @@ export function createHostdServer(input: {
       if (method === 'DELETE' && pullMatch?.[1] && pullMatch[2]) {
         return send(response, 200, { cancelled: input.hostChecks.cancel(decodeURIComponent(pullMatch[1]), Number(pullMatch[2])) });
       }
+    }
+
+    // Each managed repository's project map, built from the default branch in
+    // its mirror and kept under the work root, for the bridge only: it asks
+    // for a refresh on its schedule and after a merge, and reads the list for
+    // its health card (docs/adr/0087).
+    if (path === '/project-maps' || path.startsWith('/project-maps/')) {
+      if (!input.projectMaps) return send(response, 501, { error: 'this hostd keeps no project maps: start it with its ProjectMaps wired in (apps/hostd/src/main.ts)' });
+      if (method === 'GET' && path === '/project-maps') return send(response, 200, { maps: input.projectMaps.list() });
+      const mapMatch = /^\/project-maps\/([^/]+)\/([^/]+)$/.exec(path);
+      const repo = mapMatch ? `${decodeURIComponent(mapMatch[1]!)}/${decodeURIComponent(mapMatch[2]!)}` : null;
+      if (!repo || !isProjectMapRepo(repo)) return send(response, 400, { error: 'name the repository as /project-maps/<owner>/<name>' });
+      if (method === 'POST') {
+        let body: Record<string, unknown>;
+        try {
+          body = await readBody(request);
+        } catch {
+          return send(response, 400, { error: 'the body must be JSON: { defaultBranch, bot, force? }' });
+        }
+        const refresh = projectMapRefreshFrom(repo, body);
+        if (typeof refresh === 'string') return send(response, 400, { error: refresh });
+        return send(response, 200, { map: await input.projectMaps.refresh(refresh) });
+      }
+      if (method === 'DELETE') return send(response, 200, { deleted: await input.projectMaps.remove(repo) });
     }
 
     const resumeMatch = /^\/tasks\/([^/]+)\/resume$/.exec(path);

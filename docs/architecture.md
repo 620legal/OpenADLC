@@ -114,6 +114,9 @@ database's now and reads ten seconds back each time, sending each event once.
 `openadlc ls` reads `GET /v1/board/tasks`, the tasks queued, running or paused,
 each timed the way the card is
 ([ADR 0021](adr/0021-board-events-are-read-from-the-tables-they-happen-in.md)).
+The console's side panel reads `GET /v1/board/panel`, the tasks running or
+paused with their state and spend, and those that ended in the last day (see
+[the crew panel](#the-crew-panel-beside-every-page)).
 
 A card in Intake, Design or Build with nothing going on it says why, on what,
 and for how long (`waitingOf` in `apps/bridge/src/waiting.ts`, sent as each
@@ -199,6 +202,42 @@ session's screen is an admin's, a command line can hold a token, and the board
 is read by every user. A step it has no phrase for, or a task that has printed
 none yet, says its kind of work instead ("writing the change").
 
+### The crew panel beside every page
+
+The root layout draws a panel beside every page for someone the install
+knows (`SidePanel`, `components/side-panel.tsx`), so a person can watch the
+crew without switching between the board and Needs you
+([ADR 0085](adr/0085-the-side-panel-reads-needs-you-from-attention-and-tasks-from-one-bridge-read.md)).
+It has three tabs:
+
+- **Needs you** is `GET /v1/attention`, the read the Needs you page makes, as
+  the person looking. It is counted by `waiting()`, the function behind that
+  page's count, so the two always agree.
+- **Running** is every task running or paused, each with its bot, title,
+  repository, state, minutes in that state and spend so far ("est." on a
+  subscription seat). The states are "working", "waiting on a person" (paused
+  on an open gate) and "paused" (any other pause).
+- **Recent** is the tasks that ended (done, failed or stopped) in the last 24
+  hours by `tasks.ended_at`, newest first, up to 20.
+
+Running and Recent are one bridge read, `GET /v1/board/panel`
+(`apps/bridge/src/board-panel.ts`). Its rows are named by `nameTask` and
+`namingFacts` in `board-work.ts`, which name the board's running list too, so
+a row reads the same on both. The console's `/api/panel` makes both reads
+side by side. Each part is null when its read fails, and the panel draws
+nothing until it has the bridge's panel data: a bridge that does not answer,
+or one older than the panel, leaves the page as it is. A later read that
+fails keeps what was last drawn.
+
+The panel reads every fifteen seconds (`PANEL_EVERY_MS`, the board's own
+interval), only while the page is on screen and only from Tailwind's `md`
+width up. Below `md` it is hidden by its class and never reads, so the phone
+layout and the installed app are unchanged. Collapsed, it is a narrow rail
+with the Needs you and Running counts as badges. Whether it is open is kept
+in this browser's local storage as `openadlc.sidePanel.<encoded identity>`,
+keyed by the person `/v1/me` names (ADR 0082). Missing, unreadable or with no
+identity, it reads open.
+
 ### The Crew page's layouts
 
 The Crew page shows the crew in one of three layouts: **Cards** (the default),
@@ -228,6 +267,59 @@ inline SVG coloured only by theme tokens and hidden from screen readers. Each
 desk's accessible name holds the bot, its state and its full task. The poses
 differ by shape, so under `prefers-reduced-motion` the two animations
 (`office-busy`, `office-wave` in `globals.css`) stop and the states still read.
+
+### The project map
+
+Every managed repository has a project map: one Markdown file that summarises
+its default branch. hostd keeps it at `<work root>/maps/<owner>__<name>.md`
+(folder 0700, file 0600). It is never committed, and it is never written into
+the repository or a task's clone
+([ADR 0087](adr/0087-a-project-map-is-generated-by-hostd-from-its-mirror-and-kept-under-the-work-root.md)).
+
+**What it holds.** A header with the commit it was built from and when it was
+built. Then:
+
+- the root README's first paragraph
+- the areas and packages, each with what it owns, its entry point, its tests
+  and its README
+- the key ADRs: those AGENTS.md links to, then all of them, newest first
+- the Human-review paths, as `parseHumanReviewPaths` reads AGENTS.md on the
+  default branch
+
+A section with nothing to read from is left out.
+
+**How it is built.** `apps/hostd/src/project-map.ts` builds it with plain code,
+not a model. It fetches the repository's mirror, the one tasks are cloned from,
+under the mirror's lock. It reads the default branch's tree with `git ls-tree`
+and the few blobs it needs with `git cat-file`, skipping any over 256 KiB.
+Nothing is checked out, so only merged text reaches the map.
+
+Every string taken from a file is sanitised: it goes through `redactSecrets`,
+loses HTML comments (so no `openadlc:` marker can ride along), is folded to one
+line and is capped at 400 characters. The map never holds the remote's URL or
+anything from the environment.
+
+The same commit gives the same bytes. Paths sort by code unit, and the file is
+written only when the commit, the format version or the body changed. A write
+goes through a tmp file, `fsync` and `rename`, so a reader never sees half a
+map.
+
+**When it is rebuilt.** The bridge's `maps` job (`apps/bridge/src/project-map.ts`)
+asks hostd for each repository every 15 minutes (`OPENADLC_JOB_MAPS_MINUTES`),
+one repository at a time. The app is not subscribed to `push`, so this look is
+what catches a person's merge on GitHub. The merge job asks for a pass as soon
+as it has merged something, without waiting for it. The first pass after the
+bridge starts, and one every 24 hours, is forced: it reads every tree even when
+the commit has not moved. A map of a repository that is no longer managed is
+deleted.
+
+**When it fails.** A failed build keeps the previous file untouched. hostd
+remembers the reason until its next try, and the `project-map` health check
+turns it into a card that names the repository, the reason, and the commit of
+the map that was kept.
+
+**Routes.** hostd serves `POST` and `DELETE /project-maps/:owner/:name` and
+`GET /project-maps`, behind the internal secret, for the bridge only.
 
 ## How the parts trust each other
 

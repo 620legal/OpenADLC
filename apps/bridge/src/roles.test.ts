@@ -180,6 +180,13 @@ describe('every console route says who may call it', () => {
     }
   });
 
+  it('lets a user read the side panel’s running and recent tasks, which every console page draws (#376)', () => {
+    for (const key of ['GET /v1/board/panel']) {
+      expect(ROUTE_ROLES[key], key).toBe('user');
+      expect(everyRoute(), key).toContain(key);
+    }
+  });
+
   it('lets a user dismiss a design memory supersede’s card for everyone, and leaves reverting it to an admin', () => {
     const key = 'POST /v1/repos/:name/design-memory/notices/dismiss';
     expect(ROUTE_ROLES[key], key).toBe('user');

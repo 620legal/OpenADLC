@@ -488,3 +488,24 @@ describe('starting an engine update on hostd', () => {
     expect(JSON.parse(asked[0]?.body ?? '{}')).toEqual({ trigger: 'console', hold: {}, minReleaseAgeDays: 7 });
   });
 });
+
+describe('project maps on hostd', () => {
+  it('encodes each segment of the repository and sends the refresh body with the secret', async () => {
+    answer = { status: 200, body: { map: { repo: 'acme/demo', state: 'written' } } };
+    await expect(client.refreshProjectMap('acme/my.repo', { defaultBranch: 'main', bot: 'builder', force: true })).resolves.toEqual({
+      map: { repo: 'acme/demo', state: 'written' },
+    });
+    expect(asked[0]).toMatchObject({ url: '/project-maps/acme/my.repo', method: 'POST', secret: SECRET });
+    expect(JSON.parse(asked[0]?.body ?? '{}')).toEqual({ defaultBranch: 'main', bot: 'builder', force: true });
+
+    answer = { status: 200, body: { deleted: true } };
+    await expect(client.removeProjectMap('ac me/x y')).resolves.toEqual({ deleted: true });
+    expect(asked[1]).toMatchObject({ url: '/project-maps/ac%20me/x%20y', method: 'DELETE' });
+  });
+
+  it('lists the maps', async () => {
+    answer = { status: 200, body: { maps: [] } };
+    await expect(client.projectMaps()).resolves.toEqual({ maps: [] });
+    expect(asked[0]).toMatchObject({ url: '/project-maps', method: 'GET' });
+  });
+});

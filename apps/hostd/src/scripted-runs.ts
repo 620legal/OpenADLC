@@ -59,6 +59,10 @@ function scriptFor(skill: string, subject: string): MockScript {
         ],
         touch: ['src/dispatcher/lease.ts', 'tests/dispatcher/lease.test.ts'],
         tokensIn: 18000,
+        // Parts of the 18000, as a real engine reports them, so a scripted
+        // install's ledger carries cache tokens too.
+        cacheRead: 12000,
+        cacheWrite: 2000,
         tokensOut: 4200,
         costUsd: 0.31,
       };

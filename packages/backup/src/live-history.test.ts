@@ -97,6 +97,54 @@ describe('whether a cost was billed, across a backup and a restore', () => {
   });
 });
 
+describe('the cache counts of a cost, across a backup and a restore', () => {
+  beforeEach(() => {
+    attachments.error = null;
+  });
+
+  it('reads them into the archive', async () => {
+    vi.mocked(query).mockImplementation((async (sql: string) =>
+      /from ledger l/.test(sql)
+        ? [
+            { seat: 'builder', engine: 'claude', model: 'claude-opus-5', model_alias: null, prompt_hash: null, tokens_in: 1000, tokens_out: 1, tokens_cache_read: 700, tokens_cache_write: 200, cost_usd: '2', billed: true, at: new Date('2026-11-01T00:00:00Z') },
+          ]
+        : []) as never);
+    try {
+      const found = await readInstall({ ...EVERYTHING, history: true }, { store });
+      const text = String(vi.mocked(query).mock.calls.find(([sql]) => /from ledger l/.test(String(sql)))?.[0]);
+      expect(text).toContain('l.tokens_cache_read');
+      expect(text).toContain('l.tokens_cache_write');
+      expect(found.history?.ledger[0]).toMatchObject({ tokensIn: 1000, cacheRead: 700, cacheWrite: 200 });
+    } finally {
+      vi.mocked(query).mockImplementation((async () => []) as never);
+    }
+  });
+
+  it('restores them, and a row from an archive before them as 0', async () => {
+    const sent: { text: string; values: unknown[] }[] = [];
+    const sql = {
+      query: vi.fn(async (text: string, values: unknown[] = []) => {
+        if (/insert into ledger/.test(text)) sent.push({ text, values });
+        if (/select id, slot from bots/.test(text)) return { rows: [{ id: 'b0b0b0b0-0000-4000-8000-000000000001', slot: 'builder' }], rowCount: 1 };
+        return { rows: [], rowCount: 0 };
+      }),
+    };
+    const [row] = HISTORY.ledger;
+    await restoreDb(sql).putHistory({
+      ...HISTORY,
+      threads: [],
+      messages: [],
+      requests: [],
+      ledger: [{ ...row!, tokensIn: 1000, cacheRead: 700, cacheWrite: 200 }, row!],
+    });
+    expect(sent[0]?.text).toContain('tokens_cache_read, tokens_cache_write');
+    expect(sent.map(({ values }) => values.slice(10))).toEqual([
+      [700, 200],
+      [0, 0],
+    ]);
+  });
+});
+
 describe('recognising audit lines and costs already here', () => {
   beforeEach(() => {
     attachments.error = null;
