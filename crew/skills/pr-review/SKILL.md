@@ -168,6 +168,29 @@ End the body with the marker that carries your verdict and your lens:
 advisory seat's request for changes on GitHub would hold the branch against
 it.
 
+The `security` lens always adds a `findings` list to its marker, whatever its
+part, and `[]` when it found nothing:
+
+```
+<!-- openadlc:{"event":"review_posted","verdict":"request_changes","lens":"security","findings":[{"severity":"blocker","summary":"The webhook route skips the HMAC check when the header is missing","file":"apps/bridge/src/webhooks.ts","line":412}]} -->
+```
+
+- One entry per finding you raise in the review, minor ones included. Each
+  entry is `{"severity","summary","file","line"?}`: `severity` is `blocker`,
+  `major` or `minor` (see "Severity"), `summary` is one sentence, and `file`
+  is the repository path most responsible, even for a finding about the
+  design. `line` is optional, and a positive whole number when given.
+- Your latest list is what the Security page reads as still standing once the
+  pull request merges or closes, so it is your whole current judgement, not
+  what changed since your last review. The empty list on a review after a fix
+  is what clears an earlier review's findings; leaving `findings` out clears
+  nothing.
+- Never put `-->` or `<!--` in a summary. The marker is an HTML comment, and
+  either one breaks it, losing your verdict with it.
+- A list with one bad entry is not stored at all: keep to the shape, at most
+  50 entries, a summary of at most 500 characters.
+- Other lenses send no `findings`.
+
 ## Lead: one decision, after everyone else
 
 `reviews.md` holds every other review of this round, each with its verdict
@@ -317,6 +340,9 @@ marker is read as narration, which is what an operator's own comment is.
   lens, exactly as your brief's `lens:` line gives it. It is the only place an
   advisory seat's verdict is. The lead's approval may add
   `"scope":"cross-cutting"` to accept a change past its declared paths (see
-  "Lead: one decision, after everyone else").
+  "Lead: one decision, after everyone else"). The `security` lens adds
+  `"findings":[…]`, every finding it raised, `[]` included, whether its part
+  is advisory or blocking (see "Advisory: a comment, with your verdict in its
+  marker").
 - The question marker, ending your own message rather than a comment, when you
   escalate to a person (see "Asking a person").

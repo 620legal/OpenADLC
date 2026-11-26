@@ -1,6 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import type { SecurityAlert, SecurityAlertsView } from './api';
-import { alertCount, filterAlerts, filtersFrom, securityHref, securityRequest, severityPhrase } from './security';
+import type { SecurityAlert, SecurityAlertsView, SecurityFinding, SecurityFindingsView } from './api';
+import {
+  alertCount,
+  filterAlerts,
+  filterFindings,
+  filtersFrom,
+  findingCount,
+  findingRequest,
+  findingWhere,
+  securityHref,
+  securityRequest,
+  severityPhrase,
+} from './security';
 
 describe('a severity filter in a sentence', () => {
   it('names the level as a severity, and none as no severity', () => {
@@ -107,5 +118,56 @@ describe('the request File as task opens', () => {
     const request = securityRequest(leaked);
     expect(JSON.stringify(request)).not.toContain('ghp_');
     expect(request.text).toBe('Fix the Secret scanning alert “GitHub Personal Access Token” in web');
+  });
+});
+
+const blocker: SecurityFinding = {
+  repo: 'app',
+  pr: 7,
+  prState: 'merged',
+  reviewId: 901,
+  reviewUrl: 'https://github.com/acme/app/pull/7#pullrequestreview-901',
+  reviewedAt: '2026-11-20T10:00:00.000Z',
+  severity: 'high',
+  seatSeverity: 'blocker',
+  summary: 'The webhook route skips the HMAC check',
+  file: 'apps/bridge/src/webhooks.ts',
+  line: 412,
+};
+const major: SecurityFinding = { ...blocker, severity: 'medium', seatSeverity: 'major', summary: 'Logs the token length', line: null };
+const FINDINGS: SecurityFindingsView = {
+  repos: [
+    { repo: 'app', findings: [blocker, major] },
+    { repo: 'web', findings: [{ ...major, repo: 'web' }] },
+  ],
+};
+
+describe('the security seat’s findings, filtered as the alerts are', () => {
+  it('keeps every finding with no filter', () => {
+    expect(findingCount(filterFindings(FINDINGS, { repo: null, severity: null }))).toBe(3);
+  });
+
+  it('keeps blockers for high and drops majors, and keeps none for critical or no severity', () => {
+    const high = filterFindings(FINDINGS, { repo: null, severity: 'high' });
+    expect(high.repos.map((one) => one.findings.map((finding) => finding.seatSeverity))).toEqual([['blocker'], []]);
+    expect(findingCount(filterFindings(FINDINGS, { repo: null, severity: 'critical' }))).toBe(0);
+    expect(findingCount(filterFindings(FINDINGS, { repo: null, severity: 'none' }))).toBe(0);
+  });
+
+  it('narrows to one repository', () => {
+    expect(filterFindings(FINDINGS, { repo: 'web', severity: null }).repos.map((one) => one.repo)).toEqual(['web']);
+  });
+});
+
+describe('the request File as task opens for a finding', () => {
+  it('is a defect in the finding’s repository, with its severity, place, pull request and review', () => {
+    expect(findingRequest(blocker)).toEqual({
+      repo: 'app',
+      kind: 'defect',
+      text: 'Fix the security review finding “The webhook route skips the HMAC check” in app',
+      details:
+        'Severity: high (seat: blocker)\nWhere: apps/bridge/src/webhooks.ts:412\nFrom: pull request #7 (merged)\nReview: https://github.com/acme/app/pull/7#pullrequestreview-901',
+    });
+    expect(findingWhere(major)).toBe('apps/bridge/src/webhooks.ts');
   });
 });

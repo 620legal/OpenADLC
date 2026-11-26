@@ -1483,6 +1483,34 @@ export interface SecurityAlertsView {
   repos: { repo: string; fullName: string; types: Record<AlertType, AlertTypeState> }[];
 }
 
+/** The security seat's own grade for a finding (#378, docs/adr/0087). */
+export type SeatSeverity = 'blocker' | 'major' | 'minor';
+
+/**
+ * One finding of the security seat's latest review of a pull request that
+ * merged or was closed, as the bridge's `security-findings.ts` answers it.
+ */
+export interface SecurityFinding {
+  repo: string;
+  pr: number;
+  prState: 'merged' | 'closed';
+  reviewId: number;
+  reviewUrl: string;
+  reviewedAt: string;
+  /** The page's scale: blocker, major and minor file as high, medium and low. */
+  severity: 'high' | 'medium' | 'low';
+  /** The seat's own word, shown beside it. */
+  seatSeverity: SeatSeverity;
+  summary: string;
+  file: string;
+  line: number | null;
+}
+
+/** `GET /v1/security/findings`: each managed repository's unfixed findings, `[]` for one with none. */
+export interface SecurityFindingsView {
+  repos: { repo: string; findings: SecurityFinding[] }[];
+}
+
 /** One window's numbers, overall or for a repository; `GET /v1/insights` (the bridge's `insights.ts`). */
 export interface InsightSummary {
   merged: number;
@@ -1822,6 +1850,8 @@ export const api = {
     get<InsightsView>(`/v1/insights?days=${options.days}${options.repo ? `&repo=${encodeURIComponent(options.repo)}` : ''}`),
   securityAlerts: (options: { repo?: string | null } = {}) =>
     get<SecurityAlertsView>(`/v1/security/alerts${options.repo ? `?repo=${encodeURIComponent(options.repo)}` : ''}`),
+  securityFindings: (options: { repo?: string | null } = {}) =>
+    get<SecurityFindingsView>(`/v1/security/findings${options.repo ? `?repo=${encodeURIComponent(options.repo)}` : ''}`),
   spendingLimits: () => get<SpendingLimitsView>('/v1/spending/limits'),
   notifications: () => get<NotificationSettingsView>('/v1/settings/notifications'),
   pushDevices: () => get<PushDevicesView>('/v1/me/push'),

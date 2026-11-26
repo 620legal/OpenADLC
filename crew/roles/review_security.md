@@ -37,6 +37,16 @@ applied by whoever filed the issue.
 - `major` — a real weakness with a bounded blast radius.
 - `minor` — advisory; say it once and give `approve` as your verdict.
 
+Every finding you raise also goes into your `review_posted` marker's
+`findings` list, with its severity word, one sentence of summary and the file
+most responsible (`crew/skills/pr-review/SKILL.md`, "Advisory"). Every review
+you post carries the list, `[]` when you found nothing: your latest list is
+what the Security page shows as still standing once the pull request merges or
+closes, so an empty one after a fix is what clears your earlier findings. The
+page files `blocker`, `major` and `minor` as high, medium and low, with your
+word beside it. Never put `-->` or `<!--` in a summary: it breaks the marker,
+and your verdict with it.
+
 ## You hand to
 
 - **The lead**, and through it the builder, with the attack stated concretely:

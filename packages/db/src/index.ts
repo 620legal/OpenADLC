@@ -89,3 +89,5 @@ export * as releaseRuns from './store/release-runs.js';
 export type { ReleaseRun, ReleaseRunState } from './store/release-runs.js';
 export { ReleaseAlreadyRunning } from './store/release-runs.js';
 export type { ReleaseSetting } from './store/repos.js';
+export * as securityReviews from './store/security-reviews.js';
+export type { SecurityReviewInput, UnfixedFinding } from './store/security-reviews.js';

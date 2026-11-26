@@ -220,6 +220,8 @@ vi.mock('@openadlc/db', () => ({
     getDelivery: vi.fn(async () => ({ deliveryRules: null, testingUrl: null })),
     getProductionChoice: vi.fn(async () => null),
   },
+  // The security seat's signed findings (`security-findings.ts`); a test that delivers one watches it.
+  securityReviews: { record: vi.fn(async () => undefined) },
   settings: {
     allSettings: vi.fn(async () => (store.testingDeploy ? { testingDeploy: store.testingDeploy } : {})),
     getSetting: vi.fn(async (key: string) => (key === 'testingDeploy' ? store.testingDeploy : key === 'humanIds' ? store.humanIds : null)),
@@ -12679,5 +12681,123 @@ describe('a crew pull request whose opening was never delivered, opened by recon
 
     await expect(quietly(() => webhooks.reviewUnheard(REPO, LIVE))).rejects.toThrow('GitHub answered 502');
     expect(rounds).toEqual([]);
+  });
+});
+
+describe('the security seat’s findings, from its signed review (#378)', () => {
+  const REPOSITORY = { name: 'openadlc', full_name: 'janedoe/openadlc' };
+  const SENTINEL = 'openadlc-sentinel-janedoe';
+  const LEAD = 'openadlc-sydney-janedoe';
+  const FINDING = { severity: 'blocker', summary: 'The webhook route skips the HMAC check', file: 'apps/bridge/src/webhooks.ts', line: 412 };
+  const BODY = `One blocker.\n\n<!-- openadlc:${JSON.stringify({ event: 'review_posted', verdict: 'request_changes', lens: 'security', findings: [FINDING] })} -->\n<!-- openadlc-seat:sentinel -->`;
+  const review = {
+    action: 'submitted',
+    review: {
+      id: 901,
+      state: 'commented',
+      body: BODY,
+      html_url: 'https://github.com/janedoe/openadlc/pull/77#pullrequestreview-901',
+      submitted_at: '2026-11-20T10:00:00Z',
+      commit_id: 'c'.repeat(40),
+      user: { login: SENTINEL },
+      author_association: 'COLLABORATOR',
+    },
+    pull_request: {
+      number: 77,
+      draft: false,
+      head: { ref: 'agent/builder/42-x', sha: 'c'.repeat(40), repo: { full_name: 'janedoe/openadlc' } },
+      base: { ref: 'main' },
+      labels: [],
+      user: { login: 'openadlc-atlas-janedoe' },
+    },
+    repository: REPOSITORY,
+    sender: { login: SENTINEL },
+  };
+
+  function bridge(checked: { verified: boolean; seat: string | null }) {
+    const automation = {
+      actors: { asBot: async () => ({}) },
+      reviewRules: vi.fn(() => ({ reviewers: [{ seat: 'sentinel', lens: 'security' }, { seat: 'sydney', lead: true }] })),
+      reviewStanding: vi.fn(async () => ({
+        gate: { state: 'pending', description: 'waiting on sydney' },
+        decision: { reviewers: ['sentinel', 'sydney'], lead: 'sydney', approvers: ['sydney'] },
+        posted: ['sentinel'],
+        approved: [],
+        leadDue: null,
+      })),
+      setReviewGate: vi.fn(async (input: unknown) => input),
+      dismissedByBridge: () => false,
+    };
+    const taskService = {
+      openLeadReview: vi.fn(async () => null),
+      openMissingReviews: vi.fn(async () => []),
+      gateDescription: async (text: string) => text,
+    };
+    const attribution = { check: vi.fn(async () => ({ counts: true, ...checked, task: 'task-sec', reason: checked.verified ? null : 'unsigned' })) };
+    const webhooks = new Webhooks(
+      { automationBot: null, humans: [], review: { maxRounds: 3 } } as never,
+      automation as never,
+      {} as never,
+      taskService as never,
+      {} as never,
+      { leave: vi.fn(async () => undefined), advance: vi.fn(async () => null), enter: vi.fn(async () => undefined) } as never,
+      null,
+      null,
+      null,
+      attribution as never,
+    );
+    return { webhooks, automation };
+  }
+
+  beforeEach(async () => {
+    const { securityReviews } = await import('@openadlc/db');
+    vi.mocked(securityReviews.record).mockReset().mockResolvedValue(undefined);
+    store.bots = [
+      { id: 'bot-sentinel', name: 'sentinel', slot: 'security-reviewer', role: 'review_security', githubLogin: SENTINEL },
+      { id: 'bot-lead', name: 'sydney', slot: 'lead-reviewer', role: 'review_lead', githubLogin: LEAD },
+    ] as never;
+  });
+
+  async function deliver(webhooks: Webhooks, payload: Record<string, unknown> = review) {
+    const quiet = [vi.spyOn(console, 'warn').mockImplementation(() => undefined), vi.spyOn(console, 'log').mockImplementation(() => undefined)];
+    try {
+      await webhooks.receive('pull_request_review', payload as never, 'delivery-findings');
+    } finally {
+      for (const spy of quiet) spy.mockRestore();
+    }
+  }
+
+  it('records the list when the review’s signature verifies to the security seat', async () => {
+    const { securityReviews } = await import('@openadlc/db');
+    const { webhooks, automation } = bridge({ verified: true, seat: 'sentinel' });
+    await deliver(webhooks);
+    expect(securityReviews.record).toHaveBeenCalledWith({
+      repoId: 'repo-1',
+      prNumber: 77,
+      reviewId: 901,
+      headSha: 'c'.repeat(40),
+      seat: 'sentinel',
+      url: 'https://github.com/janedoe/openadlc/pull/77#pullrequestreview-901',
+      submittedAt: new Date('2026-11-20T10:00:00Z'),
+      findings: [FINDING],
+    });
+    expect(automation.setReviewGate).toHaveBeenCalled();
+  });
+
+  it('records nothing from a review whose signature does not check, and still publishes the gate', async () => {
+    const { securityReviews } = await import('@openadlc/db');
+    const { webhooks, automation } = bridge({ verified: false, seat: null });
+    await deliver(webhooks);
+    expect(securityReviews.record).not.toHaveBeenCalled();
+    expect(automation.setReviewGate).toHaveBeenCalled();
+  });
+
+  it('publishes the review gate as before when storing the list fails', async () => {
+    const { securityReviews } = await import('@openadlc/db');
+    vi.mocked(securityReviews.record).mockRejectedValue(new Error('the database is down'));
+    const { webhooks, automation } = bridge({ verified: true, seat: 'sentinel' });
+    await deliver(webhooks);
+    expect(securityReviews.record).toHaveBeenCalled();
+    expect(automation.setReviewGate).toHaveBeenCalledWith(expect.objectContaining({ prNumber: 77, state: 'pending', description: 'waiting on sydney' }));
   });
 });

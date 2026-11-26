@@ -107,6 +107,10 @@ describe('every console route says who may call it', () => {
     expect(roleFor('GET', '/v1/security/alerts')).toBe('user');
   });
 
+  it('lets a user read the security seat’s unfixed findings (#378)', () => {
+    expect(roleFor('GET', '/v1/security/findings')).toBe('user');
+  });
+
   it('needs an admin for a route nobody classified', () => {
     expect(roleFor('POST', '/v1/something/new')).toBe('admin');
   });
