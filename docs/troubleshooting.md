@@ -1896,8 +1896,12 @@ grep -E 'paused on a question' "$(openadlc logs bridge)" | tail -n 20
 ## An approved plan change waits on another issue
 
 A builder that asks to add paths to its lease (`plan_change`) and is approved
-while another issue's lease or work in build or review holds an overlapping
-path stays paused, and its question stays open ([development.md](development.md#plan-changes)).
+while other work holds an overlapping path stays paused, and its question
+stays open ([development.md](development.md#plan-changes)). Work holds a path
+when it is another active lease (its declared paths), an issue whose build or
+patch round is queued, running or paused (its declared and changed paths), or
+an open pull request (the files it changes); an issue in build only waiting
+its turn holds nothing, even after a failed build.
 Needs you shows it as waiting, not as the question again: "The builder (…)
 waits for #71 to let go of the approved paths", naming who approved it, the
 paths, and each issue that holds them with its pull request, with a button to

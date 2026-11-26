@@ -1135,17 +1135,28 @@ export class Gates {
   }
 
   /**
-   * The issues whose work claims a path this request asks for: another lease on
-   * the repository, or a change in build or review that declared or touched it.
-   * The lease says a path is held, and the work in flight is what a lease that
-   * outlived its task is holding it for.
+   * The issues whose work holds a path this request asks for now: another
+   * active lease, by its declared paths; an issue whose build or patch round is
+   * queued, running or paused, by its declared and changed paths; and an open
+   * pull request that is not being built, by the files it changes only. An
+   * issue in build that is only waiting its turn holds nothing, even after an
+   * earlier build failed.
+   *
+   * This must never be wider than what the dispatcher waits on (`building`). On
+   * 2026-11-26 #377's approved plan change was held for paths #374 declared,
+   * because #374 had a failed implement task, while the dispatcher would not
+   * start #374 because its paths overlapped #377, being built: each waited on
+   * the other until a person edited #374's Expected paths by hand.
    */
   private async blockers(lease: Lease, paths: readonly string[]): Promise<number[]> {
     const held = (await leases.listActiveLeases(lease.repoId)).map((other) => ({
       number: other.issueNumber,
       paths: other.declaredPaths,
     }));
-    const working = await issues.workInFlight(lease.repoId);
+    const working = (await issues.workInFlight(lease.repoId)).map((work) => ({
+      number: work.number,
+      paths: work.building ? work.paths : work.changedPaths,
+    }));
     const numbers = [...held, ...working]
       .filter((work) => work.number !== lease.issueNumber && declaredPathsOverlap(paths, work.paths))
       .map((work) => work.number);
@@ -1153,7 +1164,8 @@ export class Gates {
   }
 
   /**
-   * A person's approval: held when another lease has a path it asks for, which
+   * A person's approval: held when other work holds a path it asks for now
+   * (`blockers`), which
    * leaves the gate open, or else the work that carries it out, for the answer
    * that claims the gate to run. That widens the lease and the issue together,
    * and writes the paths into the issue's Expected paths on GitHub, which is
