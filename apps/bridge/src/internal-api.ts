@@ -767,6 +767,8 @@ export function registerInternalApi(
       taskId: params.id ?? '',
       tokensIn: input.tokensIn as number,
       tokensOut: input.tokensOut as number,
+      cacheRead: (input.cacheRead as number | undefined) ?? 0,
+      cacheWrite: (input.cacheWrite as number | undefined) ?? 0,
       costUsd: input.costUsd as number,
       engine: input.engine as string,
       model: input.model as string,

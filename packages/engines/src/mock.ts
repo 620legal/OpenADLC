@@ -14,6 +14,9 @@ export interface MockScript {
    */
   planChange?: { paths: string[]; reason: string };
   tokensIn?: number;
+  /** Parts of `tokensIn` read from and written to the cache; put on the usage event when set. */
+  cacheRead?: number;
+  cacheWrite?: number;
   tokensOut?: number;
   costUsd?: number;
   /**
@@ -66,7 +69,14 @@ export class MockEngine implements Engine {
         tokensOut: self.totals.tokensOut + tokensOut,
         costUsd: Math.round((self.totals.costUsd + costUsd) * 10_000) / 10_000,
       };
-      yield { type: 'usage', tokensIn, tokensOut, costUsd };
+      yield {
+        type: 'usage',
+        tokensIn,
+        tokensOut,
+        costUsd,
+        ...(script.cacheRead !== undefined ? { cacheRead: script.cacheRead } : {}),
+        ...(script.cacheWrite !== undefined ? { cacheWrite: script.cacheWrite } : {}),
+      };
 
       if (script.ask) {
         yield { type: 'question', question: script.ask.question, options: script.ask.options };

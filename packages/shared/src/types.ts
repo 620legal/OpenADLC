@@ -303,8 +303,16 @@ export interface LedgerEntry {
   model: string;
   /** The configured alias, when the bot was set to one. Null for a pinned id. */
   modelAlias: string | null;
+  /** All the input the model processed, cached included. */
   tokensIn: number;
   tokensOut: number;
+  /**
+   * The parts of `tokensIn` read from and written to the provider's cache,
+   * never added to it: uncached input is `tokensIn - cacheRead - cacheWrite`.
+   * 0 for a row written before they were recorded (docs/adr/0092).
+   */
+  cacheRead: number;
+  cacheWrite: number;
   costUsd: number;
   /** False for a run on a subscription seat: its cost is an estimate, not billed. Absent from an older bridge. */
   billed?: boolean;

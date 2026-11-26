@@ -376,8 +376,12 @@ async function main(): Promise<void> {
   let sentBack: { to: string } | { refused: string } | null = null;
   /** The last thing the engine said, for a question that arrives as a bare marker. */
   let lastSaid = '';
-  /** Usage the ledger has not taken yet, sent whole with the next report it does. */
-  const unrecorded = { tokensIn: 0, tokensOut: 0, costUsd: 0 };
+  /**
+   * Usage the ledger has not taken yet, sent whole with the next report it
+   * does. The cache counts are parts of `tokensIn`, summed with it, so a retry
+   * still sends them within it.
+   */
+  const unrecorded = { tokensIn: 0, tokensOut: 0, costUsd: 0, cacheRead: 0, cacheWrite: 0 };
   /** Whether the engine said it finished its turn: a `done` that is `complete`. */
   let finishedTurn = false;
   /** A take of the inbox the bridge never answered, which the task's failure asks the bridge to put back. */
@@ -649,6 +653,8 @@ async function main(): Promise<void> {
         unrecorded.tokensIn += event.tokensIn;
         unrecorded.tokensOut += event.tokensOut;
         unrecorded.costUsd += event.costUsd;
+        unrecorded.cacheRead += event.cacheRead ?? 0;
+        unrecorded.cacheWrite += event.cacheWrite ?? 0;
         // The ledger is written before the next turn, so a cap trips between
         // invocations rather than after a runaway. One it does not take is
         // tried again, with everything not yet taken, and stops the task when
@@ -668,6 +674,8 @@ async function main(): Promise<void> {
         unrecorded.tokensIn = 0;
         unrecorded.tokensOut = 0;
         unrecorded.costUsd = 0;
+        unrecorded.cacheRead = 0;
+        unrecorded.cacheWrite = 0;
         // A task already waiting on a question is not asked about the cap as
         // well: one gate is one thing for a person to answer, and the resumed
         // session checks its headroom before it does anything. Nor is one that

@@ -698,7 +698,12 @@ Codex reports a turn's usage only when the turn ends, so the per-task cap
 stops a Codex task between turns, never partway through one: a turn can run
 past the cap by up to its own spend.
 Tokens in, in the ledger, count all input the model processed, cached input
-included. Copy
+included. The ledger also keeps the parts of it read from the provider's cache
+and written to it (`tokens_cache_read`, `tokens_cache_write`), when the engine
+reports them, so uncached input is tokens in less both; prices and caps read
+tokens in and cost as before, and a row from before they were recorded has 0
+in both ([ADR 0092](adr/0092-the-ledger-records-cache-tokens-as-part-of-tokens-in.md)).
+Copy
 `config/models.example.yaml` to `config/models.yaml`; git ignores the copy, so
 an install's own prices never end up in a pull request.
 
