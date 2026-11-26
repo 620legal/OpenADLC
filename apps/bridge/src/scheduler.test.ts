@@ -3826,6 +3826,26 @@ describe('the project maps job', () => {
   });
 });
 
+describe('the routines job (docs/adr/0090)', () => {
+  it('is a scheduled job that fires the routines due now, one line per firing', async () => {
+    expect(SCHEDULED_JOBS).toContain('routines');
+    const scheduler = new Scheduler({} as never, {} as never, {} as never, {} as never, {} as never, {} as never, {} as never);
+    const fire = vi.fn(async () => ['routine 0b6f1d1c (app) filed request:00000001 as ada@example.com']);
+    scheduler.useRoutines({ fire });
+    const before = Date.now();
+    const result = await scheduler.run('routines');
+    expect(fire).toHaveBeenCalledTimes(1);
+    const [now] = (fire.mock.calls[0] ?? []) as unknown as [Date];
+    expect(now.getTime()).toBeGreaterThanOrEqual(before);
+    expect(result).toEqual({ job: 'routines', actions: ['routine 0b6f1d1c (app) filed request:00000001 as ada@example.com'] });
+  });
+
+  it('says so when no routines are wired', async () => {
+    const scheduler = new Scheduler({} as never, {} as never, {} as never, {} as never, {} as never, {} as never, {} as never);
+    expect((await scheduler.run('routines')).actions).toEqual(['routines are not wired into this bridge']);
+  });
+});
+
 describe('work held on a model account’s usage limit (ADR 0096)', () => {
   const NOW = new Date('2026-11-26T12:00:00.000Z');
   const HELD_REASON = "held on model account acct-1: You've hit your org's monthly spend limit";

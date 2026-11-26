@@ -29,6 +29,12 @@ export interface RequestRecord {
   queueReason: string | null;
   /** When it last changed: when it was claimed, put back, or moved on. */
   updatedAt: string;
+  /**
+   * The routine that filed it (migration 0174, docs/adr/0090); null for one a
+   * person filed, and once that routine is deleted. Set only by the bridge's
+   * `routines` job, never from a request's body.
+   */
+  routineId?: string | null;
 }
 
 /** One issue a request was filed as. */
@@ -53,6 +59,7 @@ interface RequestRow {
   queue_attempts: number;
   queue_reason: string | null;
   updated_at: Date;
+  routine_id?: string | null;
   issues?: { repoId: string; repoFullName: string | null; number: number; filedAt: string }[] | null;
 }
 
@@ -65,7 +72,7 @@ const ISSUES = `(
    where ri.request_id = requests.id
 ) as issues`;
 
-const COLUMNS = `id, text, context, repo_id, kind, requested_by, issue_number, state, created_at, queue_attempts, queue_reason, updated_at, ${ISSUES}`;
+const COLUMNS = `id, text, context, repo_id, kind, requested_by, issue_number, state, created_at, queue_attempts, queue_reason, updated_at, routine_id, ${ISSUES}`;
 
 const SELECT = `
   select ${COLUMNS} from requests
@@ -92,6 +99,7 @@ function toRequest(row: RequestRow): RequestRecord {
     queueAttempts: row.queue_attempts ?? 0,
     queueReason: row.queue_reason ?? null,
     updatedAt: (row.updated_at ?? row.created_at).toISOString(),
+    routineId: row.routine_id ?? null,
   };
 }
 
@@ -108,6 +116,8 @@ export async function createRequest(input: {
   requestedBy: string;
   /** `queued` to wait its turn; `draft`, the default, when triage starts on it now. */
   state?: 'queued' | 'draft';
+  /** The routine filing it, when the bridge's `routines` job does. */
+  routineId?: string | null;
 }): Promise<RequestRecord> {
   // The id is the column's default, so the same insert again draws a fresh one.
   for (let attempt = 1; ; attempt += 1) {
@@ -118,10 +128,10 @@ export async function createRequest(input: {
       const row = await withTransaction(async (client) => {
         const inserted = (
           await client.query<RequestRow>(
-            `insert into requests (text, context, repo_id, kind, requested_by, state)
-             values ($1,$2,$3,$4,$5,$6)
+            `insert into requests (text, context, repo_id, kind, requested_by, state, routine_id)
+             values ($1,$2,$3,$4,$5,$6,$7)
              returning ${COLUMNS}`,
-            [input.text, input.context, input.repoId, input.kind, input.requestedBy, input.state ?? 'draft'],
+            [input.text, input.context, input.repoId, input.kind, input.requestedBy, input.state ?? 'draft', input.routineId ?? null],
           )
         ).rows[0];
         if (!inserted) throw new Error('failed to create request');

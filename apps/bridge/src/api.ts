@@ -157,6 +157,8 @@ import { registerItemSearchRoutes } from './item-search-routes.js';
 import { itemKey, itemOf, offeredGate, requestSubject, resolveItem } from './items.js';
 import { PlanChanges, registerPlanChangeRoutes } from './plan-changes.js';
 import { DiscoverService, liveDiscoverDeps, registerDiscoverRoutes } from './discover.js';
+import type { RoutineService } from './routines.js';
+import { liveRoutineRouteDeps, registerRoutineRoutes, RoutineRoutes } from './routine-routes.js';
 import { humanReviewReader } from './human-review-read.js';
 import { readSeatPauses, seatPausedReason } from './seat-pause.js';
 import type { HealthAction } from '@openadlc/shared';
@@ -223,6 +225,12 @@ export interface ApiDeps {
   planChanges?: PlanChanges;
   /** Discover runs: their start, their page, and what their sessions report (`discover.ts`); one is made where none is given. */
   discover?: DiscoverService;
+  /**
+   * The routines job's service (`routines.ts`), given `fileRequest` here so a
+   * routine files through the same function as `POST /v1/requests`, never a
+   * copy. Absent, routines can be read and changed but nothing files them.
+   */
+  routines?: Pick<RoutineService, 'useFiler'>;
   /**
    * Told when a seat may have room — a task of its ended, its tasks at once
    * went up — so what it turned away while full starts now (`StageRunner`).
@@ -1936,6 +1944,13 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
   registerDesignMemoryRoutes(router);
   // Discover runs: started by any console user, read-only on GitHub (#370, docs/adr/0089).
   registerDiscoverRoutes(router, discoverFor(deps));
+  // Routines (#369, docs/adr/0090): read by anyone, changed by an approver,
+  // and filed by the `routines` job through `fileRequest` below.
+  registerRoutineRoutes(router, new RoutineRoutes(liveRoutineRouteDeps({ linkOf: (identity) => personGitHub.store.ofIdentity(identity) })));
+  deps.routines?.useFiler(async (request, identity, options) => {
+    const { record } = await fileRequest(request, identity, options);
+    return { id: record.id };
+  });
   // The Checks page and an item's CI failure: GETs on GitHub as the automation
   // account, and the bridge's own records; neither writes anything (ADR 0083).
   const checksReads = async () => {
@@ -2066,12 +2081,18 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
   /**
    * Writes a console request and starts its triage from the queue, as
    * `POST /v1/requests` answers it. Release's Prepare next version files
-   * through it too (`release-prepare.ts`, #363), so the request it files is
-   * queued and triaged exactly as a typed one is.
+   * through it too (`release-prepare.ts`, #363), and so does a routine
+   * (`routines.ts`, #369), so the request it files is queued and triaged
+   * exactly as a typed one is.
+   *
+   * `routineId` is the routine filing it, given only by the bridge's
+   * `routines` job: `POST /v1/requests` never passes options, so no body can
+   * mark a request as a routine's.
    */
   async function fileRequest(
     input: { text: string; context?: string | null; repo?: string; kind?: string; attachments?: unknown },
     identity: string,
+    options: { routineId?: string } = {},
   ): Promise<{ record: requests.RequestRecord; answer: unknown }> {
     if (!input.text?.trim()) throw new HttpFailure(400, 'a request needs a line of text');
     const files = attachmentIds(input.attachments);
@@ -2097,8 +2118,9 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
       kind: input.kind ?? null,
       requestedBy: identity,
       state: 'queued',
+      ...(options.routineId ? { routineId: options.routineId } : {}),
     });
-    await recordEvent({ source: 'console', type: 'request.created', payload: { requestId: record.id } });
+    await recordEvent({ source: 'console', type: 'request.created', payload: { requestId: record.id, ...(options.routineId ? { routineId: options.routineId } : {}) } });
     // Claimed before its triage can start, which reads them (`context.ts`).
     if (files.length > 0) {
       await attachments.claim(files, {
