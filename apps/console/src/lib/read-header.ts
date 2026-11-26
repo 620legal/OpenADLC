@@ -22,8 +22,12 @@ export async function readHeader(known: {
     known.crew ?? api.crew().then((body) => body.bots).catch(() => [] as CrewMember[]),
     known.costs !== undefined ? known.costs : api.costs().catch(() => null),
     known.attention !== undefined ? known.attention : api.attention().then((body) => body.items).catch(() => null),
-    // The hands-off badge's windows (#383); a failed read leaves the badge out.
-    api.handsOff().catch(() => null),
+    // The hands-off badge's windows (#383); a failed read leaves the badge
+    // out. Called inside the chain, so a client without the read is a failed
+    // read too, not a header that throws.
+    Promise.resolve()
+      .then(() => api.handsOff())
+      .catch(() => null),
   ]);
 
   return headerData({
