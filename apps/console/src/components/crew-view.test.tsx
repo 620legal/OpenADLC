@@ -177,6 +177,18 @@ describe('the crew page', () => {
     expect(cardOf(html, 'janedoe-openadlc-flow')).not.toContain('Change model');
   });
 
+  it('draws cards on the server, and offers cards, the table and the office', () => {
+    const html = page();
+    expect(html).toContain('data-crew-grid');
+    expect(html).not.toContain('data-crew-office');
+    const group = /<div role="group" aria-label="Show the crew as"[^>]*>(.*?)<\/div>/.exec(html)![1]!;
+    expect([...group.matchAll(/<button[^>]*aria-pressed="(true|false)"[^>]*>([^<]+)<\/button>/g)].map((m) => [m[2], m[1]])).toEqual([
+      ['Cards', 'true'],
+      ['Table', 'false'],
+      ['Office', 'false'],
+    ]);
+  });
+
   it('is under the same header as the board, with Crew marked', () => {
     expect(page()).toMatch(/<a aria-current="page"[^>]*href="\/crew"/);
   });

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CrewMember, ModelAccountRef, TaskSummary } from './api';
 import {
   countWords,
@@ -14,6 +14,8 @@ import {
   modelPicks,
   pickValue,
   readPick,
+  CREW_LAYOUT_KEY,
+  storedCrewLayout,
 } from './crew';
 
 const NOW = '2026-09-24T12:00:00.000Z';
@@ -321,5 +323,34 @@ describe('modelPicks', () => {
     const picks = modelPicks(builder({ modelAccountId: null }), [MAX], null);
     expect(picks.value).toBe('');
     expect(picks.placeholder).toBe('Choose a model');
+  });
+});
+
+describe('the crew layout this browser chose', () => {
+  afterEach(() => vi.unstubAllGlobals());
+  const storing = (value: string | null) =>
+    vi.stubGlobal('localStorage', { getItem: (key: string) => (key === CREW_LAYOUT_KEY ? value : null), setItem: () => {} });
+
+  it('is the table or the office when one of them is stored', () => {
+    storing('table');
+    expect(storedCrewLayout()).toBe('table');
+    storing('office');
+    expect(storedCrewLayout()).toBe('office');
+  });
+
+  it('is cards for cards, for nothing stored, and for a value this console does not know', () => {
+    for (const value of ['cards', null, 'kanban', 'Office']) {
+      storing(value);
+      expect(storedCrewLayout()).toBe('cards');
+    }
+  });
+
+  it('is cards when storage throws', () => {
+    vi.stubGlobal('localStorage', {
+      getItem: () => {
+        throw new Error('blocked');
+      },
+    });
+    expect(storedCrewLayout()).toBe('cards');
   });
 });

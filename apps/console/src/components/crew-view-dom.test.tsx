@@ -125,6 +125,94 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
+describe('the crew page’s office', () => {
+  const OFFICE_CREW = [
+    ...CREW,
+    member({
+      name: 'otto-acme',
+      slot: 'intake-2',
+      role: 'intake',
+      task: { subjectRef: 'acme#15', issue: { repo: 'acme', number: 15, title: 'Pick a threshold' }, kind: 'intake', state: 'running', startedAt: NOW, endedAt: null, round: null, waitingOnYou: true },
+    }),
+    member({
+      name: 'iris-acme',
+      slot: 'second-reviewer',
+      role: 'review_second',
+      lastTask: { subjectRef: 'acme#12', issue: null, kind: 'review', state: 'failed', startedAt: NOW, endedAt: NOW, round: null, waitingOnYou: false },
+    }),
+    member({ name: 'lead-reviewer', slot: 'lead-reviewer', role: 'review_lead', githubLogin: null, authorization: 'unauthorized' }),
+  ];
+
+  it('is off until chosen, then is kept for the next visit', async () => {
+    await mount(OFFICE_CREW);
+    expect(button('Office').getAttribute('aria-pressed')).toBe('false');
+    expect(host.querySelector('[data-crew-office]')).toBeNull();
+
+    await click(button('Office'));
+    expect(button('Office').getAttribute('aria-pressed')).toBe('true');
+    expect(localStorage.getItem(CREW_LAYOUT_KEY)).toBe('office');
+    expect(host.querySelector('[data-crew-office]')).not.toBeNull();
+    expect(host.querySelector('[data-crew-grid]')).toBeNull();
+
+    await act(async () => root.unmount());
+    root = createRoot(host);
+    await mount(OFFICE_CREW);
+    expect(host.querySelector('[data-crew-office]')).not.toBeNull();
+  });
+
+  it('shows a character for working, waiting, attention, idle and not connected', async () => {
+    localStorage.setItem(CREW_LAYOUT_KEY, 'office');
+    await mount(OFFICE_CREW);
+    const pose = (name: string) => host.querySelector(`[data-desk="${name}"]`)?.getAttribute('data-pose');
+    expect(pose('intake-acme')).toBe('busy');
+    expect(pose('otto-acme')).toBe('hand-up');
+    expect(pose('iris-acme')).toBe('stopped');
+    expect(pose('builder-acme')).toBe('rest');
+    expect(pose('lead-reviewer')).toBe('empty');
+  });
+
+  it('opens the question from the raised hand, and the item from the attention character', async () => {
+    localStorage.setItem(CREW_LAYOUT_KEY, 'office');
+    const assign = vi.fn();
+    vi.stubGlobal('location', { ...window.location, assign });
+    await mount(OFFICE_CREW);
+    await click(host.querySelector('button[aria-label="Answer otto-acme\'s question"]')!);
+    expect(assign).toHaveBeenLastCalledWith('/?item=acme%2315&role=intake');
+    await click(host.querySelector('button[aria-label="Open what iris-acme needs attention for"]')!);
+    expect(assign).toHaveBeenLastCalledWith('/?item=acme%2312&role=review_second');
+  });
+
+  it('opens a seat’s panel from its name', async () => {
+    localStorage.setItem(CREW_LAYOUT_KEY, 'office');
+    await mount(OFFICE_CREW);
+    await click(button('builder-acme', host.querySelector('[data-desk="builder-acme"]')!));
+    expect(host.querySelector('[data-panel="builder-acme"]')).not.toBeNull();
+  });
+
+  it('shows the empty state, not an empty office, for a crew with no bots', async () => {
+    localStorage.setItem(CREW_LAYOUT_KEY, 'office');
+    await mount([]);
+    expect(host.querySelector('[data-crew-office]')).toBeNull();
+    expect(host.textContent).toContain('No bots yet.');
+  });
+
+  it('is cards when storage throws on reading and on keeping the choice', async () => {
+    vi.stubGlobal('localStorage', {
+      ...memoryStorage(),
+      getItem: () => {
+        throw new Error('blocked');
+      },
+      setItem: () => {
+        throw new Error('blocked');
+      },
+    });
+    await mount(OFFICE_CREW);
+    expect(host.querySelector('[data-crew-grid]')).not.toBeNull();
+    await click(button('Office'));
+    expect(host.querySelector('[data-crew-office]')).not.toBeNull();
+  });
+});
+
 describe('the crew page’s two layouts', () => {
   it('starts as cards, turns into the table, and keeps that choice for the next visit', async () => {
     await mount();
