@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { InsightSummary, InsightsView } from '@/lib/api';
-import { duration, InsightsBody, sentBackFrom } from './insights-view';
+import { duration, InsightsBody, kTokens, sentBackFrom } from './insights-view';
 
 const H = 60 * 60 * 1000;
 
@@ -15,6 +15,7 @@ function summary(over: Partial<InsightSummary> = {}): InsightSummary {
     conflicts: { resolvedLeadOnly: 0, resolvedFull: 0, sentBack: 0, resolving: 0 },
     sendBacks: {},
     parallel: { max: 0, average: 0 },
+    implementInput: [],
     ...over,
   };
 }
@@ -74,6 +75,42 @@ describe('the Insights page', () => {
     expect(html).toMatch(/<a[^>]*aria-current="true"[^>]*href="\/insights\?repo=web&amp;days=30"[^>]*>web<\/a>/);
     expect(html).toMatch(/<a[^>]*href="\/insights\?repo=web"[^>]*>7 days<\/a>/);
     expect(html).toContain('href="/insights?days=30"');
+  });
+
+  it('shows each week’s input tokens per implement task, and no figure for a week under 5 tasks', () => {
+    const week = (weekStart: string, over: Partial<InsightSummary['implementInput'][number]>) => ({
+      weekStart,
+      tasks: 0,
+      byRun: { billed: 0, subscription: 0, mixed: 0 },
+      p25: null,
+      median: null,
+      p75: null,
+      ...over,
+    });
+    const html = render(
+      view(
+        {},
+        summary({
+          implementInput: [
+            week('2026-09-14T00:00:00.000Z', {}),
+            week('2026-09-21T00:00:00.000Z', { tasks: 4, byRun: { billed: 4, subscription: 0, mixed: 0 } }),
+            week('2026-09-28T00:00:00.000Z', { tasks: 7, byRun: { billed: 2, subscription: 5, mixed: 0 }, p25: 182_400, median: 251_000, p75: 1_420_000 }),
+          ],
+        }),
+      ),
+    );
+    expect(html).toContain('Input tokens per implement task');
+    expect(html).toMatch(/data-week="2026-09-28"[^]*?7 \(2 billed, 5 subscription\)[^]*?182k · 251k · 1,420k/);
+    expect(html).toMatch(/data-week="2026-09-21"[^]*?>4<[^]*?fewer than 5 tasks/);
+    // The newest week first.
+    expect(html.indexOf('2026-09-28')).toBeLessThan(html.indexOf('2026-09-21'));
+    expect(html).toContain('docs/runbooks/compare-implement-input-tokens.md');
+  });
+
+  it('reads a token count in thousands', () => {
+    expect(kTokens(1_240)).toBe('1.2k');
+    expect(kTokens(350_400)).toBe('350k');
+    expect(kTokens(2_140_000)).toBe('2,140k');
   });
 
   it('reads a length of time as a person does', () => {
