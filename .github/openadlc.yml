@@ -1,0 +1,23 @@
+# This repository's delivery rules and path policy. Present, it wins over the
+# rules stored for the repository (Settings), so how OpenADLC ships is changed
+# here, in a pull request.
+#
+# paths.shared replaces the default list rather than adding to it, so it
+# repeats every entry of DEFAULT_SHARED_PATHS (packages/shared/src/delivery-rules.ts)
+# before docs/**; tests/openadlc-path-policy.test.ts fails when one is missing.
+# See docs/adr/0098-this-repository-shares-docs-in-its-path-policy.md.
+version: 1
+testing:
+  on: release
+paths:
+  shared:
+    - Makefile
+    - makefile
+    - GNUmakefile
+    - 'README*'
+    - 'CHANGELOG*'
+    - 'docs/**/index*'
+    - package.json
+    - .gitignore
+    - AGENTS.md
+    - 'docs/**'
