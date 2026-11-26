@@ -1,6 +1,9 @@
 import { createHash } from 'node:crypto';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import {
   boardEvents,
+  bots,
   issues,
   mergeLines,
   repos,
@@ -11,24 +14,33 @@ import {
   type MergedRow,
   type StartedRow,
 } from '@openadlc/db';
+import { envOr, leadReviewer, loadYamlFile, resolveBotRef, reviewRulesSchema, seatOf, whoWrote, type ReviewRules } from '@openadlc/shared';
+import { DEFAULT_REVIEW } from './config.js';
 import { heldForPerson } from './merge-line.js';
+import { isCostCapGate } from './needs-you-audience.js';
 import { requestPrefixOf } from './request-context.js';
-import { STREAMING, type Router } from './router.js';
-import { describeSubject } from './thread-view.js';
+import { HttpFailure, STREAMING, type Router } from './router.js';
+import { describeSubject, requestNamed } from './thread-view.js';
 import { ignoredSubjects, parseRef, type IssueFacts } from './work.js';
 
 /**
- * What the crew is doing, as it happens: the feed behind `GET /v1/board/events`,
- * which `openadlc watch` prints.
+ * What the crew is doing, as it happens and over the last thirty days: the
+ * feed behind `GET /v1/board/events`, which `openadlc watch` prints and the
+ * console's bell listens to, and `GET /v1/board/events/history`, which the
+ * bell's panel and the Activity page list.
  *
  * Each event is read from the table it already happens in — a task's
  * `started_at`, a gate's `created_at`, a stage move into Merged, the merge
- * line's holds and the `pull.held` audit row — by one poller for the install.
+ * line's holds and the `pull.held` audit row, GitHub's deliveries of a pull
+ * request opened and a review submitted, a release run's `published_at`.
  * Nothing is emitted by the writers: tasks start in the dispatcher and the
  * task service, gates open from several routes, and merges land through the
  * merge line or through a person on GitHub, and a writer that forgets to emit
  * is a feed that quietly stops covering it (`thread-stream.ts` says the same).
- * docs/adr/0021-board-events-are-read-from-the-tables-they-happen-in.md.
+ * The stream and the history read through the same `SOURCES` and derive each
+ * event the same way, so a type added once is in both.
+ * docs/adr/0021-board-events-are-read-from-the-tables-they-happen-in.md and
+ * docs/adr/0081-board-event-history-is-a-read-of-the-tables-events-happen-in.md.
  */
 
 const PROBE_MS = 2_000;
@@ -44,6 +56,14 @@ const SENT_KEPT = 2_000;
 const PING_MS = 25_000;
 const TEXT_MAX = 200;
 
+/** How far back the history reaches, by the database's clock. */
+export const HISTORY_DAYS = 30;
+const DAY_MS = 24 * 60 * 60 * 1000;
+export const HISTORY_LIMIT_DEFAULT = 50;
+export const HISTORY_LIMIT_MAX = 200;
+/** Each source's rows per read of the history: a page of fifty would otherwise read every table six times over. */
+const HISTORY_BATCH_MIN = 100;
+
 /**
  * One board event, the contract `openadlc watch --json` prints unchanged.
  * `type` is open: a client ignores one it does not know, so types can be
@@ -53,7 +73,7 @@ export interface BoardEvent {
   id: string;
   type: string;
   at: string;
-  /** The seat that did it; null when none did (a merge-line hold, a merge by a person or by OpenADLC). */
+  /** The seat that did it; null when none did (a merge-line hold, a merge by a person or by OpenADLC, a release). */
   bot: string | null;
   item: BoardItem;
   /** One line, at most 200 characters. */
@@ -61,7 +81,7 @@ export interface BoardEvent {
 }
 
 export interface BoardItem {
-  /** The subject as the bridge writes it: `OpenADLC#227`, `request:<id8>`. */
+  /** The subject as the bridge writes it: `OpenADLC#227`, `request:<id8>`, `release:OpenADLC@v1.4.2`. */
   ref: string;
   /** The repository's full name; null for a request filed in no repository yet. */
   repo: string | null;
@@ -89,22 +109,77 @@ export interface LineEntry {
   detail: string | null;
 }
 
-/** What subjects are resolved against: the issues, repositories and requests. */
+/** One seat, as `whoWrote` tells which of them wrote something on GitHub. */
+export interface CrewFact {
+  name: string;
+  slot: string;
+  githubLogin: string | null;
+}
+
+/** What subjects are resolved against: the issues, repositories and requests, and the crew and its lead. */
 export interface BoardFacts {
   issues: (Pick<IssueFacts, 'repoName' | 'number' | 'prNumber' | 'title' | 'url' | 'labels'> & { repoId: string })[];
   repos: { id: string; name: string; fullName: string }[];
   requests: { id: string; text: string; repoId: string | null; issueNumber: number | null; state: string }[];
+  crew: CrewFact[];
+  /** The lead reviewer's seat as it is named now; null when the review rules name none. */
+  leadSeat: string | null;
 }
+
+export type PullOpenedRow = boardEvents.PullOpenedRow;
+export type ApprovalRow = boardEvents.ApprovalRow;
+export type ReleasePublishedRow = boardEvents.ReleasePublishedRow;
+export type HeldLineRow = boardEvents.HeldLineRow;
+export type EventWindow = boardEvents.EventWindow;
 
 export interface BoardEventStore {
   dbNow(): Promise<Date>;
-  startedSince(since: Date): Promise<StartedRow[]>;
-  askedSince(since: Date): Promise<AskedRow[]>;
-  mergedSince(since: Date): Promise<MergedRow[]>;
-  heldAuditSince(since: Date): Promise<HeldAuditRow[]>;
+  startedIn(window: EventWindow): Promise<StartedRow[]>;
+  askedIn(window: EventWindow): Promise<AskedRow[]>;
+  mergedIn(window: EventWindow): Promise<MergedRow[]>;
+  heldAuditIn(window: EventWindow): Promise<HeldAuditRow[]>;
+  /** Pull requests opened by one of the crew's accounts. */
+  pullsOpenedIn(window: EventWindow): Promise<PullOpenedRow[]>;
+  /** Approving reviews by one of the crew's accounts; whether the lead's is decided against `BoardFacts`. */
+  approvalsIn(window: EventWindow): Promise<ApprovalRow[]>;
+  releasesPublishedIn(window: EventWindow): Promise<ReleasePublishedRow[]>;
+  /** Merge-line entries in `merging` changed in the window: the history's holds. */
+  heldLineIn(window: EventWindow): Promise<HeldLineRow[]>;
   liveTasks(): Promise<LiveTaskRow[]>;
   mergeLine(): Promise<LineEntry[]>;
   facts(): Promise<BoardFacts>;
+  /** A request older than the newest `facts` lists, by the prefix a subject carries; null when none, or more than one, has it. */
+  requestByPrefix(prefix: string): Promise<BoardFacts['requests'][number] | null>;
+}
+
+let reviewRulesRead: ReviewRules | undefined;
+
+/**
+ * The review rules as the bridge started with them, read here because the
+ * route is registered with no config in reach: config/review.yaml, or the
+ * shipped rules without it (`loadBridgeConfig`). Read once: the bridge reads
+ * the file once at start too, so a change to it takes a restart either way.
+ */
+function reviewRulesNow(): ReviewRules {
+  if (reviewRulesRead) return reviewRulesRead;
+  const path = join(envOr('OPENADLC_CONFIG_ROOT', join(process.cwd(), 'config')), 'review.yaml');
+  try {
+    reviewRulesRead = existsSync(path) ? loadYamlFile(path, reviewRulesSchema) : DEFAULT_REVIEW;
+  } catch {
+    // The bridge refuses to start on a malformed file; a display feed falls back rather than throwing every read.
+    reviewRulesRead = DEFAULT_REVIEW;
+  }
+  return reviewRulesRead;
+}
+
+/** The lead reviewer's seat, named as the crew names it now; null when the rules name no lead. */
+export function leadSeatOf(rules: Pick<ReviewRules, 'reviewers'>, crew: readonly CrewFact[]): string | null {
+  try {
+    const seat = leadReviewer(rules).seat;
+    return resolveBotRef(crew, seat)?.name ?? seat;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -113,22 +188,40 @@ export interface BoardEventStore {
  * route against a mock of `@openadlc/db` that has no `boardEvents`.
  */
 export function liveBoardEventStore(): BoardEventStore {
+  const crewLogins = async (): Promise<string[]> =>
+    (await bots.listBots()).map((bot) => bot.githubLogin).filter((login): login is string => Boolean(login));
   return {
     dbNow: () => boardEvents.dbNow(),
-    startedSince: (since) => boardEvents.startedSince(since),
-    askedSince: (since) => boardEvents.askedSince(since),
-    mergedSince: (since) => boardEvents.mergedSince(since),
-    heldAuditSince: (since) => boardEvents.heldAuditSince(since),
+    startedIn: (window) => boardEvents.startedIn(window),
+    askedIn: (window) => boardEvents.askedIn(window),
+    mergedIn: (window) => boardEvents.mergedIn(window),
+    heldAuditIn: (window) => boardEvents.heldAuditIn(window),
+    pullsOpenedIn: async (window) => boardEvents.pullsOpenedIn(window, await crewLogins()),
+    approvalsIn: async (window) => boardEvents.approvalsIn(window, await crewLogins()),
+    releasesPublishedIn: (window) => boardEvents.releasesPublishedIn(window),
+    heldLineIn: (window) => boardEvents.heldLineIn(window),
     liveTasks: () => boardEvents.liveTasks(),
     mergeLine: () => mergeLines.line(),
     facts: async () => {
-      const [issueList, repoList, requestList] = await Promise.all([
+      const [issueList, repoList, requestList, crewList] = await Promise.all([
         issues.listIssues(),
         // A task's repository may since have been removed: it still names it.
         repos.listRepos({ includeRemoved: true }),
         requests.listRequests(200),
+        bots.listBots(),
       ]);
-      return { issues: issueList, repos: repoList, requests: requestList.map((one) => ({ ...one, issueNumber: one.issueNumber ?? null })) };
+      const crew = crewList.map((bot) => ({ name: bot.name, slot: bot.slot, githubLogin: bot.githubLogin }));
+      return {
+        issues: issueList,
+        repos: repoList,
+        requests: requestList.map((one) => ({ ...one, issueNumber: one.issueNumber ?? null })),
+        crew,
+        leadSeat: leadSeatOf(reviewRulesNow(), crew),
+      };
+    },
+    requestByPrefix: async (prefix) => {
+      const found = await requests.findRequestByPrefix(prefix).catch(() => null);
+      return found ? { ...found, issueNumber: found.issueNumber ?? null } : null;
     },
   };
 }
@@ -137,9 +230,51 @@ export function liveBoardEventStore(): BoardEventStore {
 export type RawEvent =
   | { type: 'task.started'; row: StartedRow }
   | { type: 'question.asked'; row: AskedRow }
+  | { type: 'task.capped'; row: AskedRow }
   | { type: 'merged'; row: MergedRow }
   | { type: 'pull_request.held'; source: 'audit'; row: HeldAuditRow }
-  | { type: 'pull_request.held'; source: 'merge-line'; entry: LineEntry; reason: string; at: string };
+  | { type: 'pull_request.held'; source: 'merge-line'; entry: LineEntry; reason: string; at: string }
+  | { type: 'pull_request.opened'; row: PullOpenedRow }
+  | { type: 'pull_request.lead_approved'; row: ApprovalRow }
+  | { type: 'release.published'; row: ReleasePublishedRow };
+
+/**
+ * Where every row event is read from, for a window: the live stream and the
+ * history both read these, so a type added here is in both. Merge-line holds
+ * are not here: the stream sees them as a change in the line, and the history
+ * reads the entries held now (`HISTORY_HOLDS`).
+ *
+ * A gate is classified here, once: the one a task at its cost cap asks
+ * (`costCapGate`) is `task.capped`, and only that. Sent as both, the bell had
+ * two rows for one stop, the second repeating the first.
+ */
+export const SOURCES: readonly ((store: BoardEventStore, window: EventWindow) => Promise<RawEvent[]>)[] = [
+  async (store, window) => (await store.startedIn(window)).map((row) => ({ type: 'task.started' as const, row })),
+  async (store, window) =>
+    (await store.askedIn(window)).map((row) => ({ type: isCostCapGate(row.options) ? ('task.capped' as const) : ('question.asked' as const), row })),
+  async (store, window) => (await store.mergedIn(window)).map((row) => ({ type: 'merged' as const, row })),
+  async (store, window) => (await store.heldAuditIn(window)).map((row) => ({ type: 'pull_request.held' as const, source: 'audit' as const, row })),
+  async (store, window) => (await store.pullsOpenedIn(window)).map((row) => ({ type: 'pull_request.opened' as const, row })),
+  async (store, window) => (await store.approvalsIn(window)).map((row) => ({ type: 'pull_request.lead_approved' as const, row })),
+  async (store, window) => (await store.releasesPublishedIn(window)).map((row) => ({ type: 'release.published' as const, row })),
+];
+
+/** The holds the history lists: entries waiting on a person now, timed when their row last changed, under the id the stream gives them. */
+async function historyHolds(store: BoardEventStore, window: EventWindow): Promise<RawEvent[]> {
+  const held: RawEvent[] = [];
+  for (const row of await store.heldLineIn(window)) {
+    const entry: LineEntry = { id: row.id, repoName: row.repoName, prNumber: row.prNumber, state: row.state, detail: row.detail };
+    const reason = heldForPerson(entry);
+    if (reason) held.push({ type: 'pull_request.held', source: 'merge-line', entry, reason, at: row.at });
+  }
+  return held;
+}
+
+const HISTORY_SOURCES = [...SOURCES, historyHolds];
+
+function holdId(entryId: string, reason: string): string {
+  return `pull_request.held:merge-line:${entryId}:${createHash('sha256').update(reason).digest('hex').slice(0, 8)}`;
+}
 
 /** The id an event is sent under and deduplicated by: `<type>:<row key>`. */
 export function rawId(raw: RawEvent): string {
@@ -148,12 +283,19 @@ export function rawId(raw: RawEvent): string {
       return `task.started:${raw.row.taskId}`;
     case 'question.asked':
       return `question.asked:${raw.row.gateId}`;
+    case 'task.capped':
+      return `task.capped:${raw.row.gateId}`;
     case 'merged':
       return `merged:${raw.row.moveId}`;
     case 'pull_request.held':
-      return raw.source === 'audit'
-        ? `pull_request.held:audit:${raw.row.auditId}`
-        : `pull_request.held:merge-line:${raw.entry.id}:${createHash('sha256').update(raw.reason).digest('hex').slice(0, 8)}`;
+      return raw.source === 'audit' ? `pull_request.held:audit:${raw.row.auditId}` : holdId(raw.entry.id, raw.reason);
+    case 'pull_request.opened':
+      // By the pull request, not the delivery: GitHub redelivers, and it opened once.
+      return `pull_request.opened:${raw.row.repoFullName}#${raw.row.prNumber}`;
+    case 'pull_request.lead_approved':
+      return `pull_request.lead_approved:${raw.row.reviewId}`;
+    case 'release.published':
+      return `release.published:${raw.row.runId}`;
   }
 }
 
@@ -167,6 +309,7 @@ export function subjectOf(raw: RawEvent, facts: Pick<BoardFacts, 'repos'>): stri
     case 'task.started':
       return raw.row.subjectRef;
     case 'question.asked':
+    case 'task.capped':
       return raw.row.subjectRef ?? '';
     case 'merged':
       return `${raw.row.repoName}#${raw.row.issueNumber}`;
@@ -177,11 +320,16 @@ export function subjectOf(raw: RawEvent, facts: Pick<BoardFacts, 'repos'>): stri
       const repo = match ? facts.repos.find((one) => one.fullName === match[1]) : undefined;
       return repo && match ? `${repo.name}#${match[2]}` : raw.row.target;
     }
+    case 'pull_request.opened':
+    case 'pull_request.lead_approved':
+      return `${raw.row.repoName}#${raw.row.prNumber}`;
+    case 'release.published':
+      return `release:${raw.row.repoName}@${raw.row.tag ?? raw.row.version ?? raw.row.runId}`;
   }
 }
 
 /** A subject as an event or a live task carries it: the ref, the repository's full name, and a link. */
-export function itemFor(ref: string, facts: BoardFacts): BoardItem {
+export function itemFor(ref: string, facts: Pick<BoardFacts, 'issues' | 'repos' | 'requests'>): BoardItem {
   const topic = describeSubject(ref, facts);
   const fullName = topic.repo ? (facts.repos.find((one) => one.name === topic.repo)?.fullName ?? topic.repo) : null;
   const url = topic.kind === 'pull_request' ? (topic.pullRequest?.url ?? null) : (topic.issue?.url ?? null);
@@ -208,9 +356,44 @@ export function oneLine(text: string): string {
   return chars.length <= TEXT_MAX ? flat : `${chars.slice(0, TEXT_MAX - 1).join('')}…`;
 }
 
+/** The seat a crew account's post was written by, as `whoWrote` tells it; null for a person, or a shared account the hint does not resolve. */
+function seatWho(login: string, crew: readonly CrewFact[], hint: string | null): string | null {
+  const author = whoWrote(login, crew, { bot: hint });
+  return author.kind === 'openadlc' ? (author.bot?.name ?? null) : null;
+}
+
+/** The seat a crew branch names, `agent/<seat>/…`. */
+function seatOfBranch(ref: string | null): string | null {
+  return ref ? (/^agent\/([^/]+)\//.exec(ref)?.[1] ?? null) : null;
+}
+
+const CAP_QUESTION = /^Stopped at the \$(\d+(?:\.\d+)?) cap on .+ after \$(\d+(?:\.\d+)?)/;
+
+/**
+ * Whether a row is an event at all once the crew is known: an approval is the
+ * lead's only when its author is the lead seat, by `whoWrote`'s rule — the
+ * account, or on a shared account the review's own marker, which is only its
+ * word. Good enough for a display feed; the merge decision never reads this.
+ */
+function counts(raw: RawEvent, facts: BoardFacts): boolean {
+  if (raw.type === 'pull_request.lead_approved') {
+    return facts.leadSeat !== null && seatWho(raw.row.login, facts.crew, seatOf(raw.row.body)) === facts.leadSeat;
+  }
+  if (raw.type === 'pull_request.opened') return whoWrote(raw.row.login, facts.crew).kind === 'openadlc';
+  return true;
+}
+
 /** A row read from its table, as the event the feed sends. Pure. */
 export function toBoardEvent(raw: RawEvent, facts: BoardFacts): BoardEvent {
-  const item = itemFor(subjectOf(raw, facts), facts);
+  const ref = subjectOf(raw, facts);
+  if (raw.type === 'release.published') {
+    const item = { ref, repo: raw.row.repoFullName, url: raw.row.url };
+    const name = raw.row.tag ?? raw.row.version ?? 'a release';
+    return { id: rawId(raw), type: raw.type, at: rawAt(raw), bot: null, item, text: oneLine(`${raw.row.repoFullName} ${name} published, cut by @${raw.row.cutBy}`) };
+  }
+  const resolved = itemFor(ref, facts);
+  // The pull request's own page: a subject the issues do not list resolves to an issue's address.
+  const item = (raw.type === 'pull_request.opened' || raw.type === 'pull_request.lead_approved') && raw.row.url ? { ...resolved, url: raw.row.url } : resolved;
   const label = labelOf(item);
   const base = { id: rawId(raw), type: raw.type, at: rawAt(raw), item };
   switch (raw.type) {
@@ -218,6 +401,11 @@ export function toBoardEvent(raw: RawEvent, facts: BoardFacts): BoardEvent {
       return { ...base, bot: raw.row.bot, text: oneLine(`${raw.row.bot ?? 'a seat'} started ${raw.row.skill ?? raw.row.kind} on ${label}`) };
     case 'question.asked':
       return { ...base, bot: raw.row.bot, text: oneLine(`${raw.row.bot ?? 'a seat'} asked: ${raw.row.question}`) };
+    case 'task.capped': {
+      const cap = CAP_QUESTION.exec(raw.row.question);
+      const said = cap ? `stopped at the $${cap[1]} cap on ${label} after $${cap[2]}` : `stopped at its cost cap on ${label}`;
+      return { ...base, bot: raw.row.bot, text: oneLine(`${raw.row.bot ?? 'a seat'} ${said}`) };
+    }
     case 'merged': {
       const pr = raw.row.prNumber !== null && raw.row.prNumber !== raw.row.issueNumber ? ` (#${raw.row.prNumber})` : '';
       return { ...base, bot: raw.row.bot, text: oneLine(`${label} merged${pr} by ${raw.row.actor}`) };
@@ -226,7 +414,33 @@ export function toBoardEvent(raw: RawEvent, facts: BoardFacts): BoardEvent {
       return raw.source === 'merge-line'
         ? { ...base, bot: null, text: oneLine(`${label} held: ${raw.reason}`) }
         : { ...base, bot: null, text: oneLine(`${label} held by ${raw.row.actor}${raw.row.why ? `: ${raw.row.why}` : ''}`) };
+    case 'pull_request.opened': {
+      const bot = seatWho(raw.row.login, facts.crew, seatOfBranch(raw.row.headRef));
+      return { ...base, bot, text: oneLine(`${bot ?? raw.row.login} opened #${raw.row.prNumber}: ${raw.row.title}`) };
+    }
+    case 'pull_request.lead_approved':
+      return { ...base, bot: facts.leadSeat, text: oneLine(`${facts.leadSeat ?? 'the lead'} approved #${raw.row.prNumber}`) };
   }
+}
+
+/**
+ * Rows as the events they are, for the stream and the history alike: an
+ * `openadlc:ignore` issue's work left out as the board leaves it out, a row
+ * that is no event once the crew is known (`counts`) dropped, and each id
+ * once. Pure.
+ */
+export function deriveEvents(raws: readonly RawEvent[], facts: BoardFacts): BoardEvent[] {
+  const ignored = ignoredSubjects(facts.issues);
+  const seen = new Set<string>();
+  const events: BoardEvent[] = [];
+  for (const raw of raws) {
+    if (ignored.has(subjectOf(raw, facts)) || !counts(raw, facts)) continue;
+    const id = rawId(raw);
+    if (seen.has(id)) continue;
+    seen.add(id);
+    events.push(toBoardEvent(raw, facts));
+  }
+  return events;
 }
 
 /** A live task as `GET /v1/board/tasks` answers it. Pure. */
@@ -251,6 +465,15 @@ function holdsOf(line: readonly LineEntry[]): Map<string, string> {
     if (reason) held.set(entry.id, reason);
   }
   return held;
+}
+
+/** Reads every source for a window. */
+async function readSources(
+  sources: readonly ((store: BoardEventStore, window: EventWindow) => Promise<RawEvent[]>)[],
+  store: BoardEventStore,
+  window: EventWindow,
+): Promise<RawEvent[][]> {
+  return Promise.all(sources.map((source) => source(store, window)));
 }
 
 /**
@@ -365,19 +588,8 @@ export class BoardFeed {
    */
   private async read(generation: number, cursor: Date): Promise<void> {
     const from = new Date(cursor.getTime() - OVERLAP_MS);
-    const [started, asked, merged, heldAudit, line] = await Promise.all([
-      this.store.startedSince(from),
-      this.store.askedSince(from),
-      this.store.mergedSince(from),
-      this.store.heldAuditSince(from),
-      this.store.mergeLine(),
-    ]);
-    const rows: RawEvent[] = [
-      ...started.map((row) => ({ type: 'task.started' as const, row })),
-      ...asked.map((row) => ({ type: 'question.asked' as const, row })),
-      ...merged.map((row) => ({ type: 'merged' as const, row })),
-      ...heldAudit.map((row) => ({ type: 'pull_request.held' as const, source: 'audit' as const, row })),
-    ];
+    const [reads, line] = await Promise.all([readSources(SOURCES, this.store, { from }), this.store.mergeLine()]);
+    const rows = reads.flat();
     if (generation !== this.generation) return;
     let newest = cursor.getTime();
     for (const raw of rows) newest = Math.max(newest, Date.parse(rawAt(raw)));
@@ -394,14 +606,12 @@ export class BoardFeed {
     const fresh = [...rows.filter((raw) => Date.parse(rawAt(raw)) >= this.floor && !this.sent.has(rawId(raw))), ...changed].sort(
       (a, b) => Date.parse(rawAt(a)) - Date.parse(rawAt(b)),
     );
-    const events: BoardEvent[] = [];
+    let events: BoardEvent[] = [];
     if (fresh.length > 0) {
       // Read only when there is something to say, which most probes do not have.
       const facts = await this.store.facts();
       if (generation !== this.generation) return;
-      const ignored = ignoredSubjects(facts.issues);
-      // An `openadlc:ignore` issue's work is a person's, left out as the board leaves it out.
-      for (const raw of fresh) if (!ignored.has(subjectOf(raw, facts))) events.push(toBoardEvent(raw, facts));
+      events = deriveEvents(fresh, facts);
     }
 
     for (const event of events) for (const subscriber of this.subscribers) subscriber(event);
@@ -425,8 +635,141 @@ export function sharedBoardFeed(): BoardFeed {
   return shared;
 }
 
+/** Where a page of the history ends: the last event's time and id. */
+export interface HistoryCursor {
+  at: string;
+  id: string;
+}
+
+/** A cursor as `next` and `before` carry it: `<at ISO>~<id>`. Opaque to a client. */
+export function cursorText(event: Pick<BoardEvent, 'at' | 'id'>): string {
+  return `${event.at}~${event.id}`;
+}
+
+/** `before` read back, or a 400 saying what to send. */
+export function parseCursor(text: string | null): HistoryCursor | null {
+  if (text === null || text === '') return null;
+  const cut = text.indexOf('~');
+  const at = cut > 0 ? text.slice(0, cut) : '';
+  const id = cut > 0 ? text.slice(cut + 1) : '';
+  const time = Date.parse(at);
+  if (!id || Number.isNaN(time) || new Date(time).toISOString() !== at) {
+    throw new HttpFailure(400, 'before must be the next value a page of the history answered, as it was sent');
+  }
+  return { at, id };
+}
+
+/** `limit` read, or a 400 saying what to send. */
+export function parseLimit(text: string | null): number {
+  if (text === null || text === '') return HISTORY_LIMIT_DEFAULT;
+  const limit = /^\d+$/.test(text) ? Number(text) : Number.NaN;
+  if (!Number.isInteger(limit) || limit < 1 || limit > HISTORY_LIMIT_MAX) {
+    throw new HttpFailure(400, `limit must be a whole number from 1 to ${HISTORY_LIMIT_MAX}`);
+  }
+  return limit;
+}
+
+/** Newest first, by time and then id, as the history and every client order events. */
+export function newestFirst(a: Pick<BoardEvent, 'at' | 'id'>, b: Pick<BoardEvent, 'at' | 'id'>): number {
+  const byTime = Date.parse(b.at) - Date.parse(a.at);
+  if (byTime !== 0) return byTime;
+  return a.id < b.id ? 1 : a.id > b.id ? -1 : 0;
+}
+
+/** Whether an event is past a cursor, strictly: older, or as old and with a lower id. */
+function beyond(event: BoardEvent, cursor: HistoryCursor | null): boolean {
+  return !cursor || newestFirst({ at: cursor.at, id: cursor.id }, event) < 0;
+}
+
+export interface HistoryPage {
+  events: BoardEvent[];
+  /** The `before` for the next page; null once the page reached the floor. */
+  next: string | null;
+  /** The oldest time the history reaches, by the database's clock. */
+  floor: string;
+}
+
 /**
- * `GET /v1/board/events`, the feed as server-sent events, and
+ * Requests the page names that are older than the newest `facts` reads, so
+ * an old request still resolves to its repository.
+ */
+async function withRequestsNamed(store: BoardEventStore, facts: BoardFacts, raws: readonly RawEvent[]): Promise<BoardFacts> {
+  const missing = new Set<string>();
+  for (const raw of raws) {
+    const prefix = requestPrefixOf(subjectOf(raw, facts));
+    if (prefix && !requestNamed(`request:${prefix}`, facts.requests)) missing.add(prefix);
+  }
+  if (missing.size === 0) return facts;
+  const found = (await Promise.all([...missing].map((prefix) => store.requestByPrefix(prefix)))).filter(
+    (one): one is BoardFacts['requests'][number] => one !== null && !facts.requests.some((known) => known.id === one.id),
+  );
+  return found.length > 0 ? { ...facts, requests: [...facts.requests, ...found] } : facts;
+}
+
+/**
+ * One page of the history: the events before `before`, or before now, back
+ * to thirty days by the database's clock, newest first and filtered as the
+ * events they are, so a filter means what the row shows.
+ *
+ * Each source is read in batches with the tie rule (`EventWindow`). A source
+ * that filled its batch is known only down to its oldest row's time, so a
+ * batch's events are kept down to the newest such time and the next batch
+ * reads from just below it: every event since the floor comes exactly once,
+ * however the pages fall.
+ */
+export async function readHistory(
+  store: BoardEventStore,
+  options: { limit?: number; before?: HistoryCursor | null; repo?: string | null; bot?: string | null } = {},
+): Promise<HistoryPage> {
+  const limit = options.limit ?? HISTORY_LIMIT_DEFAULT;
+  const cursor = options.before ?? null;
+  const now = await store.dbNow();
+  const floor = new Date(now.getTime() - HISTORY_DAYS * DAY_MS);
+  const page: HistoryPage = { events: [], next: null, floor: floor.toISOString() };
+  let to = cursor ? new Date(cursor.at) : now;
+  if (to.getTime() < floor.getTime()) return page;
+
+  let facts = await store.facts();
+  const repoFilter = options.repo ? (facts.repos.find((one) => one.name === options.repo || one.fullName === options.repo)?.fullName ?? options.repo) : null;
+  const matches = (event: BoardEvent): boolean => (!repoFilter || event.item.repo === repoFilter) && (!options.bot || event.bot === options.bot);
+
+  const batch = Math.max(limit, HISTORY_BATCH_MIN);
+  const found: BoardEvent[] = [];
+  let reachedFloor = false;
+  for (;;) {
+    const reads = await readSources(HISTORY_SOURCES, store, { from: floor, to, limit: batch });
+    let known = floor.getTime();
+    let cut = false;
+    for (const rows of reads) {
+      if (rows.length < batch) continue;
+      cut = true;
+      known = Math.max(known, Math.min(...rows.map((raw) => Date.parse(rawAt(raw)))));
+    }
+    const raws = reads.flat().filter((raw) => Date.parse(rawAt(raw)) >= known);
+    facts = await withRequestsNamed(store, facts, raws);
+    found.push(...deriveEvents(raws, facts).filter((event) => beyond(event, cursor) && matches(event)));
+    if (!cut) {
+      reachedFloor = true;
+      break;
+    }
+    if (found.length >= limit) break;
+    to = new Date(known - 1);
+    if (to.getTime() < floor.getTime()) {
+      reachedFloor = true;
+      break;
+    }
+  }
+
+  found.sort(newestFirst);
+  page.events = found.slice(0, limit);
+  const last = page.events.at(-1);
+  page.next = last && (!reachedFloor || found.length > limit) ? cursorText(last) : null;
+  return page;
+}
+
+/**
+ * `GET /v1/board/events`, the feed as server-sent events,
+ * `GET /v1/board/events/history`, its last thirty days a page at a time, and
  * `GET /v1/board/tasks`, the tasks queued, running or paused. Called once from
  * `registerConsoleApi`; a test passes its own feed and store.
  */
@@ -437,7 +780,8 @@ export function registerBoardEventRoutes(router: Router, feed?: BoardFeed, store
   /**
    * Starts from now and replays nothing: `Last-Event-ID` is not read. A
    * client that reconnects has missed what happened while it was away, which
-   * is what "watch" means; the board is where history is.
+   * is what "watch" means; the history below is where it reads what it
+   * missed.
    */
   router.get('/v1/board/events', async ({ res }) => {
     const events = feedOf();
@@ -461,6 +805,17 @@ export function registerBoardEventRoutes(router: Router, feed?: BoardFeed, store
     });
     res.write('retry: 1000\n\n');
     return STREAMING;
+  });
+
+  /**
+   * Read when a console tab opens, its bell's panel opens, its stream comes
+   * back, or someone asks for more: never on a timer per tab, which the one
+   * shared poller above is for.
+   */
+  router.get('/v1/board/events/history', async ({ query }) => {
+    const limit = parseLimit(query.get('limit'));
+    const before = parseCursor(query.get('before'));
+    return readHistory(storeOf(), { limit, before, repo: query.get('repo') || null, bot: query.get('bot') || null });
   });
 
   /**

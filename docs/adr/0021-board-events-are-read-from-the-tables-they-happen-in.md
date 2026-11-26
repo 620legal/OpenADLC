@@ -2,6 +2,7 @@
 
 - **Status:** accepted
 - **Date:** 2026-11-02
+- Amended by [0081](0081-board-event-history-is-a-read-of-the-tables-events-happen-in.md) (history)
 
 ## Context
 
