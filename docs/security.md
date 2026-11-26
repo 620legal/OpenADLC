@@ -1216,6 +1216,32 @@ the console, so the bridge refuses it there (`409 self-demote`); an install
 locked out already sets `OPENADLC_IDENTITY` to an admin's address and runs
 `openadlc up` again.
 
+### The Security page
+
+The console's Security page (`/security`, `GET /v1/security/alerts`) lists
+each managed repository's open Dependabot, code-scanning and secret-scanning
+alerts. The bridge reads them from GitHub as the app when the page is opened,
+with an installation token scoped to the one repository, and keeps an answer
+for a minute; nothing is stored (docs/adr/0086).
+
+- **Only GETs.** The reader (`apps/bridge/src/security-alerts.ts`) asks GitHub
+  through one function that GETs a list; minting the installation token is the
+  only other call. Nothing is written to GitHub, and no alert is dismissed.
+- **No secret leaves GitHub.** The secret-scanning read asks
+  `hide_secret=true`, and every entry is built from an allowlist of fields,
+  never a copy of GitHub's object, so a leaked value is not in the bridge's
+  answer even when GitHub sends one. A secret-scanning entry is the secret
+  type's name and the link. File as task builds its request from that entry, so
+  it carries no secret either.
+- **Secret scanning is for admins.** Dependabot and code scanning are shown to
+  every console user. For a user the bridge never makes the secret-scanning
+  call; the type comes back as `admins-only`, and its cache is kept per type, so
+  a user's request is never served an admin's answer. That follows GitHub's own
+  default, which shows secret-scanning alerts to admins only.
+- **Permissions.** The app reads with Dependabot alerts, Code scanning alerts
+  and Secret scanning alerts, each Read-only. They are optional: missing, they
+  mark that type "not readable" and raise the `security-alerts` warning card.
+
 ### Attachments
 
 A person can give the crew files with a request or a message: screenshots,

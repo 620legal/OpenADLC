@@ -137,6 +137,13 @@ export const CostsIcon = (props: Props) => (
   </Icon>
 );
 
+/** Security: a shield, for the repositories' open security alerts. Drawn here, not taken from an icon set. */
+export const SecurityIcon = (props: Props) => (
+  <Icon {...props}>
+    <path d="M12 3l7 3v6c0 4.2-3 7.6-7 9-4-1.4-7-4.8-7-9V6z" />
+  </Icon>
+);
+
 /** Insights: bars of different heights, for how fast work moves. */
 export const InsightsIcon = (props: Props) => (
   <Icon {...props}>

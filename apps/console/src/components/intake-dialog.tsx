@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useTransition, type ReactNode } from 'react';
+import { useEffect, useRef, useState, useTransition, type ReactNode } from 'react';
 import { fileRequest } from '@/app/actions';
 import { AttachmentDrop, type AttachmentState } from '@/components/attachment-drop';
 import { Button } from '@/components/ui/button';
@@ -48,12 +48,30 @@ export function sentTo(repo: string): string {
   return repo || 'intake decides the repository';
 }
 
+/** A request another page starts, such as the Security page's File as task: the repository, the kind and the words. */
+export interface RequestPrefill {
+  repo: string;
+  kind: string;
+  text: string;
+  details: string;
+}
+
+/**
+ * What opening the dialog with a prefill does to the form: fills an empty
+ * one, as a starter does, or offers to replace a draft somebody was writing,
+ * which is never thrown away without their click.
+ */
+export function prefillAction(text: string, details: string): 'fill' | 'offer' {
+  return showsStarters(text, details) ? 'fill' : 'offer';
+}
+
 export function IntakeDialog({
   repos,
   labelOf = (name) => botLabel({ name }),
   children,
   open: openFromOutside,
   onOpenChange,
+  prefill,
 }: {
   repos: string[];
   /** The bot that took the request, as a person reads it: the bridge answers with its name. */
@@ -66,6 +84,12 @@ export function IntakeDialog({
    */
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
+  /**
+   * A request another page starts (`RequestPrefill`), taken each time the
+   * dialog opens with it: the repository is always set, and the words fill
+   * only an empty form (`prefillAction`).
+   */
+  prefill?: RequestPrefill;
 }) {
   const controlled = openFromOutside !== undefined;
   const [openHere, setOpenHere] = useState(false);
@@ -114,6 +138,29 @@ export function IntakeDialog({
     setKind(starter.kind);
   };
 
+  /** The prefill a draft stands in the way of, offered as one line until it is taken or the dialog closes. */
+  const [offered, setOffered] = useState<RequestPrefill | null>(null);
+  const taken = useRef<RequestPrefill | null>(null);
+  const takePrefill = (one: RequestPrefill): void => {
+    setText(one.text);
+    setContext(one.details);
+    if (KINDS.includes(one.kind)) setKind(one.kind);
+    setOffered(null);
+  };
+  useEffect(() => {
+    if (!open) {
+      taken.current = null;
+      return;
+    }
+    if (!prefill || taken.current === prefill) return;
+    taken.current = prefill;
+    if (prefill.repo && repos.includes(prefill.repo)) setRepo(prefill.repo);
+    if (prefillAction(text, context) === 'fill') takePrefill(prefill);
+    else setOffered(prefill);
+    // Only on opening, or a new prefill: the text changing is the person typing.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, prefill]);
+
   const submit = (andAnother = false): void => {
     startTransition(async () => {
       const title = requestTitle(text);
@@ -152,6 +199,7 @@ export function IntakeDialog({
 
   const another = (): void => {
     clear();
+    setOffered(null);
     setSent(null);
     setAdded(null);
   };
@@ -190,6 +238,15 @@ export function IntakeDialog({
               <p role="status" className="mt-3 rounded-md border border-signal/40 bg-signal/10 px-2.5 py-1.5 text-[12px] text-signal">
                 Sent: {added.title} → {sentTo(added.repo)} · {whatNext(added)}.
               </p>
+            )}
+
+            {offered && (
+              <div role="status" className="mt-3 flex flex-wrap items-center gap-2 rounded-md border border-edge bg-surface px-2.5 py-1.5 text-[12px] text-soft">
+                <span>Your draft is kept.</span>
+                <Button type="button" size="sm" variant="ghost" onClick={() => takePrefill(offered)}>
+                  Replace your draft with this alert
+                </Button>
+              </div>
             )}
 
             <div className="mt-4 space-y-3">
