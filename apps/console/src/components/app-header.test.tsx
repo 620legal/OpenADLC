@@ -79,6 +79,7 @@ describe('the header', () => {
       'Security false Pin Security',
       'Releases true Unpin Releases',
       'Map false Pin Map',
+      'Activity false Pin Activity',
       'Settings false Pin Settings',
     ]);
     expect(panel).toMatch(/<input[^>]*type="search"[^>]*aria-label="Find a page"/);
@@ -180,7 +181,9 @@ describe('the repository switcher', () => {
 
   function switcher(repo: string, repos = ['api', 'openadlc-testbed', 'website']): string {
     const data = headerData({ repos, repoColors: COLORS, crew: CREW, budget: null, needsYou: null });
-    return wide(renderToStaticMarkup(<AppHeader page="board" repo={repo} data={data} />).replace(/<!-- -->/g, ''));
+    const html = wide(renderToStaticMarkup(<AppHeader page="board" repo={repo} data={data} />).replace(/<!-- -->/g, ''));
+    // The switcher alone, before the navigation: the activity panel further along has filters of its own (#374).
+    return html.slice(0, html.indexOf('<nav aria-label="Console"'));
   }
 
   /** The list it opens: each entry's colour, name and whether it is the board on screen. */

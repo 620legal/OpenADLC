@@ -169,7 +169,7 @@ describe('the pinned navigation', () => {
     expect(more().getAttribute('aria-expanded')).toBe('true');
     expect(panel().hidden).toBe(false);
     expect(document.activeElement?.getAttribute('aria-label')).toBe('Find a page');
-    expect(rows()).toEqual(['Board', 'Needs you', 'Crew', 'Costs', 'Insights', 'Security', 'Releases', 'Map', 'Settings']);
+    expect(rows()).toEqual(['Board', 'Needs you', 'Crew', 'Costs', 'Insights', 'Security', 'Releases', 'Map', 'Activity', 'Settings']);
     expect(toggle('Pin Costs')?.getAttribute('aria-pressed')).toBe('false');
     expect(toggle('Unpin Crew')?.getAttribute('aria-pressed')).toBe('true');
 
@@ -264,7 +264,8 @@ describe('the pinned navigation', () => {
 describe('the header below 768px', () => {
   it('wraps its second line between its parts, never inside one', () => {
     const phone = [...container.querySelectorAll('header')].find((one) => classes(one).includes('md:hidden'))!;
-    const line = phone.querySelector('p')!;
+    // The header's own second line, not a paragraph inside the activity panel.
+    const line = phone.querySelector(':scope > p')!;
     expect(classes(line)).toEqual(expect.arrayContaining(['flex', 'flex-wrap', 'whitespace-nowrap']));
     expect(line.textContent).toContain('3 need you · 10 system');
   });

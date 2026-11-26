@@ -5,7 +5,9 @@ import { createContext, useContext, useEffect, useId, useRef, useState, type Rea
 import { CommandPalette } from '@/components/command-palette';
 import { IntakeDialog } from '@/components/intake-dialog';
 import { KeysHelp } from '@/components/keys-help';
+import { ActivityBell } from '@/components/activity-bell';
 import {
+  ActivityIcon,
   BoardIcon,
   CheckIcon,
   ChevronDownIcon,
@@ -325,6 +327,8 @@ export function AppHeader({ page, repo = 'all', data }: { page: Page; repo?: str
             {crewLine(data.counts)}
           </span>
           {data.spend && <Spend spend={data.spend} />}
+          {/* What the crew has done since this browser last looked (#374). */}
+          <ActivityBell repos={data.repos} crew={data.crew} />
           {/* Every role's, unlike Settings: how this browser says something waits. */}
           <AlertsMenu />
           {data.needsYou !== null && <NeedsChip count={data.needsYou} split={data.needsSplit} href={needsHref} />}
@@ -347,7 +351,8 @@ export function AppHeader({ page, repo = 'all', data }: { page: Page; repo?: str
             <BrandMark compact />
           </Link>
           <RepoSwitcher repos={data.repos} colors={data.repoColors} current={repo} compact />
-          <div className="ml-auto shrink-0">
+          <div className="ml-auto flex shrink-0 items-center">
+            <ActivityBell repos={data.repos} crew={data.crew} compact />
             <AlertsMenu compact />
           </div>
           <IntakeDialog repos={data.repos} labelOf={labelOf}>
@@ -610,6 +615,7 @@ const NAV_ICONS: Record<Page, (props: { size?: number }) => ReactNode> = {
   security: SecurityIcon,
   releases: ShipIcon,
   map: MapIcon,
+  activity: ActivityIcon,
   settings: SettingsIcon,
 };
 

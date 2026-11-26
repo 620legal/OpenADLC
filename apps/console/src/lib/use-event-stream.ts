@@ -11,8 +11,12 @@ export const POLL_MS = 5_000;
 export interface EventStreamHandlers {
   /** The stream is open, the first time or again: whatever arrived while it was down is read now. */
   onOpen: () => void;
-  /** The bridge says something changed. */
-  onChanged: () => void;
+  /**
+   * The bridge says something changed. `data` is the message's own, for a
+   * stream whose messages carry what changed (the board's events); absent
+   * when a browser with no EventSource reads again on its timer instead.
+   */
+  onChanged: (data?: string) => void;
   /** The stream is not connected, for the panel to say so. */
   onDown: () => void;
 }
@@ -33,13 +37,18 @@ export interface EventStreamHandlers {
  * stream.
  *
  * With no EventSource it reads again every five seconds instead.
+ *
+ * `event` is the message name the stream sends: `changed` for a thread's and
+ * a work item's, `board` for the board's events. A null `url` opens nothing
+ * yet, for a stream that waits its turn.
  */
-export function useEventStream(url: string, handlers: EventStreamHandlers): void {
+export function useEventStream(url: string | null, handlers: EventStreamHandlers, event = 'changed'): void {
   // The latest handlers, without opening the stream again each render.
   const latest = useRef(handlers);
   latest.current = handlers;
 
   useEffect(() => {
+    if (url === null) return;
     if (typeof EventSource === 'undefined') {
       const timer = setInterval(() => latest.current.onChanged(), POLL_MS);
       return () => clearInterval(timer);
@@ -57,7 +66,7 @@ export function useEventStream(url: string, handlers: EventStreamHandlers): void
         wait = RECONNECT_FIRST_MS;
         latest.current.onOpen();
       });
-      stream.addEventListener('changed', () => latest.current.onChanged());
+      stream.addEventListener(event, (message?: Event) => latest.current.onChanged((message as MessageEvent<string> | undefined)?.data));
       stream.addEventListener('error', () => {
         latest.current.onDown();
         // CONNECTING: the browser is trying again by itself.
@@ -75,5 +84,5 @@ export function useEventStream(url: string, handlers: EventStreamHandlers): void
       clearTimeout(retry);
       source?.close();
     };
-  }, [url]);
+  }, [url, event]);
 }
