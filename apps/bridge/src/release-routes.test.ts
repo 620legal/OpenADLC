@@ -7,6 +7,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ReleaseRun, ReleaseSetting } from '@openadlc/db';
 import { PersonFlows, type GitHubViewer, type PersonGitHubDeps } from './person-github.js';
 import { RELEASE_CUT, RELEASE_CUT_REFUSED, ReleaseCuts, VIEW_TTL_MS, registerReleaseRoutes, type ReleaseCutDeps } from './release-routes.js';
+import type { ReleaseAccountProbe } from './hostd-client.js';
+import { ReleaseReadiness } from './release-readiness.js';
+import { authorize } from './roles.js';
 import { Router } from './router.js';
 
 /**
@@ -649,6 +652,85 @@ describe('the routes', () => {
     });
     expect(await (await fetch(`${url}/v1/repos/app/releases`, { headers: as('bob@example.com') })).json()).toMatchObject({ runs: [{ state: 'published' }] });
     expect((await fetch(`${url}/v1/releases/nope`, { headers: as('bob@example.com') })).status).toBe(404);
+  });
+});
+
+describe('the readiness route (#371, ADR 0084)', () => {
+  let server: Server | undefined;
+  afterEach(async () => {
+    if (server) await new Promise<void>((resolve) => server!.close(() => resolve()));
+    server = undefined;
+  });
+
+  /** The readiness as `api.ts` wires it, over the rig's cut: its version read, its last release, its reader. */
+  function readinessOf(r: Rig, hostd: { releaseAccount: () => Promise<{ probe: ReleaseAccountProbe | null }>; startRelease: ReturnType<typeof vi.fn> }) {
+    return new ReleaseReadiness({
+      repo: r.deps.repo,
+      getRelease: r.deps.getRelease,
+      recipeSetBy: async () => null,
+      hasSigningKey: async () => true,
+      releaseAccount: () => hostd.releaseAccount(),
+      lastRelease: (releaseRepo) => r.deps.release.lastRelease(releaseRepo),
+      reader: r.deps.reader,
+      version: (client, repo, setting, last, sha) => r.cuts.version(client, repo, setting, last, sha),
+      app: async () => ({ request: async <T,>() => [] as T }),
+      lastRun: async () => null,
+      now: () => r.clock.now,
+    });
+  }
+
+  async function serve(r: Rig, readiness: ReleaseReadiness, known: Record<string, 'user' | 'admin'>) {
+    const lookup = { roleOf: async (identity: string) => known[identity] ?? null, admins: async () => ['admin@example.com'], refused: async () => undefined };
+    const router = new Router(undefined, undefined, undefined, (method, path, identity) => authorize(lookup, method, path, identity));
+    registerReleaseRoutes(router, r.cuts, readiness);
+    server = createServer((request, response) => void router.handle(request, response));
+    await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve));
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const as = (identity: string) => ({ 'x-openadlc-identity': identity, 'content-type': 'application/json' });
+    return { url, as };
+  }
+
+  it('answers a user the six items in order, and refuses someone the install does not know', async () => {
+    const r = rig();
+    const hostd = { releaseAccount: vi.fn(async () => ({ probe: { ok: true as const, account: 'rel', uid: 502, home: '/Users/rel' } })), startRelease: vi.fn() };
+    const { url, as } = await serve(r, readinessOf(r, hostd), { [JANE]: 'user' });
+
+    const answer = await fetch(`${url}/v1/repos/app/release/readiness`, { headers: as(JANE) });
+    expect(answer.status).toBe(200);
+    const body = (await answer.json()) as { items: { id: string; status: string }[] };
+    expect(body.items.map((item) => item.id)).toEqual(['account', 'signing_key', 'recipe', 'release_tag', 'version', 'last_build']);
+
+    const stranger = await fetch(`${url}/v1/repos/app/release/readiness`, { headers: as('mallory@example.com') });
+    expect(stranger.status).toBe(403);
+    expect(((await stranger.json()) as { code: string }).code).toBe('not-a-user');
+    // Refused the same way the other release reads are.
+    expect((await fetch(`${url}/v1/repos/app/releases`, { headers: as('mallory@example.com') })).status).toBe(403);
+    expect((await fetch(`${url}/v1/repos/nope/release/readiness`, { headers: as(JANE) })).status).toBe(404);
+  });
+
+  it('cannot start a build, and pins no view: a view made before still cuts after many readings', async () => {
+    const r = rig();
+    const hostd = { releaseAccount: vi.fn(async () => ({ probe: null })), startRelease: vi.fn() };
+    const { url, as } = await serve(r, readinessOf(r, hostd), { [JANE]: 'user' });
+    const view = (await (await fetch(`${url}/v1/repos/app/release/views`, { method: 'POST', headers: as(JANE) })).json()) as { viewId: string };
+
+    for (let reading = 0; reading < 8; reading += 1) {
+      r.clock.now += 31_000;
+      expect((await fetch(`${url}/v1/repos/app/release/readiness`, { headers: as(JANE) })).status).toBe(200);
+    }
+    expect(r.start).not.toHaveBeenCalled();
+    expect(hostd.startRelease).not.toHaveBeenCalled();
+    expect(r.audits).toEqual([]);
+
+    // VIEWS_PER_IDENTITY is five; had each reading pinned a view, this one would be gone.
+    const cut = await fetch(`${url}/v1/repos/app/release/cut`, { method: 'POST', headers: as(JANE), body: JSON.stringify({ viewId: view.viewId }) });
+    expect(cut.status).toBe(200);
+  });
+
+  it('is registered only when a readiness is given', () => {
+    const router = new Router(undefined, undefined, undefined, async () => 'user');
+    registerReleaseRoutes(router, rig().cuts);
+    expect(router.table().some((route) => route.path === '/v1/repos/:name/release/readiness')).toBe(false);
   });
 });
 

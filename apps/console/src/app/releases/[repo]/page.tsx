@@ -4,6 +4,7 @@ import { BridgeDown } from '@/components/bridge-down';
 import { CutRelease } from '@/components/cut-release';
 import { HOW_THIS_WORKS, HowThisWorks } from '@/components/how-this-works';
 import { PrepareVersion, Preparing } from '@/components/prepare-version';
+import { ReleaseReadiness } from '@/components/release-readiness';
 import { api, type ReleaseView } from '@/lib/api';
 import { BridgeAnswered } from '@/lib/bridge-answered';
 import { readHeader } from '@/lib/read-header';
@@ -22,13 +23,18 @@ export const dynamic = 'force-dynamic';
  * Where the head's version is not above the last release, Prepare next
  * version files a request for the crew to raise it (#363, docs/adr/0078),
  * and while that is open the page shows it instead.
+ *
+ * Above Cut release, a checklist of what a cut needs (#371, docs/adr/0084),
+ * read from the bridge and again while the page is open. It only informs:
+ * Cut release is drawn the same whatever it says, and a checklist the bridge
+ * could not read never sends the page to BridgeDown.
  */
 export default async function ReleasePage({ params }: { params: Promise<{ repo: string }> }) {
   const { repo: raw } = await params;
   const repo = decodeURIComponent(raw);
   let read;
   try {
-    const [view, runs, header] = await Promise.all([
+    const [view, runs, readiness, header] = await Promise.all([
       api.releaseView(repo).catch((error: unknown) => {
         // A refusal the bridge explained — no recipe, the last release unreadable — is said on the page.
         if (error instanceof BridgeAnswered && error.status !== 500) return { refused: error.said || error.message, status: error.status };
@@ -38,13 +44,14 @@ export default async function ReleasePage({ params }: { params: Promise<{ repo: 
         if (error instanceof BridgeAnswered && error.status === 404) return null;
         throw error;
       }),
+      api.releaseReadiness(repo).catch(() => null),
       readHeader(),
     ]);
-    read = { view, runs, header };
+    read = { view, runs, readiness, header };
   } catch (error) {
     return <BridgeDown error={error} />;
   }
-  const { view, runs, header } = read;
+  const { view, runs, readiness, header } = read;
   if (runs === null) notFound();
 
   return (
@@ -57,11 +64,13 @@ export default async function ReleasePage({ params }: { params: Promise<{ repo: 
             <p data-refused className="text-[12.5px] text-soft">
               {view.refused}
             </p>
+            <ReleaseReadiness repo={repo} initial={readiness} />
             <CutReleaseRunsOnly repo={repo} runs={runs} />
           </section>
         ) : (
           <>
             <Pinned view={view} />
+            <ReleaseReadiness repo={repo} initial={readiness} />
             <section className="flex flex-col gap-2">
               <h2 className="text-[13px] font-semibold text-body">Cut release</h2>
               {view.preparing ? (

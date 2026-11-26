@@ -859,7 +859,8 @@ async function main(): Promise<void> {
     notifier,
     // The cut's routes (`release-routes.ts`), the only caller of `start`;
     // the compare view reads GitHub as the last release is read.
-    releaseCuts: { service: releaseRuns, reader: deployClient },
+    // The readiness checklist judges the tag as the app, as the publish makes it.
+    releaseCuts: { service: releaseRuns, reader: deployClient, app: (fullName: string) => appGate.client(fullName).catch(() => null) },
   };
   // Stops the look at Needs you for a waiting merge or a stopped review (`notify-waiting.ts`).
   const stopConsoleApi = registerConsoleApi(router, deps);

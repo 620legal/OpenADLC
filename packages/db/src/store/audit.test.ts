@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('../client.js', () => ({ query: vi.fn() }));
 
 import { query } from '../client.js';
-import { hasEventOfType, lastEventAt, listEventsOfTypeWith, pruneGithubDeliveries } from './audit.js';
+import { hasEventOfType, lastAuditHaving, lastEventAt, listEventsOfTypeWith, pruneGithubDeliveries } from './audit.js';
 
 beforeEach(() => {
   vi.mocked(query).mockReset();
@@ -83,5 +83,33 @@ describe('removing old GitHub deliveries', () => {
     vi.mocked(query).mockResolvedValueOnce([{ removed: '0' }]);
 
     await expect(pruneGithubDeliveries(new Date())).resolves.toBe(0);
+  });
+});
+
+describe('who last saved one setting', () => {
+  it('reads the newest row of the action on the target whose payload carries the key', async () => {
+    vi.mocked(query).mockResolvedValueOnce([
+      { id: '9', actor: 'operator', action: 'repo.settings', target: 'shop', payload: { release: { command: 'make' } }, at: new Date('2026-11-01T10:00:00.000Z') },
+    ]);
+
+    await expect(lastAuditHaving('repo.settings', 'shop', 'release')).resolves.toEqual({
+      id: 9,
+      actor: 'operator',
+      action: 'repo.settings',
+      target: 'shop',
+      payload: { release: { command: 'make' } },
+      at: '2026-11-01T10:00:00.000Z',
+    });
+
+    const [sql, params] = vi.mocked(query).mock.calls[0] ?? [];
+    expect(String(sql)).toContain('payload ? $3');
+    expect(String(sql)).toContain('order by at desc limit 1');
+    expect(params).toEqual(['repo.settings', 'shop', 'release']);
+  });
+
+  it('answers null when no save sent the key', async () => {
+    vi.mocked(query).mockResolvedValueOnce([]);
+
+    await expect(lastAuditHaving('repo.settings', 'shop', 'release')).resolves.toBeNull();
   });
 });
