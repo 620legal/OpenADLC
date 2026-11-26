@@ -31,6 +31,7 @@ interface TaskRow {
   base_ref?: string | null;
   base_context?: ContextDocument[] | null;
   takes_messages?: boolean | null;
+  model_account_id?: string | null;
 }
 
 export interface TaskRecord extends Task {
@@ -69,11 +70,19 @@ export interface TaskRecord extends Task {
    * from (`builderOn`, `PAUSED_BUILDER_HOLD_MS`).
    */
   pausedAt?: string | null;
+  /**
+   * The model account its session ran on, as its bot's row said when hostd
+   * marked it running; null before then, and for a bot on no account.
+   * Optional so a fixture typed as a task need not name it. What a usage
+   * limit is held on (ADR 0096): the bot's account at the task's end may be
+   * another one, if a person moved the seat while the task ran.
+   */
+  modelAccountId?: string | null;
 }
 
 const COLUMNS = `id, bot_id, repo_id, kind, subject_type, subject_ref, lease_id, state, skill,
          worktree, branch, tmux_session, container, cost_cap_usd, cost_usd, billed, unbilled_usd, round,
-         started_at, ended_at, exit_reason, created_at, auto_retried_at, base_ref, base_context, host_id, takes_messages, paused_at`;
+         started_at, ended_at, exit_reason, created_at, auto_retried_at, base_ref, base_context, host_id, takes_messages, paused_at, model_account_id`;
 
 const SELECT = `
   select ${COLUMNS}
@@ -110,6 +119,7 @@ function toTask(row: TaskRow): TaskRecord {
     baseContext: row.base_context ?? [],
     takesMessages: row.takes_messages ?? null,
     pausedAt: row.paused_at?.toISOString() ?? null,
+    modelAccountId: row.model_account_id ?? null,
   };
 }
 
@@ -219,6 +229,22 @@ export async function listTasksSince(since: Date): Promise<TaskRecord[]> {
      where created_at >= $1 or ended_at >= $1 or state in ('queued','running','paused')
      order by created_at desc`,
     [since],
+  );
+  return rows.map(toTask);
+}
+
+/**
+ * Every held task — ended on its model account's usage limit — whose work has
+ * not been started again since, oldest first: what the recovery starts once
+ * the account works (`retryAfterRecovery`). Without the window `listTasksSince`
+ * is read with: a monthly spend limit can last weeks, and a held task that
+ * fell out of the window would never be started again, with nothing saying so.
+ */
+export async function listHeldTasks(): Promise<TaskRecord[]> {
+  const rows = await query<TaskRow>(
+    `${SELECT}
+     where state = 'held' and ${NO_LATER_TASK}
+     order by created_at`,
   );
   return rows.map(toTask);
 }
@@ -457,6 +483,10 @@ export async function failUnstarted(id: string, reason: string): Promise<TaskRec
  * on the same issue. A task that has ended stays ended, and a `done` one is
  * not changed at all. A failed one may still be stopped: the card's Stop on
  * it. Writing an ending a task already has again is harmless and allowed.
+ *
+ * A held task (its model account at its usage limit) is an ending too: it is
+ * never written `done` or `failed`, and never written `held` over either. Stop
+ * on one drops it, so the recovery does not start it again.
  */
 export const TASK_STATE_FROM: Record<TaskState, readonly TaskState[]> = {
   queued: ['queued', 'running', 'paused'],
@@ -464,7 +494,8 @@ export const TASK_STATE_FROM: Record<TaskState, readonly TaskState[]> = {
   paused: ['queued', 'running', 'paused'],
   done: ['queued', 'running', 'paused'],
   failed: ['queued', 'running', 'paused', 'failed'],
-  stopped: ['queued', 'running', 'paused', 'failed', 'stopped'],
+  stopped: ['queued', 'running', 'paused', 'failed', 'stopped', 'held'],
+  held: ['queued', 'running', 'paused', 'held'],
 };
 
 /**
@@ -497,13 +528,21 @@ export async function updateTaskState(
        container = coalesce($7, container),
        host_id = coalesce($8::uuid, host_id),
        started_at = case when $2 = 'running' and started_at is null then now() else started_at end,
-       ended_at = case when $2 in ('done','failed','stopped') then now() else ended_at end,
+       ended_at = case when $2 in ('done','failed','stopped','held') then now() else ended_at end,
        -- Only on the way in: the runner reports a pause again after the
        -- gate's own, and a second stamp could land after a quick answer.
        paused_at = case when $2 = 'paused' and state <> 'paused' then now() else paused_at end,
        -- Kept across a second running that does not say (hostd's own),
        -- and forgotten on the way out: a resumed session says again.
        takes_messages = case when $2 = 'running' then coalesce($10::boolean, takes_messages) else null end,
+       -- The account its session runs on, read from its bot in this same
+       -- write as hostd marks it running, and again on each resume, which
+       -- starts a session with the bot's account of then. The runner's own
+       -- running, sent once the task is running, leaves it. A hold is raised
+       -- on this account, not on the bot's at the task's end (ADR 0096).
+       model_account_id = case when $2 = 'running' and state <> 'running'
+         then (select b.model_account_id from bots b where b.id = tasks.bot_id)
+         else model_account_id end,
        updated_at = now()
      where id = $1 and state = any($9::text[])
      returning ${COLUMNS}`,

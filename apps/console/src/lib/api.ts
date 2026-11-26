@@ -1577,6 +1577,19 @@ export interface InsightSummary {
   conflicts: { resolvedLeadOnly: number; resolvedFull: number; sentBack: number; resolving: number };
   sendBacks: Record<string, number>;
   parallel: { max: number; average: number };
+  /** Input tokens per completed implement task, by UTC week, oldest first (the bridge's `ImplementInputWeek`). */
+  implementInput: ImplementInputWeek[];
+}
+
+export interface ImplementInputWeek {
+  /** Monday 00:00 UTC, ISO. */
+  weekStart: string;
+  tasks: number;
+  byRun: { billed: number; subscription: number; mixed: number };
+  /** Null for a week under 5 tasks. */
+  p25: number | null;
+  median: number | null;
+  p75: number | null;
 }
 
 export interface InsightsView {

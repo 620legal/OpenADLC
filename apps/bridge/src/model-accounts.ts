@@ -57,6 +57,13 @@ export interface ModelAccountDeps {
    * given a key, signed in, checked, removed. The health checks ask again then.
    */
   changed?: () => void;
+  /**
+   * Told when a person's Verify has been recorded. A model account held at its
+   * usage limit (`model-limit`) is cleared by a Verify that passed after the
+   * hold began, so its check is asked now: a person who raised the limit and
+   * pressed Verify sees the card go, and the held work start, in seconds.
+   */
+  verified?: () => void;
 }
 
 /** What the bridge asks hostd about an account. `HostdClient` is one. */
@@ -516,6 +523,8 @@ export function registerModelAccountRoutes(router: Router, deps: ModelAccountDep
   });
 
   router.post('/v1/model-accounts/:id/verify', async ({ params, identity }) => {
-    return told(await verifyModelAccount({ id: params.id ?? '', actor: identity }, deps));
+    const verified = told(await verifyModelAccount({ id: params.id ?? '', actor: identity }, deps));
+    deps.verified?.();
+    return verified;
   });
 }

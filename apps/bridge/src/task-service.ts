@@ -2,7 +2,7 @@ import { audit, bots, costs, hasEventOfType, health, hosts, lastEventAt, leases,
 import { githubDidNotAnswer } from '@openadlc/github';
 import { attachmentsForTask } from './attachment-routes.js';
 import { stoppedByTheBridge } from './bridge-stops.js';
-import { botAtStart, headerFor, leaseExpiryFrom, maxTasksOf, pathMatches, resolveBotRef, sameLogin, seatOf, withoutHeader, type ContextDocument, type HumanReviewRule, type Task, type TaskKind } from '@openadlc/shared';
+import { botAtStart, hasEnded, headerFor, leaseExpiryFrom, maxTasksOf, pathMatches, resolveBotRef, sameLogin, seatOf, withoutHeader, type ContextDocument, type HumanReviewRule, type Task, type TaskKind } from '@openadlc/shared';
 import type { Actors } from './actors.js';
 import type { BridgeConfig } from './config.js';
 import type { Context } from './context.js';
@@ -575,7 +575,7 @@ export function pullOpenReader(actors: Pick<Actors, 'asBot'>, config: Pick<Bridg
  * open, so it is never parked on a closed one (ADR 0073).
  */
 export async function settleLeaseAfter(task: Pick<Task, 'leaseId' | 'state' | 'subjectRef'>, pullOpen?: PullOpen | null): Promise<void> {
-  if (!task.leaseId || !['done', 'failed', 'stopped'].includes(task.state)) return;
+  if (!task.leaseId || !hasEnded(task.state)) return;
   try {
     const { released, held } = await leases.settlePausedLeases({
       leaseId: task.leaseId,
@@ -736,7 +736,7 @@ export class TaskService {
    * row that cannot be read holds nobody back: a check that has not said is
    * not a failure.
    */
-  async blocked(seats: readonly { id: string; name: string }[], repoName: string | null): Promise<Map<string, Blocker[]>> {
+  async blocked(seats: readonly { id: string; name: string; modelAccountId?: string | null }[], repoName: string | null): Promise<Map<string, Blocker[]>> {
     const blocked = new Map<string, Blocker[]>();
     if (seats.length === 0) return blocked;
     // A seat a person paused from Crew takes no new work, scripted or not: it
@@ -749,7 +749,9 @@ export class TaskService {
         { row: `seat-paused:${seat.name}`, kind: 'paused', why: seatPausedWords(seat.name, pause), instruction: `Resume it on the Crew page.` },
       ]);
     }
-    if (process.env.OPENADLC_SCRIPTED_ENGINES === '1') return blocked;
+    // Scripted, only a model account's usage limit holds a seat back: it comes
+    // from the engine's own output, not from GitHub (`blockersOf`).
+    const scripted = process.env.OPENADLC_SCRIPTED_ENGINES === '1';
     let rows: Awaited<ReturnType<typeof health.listHealth>>;
     try {
       rows = await health.listHealth();
@@ -757,7 +759,7 @@ export class TaskService {
       return blocked;
     }
     for (const seat of seats) {
-      const blockers = blockersOf(rows, seat, repoName);
+      const blockers = blockersOf(rows, seat, repoName, { scripted });
       if (blockers.length > 0) blocked.set(seat.name, [...(blocked.get(seat.name) ?? []), ...blockers]);
     }
     return blocked;
@@ -1439,7 +1441,7 @@ export class TaskService {
     // the session before its own look at the row refused the task. A read
     // that fails goes on to hostd, whose look is still there.
     const now = await (async () => tasks.getTask(task.id))().catch(() => null);
-    if (now && ['done', 'failed', 'stopped'].includes(now.state)) {
+    if (now && hasEnded(now.state)) {
       const why = `it was ${now.state} before hostd was asked to start it${now.exitReason ? `: ${now.exitReason}` : ''}`;
       console.log(`[bridge] ${input.subjectRef}: ${bot.name}'s ${input.skill} is not started; ${why}`);
       await threads

@@ -9,9 +9,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  * holding may have been let go.
  */
 
+/** What the usage-limit test's recovery and health check read (ADR 0096). */
+const limitWorld = vi.hoisted(() => ({
+  rows: new Map<string, Record<string, unknown>>(),
+  tasks: [] as Record<string, unknown>[],
+  issues: [] as Record<string, unknown>[],
+  fixed: [] as string[],
+  now: null as Date | null,
+}));
+
 vi.mock('@openadlc/db', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@openadlc/db')>();
   return {
+    health: { listHealth: vi.fn(async () => [...limitWorld.rows.values()]) },
+    modelAccounts: { get: vi.fn(async () => null) },
     // What /healthz says while the database does not answer is the real wording.
     databaseAddress: actual.databaseAddress,
     databaseNotAnswering: actual.databaseNotAnswering,
@@ -41,7 +52,7 @@ vi.mock('@openadlc/db', async (importOriginal) => {
     },
     costs: { currentPeriod: vi.fn(() => '2026-09') },
     credentials: {},
-    issues: {},
+    issues: { listIssues: vi.fn(async () => limitWorld.issues), workInFlight: vi.fn(async () => []) },
     leases: {
       releaseForPullRequest: vi.fn(async () => null),
       settlePausedLeases: vi.fn(async () => ({ released: [], held: [] })),
@@ -70,6 +81,11 @@ vi.mock('@openadlc/db', async (importOriginal) => {
       getTask: vi.fn(async (id: string) => (id === 'task-gone' ? null : { id, state: id === 'task-done' ? 'done' : id === 'task-paused' ? 'paused' : 'running', kind: id === 'task-review' ? 'review' : id === 'task-qa' ? 'qa' : id === 'task-spec' || id === 'task-judge' ? 'spec' : id === 'task-deploy' ? 'deploy' : id === 'task-request' ? 'intake' : 'implement', skill: id === 'task-judge' ? 'plan-change-review' : null, repoId: 'repo-1', branch: 'agent/builder/78-issue-78', subjectRef: id === 'task-request' ? 'request:aaaaaaaa' : 'openadlc#78' })),
       listTasksOnSubjects: vi.fn(async () => []),
       pausedWithAnswer: vi.fn(async () => []),
+      listTasksSince: vi.fn(async () => limitWorld.tasks),
+      listHeldTasks: vi.fn(async () => limitWorld.tasks.filter((task) => task.state === 'held')),
+      seatHasRoom: vi.fn(async () => true),
+      claimAutoRetry: vi.fn(async () => true),
+      countUnfinishedImplementTasks: vi.fn(async () => 0),
       updateTaskState: vi.fn(async (id: string, state: string, extra: { exitReason: string | null }) => ({
         id,
         botId: 'bot-builder',
@@ -136,15 +152,47 @@ const inboxTake = vi.fn(async (_taskId: string, _takeId: string) => [{ id: 'inbo
 const inboxSettle = vi.fn(async (_taskId?: string) => 0);
 const inboxRelease = vi.fn(async (_taskId: string, _takeId: string) => 1);
 const hostCheckRecord = vi.fn(async (_report: unknown) => true);
+const SHARED_CLAUDE = { id: 'acct-1', provider: 'anthropic' as const, kind: 'subscription' as const, label: 'Shared Claude', createdAt: '2026-10-01T00:00:00.000Z' };
+const ON_SHARED = { id: 'bot-builder', name: 'builder', slot: 'builder', role: 'implement', engine: 'claude', githubLogin: null, modelAccountId: 'acct-1' };
 const releaseRecord = vi.fn(async (_report: unknown) => true);
 
 
 let bridge: Server;
 let bridgeUrl: string;
+/** The health checks the state route raises a usage limit on; only `model-limit` is registered. */
+let healthRegistry: import('./health/registry.js').HealthRegistry;
+const verifyAccount = vi.fn(async (_accountId: string) => ({ ok: false, message: 'still limited' }));
 
 beforeEach(async () => {
   const { registerInternalApi } = await import('./internal-api.js');
   const { Router } = await import('./router.js');
+  const { HealthRegistry } = await import('./health/registry.js');
+  const { modelLimitCheck } = await import('./health/checks/model-limit.js');
+  limitWorld.rows.clear();
+  limitWorld.tasks = [];
+  limitWorld.issues = [];
+  limitWorld.fixed = [];
+  limitWorld.now = null;
+  healthRegistry = new HealthRegistry({
+    checks: [
+      modelLimitCheck({
+        rows: async () => [...limitWorld.rows.values()] as never,
+        accounts: async () => [SHARED_CLAUDE],
+        crew: async () => [ON_SHARED] as never,
+        verify: (account) => verifyAccount(account.id),
+      }),
+    ],
+    store: {
+      list: async () => [...limitWorld.rows.values()] as never,
+      save: async (row) => void limitWorld.rows.set(row.id, row as never),
+      remove: async (ids) => ids.forEach((id) => limitWorld.rows.delete(id)),
+      dismiss: async () => false,
+    },
+    consoleUrl: 'http://127.0.0.1:47300',
+    now: () => limitWorld.now ?? new Date(),
+    onFixed: async (ids) => void limitWorld.fixed.push(...ids),
+    log: () => undefined,
+  });
   const router = new Router();
   registerInternalApi(router, {
     config: { automationBot: null, costs: { monthlyCapUsd: 1500, perTaskCapUsd: 15 }, organization: 'exampleco', webhookSecret: '', gitHubClientId: '', humans: [] } as never,
@@ -174,6 +222,7 @@ beforeEach(async () => {
     pauseHolds: { paused: pauseHeld, forget: pauseForget },
     hostChecks: { record: hostCheckRecord },
     releases: { record: releaseRecord },
+    health: healthRegistry,
   });
   bridge = createServer((request, response) => void router.handle(request, response));
   await new Promise<void>((resolve) => bridge.listen(0, '127.0.0.1', resolve));
@@ -1895,5 +1944,167 @@ describe('the designer’s verdict on a plan change', () => {
     verdict.mockClear();
     await post('/internal/tasks/task-1/message', { kind: 'bot', text: 'Still reading.' });
     expect(verdict).not.toHaveBeenCalled();
+  });
+});
+
+describe('a task that ends on its model account’s usage limit (#395, ADR 0096)', () => {
+  const INCIDENT =
+    "engine exited 1: You've hit your org's monthly spend limit · ask your admin to raise it at https://claude.ai/admin-settings/usage · your weekly limit resets 11am (UTC)";
+
+  const OTHER_CLAUDE = { ...SHARED_CLAUDE, id: 'acct-2', label: 'Other Claude' };
+
+  /**
+   * Puts the builder on an account for one test, and back after: `thinksWith`
+   * is its bot's account now, `ranOn` the one its tasks were recorded running on.
+   */
+  async function onSharedAccount<T>(
+    body: () => Promise<T>,
+    accounts: { thinksWith?: string; ranOn?: string | null } = {},
+  ): Promise<T> {
+    const { bots, modelAccounts, tasks } = await import('@openadlc/db');
+    const thinksWith = accounts.thinksWith ?? 'acct-1';
+    const ranOn = accounts.ranOn === undefined ? 'acct-1' : accounts.ranOn;
+    const seat = { ...ON_SHARED, modelAccountId: thinksWith };
+    const byId = vi.mocked(bots.getBotById).getMockImplementation();
+    const list = vi.mocked(bots.listBots).getMockImplementation();
+    const get = vi.mocked(modelAccounts.get).getMockImplementation();
+    const task = vi.mocked(tasks.getTask).getMockImplementation()! as (id: string) => Promise<Record<string, unknown> | null>;
+    vi.mocked(bots.getBotById).mockImplementation((async () => seat) as never);
+    vi.mocked(bots.listBots).mockImplementation((async () => [seat]) as never);
+    vi.mocked(modelAccounts.get).mockImplementation(
+      (async (id: string) => (id === 'acct-1' ? SHARED_CLAUDE : id === 'acct-2' ? OTHER_CLAUDE : null)) as never,
+    );
+    vi.mocked(tasks.getTask).mockImplementation((async (id: string) => {
+      const row = await task(id);
+      return row ? { ...row, botId: 'bot-builder', modelAccountId: ranOn } : null;
+    }) as never);
+    try {
+      return await body();
+    } finally {
+      vi.mocked(bots.getBotById).mockImplementation(byId as never);
+      vi.mocked(bots.listBots).mockImplementation(list as never);
+      vi.mocked(modelAccounts.get).mockImplementation(get as never);
+      vi.mocked(tasks.getTask).mockImplementation(task as never);
+    }
+  }
+
+  it('is held, parks nothing, holds the account’s seats back with a card that says when it resets, and is started again once the account works', async () => {
+    const { tasks, leases } = await import('@openadlc/db');
+    const { holdFor } = await import('@openadlc/dispatcher');
+    const { retryAfterRecovery } = await import('./scheduler.js');
+
+    await onSharedAccount(async () => {
+      const response = await post('/internal/tasks/task-1/state', { state: 'failed', reason: INCIDENT });
+      expect(response.status).toBe(200);
+
+      // Held, in the bridge's own words, which name the account.
+      const reason = `held on model account acct-1: ${INCIDENT}`;
+      expect(vi.mocked(tasks.updateTaskState)).toHaveBeenCalledWith('task-1', 'held', { exitReason: reason });
+      // An end like any other: its lease is settled, its seat freed, its builder's reviews asked.
+      expect(vi.mocked(leases.settlePausedLeases)).toHaveBeenCalledWith(expect.objectContaining({ leaseId: 'lease-78', reason: 'its task on openadlc#78 held' }));
+      expect(seatFreed).toHaveBeenCalledWith('bot-builder', 'implement task held');
+      expect(builderEnded).toHaveBeenCalled();
+      // Nothing is parked: the issue is not sent to triage.
+      expect(sendToTriage).not.toHaveBeenCalled();
+
+      // The account's card, once, saying when it resets and where to raise it.
+      const row = limitWorld.rows.get('model-limit:acct-1') as { state: string; severity: string; facts: Record<string, unknown>; action: unknown } | undefined;
+      expect(row).toMatchObject({ state: 'failing', severity: 'blocking', action: { label: 'Raise the limit', url: 'https://claude.ai/admin-settings/usage' } });
+      expect(row?.facts).toMatchObject({ accountId: 'acct-1', kind: 'spend', url: 'https://claude.ai/admin-settings/usage' });
+      expect(String(row?.facts.resetsAt)).toMatch(/T11:00:00\.000Z$/);
+      expect(Date.parse(String(row?.facts.resetsAt))).toBeGreaterThan(Date.now());
+
+      // A second held task on the account is the same hold.
+      const since = row?.facts.since;
+      await post('/internal/tasks/task-2/state', { state: 'failed', reason: INCIDENT });
+      expect([...limitWorld.rows.keys()]).toEqual(['model-limit:acct-1']);
+      expect((limitWorld.rows.get('model-limit:acct-1') as { facts: Record<string, unknown> }).facts.since).toBe(since);
+
+      // The dispatcher leases nothing to a seat on the account, and goes on with one on another.
+      const rows = (await healthRegistry.rows()) as never;
+      expect(holdFor(ON_SHARED, 'openadlc', rows)).toMatch(/at its spend limit/);
+      expect(holdFor({ ...ON_SHARED, id: 'bot-other', modelAccountId: 'acct-2' }, 'openadlc', rows)).toBeNull();
+
+      // The account works again: its check passes once it is due, and the row's fix starts the build again.
+      limitWorld.tasks = [
+        {
+          id: 'task-1',
+          botId: 'bot-builder',
+          repoId: 'repo-1',
+          kind: 'implement',
+          subjectType: 'issue',
+          subjectRef: 'openadlc#78',
+          state: 'held',
+          exitReason: reason,
+          startedAt: new Date(Date.now() - 60_000).toISOString(),
+          endedAt: new Date().toISOString(),
+          createdAt: new Date(Date.now() - 60_000).toISOString(),
+          autoRetriedAt: null,
+        },
+      ];
+      limitWorld.issues = [{ repoName: 'openadlc', number: 78, prNumber: null, stage: 'build', labels: [], declaredPaths: [] }];
+      verifyAccount.mockResolvedValueOnce({ ok: true, message: 'ok' });
+      limitWorld.now = new Date(Date.now() + 16 * 60_000);
+      await healthRegistry.run({ ids: ['model-limit'] });
+      expect(limitWorld.rows.get('model-limit:acct-1')).toMatchObject({ state: 'ok' });
+      expect(limitWorld.fixed).toEqual(['model-limit:acct-1']);
+
+      // An earlier test in this file leaves its own issues behind.
+      const { issues } = await import('@openadlc/db');
+      vi.mocked(issues.listIssues).mockResolvedValueOnce(limitWorld.issues as never);
+      const retry = vi.fn(async (_id: string, _actor: string) => ({ task: { taskId: 'task-again' }, bot: 'builder' }));
+      const actions = await retryAfterRecovery(limitWorld.fixed, { retry, now: () => new Date() });
+      expect(retry).toHaveBeenCalledWith('task-1', 'health-recovery');
+      expect(actions).toEqual(['openadlc#78: builder’s implement run again, now that model-limit:acct-1 passes']);
+    });
+  });
+
+  it('stays failed for a bot on no model account, and for any other reason', async () => {
+    const { tasks } = await import('@openadlc/db');
+
+    await post('/internal/tasks/task-1/state', { state: 'failed', reason: INCIDENT });
+    expect(vi.mocked(tasks.updateTaskState)).toHaveBeenLastCalledWith('task-1', 'failed', { exitReason: INCIDENT });
+
+    await onSharedAccount(async () => {
+      await post('/internal/tasks/task-1/state', { state: 'failed', reason: 'vitest exited with code 1' });
+      expect(vi.mocked(tasks.updateTaskState)).toHaveBeenLastCalledWith('task-1', 'failed', { exitReason: 'vitest exited with code 1' });
+      await post('/internal/tasks/task-1/state', { state: 'failed', reason: 'engine exited 1: 429 Too Many Requests: rate_limit_error' });
+      expect(vi.mocked(tasks.updateTaskState)).toHaveBeenLastCalledWith('task-1', 'failed', expect.anything());
+    });
+    expect(limitWorld.rows.size).toBe(0);
+  });
+
+  it('holds the account the task ran on, not the one its seat was moved to while it ran', async () => {
+    const { tasks } = await import('@openadlc/db');
+    const { holdFor } = await import('@openadlc/dispatcher');
+
+    // Started on acct-1; a person moved the seat to acct-2 before the limit came back.
+    await onSharedAccount(
+      async () => {
+        await post('/internal/tasks/task-1/state', { state: 'failed', reason: INCIDENT });
+        expect(vi.mocked(tasks.updateTaskState)).toHaveBeenLastCalledWith('task-1', 'held', {
+          exitReason: `held on model account acct-1: ${INCIDENT}`,
+        });
+        expect([...limitWorld.rows.keys()]).toEqual(['model-limit:acct-1']);
+        // The seat on acct-2, which works, is not held back for acct-1's limit.
+        const rows = (await healthRegistry.rows()) as never;
+        expect(holdFor({ ...ON_SHARED, modelAccountId: 'acct-2' }, 'openadlc', rows)).toBeNull();
+        expect(holdFor(ON_SHARED, 'openadlc', rows)).toMatch(/at its spend limit/);
+      },
+      { thinksWith: 'acct-2', ranOn: 'acct-1' },
+    );
+  });
+
+  it('stays failed for a task with no account recorded, even when its bot thinks with one now', async () => {
+    const { tasks } = await import('@openadlc/db');
+
+    await onSharedAccount(
+      async () => {
+        await post('/internal/tasks/task-1/state', { state: 'failed', reason: INCIDENT });
+        expect(vi.mocked(tasks.updateTaskState)).toHaveBeenLastCalledWith('task-1', 'failed', { exitReason: INCIDENT });
+      },
+      { thinksWith: 'acct-1', ranOn: null },
+    );
+    expect(limitWorld.rows.size).toBe(0);
   });
 });

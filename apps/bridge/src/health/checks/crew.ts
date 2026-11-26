@@ -1,6 +1,7 @@
 import { ConfigurationError, collaboratorsUrl, sameSigningKey } from '@openadlc/github';
 import { COMMITTING_ROLES, botAtStart, botInWords, holdsCredential, repositoryRoleFor, sameLogin, type Bot, type HealthAction } from '@openadlc/shared';
 import { botSaid } from '../../bot-said.js';
+import { heldAccountOf } from '../../usage-limit.js';
 import { alreadyInUse, signingKeyTitle } from '../../signing-keys.js';
 import type { CheckResult, HealthCheck } from '../types.js';
 import { GITHUB_CALLS_AT_ONCE, SLOW_CHECK_MS, mapLimited } from '../limited.js';
@@ -92,11 +93,13 @@ function list(names: readonly string[]): string {
 
 /**
  * The checks whose answer decides whether a bot can do a task at all: its
- * sign-in, its place in the repository, and the host service that runs it.
+ * sign-in, its place in the repository, the host service that runs it, and
+ * whether the model account it thinks with is at its usage limit (ADR 0096).
  * A task started while one fails only fails, so it is not started; a task that
- * failed on one is run again when the check passes.
+ * failed on one, or was held on its account's limit, is run again when the
+ * check passes.
  */
-export const PREREQUISITE_CHECKS = ['bot-sign-in', 'bot-access', 'hostd'] as const;
+export const PREREQUISITE_CHECKS = ['bot-sign-in', 'bot-access', 'hostd', 'model-limit'] as const;
 
 /** Whether a health row (`checkId` or `checkId:subject`) is one of those checks'. */
 export function isPrerequisiteRow(id: string): boolean {
@@ -109,13 +112,18 @@ export interface HealthAnswer {
   state: string;
   title: string | null;
   detail: string | null;
+  /** What the row keeps; a `model-limit` row names its account here. Absent reads as nothing. */
+  facts?: Record<string, unknown>;
 }
 
 export interface Blocker {
   /** The failing row, which is also the one whose recovery clears this. */
   row: string;
-  /** `paused`: a person paused the seat from Crew (`seat-pause.ts`); no health row, and its resume is what clears it. */
-  kind: 'sign-in' | 'access' | 'host' | 'paused';
+  /**
+   * `paused`: a person paused the seat from Crew (`seat-pause.ts`); no health row, and its resume is what clears it.
+   * `limit`: the model account the seat thinks with is at its usage limit (`model-limit:<accountId>`).
+   */
+  kind: 'sign-in' | 'access' | 'host' | 'paused' | 'limit';
   /** Short enough for a status line: who cannot do what. */
   why: string;
   /** What the board's card tells a person to do, for an error that has to say it too. */
@@ -123,10 +131,21 @@ export interface Blocker {
 }
 
 /** What keeps this seat from working in this repository right now, from what the checks last said. */
-export function blockersOf(rows: readonly HealthAnswer[], seat: { id: string; name: string }, repoName: string | null): Blocker[] {
+export function blockersOf(
+  rows: readonly HealthAnswer[],
+  seat: { id: string; name: string; modelAccountId?: string | null },
+  repoName: string | null,
+  options: { scripted?: boolean } = {},
+): Blocker[] {
   const failing = (id: string) => rows.find((row) => row.id === id && row.state === 'failing');
   const said = (row: HealthAnswer) => row.detail ?? row.title ?? '';
   const blockers: Blocker[] = [];
+
+  // Read under scripted engines too, as the dispatcher's hold does: the limit
+  // is the engine's own output, not something GitHub would refuse.
+  const limit = limitBlocker(rows, seat);
+  if (limit) blockers.push(limit);
+  if (options.scripted) return blockers;
 
   const signIn = failing(`bot-sign-in:${seat.id}`);
   if (signIn) blockers.push({ row: signIn.id, kind: 'sign-in', why: `${seat.name} cannot sign in to GitHub`, instruction: said(signIn) });
@@ -138,6 +157,18 @@ export function blockersOf(rows: readonly HealthAnswer[], seat: { id: string; na
   if (host) blockers.push({ row: host.id, kind: 'host', why: 'OpenADLC’s host service is not answering', instruction: said(host) });
   return blockers;
 }
+
+/** The blocker of a seat whose model account is at its usage limit, or null. */
+export function limitBlocker(rows: readonly HealthAnswer[], seat: { name: string; modelAccountId?: string | null }): Blocker | null {
+  if (!seat.modelAccountId) return null;
+  const row = rows.find((one) => one.id === `model-limit:${seat.modelAccountId}` && one.state === 'failing');
+  if (!row) return null;
+  const account = typeof row.facts?.accountName === 'string' ? row.facts.accountName : 'its model account';
+  return { row: row.id, kind: 'limit', why: `${seat.name} thinks with ${account}, ${LIMIT_WHY}`, instruction: row.detail ?? row.title ?? '' };
+}
+
+/** How a `limit` blocker's words end, which `causeOfFailure` reads back. */
+const LIMIT_WHY = 'which is at its usage limit';
 
 /**
  * The gate's description when the reviewers it waits on are ones that cannot
@@ -155,8 +186,10 @@ export function waitingOnBlocked(description: string, blocked: ReadonlyMap<strin
   if (blockers.length === 0) return null;
   const ofAccount = blockers.filter((blocker) => blocker.kind === 'sign-in' || blocker.kind === 'access');
   const paused = blockers.filter((blocker) => blocker.kind === 'paused');
-  const shown = ofAccount.length > 0 ? ofAccount : paused.length > 0 ? paused : blockers;
-  const subject = ofAccount.length > 0 ? 'the reviewer account' : paused.length > 0 ? 'a paused seat' : 'the host service';
+  const limited = blockers.filter((blocker) => blocker.kind === 'limit');
+  const shown = ofAccount.length > 0 ? ofAccount : paused.length > 0 ? paused : limited.length > 0 ? limited : blockers;
+  const subject =
+    ofAccount.length > 0 ? 'the reviewer account' : paused.length > 0 ? 'a paused seat' : limited.length > 0 ? 'the model account' : 'the host service';
   return `waiting on ${subject}: ${[...new Set(shown.map((blocker) => blocker.why))].join('; ')}`;
 }
 
@@ -166,8 +199,20 @@ export function waitingOnBlocked(description: string, blocked: ReadonlyMap<strin
  * a model account signed out, a permission the app lacks or a failed build
  * are not these, and a task that failed for them waits for a person.
  */
-export function causeOfFailure(reason: string | null | undefined, task: { botId: string; repoName: string | null }): string | null {
+export function causeOfFailure(
+  reason: string | null | undefined,
+  task: { botId: string; repoName: string | null; modelAccountId?: string | null },
+): string | null {
   const text = reason ?? '';
+  // Held on its model account's usage limit: the bridge's own words name the
+  // account it was held on (`heldReason`), which is the row it waits on.
+  const heldOn = heldAccountOf(text);
+  if (heldOn) return `model-limit:${heldOn}`;
+  // Not started because the account was held: the blocker's words, read
+  // whole, since an account's name may have a full stop in it.
+  if (new RegExp(`^\\S+ was not started: \\S+ thinks with .+?, ${LIMIT_WHY}`).test(text)) {
+    return task.modelAccountId ? `model-limit:${task.modelAccountId}` : null;
+  }
   // Work recorded without being started, because a check was failing
   // (`TaskService.open`, `whenBlocked: 'record'`). The words are OpenADLC's own,
   // from the blocker, so they name the row exactly; the first is the one

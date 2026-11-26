@@ -1,7 +1,7 @@
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { registerInternalAttachmentRoutes } from './attachment-routes.js';
 import type { IncomingMessage } from 'node:http';
-import { audit, bots, costs, hasEventOfType, issues, leases, localCiRuns, recordEvent, repos, spendingLimits, stageMoves, tasks, threads } from '@openadlc/db';
+import { audit, bots, costs, hasEventOfType, issues, leases, localCiRuns, modelAccounts, recordEvent, repos, spendingLimits, stageMoves, tasks, threads } from '@openadlc/db';
 import {
   GitHubUnavailableError,
   TASK_TOKEN_HEADER,
@@ -17,8 +17,10 @@ import {
   messageKindFor,
   type Bot,
   type MarkerEvent,
+  type ModelAccount,
   type Task,
   type TaskState,
+  hasEnded,
   dedupeMarker,
   hasIgnoreLabel,
   redactSecrets,
@@ -31,6 +33,8 @@ import {
 import { planChangesFor, type ApiDeps } from './api.js';
 import { bodyDigest } from './attribution.js';
 import { STAMP_REFUSED, STAMP_SIGNED } from './health/checks/attribution.js';
+import { MODEL_LIMIT_CHECK, limitFailure } from './health/checks/model-limit.js';
+import { heldReason, usageLimit, type UsageLimit } from './usage-limit.js';
 import { asAutomation, automationBotName, automationLogin, findOwnOpenIssue } from './automation-bot.js';
 import { subjectClosed } from './gates.js';
 import { startBuild } from './build-start.js';
@@ -492,6 +496,16 @@ export function registerInternalApi(
         }
       }
     }
+    // An engine that ended on its model account's usage or spend limit did not
+    // fail: the account is at its limit, and every task on it would end the
+    // same way. Written `held`, which parks nothing and is started again once
+    // the account works (ADR 0096). On 2026-11-25 these were written `failed`,
+    // and three leases each parked nine issues `needs-triage`.
+    const heldOn = state === 'failed' ? await limitOf(params.id ?? '', reason).catch(() => null) : null;
+    if (heldOn) {
+      state = 'held';
+      reason = heldReason(heldOn.account.id, heldOn.limit.words);
+    }
     const task = await tasks.updateTaskState(params.id ?? '', state, {
       exitReason: reason,
       // Said by the runner with `running`: whether a person's message can reach its session.
@@ -505,6 +519,25 @@ export function registerInternalApi(
       throw new HttpFailure(409, `the task is ${current.state} and cannot become ${state}`, { state: current.state });
     }
     const ended = task;
+
+    // The account's hold: one row per account, so a second held task on it
+    // refreshes what the card says and keeps when the hold began.
+    if (heldOn && ended.state === 'held') {
+      const at = new Date().toISOString();
+      await deps.health
+        ?.raise(
+          MODEL_LIMIT_CHECK,
+          limitFailure(
+            heldOn.account,
+            heldOn.users,
+            { kind: heldOn.limit.kind, words: heldOn.limit.words, resetsAt: heldOn.limit.resetsAt?.toISOString() ?? null, url: heldOn.limit.url },
+            { since: at, lastCheckedAt: at },
+          ),
+        )
+        .catch((error: unknown) =>
+          console.warn(`[bridge] the usage limit of model account ${heldOn.account.id} was not recorded: ${error instanceof Error ? error.message : error}`),
+        );
+    }
 
     // A question settled as it was asked — a plan change a standing approval
     // approved in `Gates.open` — leaves nobody to answer it, so the task goes
@@ -524,16 +557,16 @@ export function registerInternalApi(
     // here, posted once the session has stopped. Starting the next triage when
     // the question itself arrived could have killed the session that asked it,
     // which is named for its skill, before it reported its usage.
-    if (ended.kind === 'intake' && ['done', 'failed', 'stopped', 'paused'].includes(state)) {
+    if (ended.kind === 'intake' && (hasEnded(state) || state === 'paused')) {
       void deps.requestQueue?.drain().catch(() => undefined);
     }
 
     // A message its session did not take goes where it would have gone had
     // it arrived now: the task is no longer live. After the answer, since a
     // start can wait on GitHub; the sweep catches one this misses.
-    if (['paused', 'done', 'failed', 'stopped'].includes(state)) settleInbox(ended.id, ended.subjectRef);
+    if (state === 'paused' || hasEnded(state)) settleInbox(ended.id, ended.subjectRef);
 
-    if (['done', 'failed', 'stopped'].includes(state)) {
+    if (hasEnded(state)) {
       await deps.hostd.cleanupTask(ended.id, reason ?? state).catch(() => undefined);
       // A lease a gate paused is not let go by anything else once its task ends.
       // Never parked on a pull request that has closed (ADR 0073).
@@ -546,6 +579,14 @@ export function registerInternalApi(
     // before doing anything — an engine the session could not find — left the
     // thread at "started triage" and "reading intake.md", which reads as work
     // still going on, and the person who filed the request waited for it.
+    if (state === 'held') {
+      await sayTaskEnded(ended, 'held', reason).catch((error: unknown) =>
+        console.warn(`[bridge] could not say in its thread that ${ended.id} is held: ${error instanceof Error ? error.message : error}`),
+      );
+      // Not `model-account`: listing models passes while a limit lasts, and
+      // the account's hold is its own row, raised above.
+      deps.health?.runSoon(['hostd', 'idle-lease']);
+    }
     if (state === 'failed' || (state === 'stopped' && reason)) {
       const how = state;
       await sayTaskEnded(ended, how, reason).catch((error: unknown) =>
@@ -627,7 +668,7 @@ export function registerInternalApi(
     // when that hold lapses with it still waiting (`PauseHolds`). Asked at
     // the pause, on 2026-11-10 the lead reviewed a head the round replaced
     // once its question was answered a minute later (#287).
-    if ((ended.kind === 'patch' || ended.kind === 'implement') && ['done', 'failed', 'stopped', 'paused'].includes(state)) {
+    if ((ended.kind === 'patch' || ended.kind === 'implement') && (hasEnded(state) || state === 'paused')) {
       // In a `then`, so even a throw before its first await is said and the
       // task's state, already written, is still answered.
       await Promise.resolve()
@@ -651,11 +692,11 @@ export function registerInternalApi(
     // refused while the design seat ran another waited up to an hour after
     // that one ended. Asked after the handoff above, so the issue this task
     // finished has been moved on before anything looks at its stage.
-    if (['done', 'failed', 'stopped'].includes(state)) deps.stageRuns?.seatFreed(ended.botId, `${ended.kind} task ${state}`);
+    if (hasEnded(state)) deps.stageRuns?.seatFreed(ended.botId, `${ended.kind} task ${state}`);
 
     // Work that ended may have been holding a path an approved plan change
     // asked for, so the ones waiting on it look again.
-    if (['done', 'failed', 'stopped'].includes(state)) {
+    if (hasEnded(state)) {
       try {
         for (const id of await deps.gates.applyHeld()) {
           await deps.taskService.resume(id).catch((error: Error) => console.warn(`[bridge] resume after a plan change failed: ${error.message}`));
@@ -1540,10 +1581,36 @@ async function targetsOfTask(
 }
 
 /**
+ * The model account a failed task's session ran on, when the task's reason
+ * says that account is at its usage or spend limit (`usageLimit`), with the
+ * bots that think with it; null for a task that ran on no account, or any
+ * other reason.
+ *
+ * The account is the one recorded on the task as it started running
+ * (`tasks.model_account_id`), never its bot's account now: a seat moved from
+ * account A to B while its task ran would otherwise hold B, which works, for
+ * A's limit, and leave A to be leased to and fail the next task the same way.
+ */
+async function limitOf(taskId: string, reason: string | null): Promise<{ account: ModelAccount; users: Bot[]; limit: UsageLimit } | null> {
+  if (!reason) return null;
+  const task = await tasks.getTask(taskId);
+  if (!task?.modelAccountId) return null;
+  const account = await modelAccounts.get(task.modelAccountId);
+  if (!account) return null;
+  const limit = usageLimit(reason, account.provider, new Date());
+  if (!limit) return null;
+  const users = (await bots.listBots()).filter((one) => one.modelAccountId === account.id);
+  if (users.length > 0) return { account, users, limit };
+  // Nobody thinks with it any more: the card still names the bot it held.
+  const bot = await bots.getBotById(task.botId);
+  return { account, users: bot ? [bot] : [], limit };
+}
+
+/**
  * The line a bot's thread gets when its task ends without finishing: what
  * stopped, and why, in the reason the task gave.
  */
-async function sayTaskEnded(task: Task, state: 'failed' | 'stopped', reason: string | null): Promise<void> {
+async function sayTaskEnded(task: Task, state: 'failed' | 'stopped' | 'held', reason: string | null): Promise<void> {
   const bot = await bots.getBotById(task.botId);
   const who = botAtStart(bot);
   const thread = await threads.ensureThread({ botId: task.botId, repoId: task.repoId, subjectRef: task.subjectRef });
@@ -1556,7 +1623,12 @@ async function sayTaskEnded(task: Task, state: 'failed' | 'stopped', reason: str
     threadId: thread.id,
     kind: 'sys',
     author: 'openadlc',
-    text: state === 'failed' ? `${who} could not finish ${task.subjectRef}` : `${who} stopped work on ${task.subjectRef}`,
+    text:
+      state === 'failed'
+        ? `${who} could not finish ${task.subjectRef}`
+        : state === 'held'
+          ? `${who} is held on its model account’s usage limit on ${task.subjectRef}; it starts again by itself once the account works`
+          : `${who} stopped work on ${task.subjectRef}`,
     note: reason ?? state,
     payload: { taskId: task.id, state },
   });
