@@ -255,6 +255,27 @@ describe('trying a failed task again', () => {
     expect(store.audits.at(-1)).toMatchObject({ action: 'task.retried', payload: { retried: 'task-review', task: 'task-new' } });
   });
 
+  it('runs again a task held on its model account’s usage limit, for a person’s Try again or the recovery', async () => {
+    const { retryTask } = await import('./task-retry.js');
+    store.tasks = [
+      task({
+        id: 'task-held',
+        botId: 'bot-lead',
+        kind: 'review',
+        subjectType: 'pr',
+        subjectRef: 'openadlc-testbed#2',
+        state: 'held',
+        skill: 'pr-review',
+        branch: 'agent/openadlc-atlas-janedoe/1-issue-1',
+      }),
+    ];
+
+    const retried = await retryTask('task-held', 'janedoe', await deps());
+
+    expect(retried).toMatchObject({ retried: 'task-held', task: { taskId: 'task-new' } });
+    expect(opened).toEqual([expect.objectContaining({ kind: 'review', subjectRef: 'openadlc-testbed#2', skill: 'pr-review' })]);
+  });
+
   it('builds again under a lease it takes for the same builder, the way the dispatcher does', async () => {
     const { retryTask } = await import('./task-retry.js');
     store.tasks = [task({ id: 'task-build-failed', botId: 'bot-builder', kind: 'implement', subjectRef: 'openadlc-testbed#1', state: 'failed' })];

@@ -28,8 +28,27 @@ export const TASK_KINDS = [
 ] as const;
 export type TaskKind = (typeof TASK_KINDS)[number];
 
-export const TASK_STATES = ['queued', 'running', 'paused', 'stopped', 'done', 'failed'] as const;
+/**
+ * `held` is a task that ended because its model account hit a usage or spend
+ * limit: the account's state, not the task's failure. It is never counted
+ * toward parking an issue, and the recovery starts it again once the account
+ * works (docs/adr/0096-a-model-accounts-usage-limit-is-a-health-row-and-its-tasks-end-held.md).
+ */
+export const TASK_STATES = ['queued', 'running', 'paused', 'stopped', 'done', 'failed', 'held'] as const;
 export type TaskState = (typeof TASK_STATES)[number];
+
+/**
+ * The states a task has ended in. Code that asks whether a task has ended reads
+ * this rather than listing states: a list written before `held` read a held
+ * task as still live, and held its seat and its lease for good.
+ */
+export const TASK_ENDINGS = ['done', 'failed', 'stopped', 'held'] as const satisfies readonly TaskState[];
+export type TaskEnding = (typeof TASK_ENDINGS)[number];
+
+/** Whether a task in this state has ended. */
+export function hasEnded(state: string): boolean {
+  return (TASK_ENDINGS as readonly string[]).includes(state);
+}
 
 export const SESSION_STATES = ['working', 'idle', 'paused', 'stopped'] as const;
 export type SessionState = (typeof SESSION_STATES)[number];

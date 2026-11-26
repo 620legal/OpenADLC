@@ -119,7 +119,9 @@ export async function retryTask(taskId: string, actor: string, deps: RetryDeps, 
   // and the sweep after it ended all go on from its branch. Whether it has a
   // pull request after all is asked below, with the issue.
   const continuing = continuesBranch(task);
-  if (task.state !== 'failed' && task.state !== 'stopped' && !continuing) {
+  // A task held on its model account's usage limit is run again by the
+  // recovery once the account works, and by a person's Try again before then.
+  if (task.state !== 'failed' && task.state !== 'stopped' && task.state !== 'held' && !continuing) {
     throw new HttpFailure(409, `that task is ${task.state}, so there is nothing to run again`);
   }
   const bot = await bots.getBotById(task.botId);

@@ -15,6 +15,8 @@ describe('which rows decide whether a bot can work', () => {
     expect(isPrerequisiteRow('bot-sign-in:bot-security')).toBe(true);
     expect(isPrerequisiteRow('bot-access:bot-security:openadlc')).toBe(true);
     expect(isPrerequisiteRow('hostd')).toBe(true);
+    // A model account at its usage limit (ADR 0096).
+    expect(isPrerequisiteRow('model-limit:acct-1')).toBe(true);
   });
 
   it('are not the webhook, the app’s permissions or a model account', () => {
@@ -56,6 +58,57 @@ describe('what keeps a seat from working', () => {
   it('falls back to the title when a row has no detail', () => {
     const rows: HealthAnswer[] = [{ id: 'hostd', state: 'failing', title: 'hostd is down', detail: null }];
     expect(blockersOf(rows, SEAT, null)[0]?.instruction).toBe('hostd is down');
+  });
+});
+
+describe('a seat whose model account is at its usage limit', () => {
+  const ON_SHARED = { ...SEAT, modelAccountId: 'acct-1' };
+  const limited: HealthAnswer = {
+    id: 'model-limit:acct-1',
+    state: 'failing',
+    title: 'The Anthropic subscription “Shared Claude” is at its spend limit',
+    detail: 'Nothing more is started on it until it works again.',
+    facts: { accountName: 'the Anthropic subscription “Shared Claude”' },
+  };
+
+  it('is held back, with the row the recovery waits on', () => {
+    expect(blockersOf([limited], ON_SHARED, 'openadlc')).toEqual([
+      {
+        row: 'model-limit:acct-1',
+        kind: 'limit',
+        why: 'openadlc-cipher-janedoe thinks with the Anthropic subscription “Shared Claude”, which is at its usage limit',
+        instruction: 'Nothing more is started on it until it works again.',
+      },
+    ]);
+  });
+
+  it('is held back under scripted engines too, where nothing GitHub would refuse is read', () => {
+    expect(blockersOf([limited, failing('bot-sign-in:bot-security')], ON_SHARED, 'openadlc', { scripted: true }).map((blocker) => blocker.kind)).toEqual(['limit']);
+  });
+
+  it('is not, for a seat on another account or none, or once the row passes', () => {
+    expect(blockersOf([limited], { ...SEAT, modelAccountId: 'acct-2' }, 'openadlc')).toEqual([]);
+    expect(blockersOf([limited], SEAT, 'openadlc')).toEqual([]);
+    expect(blockersOf([{ ...limited, state: 'ok' }], ON_SHARED, 'openadlc')).toEqual([]);
+  });
+
+  it('makes a gate say it waits on the model account', () => {
+    const blocked = new Map([['openadlc-cipher-janedoe', blockersOf([limited], ON_SHARED, 'openadlc')]]);
+    expect(waitingOnBlocked('waiting on openadlc-cipher-janedoe', blocked)).toBe(
+      'waiting on the model account: openadlc-cipher-janedoe thinks with the Anthropic subscription “Shared Claude”, which is at its usage limit',
+    );
+  });
+
+  it('is what a held task’s words, and a start it refused, point at', () => {
+    expect(causeOfFailure("held on model account acct-1: You've hit your org's monthly spend limit", { botId: 'bot-security', repoName: 'openadlc' })).toBe(
+      'model-limit:acct-1',
+    );
+    const refused = `openadlc-cipher-janedoe was not started: ${blockersOf([limited], ON_SHARED, 'openadlc')[0]?.why}. It starts once the account works.`;
+    expect(causeOfFailure(refused, { botId: 'bot-security', repoName: 'openadlc', modelAccountId: 'acct-1' })).toBe('model-limit:acct-1');
+    // With no account to name, nothing.
+    expect(causeOfFailure(refused, { botId: 'bot-security', repoName: 'openadlc' })).toBeNull();
+    // The engine's own words are not the bridge's: only a held task's reason names the row.
+    expect(causeOfFailure("engine exited 1: You've hit your org's monthly spend limit", { botId: 'bot-security', repoName: 'openadlc', modelAccountId: 'acct-1' })).toBeNull();
   });
 });
 

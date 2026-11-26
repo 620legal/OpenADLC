@@ -38,6 +38,8 @@ const store = vi.hoisted(() => ({
   roundAt: null as string | null,
   /** Every task the store holds, with `autoRetriedAt` as the claim leaves it. */
   tasks: [] as Record<string, any>[],
+  /** Held tasks older than the board's window, which `listHeldTasks` reads and `listTasksSince` does not. */
+  heldOld: [] as Record<string, any>[],
   /** When each attachment sweep cut off. */
   swept: [] as Date[],
   /** The moments `pruneGithubDeliveries` was asked to remove deliveries before. */
@@ -160,6 +162,7 @@ vi.mock('@openadlc/db', async () => ({
       [...store.deployTasks, ...store.reviewTasks].filter((task) => refs.includes(task.subjectRef)),
     ),
     listTasksSince: vi.fn(async () => store.tasks),
+    listHeldTasks: vi.fn(async () => [...store.heldOld, ...store.tasks.filter((task) => task.state === 'held')]),
     countUnfinishedImplementTasks: vi.fn(
       async (repoId: string) =>
         store.tasks.filter((task) => task.repoId === repoId && task.kind === 'implement' && ['queued', 'running', 'paused'].includes(task.state)).length,
@@ -173,7 +176,7 @@ vi.mock('@openadlc/db', async () => ({
         store.tasks.filter((task) => task.botId === botId && ['queued', 'running', 'paused'].includes(task.state)).length + alsoStarting < 1,
     ),
     claimAutoRetry: vi.fn(async (id: string) => {
-      const task = store.tasks.find((one) => one.id === id);
+      const task = [...store.tasks, ...store.heldOld].find((one) => one.id === id);
       if (!task || task.autoRetriedAt) return false;
       task.autoRetriedAt = '2026-09-29T12:00:00.000Z';
       return true;
@@ -215,6 +218,7 @@ beforeEach(() => {
   store.reviewTasks = [];
   store.roundAt = null;
   store.tasks = [];
+  store.heldOld = [];
   store.audits = [];
   store.testingDeploy = null;
   github.workflows = [{ name: 'deploy-testing', path: '.github/workflows/deploy-testing.yml' }];
@@ -3819,5 +3823,115 @@ describe('the project maps job', () => {
   it('says so when no refresher is wired', async () => {
     const scheduler = new Scheduler({} as never, {} as never, {} as never, {} as never, {} as never, {} as never, {} as never);
     expect((await scheduler.run('maps')).actions).toEqual(['project maps are not wired into this bridge']);
+  });
+});
+
+describe('work held on a model account’s usage limit (ADR 0096)', () => {
+  const NOW = new Date('2026-11-26T12:00:00.000Z');
+  const HELD_REASON = "held on model account acct-1: You've hit your org's monthly spend limit";
+  const FIXED = { id: 'model-limit:acct-1', state: 'ok', fixedAt: '2026-11-26T11:00:00.000Z' };
+  const FAILING = { id: 'model-limit:acct-1', state: 'failing', fixedAt: null };
+
+  function held(id: string, subjectRef: string, overrides: Record<string, unknown> = {}) {
+    return {
+      id,
+      botId: 'bot-cipher',
+      repoId: 'repo-1',
+      kind: 'review',
+      subjectType: 'pr',
+      subjectRef,
+      state: 'held',
+      startedAt: '2026-11-25T10:00:00.000Z',
+      endedAt: '2026-11-25T10:05:00.000Z',
+      createdAt: '2026-11-25T10:00:00.000Z',
+      exitReason: HELD_REASON,
+      autoRetriedAt: null,
+      ...overrides,
+    };
+  }
+
+  function recovering(account: string | null = 'acct-1') {
+    store.repos = [{ id: 'repo-1', name: 'openadlc-testbed', fullName: 'janedoe/openadlc-testbed' }];
+    store.bots = [{ id: 'bot-cipher', name: 'openadlc-cipher-janedoe', modelAccountId: account }];
+    let n = 0;
+    const retry = vi.fn(async (id: string, _actor: string) => {
+      const original = [...store.tasks, ...store.heldOld].find((task) => task.id === id);
+      const started = `retry-${++n}`;
+      store.tasks.push({ ...original, id: started, state: 'running', endedAt: null, exitReason: null, autoRetriedAt: null, createdAt: `2026-11-26T12:00:0${n}.000Z` });
+      return { task: { taskId: started }, bot: 'openadlc-cipher-janedoe' };
+    });
+    const deps = { retry, now: () => NOW };
+    return { retry, fixed: (ids: string[]) => retryAfterRecovery(ids, deps), sweep: () => retryAfterRecovery(null, deps) };
+  }
+
+  it('starts the held work once the account’s row passes, within the seat’s tasks at once, and leaves the new task unclaimed', async () => {
+    store.tasks = [held('t-a', 'openadlc-testbed#2'), held('t-b', 'openadlc-testbed#3')];
+    store.health = [FIXED];
+    const { retry, fixed } = recovering();
+
+    const actions = await fixed(['model-limit:acct-1']);
+
+    expect(retry.mock.calls.map(([id]) => id)).toEqual(['t-a']);
+    expect(actions).toEqual(['openadlc-testbed#2: openadlc-cipher-janedoe’s review run again, now that model-limit:acct-1 passes']);
+    expect(store.audits).toEqual([expect.objectContaining({ action: 'task.auto_retried', payload: expect.objectContaining({ retried: 't-a', cause: 'model-limit:acct-1' }) })]);
+    // Held again, the retry can be started again the next time the account works.
+    expect(store.tasks.find((task) => task.id === 'retry-1')?.autoRetriedAt).toBeNull();
+  });
+
+  it('includes a task held longer ago than the board’s week', async () => {
+    store.heldOld = [held('t-old', 'openadlc-testbed#4', { createdAt: '2026-11-01T10:00:00.000Z', endedAt: '2026-11-01T10:05:00.000Z' })];
+    store.health = [FIXED];
+    const { retry, fixed } = recovering();
+
+    await fixed(['model-limit:acct-1']);
+
+    expect(retry).toHaveBeenCalledWith('t-old', RECOVERY_ACTOR);
+  });
+
+  it('starts nothing while the account’s row still fails', async () => {
+    store.tasks = [held('t-a', 'openadlc-testbed#2')];
+    store.health = [FAILING];
+    const { retry, sweep } = recovering();
+
+    await sweep();
+
+    expect(retry).not.toHaveBeenCalled();
+  });
+
+  it('starts a held task whose seat moved to a working account without the old row passing', async () => {
+    store.tasks = [held('t-a', 'openadlc-testbed#2')];
+    store.health = [FAILING];
+    const { retry, sweep } = recovering('acct-2');
+
+    const actions = await sweep();
+
+    expect(retry).toHaveBeenCalledWith('t-a', RECOVERY_ACTOR);
+    expect(actions[0]).toMatch(/thinks with a model account that is not at its limit/);
+  });
+
+  it('does not start one whose seat moved to an account that is held too', async () => {
+    store.tasks = [held('t-a', 'openadlc-testbed#2')];
+    store.health = [FAILING, { id: 'model-limit:acct-2', state: 'failing', fixedAt: null }];
+    const { retry, sweep } = recovering('acct-2');
+
+    await sweep();
+
+    expect(retry).not.toHaveBeenCalled();
+  });
+
+  it('starts a review that was not started because the account was held, once its row passes', async () => {
+    store.tasks = [
+      held('t-a', 'openadlc-testbed#2', {
+        state: 'failed',
+        startedAt: null,
+        exitReason: 'openadlc-cipher-janedoe was not started: openadlc-cipher-janedoe thinks with the Anthropic subscription, which is at its usage limit. It starts once the account works.',
+      }),
+    ];
+    store.health = [FIXED];
+    const { retry, fixed } = recovering();
+
+    await fixed(['model-limit:acct-1']);
+
+    expect(retry).toHaveBeenCalledWith('t-a', RECOVERY_ACTOR);
   });
 });

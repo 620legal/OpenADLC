@@ -4,7 +4,7 @@ import { readAccounts } from '../github-identities.js';
 import { signInKind } from '../sign-in.js';
 import { revokeGate, settledSigningKey } from '../signing-keys.js';
 import { createHash } from 'node:crypto';
-import { attributions, audit, bots, credentials, deployRuns, externalSigningKeys, identities, issues, lastAudit, lastGithubDelivery, leases, listEventsOfType, modelAccounts, pushDevices, repos, settings, tasks } from '@openadlc/db';
+import { attributions, audit, bots, credentials, deployRuns, externalSigningKeys, health, identities, issues, lastAudit, lastGithubDelivery, leases, listEventsOfType, modelAccounts, pushDevices, repos, settings, tasks } from '@openadlc/db';
 import { installationSettingsUrl, parseEgressHosts } from '@openadlc/shared';
 import {
   GcpSecretStore,
@@ -33,7 +33,7 @@ import { APP_API } from '../invitation-service.js';
 import { Attribution, bodyDigest, postPath, postTarget } from '../attribution.js';
 import { asAutomation, automationBotName } from '../automation-bot.js';
 import { reviewerStandings } from '../automation.js';
-import { defaultModelAccountDeps, listAccountModels } from '../model-accounts.js';
+import { defaultModelAccountDeps, listAccountModels, verifyModelAccount } from '../model-accounts.js';
 import type { RepoSetup } from '../repo-setup.js';
 import type { WebhookSetup } from '../webhook-setup.js';
 import { appChecks } from './checks/app.js';
@@ -57,6 +57,7 @@ import { leaseCheck } from './checks/leases.js';
 import { deployDispatchCheck } from './checks/deploy-dispatch.js';
 import { RETRY_WITHIN_MS } from '../deploy-pipeline.js';
 import { modelAccountCheck } from './checks/models.js';
+import { MODEL_LIMIT_CHECK, modelLimitCheck } from './checks/model-limit.js';
 import { humanReviewLinesInspection, namedLoginsInspection, repoConfigCheck } from './checks/repo-config.js';
 import { repoOwnerCheck } from './checks/repo-owner.js';
 import { rulesCheck, skippedByLastApply } from './checks/repository.js';
@@ -353,6 +354,14 @@ export function defaultChecks(wiring: HealthWiring): HealthCheck[] {
       crew: () => bots.listBots(),
       models: (account) => listAccountModels(account.id, modelDeps),
       login: (account) => hostd.loginStatus(account.id),
+    }),
+    // Clears a model account's usage-limit hold once a check of it passes;
+    // only a task's end opens one (`HealthRegistry.raise`, ADR 0096).
+    modelLimitCheck({
+      rows: async () => (await health.listHealth()).filter((row) => row.checkId === MODEL_LIMIT_CHECK),
+      accounts: () => modelAccounts.list(),
+      crew: () => bots.listBots(),
+      verify: (account) => verifyModelAccount({ id: account.id, actor: 'health:model-limit' }, modelDeps),
     }),
     rulesCheck({
       plan: () => wiring.repoSetup.plan(),

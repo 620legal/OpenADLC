@@ -14,6 +14,10 @@
  * apps/bridge/src/health/checks/crew.ts: keep the two in step). A lease taken
  * then was refused and released, every pass, for every issue in the
  * repository; so those hold a builder back here too.
+ *
+ * And a builder whose model account is at its usage or spend limit is passed
+ * over: every build leased to it would end held on the limit (ADR 0096).
+ * Seats on other accounts go on as they were.
  */
 
 /** Just the columns of a health row this reads; `HealthRow` from `@openadlc/db` has them. */
@@ -25,15 +29,43 @@ export interface HealthFacts {
   detail?: string | null;
 }
 
+/**
+ * What a `model-limit` row's kind is called. Kept in step with
+ * `limitInWords` in apps/bridge/src/health/checks/model-limit.ts, which the
+ * dispatcher, a package of its own, cannot import.
+ */
+const LIMIT_WORDS: Record<string, string> = { spend: 'spend limit', weekly: 'weekly limit', session: 'usage limit', credit: 'credit limit', quota: 'quota' };
+
+/**
+ * Why a builder whose model account is at its usage limit is passed over, or
+ * null when it is not: the `model-limit:<accountId>` row the bridge raised
+ * when a task on the account ended on the limit (ADR 0096).
+ */
+export function limitHold(builder: { name: string; modelAccountId?: string | null }, checks: readonly HealthFacts[]): string | null {
+  if (!builder.modelAccountId) return null;
+  const row = checks.find((one) => one.id === `model-limit:${builder.modelAccountId}` && one.state === 'failing');
+  if (!row) return null;
+  const account = typeof row.facts.accountName === 'string' ? row.facts.accountName : 'its model account';
+  const kind = LIMIT_WORDS[String(row.facts.kind)] ?? 'usage limit';
+  const at = typeof row.facts.resetsAt === 'string' ? new Date(row.facts.resetsAt) : null;
+  const resets = at && Number.isFinite(at.getTime()) ? ` (it says it resets ${at.toISOString().slice(0, 16).replace('T', ' ')} UTC)` : '';
+  return `${builder.name} thinks with ${account}, which is at its ${kind}${resets}; nothing is leased to it until it works again`;
+}
+
 /** Where a person reconnects a bot, as the board's card for it says. */
 const RECONNECT = 'reconnect it from Settings → GitHub → Connected accounts';
 
 export function holdFor(
-  builder: { id: string; name: string },
+  builder: { id: string; name: string; modelAccountId?: string | null },
   repo: string,
   checks: readonly HealthFacts[],
   options: { scripted?: boolean } = {},
 ): string | null {
+  // Before the scripted return: the limit comes from the engine's own output,
+  // not from GitHub, and a build leased to a seat on a held account only ends
+  // held again.
+  const limited = limitHold(builder, checks);
+  if (limited) return limited;
   // Scripted engines fabricate the work and push nothing to GitHub, so what
   // GitHub would refuse decides nothing — and the integration suites, which
   // run them with no GitHub account behind any bot, could lease nothing.

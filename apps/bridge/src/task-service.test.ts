@@ -2001,6 +2001,54 @@ describe('a bot that must be able to work before a task starts', () => {
       expect(startTask).not.toHaveBeenCalled();
     });
 
+    describe('a seat whose model account is at its usage limit (ADR 0096)', () => {
+      const limited = {
+        id: 'model-limit:acct-1',
+        state: 'failing',
+        title: 'The Anthropic subscription “Shared Claude” is at its spend limit',
+        detail: 'Nothing more is started on it until it works again.',
+        facts: { accountName: 'the Anthropic subscription “Shared Claude”' },
+      };
+      beforeEach(() => {
+        store.crew = [
+          { ...LEAD, modelAccountId: 'acct-2' },
+          { ...SECURITY, modelAccountId: 'acct-1' },
+        ];
+        store.health = [limited];
+      });
+
+      it('is refused, and a seat on another account starts', async () => {
+        const { tasksService, startTask } = readyService();
+
+        const refused = await tasksService.open({ ...REVIEW, bot: SECURITY.name }).catch((error: unknown) => error);
+        expect(refused).toBeInstanceOf(PrerequisiteNotReadyError);
+        expect((refused as Error).message).toMatch(
+          /^openadlc-cipher-janedoe was not started: openadlc-cipher-janedoe thinks with the Anthropic subscription “Shared Claude”, which is at its usage limit\./,
+        );
+        expect(startTask).not.toHaveBeenCalled();
+
+        await expect(tasksService.open({ ...REVIEW, bot: LEAD.name })).resolves.toMatchObject({ taskId: 'task-2' });
+      });
+
+      it('is refused under scripted engines too: the limit is the engine’s, not GitHub’s', async () => {
+        vi.stubEnv('OPENADLC_SCRIPTED_ENGINES', '1');
+        const { tasksService } = readyService();
+        await expect(tasksService.open({ ...REVIEW, bot: SECURITY.name })).rejects.toThrow(/which is at its usage limit/);
+      });
+
+      it('is recorded to run later in words the recovery reads the account’s row from', async () => {
+        vi.mocked(tasks.updateTaskState).mockClear();
+        const { tasksService } = readyService();
+
+        const held = await tasksService.open({ ...REVIEW, bot: SECURITY.name, whenBlocked: 'record' });
+
+        expect(held).toMatchObject({ session: null });
+        const reason = (held as { error: string }).error;
+        expect(tasks.updateTaskState).toHaveBeenCalledWith('task-2', 'failed', { exitReason: reason });
+        expect(causeOfFailure(reason, { botId: 'bot-security', repoName: 'openadlc', modelAccountId: 'acct-1' })).toBe('model-limit:acct-1');
+      });
+    });
+
     it('starts as soon as the sign-in passes', async () => {
       store.health = [{ ...signedOut('bot-security'), state: 'passing' }];
       const { tasksService, startTask } = readyService();

@@ -378,7 +378,11 @@ export function pinnedTask(
         ? 'Could not finish'
         : task.state === 'stopped'
           ? 'Stopped work on'
-          : // Done, but its pull request was never opened: not finished.
+          : // Its model account at its usage limit: the bridge starts it
+            // again once the account works, so not a failure (ADR 0096).
+            task.state === 'held'
+            ? 'Held on its model account’s usage limit on'
+            : // Done, but its pull request was never opened: not finished.
             task.endedWithoutPullRequest
             ? 'No pull request for'
             : (DID[task.kind] ?? 'Finished');

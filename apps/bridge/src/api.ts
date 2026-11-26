@@ -71,6 +71,7 @@ import {
   type Lease,
   type Task,
   type TaskState,
+  TASK_ENDINGS,
 } from '@openadlc/shared';
 import type { Actors } from './actors.js';
 import { personMayMergeOver, type Automation } from './automation.js';
@@ -605,8 +606,13 @@ export async function dismissTask(
 /** A request with no intake seat to triage it: the crew's to change, not the bridge failing. */
 const NO_INTAKE = 'no intake bot is configured; add an intake seat to config/bots.yaml and run openadlc up';
 
-/** The states a task can be stopped from: the ones whose card offers "Try again", and a pause, on a question or not. */
-const STOPPABLE: readonly string[] = ['failed', 'stopped', 'paused'];
+/**
+ * The states a task can be stopped from: the ones whose card offers "Try
+ * again", a pause, on a question or not, and a task held on its model
+ * account's usage limit, whose Stop drops it so the recovery does not start
+ * it again once the account works.
+ */
+const STOPPABLE: readonly string[] = ['failed', 'stopped', 'paused', 'held'];
 const HELD_LEASE: readonly string[] = ['leased', 'in_task', 'paused'];
 const UNFINISHED: readonly TaskState[] = ['queued', 'running', 'paused'];
 
@@ -1248,6 +1254,7 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
     // An account signed in again, verified or given a new key is its check
     // passing: asked now, so its card goes now.
     changed: () => deps.health?.runSoon(['model-account']),
+    verified: () => deps.health?.runSoon(['model-limit']),
   });
   registerAssignmentRoutes(router, defaultAssignmentDeps(deps.config?.configRoot));
   registerEngineUpdateRoutes(router, engineUpdatesFor(hostd));
@@ -1709,7 +1716,7 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
           const [botSessions, running, ended, credential, unfinished, finished] = await Promise.all([
             sessions.listSessions(bot.id),
             tasks.listTasks({ botId: bot.id, states: ['running', 'paused', 'queued'], limit: 1 }),
-            tasks.listTasks({ botId: bot.id, states: ['done', 'failed', 'stopped'], limit: 1 }),
+            tasks.listTasks({ botId: bot.id, states: [...TASK_ENDINGS], limit: 1 }),
             credentials.getCredential(bot.id),
             tasks.listTasks({ botId: bot.id, states: ['running', 'paused', 'queued'], limit: 50 }),
             tasks.listTasks({ botId: bot.id, states: ['done', 'failed', 'stopped'], limit: 3 }),
