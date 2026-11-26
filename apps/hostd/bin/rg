@@ -7,7 +7,7 @@
 # Codex applies no shell lists. So this refuses `--pre`, `--pre-glob` and
 # `--hostname-bin`, anywhere before `--`, and drops RIPGREP_CONFIG_PATH, a
 # config file that could supply `--pre` for it
-# (docs/adr/0097-a-skill-that-writes-only-scratch-and-adrs-is-read-only-to-openadlcs-git-and-rg.md).
+# (docs/adr/0099-a-skill-that-writes-only-scratch-and-adrs-is-read-only-to-openadlcs-git-and-rg.md).
 #
 # Plain sh rather than a Node check, as git has: rg is the most-run reader, and
 # a Node start on every search costs more than a case match. Names are matched

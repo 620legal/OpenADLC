@@ -71,7 +71,7 @@ export const TOOLS_POLICY_ENV = 'OPENADLC_TOOLS_POLICY';
  * holds only what the session posts with `--body-file` or its own notes, and
  * `docs/adr/**` is Markdown that reaches the repository only in a pull request
  * the merge line holds like any other — not a hook, configuration, or code the
- * host runs (docs/adr/0097-a-skill-that-writes-only-scratch-and-adrs-is-read-only-to-openadlcs-git-and-rg.md).
+ * host runs (docs/adr/0099-a-skill-that-writes-only-scratch-and-adrs-is-read-only-to-openadlcs-git-and-rg.md).
  */
 export const READ_ONLY_WRITE_SCOPES = ['.openadlc-scratch/**', 'docs/adr/**'] as const;
 

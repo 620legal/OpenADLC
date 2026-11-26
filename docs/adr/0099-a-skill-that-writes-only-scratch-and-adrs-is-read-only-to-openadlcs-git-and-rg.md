@@ -1,4 +1,4 @@
-# 0097. A skill that writes only scratch and ADRs is read-only to OpenADLC's git and rg
+# 0099. A skill that writes only scratch and ADRs is read-only to OpenADLC's git and rg
 
 - **Status:** accepted
 - **Date:** 2026-11-26

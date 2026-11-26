@@ -5,7 +5,7 @@
 
 ## Context
 
-ADR 0087 has hostd build a map of each managed repository's default branch
+ADR 0100 has hostd build a map of each managed repository's default branch
 under its work root. Until it is read it saves nothing: every design and build
 session still starts by exploring the repository the way the last one did.
 #380 asks for the map on a console page and for spec and implement sessions to

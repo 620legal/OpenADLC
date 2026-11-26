@@ -14,7 +14,7 @@ export interface ProjectMapReader {
 
 /**
  * Whether each managed repository's project map was rebuilt the last time
- * hostd tried (docs/adr/0087). A failed build keeps the previous map, so the
+ * hostd tried (docs/adr/0100). A failed build keeps the previous map, so the
  * card says which commit the kept one is from, or that there is none yet.
  * Nothing here is a person's step: the card clears itself on the next good
  * build.

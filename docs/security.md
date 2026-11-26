@@ -700,7 +700,7 @@ none of it.
   scope rather than set in `tools.yaml`, so a new skill is held from the start.
   A policy without the field reads as `false`, because `apps/hostd/bin` is
   mounted live into containers already running
-  (docs/adr/0097-a-skill-that-writes-only-scratch-and-adrs-is-read-only-to-openadlcs-git-and-rg.md).
+  (docs/adr/0099-a-skill-that-writes-only-scratch-and-adrs-is-read-only-to-openadlcs-git-and-rg.md).
   For such a skill, before anything runs the real git:
   - `git` refuses every `-c` and `--config-env`, not a list of keys.
   - It refuses `--git-dir`, `--work-tree` and `--exec-path=`.

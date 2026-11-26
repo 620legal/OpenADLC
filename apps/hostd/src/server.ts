@@ -731,7 +731,7 @@ export function createHostdServer(input: {
     // Each managed repository's project map, built from the default branch in
     // its mirror and kept under the work root, for the bridge only: it asks
     // for a refresh on its schedule and after a merge, and reads the list for
-    // its health card (docs/adr/0087), and reads one map whole (docs/adr/0088).
+    // its health card (docs/adr/0100), and reads one map whole (docs/adr/0088).
     if (path === '/project-maps' || path.startsWith('/project-maps/')) {
       if (!input.projectMaps) return send(response, 501, { error: 'this hostd keeps no project maps: start it with its ProjectMaps wired in (apps/hostd/src/main.ts)' });
       if (method === 'GET' && path === '/project-maps') return send(response, 200, { maps: input.projectMaps.list() });

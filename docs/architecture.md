@@ -363,7 +363,7 @@ Every managed repository has a project map: one Markdown file that summarises
 its default branch. hostd keeps it at `<work root>/maps/<owner>__<name>.md`
 (folder 0700, file 0600). It is never committed, and it is never written into
 the repository or a task's clone
-([ADR 0087](adr/0087-a-project-map-is-generated-by-hostd-from-its-mirror-and-kept-under-the-work-root.md)).
+([ADR 0100](adr/0100-a-project-map-is-generated-by-hostd-from-its-mirror-and-kept-under-the-work-root.md)).
 
 **What it holds.** A header with the commit it was built from and when it was
 built. Then:

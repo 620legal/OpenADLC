@@ -303,7 +303,7 @@ async function main(): Promise<void> {
   // Each managed repository's project map, read from the tasks' own mirror
   // (one lock per mirror is module-wide, so a task's fetch and the map's never
   // overlap) and written under the work root, never into the repository
-  // (docs/adr/0087).
+  // (docs/adr/0100).
   const projectMaps = new ProjectMaps({
     workRoot: config.workRoot,
     worktrees: new Worktrees(config.workRoot),

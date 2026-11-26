@@ -613,7 +613,7 @@ async function main(): Promise<void> {
     },
   });
   scheduler.useRoutines(routineService);
-  // Each managed repository's project map on hostd (docs/adr/0087): the
+  // Each managed repository's project map on hostd (docs/adr/0100): the
   // `maps` job is its clock, a merge nudges it, and one pass a day is forced.
   scheduler.useProjectMaps(
     new ProjectMapRefresher({
