@@ -341,6 +341,10 @@ export function RepoSettings({
             <ExternalIcon size={11} />
           </a>
         )}
+        {/* What its ci and host check run, their last results and the flaky jobs (#372). */}
+        <a data-checks-link href={`/checks/${encodeURIComponent(repo.name)}`} className="text-[12.5px] text-link hover:underline">
+          Checks
+        </a>
         <SaveLine saving={saving} />
       </div>
 
