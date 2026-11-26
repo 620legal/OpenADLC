@@ -51,6 +51,9 @@ keep-list before every fetch. It does not remove a list of known-bad paths.
    `--no-write-fetch-head`. With these, the run leaves nothing in `.git`
    beyond the keep-list and what `init` writes.
 
+   Amended by [ADR 0097](0097-a-host-checks-git-starts-no-background-maintenance.md):
+   every git call also turns off automatic maintenance and gc.
+
 The fetch and checkout then read only that fresh config, their own `-c` flags,
 and the head's tracked `.gitattributes`. That file can name a filter but cannot
 define one, because only config can. The working tree, untracked and ignored

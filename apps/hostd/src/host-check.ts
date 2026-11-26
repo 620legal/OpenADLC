@@ -589,6 +589,18 @@ const MODULES_FUNCTIONS = [
  * every gitfile dangling, so a second build failed (`MODULES_FUNCTIONS`,
  * docs/adr/0079-a-submodules-git-dir-is-kept-and-cleaned-like-the-top-level-git.md).
  *
+ * `g` also starts no work in the background. The kept objects gain a pack
+ * every run, so after about 50 runs they passed `gc.autoPackLimit`, and every
+ * fetch then started `git maintenance run --auto` (`gc --auto` before it),
+ * detached: it outlived the run as the account and was still writing
+ * `objects/` as the next run cleaned `.git`, and a test's cleanup of a
+ * fixture's `.git` failed with ENOTEMPTY (#406's ci). `maintenance.auto=false`
+ * and `gc.auto=0` stop it starting, `gc.autoDetach=false` and
+ * `maintenance.autoDetach=false` (git 2.47+; older git ignores the key) keep
+ * any that still starts in the foreground, and `fetch.writeCommitGraph=false`
+ * pins git's default against a later one
+ * (docs/adr/0097-a-host-checks-git-starts-no-background-maintenance.md).
+ *
  * `namespace` is the refs the bundle carries, `refs/openadlc/<namespace>/*`:
  * a host check's, or a release's (`release-run.ts`), which runs the same
  * script as its own account.
@@ -597,7 +609,7 @@ export function receiveScript(namespace: 'host-check' | 'release'): string {
   return [
   'set -e',
   'export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1',
-  'g() { git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c core.attributesFile=/dev/null -c core.logAllRefUpdates=false "$@"; }',
+  'g() { git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c core.attributesFile=/dev/null -c core.logAllRefUpdates=false -c maintenance.auto=false -c maintenance.autoDetach=false -c gc.auto=0 -c gc.autoDetach=false -c fetch.writeCommitGraph=false "$@"; }',
   ...MODULES_FUNCTIONS,
   'dir="$1"; head="$2"',
   'mkdir -p "$dir"',
