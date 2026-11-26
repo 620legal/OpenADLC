@@ -38,3 +38,4 @@ export * from './task-postgres-compose.js';
 export * from './login-item.js';
 export * from './release-manifest.js';
 export * from './release-version.js';
+export * from './ci-workflow.js';

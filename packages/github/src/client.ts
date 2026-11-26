@@ -1591,6 +1591,73 @@ export class GitHubClient {
     return pulls.map((pull) => ({ number: pull.number, headRef: pull.head.ref, headRepoFullName: pull.head.repo?.full_name ?? null }));
   }
 
+  /**
+   * One Actions job's log, as plain text, or why it could not be read.
+   *
+   * GitHub answers the logs URL with a redirect to a short-lived blob URL on
+   * another host. `request()` cannot read it: it parses JSON, and fetch
+   * following the redirect itself would carry the token to that host. So the
+   * redirect is taken by hand and the blob fetched with no authorization.
+   * Only GETs. A log past `JOB_LOG_MAX_BYTES` is not read whole: the Checks
+   * page wants its first error, and holding a runaway log in the bridge's
+   * memory would cost more than the excerpt is worth.
+   */
+  async jobLog(repo: string, jobId: number, options: { timeoutMs?: number } = {}): Promise<JobLog> {
+    const path = `/repos/${repo}/actions/jobs/${jobId}/logs`;
+    let location: string | null;
+    try {
+      const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
+        method: 'GET',
+        redirect: 'manual',
+        signal: AbortSignal.timeout(options.timeoutMs ?? REQUEST_TIMEOUT_MS),
+        headers: {
+          accept: 'application/vnd.github+json',
+          authorization: `Bearer ${this.options.token}`,
+          'x-github-api-version': '2022-11-28',
+          'user-agent': `openadlc (acting as ${this.options.actingAs})`,
+        },
+      });
+      if (response.status === 404 || response.status === 410) return { missing: 'expired' };
+      if (response.status < 300 || response.status >= 400) return { missing: 'unreachable' };
+      location = response.headers.get('location');
+      await response.body?.cancel().catch(() => undefined);
+    } catch {
+      return { missing: 'unreachable' };
+    }
+    if (!location || !/^https:\/\//.test(location)) return { missing: 'unreachable' };
+    try {
+      const blob = await this.fetchImpl(location, {
+        method: 'GET',
+        signal: AbortSignal.timeout(options.timeoutMs ?? REQUEST_TIMEOUT_MS),
+        headers: { 'user-agent': `openadlc (acting as ${this.options.actingAs})` },
+      });
+      if (blob.status === 404 || blob.status === 410) return { missing: 'expired' };
+      if (!blob.ok) return { missing: 'unreachable' };
+      const declared = Number(blob.headers.get('content-length') ?? '');
+      if (Number.isFinite(declared) && declared > JOB_LOG_MAX_BYTES) {
+        await blob.body?.cancel().catch(() => undefined);
+        return { missing: 'too_large' };
+      }
+      if (!blob.body) return { text: await blob.text() };
+      const reader = blob.body.getReader();
+      const chunks: Uint8Array[] = [];
+      let bytes = 0;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        bytes += value.byteLength;
+        if (bytes > JOB_LOG_MAX_BYTES) {
+          await reader.cancel().catch(() => undefined);
+          return { missing: 'too_large' };
+        }
+        chunks.push(value);
+      }
+      return { text: Buffer.concat(chunks).toString('utf8') };
+    } catch {
+      return { missing: 'unreachable' };
+    }
+  }
+
   /** Uploaded once per bot after device auth, so signed commits verify on GitHub. */
   async uploadSshSigningKey(title: string, publicKey: string): Promise<number> {
     const created = await this.request<{ id: number }>('POST', '/user/ssh_signing_keys', {
@@ -1658,6 +1725,16 @@ export class GitHubClient {
     return JSON.parse(text) as ReleaseAsset;
   }
 }
+
+/** The most of a job's log `jobLog` reads: 8 MiB. */
+export const JOB_LOG_MAX_BYTES = 8 * 1024 * 1024;
+
+/**
+ * A job's log, or why there is none: `expired` when GitHub no longer has it
+ * (it keeps logs for a set number of days), `too_large` past
+ * `JOB_LOG_MAX_BYTES`, `unreachable` for anything else.
+ */
+export type JobLog = { text: string } | { missing: 'expired' | 'too_large' | 'unreachable' };
 
 /** A release asset as GitHub answers it. */
 export interface ReleaseAsset {

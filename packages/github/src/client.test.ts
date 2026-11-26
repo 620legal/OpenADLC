@@ -1476,3 +1476,48 @@ describe('a list read by its next links', () => {
     expect(nextLinkPath(null)).toBeNull();
   });
 });
+
+describe("a job's log", () => {
+  /** GitHub's logs URL redirecting to a blob host, which records whether a token reached it. */
+  function logsAt(blob: () => Response, first: () => Response = () => new Response(null, { status: 302, headers: { location: 'https://blob.example/log?sig=x' } })) {
+    const seen: { url: string; method: string; authorization: string | null; redirect: string | undefined }[] = [];
+    const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
+      const headers = new Headers(init?.headers);
+      seen.push({ url: String(url), method: init?.method ?? 'GET', authorization: headers.get('authorization'), redirect: init?.redirect });
+      return String(url).startsWith('https://blob.example') ? blob() : first();
+    }) as typeof fetch;
+    return { client: new GitHubClient({ token: 'secret-token', actingAs: 'openadlc-flow', fetchImpl }), seen };
+  }
+
+  it('follows the redirect by hand, without the token, and reads the text', async () => {
+    const { client, seen } = logsAt(() => new Response('2026-01-01T00:00:00.0000000Z hello\n', { status: 200 }));
+    expect(await client.jobLog('acme/api', 7)).toEqual({ text: '2026-01-01T00:00:00.0000000Z hello\n' });
+    expect(seen).toHaveLength(2);
+    expect(seen[0]).toMatchObject({ url: 'https://api.github.com/repos/acme/api/actions/jobs/7/logs', redirect: 'manual', authorization: 'Bearer secret-token' });
+    expect(seen[1]).toMatchObject({ url: 'https://blob.example/log?sig=x', authorization: null });
+    expect(seen.every((one) => one.method === 'GET')).toBe(true);
+  });
+
+  it('maps 404 and 410 to expired, and a refusal to unreachable', async () => {
+    expect(await logsAt(() => new Response('x'), () => new Response('gone', { status: 410 })).client.jobLog('acme/api', 7)).toEqual({ missing: 'expired' });
+    expect(await logsAt(() => new Response('x'), () => new Response('no', { status: 404 })).client.jobLog('acme/api', 7)).toEqual({ missing: 'expired' });
+    expect(await logsAt(() => new Response('x', { status: 410 })).client.jobLog('acme/api', 7)).toEqual({ missing: 'expired' });
+    expect(await logsAt(() => new Response('x'), () => new Response('no', { status: 403 })).client.jobLog('acme/api', 7)).toEqual({ missing: 'unreachable' });
+  });
+
+  it('stops at the size cap', async () => {
+    const big = new Uint8Array(1024 * 1024).fill(97);
+    const stream = () =>
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            for (let i = 0; i < 9; i += 1) controller.enqueue(big);
+            controller.close();
+          },
+        }),
+        { status: 200 },
+      );
+    expect(await logsAt(stream).client.jobLog('acme/api', 7)).toEqual({ missing: 'too_large' });
+    expect(await logsAt(() => new Response('x', { status: 200, headers: { 'content-length': String(9 * 1024 * 1024) } })).client.jobLog('acme/api', 7)).toEqual({ missing: 'too_large' });
+  });
+});
