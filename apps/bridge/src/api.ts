@@ -1,5 +1,6 @@
 import { signInKind } from './sign-in.js';
 import { aggregateInsights, withoutIgnored } from './insights.js';
+import { SecurityAlertsReader, securityReadsAsApp } from './security-alerts.js';
 import { insights } from '@openadlc/db';
 import { heldForPerson } from './merge-line.js';
 import { monthStart, parseCap, summarize as summarizeCi } from './ci-usage.js';
@@ -137,6 +138,7 @@ import type { WaitChain } from './wait-chain.js';
 import type { WaitingReads } from './waiting.js';
 import { describeSubject } from './thread-view.js';
 import { registerBoardEventRoutes } from './board-events.js';
+import { registerBoardPanelRoute } from './board-panel.js';
 import { answerFromConsole, sendThreadMessage } from './thread-messages.js';
 import { setApproversFromLogins } from './people-routes.js';
 import { checkConsoleLogo, checkConsoleName, decodeLogo, LOGO_POLICY, logoMediaType } from './brand.js';
@@ -1634,6 +1636,10 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
   // `openadlc watch` and `openadlc ls` read (`board-events.ts`).
   registerBoardEventRoutes(router);
 
+  // The console's side panel: tasks running or paused, each with its state
+  // and spend, and the ones that ended in the last day (`board-panel.ts`).
+  registerBoardPanelRoute(router);
+
   router.get('/v1/bots', async ({ role }) => {
     const [crew, issueList, openGates, repoList, checks, seatPauses, requestList] = await Promise.all([
       bots.listBots(),
@@ -2186,6 +2192,22 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
     const [data, issueList] = await Promise.all([insights.readInsightData(since), issues.listIssues()]);
     return aggregateInsights(withoutIgnored(data, issueList), { days, repo: query.get('repo') || null });
   });
+
+  // Each managed repository's open security alerts, read from GitHub as the
+  // app when the page opens, only with GETs (docs/adr/0086). A user's answer
+  // never reads secret scanning; it is an admin's (#377).
+  const securityAlerts = new SecurityAlertsReader(
+    securityReadsAsApp({
+      api: APP_API,
+      credentials: async () => {
+        const clientId = (await effectiveConfig(config)).gitHubClientId;
+        const privateKey = await getSecretStore().get(appPrivateKeyRef());
+        return clientId && privateKey ? { clientId, privateKey } : null;
+      },
+      repositories: async () => (await repos.listRepos()).map((repo) => ({ name: repo.name, fullName: repo.fullName })),
+    }),
+  );
+  router.get('/v1/security/alerts', async ({ query, role }) => securityAlerts.view({ role, repo: query.get('repo') || null }));
 
   router.get('/v1/costs', async ({ query }) => {
     const period = query.get('period') ?? costs.currentPeriod();

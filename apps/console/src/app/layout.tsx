@@ -4,6 +4,7 @@ import { BrandProvider, RoleProvider } from '../components/app-header';
 import { ConsoleUpdatedNotice } from '../components/console-updated';
 import { EarlyClicks } from '../components/early-clicks';
 import { NoAdmin, NotAUser } from '../components/not-a-user';
+import { SidePanel } from '../components/side-panel';
 import { ViewerProvider } from '../components/viewer';
 import { readBrand, readMe } from '../lib/api';
 import { EARLY_CLICKS_SCRIPT } from '../lib/early-clicks';
@@ -76,7 +77,19 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
           <RoleProvider role={me?.role ?? 'admin'}>
             {/* Who is looking, only to key their own browser state; never what they may do (ADR 0082). */}
             <ViewerProvider identity={me?.known && me.email ? me.email : null}>
-              <BrandProvider brand={brand}>{children}</BrandProvider>
+              <BrandProvider brand={brand}>
+                {/*
+                  The crew panel beside every page, outside the page's column so
+                  a full-height page keeps its height, and here so it keeps its
+                  tab and what it read across navigations (ADR 0085). Hidden
+                  below md; only for someone the install knows, whom the bridge
+                  answers.
+                */}
+                <div className="md:flex">
+                  <div className="min-w-0 flex-1">{children}</div>
+                  <SidePanel />
+                </div>
+              </BrandProvider>
             </ViewerProvider>
           </RoleProvider>
         )}

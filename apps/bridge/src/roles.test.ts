@@ -103,6 +103,10 @@ describe('every console route says who may call it', () => {
     expect(roleFor('PATCH', '/v1/repos/:name')).toBe('admin');
   });
 
+  it('lets a user read the Security page, whose route keeps secret scanning an admin’s (#377)', () => {
+    expect(roleFor('GET', '/v1/security/alerts')).toBe('user');
+  });
+
   it('needs an admin for a route nobody classified', () => {
     expect(roleFor('POST', '/v1/something/new')).toBe('admin');
   });
@@ -167,6 +171,13 @@ describe('every console route says who may call it', () => {
 
   it('lets a user read the board’s events and live tasks, as `openadlc watch` and `ls` do, from the console API', () => {
     for (const key of ['GET /v1/board/events', 'GET /v1/board/tasks']) {
+      expect(ROUTE_ROLES[key], key).toBe('user');
+      expect(everyRoute(), key).toContain(key);
+    }
+  });
+
+  it('lets a user read the side panel’s running and recent tasks, which every console page draws (#376)', () => {
+    for (const key of ['GET /v1/board/panel']) {
       expect(ROUTE_ROLES[key], key).toBe('user');
       expect(everyRoute(), key).toContain(key);
     }

@@ -89,7 +89,7 @@ function logins() {
 
 async function start(
   service: ReturnType<typeof logins> | undefined,
-  parts: { runner?: object; driver?: object; taskDatabases?: object; hostChecks?: object; releaseAccount?: object | null; releaseRuns?: object | null } = {},
+  parts: { runner?: object; driver?: object; taskDatabases?: object; hostChecks?: object; releaseAccount?: object | null; releaseRuns?: object | null; projectMaps?: object } = {},
 ) {
   const { createHostdServer } = await import('./server.js');
   const { RegistryCredentials } = await import('./registry.js');
@@ -108,6 +108,7 @@ async function start(
     ...(parts.hostChecks ? { hostChecks: parts.hostChecks as never } : {}),
     ...(parts.releaseAccount !== undefined ? { releaseAccount: parts.releaseAccount as never } : {}),
     ...(parts.releaseRuns !== undefined ? { releaseRuns: parts.releaseRuns as never } : {}),
+    ...(parts.projectMaps ? { projectMaps: parts.projectMaps as never } : {}),
   });
 
   await new Promise<void>((resolve) => http.listen(0, '127.0.0.1', resolve));
@@ -616,6 +617,68 @@ describe('a host check, through hostd', () => {
   it('says this hostd runs none when it has no host checks', async () => {
     server = await start(undefined);
     expect((await server.call('GET', '/host-check/account')).status).toBe(501);
+  });
+});
+
+describe('project maps, through hostd', () => {
+  const VIEW = {
+    repo: 'acme/demo',
+    path: '/work/maps/acme__demo.md',
+    commit: 'a'.repeat(40),
+    builtAt: '2026-11-25T10:00:00.000Z',
+    state: 'written',
+    error: null,
+    triedAt: '2026-11-25T10:00:00.000Z',
+  };
+
+  function projectMaps() {
+    return {
+      refresh: vi.fn(async () => VIEW),
+      list: vi.fn(() => [VIEW]),
+      remove: vi.fn(async () => true),
+    };
+  }
+
+  it('is refused without the install secret', async () => {
+    const maps = projectMaps();
+    server = await start(undefined, { projectMaps: maps });
+    expect((await server.call('POST', '/project-maps/acme/demo', {}, { defaultBranch: 'main', bot: 'builder' })).status).toBe(401);
+    expect((await server.call('GET', '/project-maps', {})).status).toBe(401);
+    expect((await server.call('DELETE', '/project-maps/acme/demo', {})).status).toBe(401);
+    expect(maps.refresh).not.toHaveBeenCalled();
+    expect(maps.remove).not.toHaveBeenCalled();
+  });
+
+  it('refreshes, lists and removes, passing the view through', async () => {
+    const maps = projectMaps();
+    server = await start(undefined, { projectMaps: maps });
+    const refreshed = await server.call('POST', '/project-maps/acme/demo', PLATFORM, { defaultBranch: 'main', bot: 'builder', force: true });
+    expect(refreshed).toEqual({ status: 200, body: { map: VIEW } });
+    expect(maps.refresh).toHaveBeenCalledWith({ repo: 'acme/demo', defaultBranch: 'main', bot: 'builder', force: true });
+    expect((await server.call('GET', '/project-maps')).body).toEqual({ maps: [VIEW] });
+    expect((await server.call('DELETE', '/project-maps/acme/demo')).body).toEqual({ deleted: true });
+    expect(maps.remove).toHaveBeenCalledWith('acme/demo');
+  });
+
+  it('refuses a name that is not owner/name, and a body with no default branch', async () => {
+    const maps = projectMaps();
+    server = await start(undefined, { projectMaps: maps });
+    const body = { defaultBranch: 'main', bot: 'builder' };
+    expect((await server.call('POST', '/project-maps/acme/..', PLATFORM, body)).status).toBe(400);
+    expect((await server.call('POST', `/project-maps/acme/${encodeURIComponent('..')}`, PLATFORM, body)).status).toBe(400);
+    expect((await server.call('POST', '/project-maps/a/b/c', PLATFORM, body)).status).toBe(400);
+    expect((await server.call('POST', `/project-maps/${encodeURIComponent('a/b')}/c`, PLATFORM, body)).status).toBe(400);
+    expect((await server.call('POST', '/project-maps/acme/demo', PLATFORM, { bot: 'builder' })).status).toBe(400);
+    expect((await server.call('DELETE', '/project-maps/a/b/c')).status).toBe(400);
+    expect(maps.refresh).not.toHaveBeenCalled();
+    expect(maps.remove).not.toHaveBeenCalled();
+  });
+
+  it('says what to set when this hostd keeps no maps', async () => {
+    server = await start(undefined);
+    const answered = await server.call('GET', '/project-maps');
+    expect(answered.status).toBe(501);
+    expect(String(answered.body.error)).toContain('ProjectMaps');
   });
 });
 

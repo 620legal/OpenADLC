@@ -307,6 +307,40 @@ export interface RunningTask {
   since: string | null;
 }
 
+/** A task as the side panel names it: `RunningTask` with no since (the bridge's `NamedTask`). */
+export type PanelTask = Omit<RunningTask, 'since'>;
+
+/** A task running or paused, in the side panel's Running tab (`GET /v1/board/panel`, ADR 0085). */
+export interface PanelRunning extends PanelTask {
+  /** `working` is running; `waiting` is paused on a person's gate; `paused` is any other pause. */
+  state: 'working' | 'waiting' | 'paused';
+  /** When it came into that state: what "12 min" is counted from. */
+  since: string | null;
+  costUsd: number;
+  /** False on a subscription seat: the spend is an estimate (ADR 0050). */
+  billed: boolean;
+}
+
+/** A task that ended in the last 24 hours, in the side panel's Recent tab. */
+export interface PanelRecent extends PanelTask {
+  outcome: 'done' | 'failed' | 'stopped';
+  endedAt: string;
+  costUsd: number;
+  billed: boolean;
+}
+
+/** What `GET /v1/board/panel` answers. */
+export interface BoardPanel {
+  running: PanelRunning[];
+  recent: PanelRecent[];
+}
+
+/** What the console's `/api/panel` answers: each part null when its read failed or an older bridge has none. */
+export interface PanelRead {
+  tasks: BoardPanel | null;
+  attention: AttentionItem[] | null;
+}
+
 export interface Board {
   repo: string;
   repos: string[];
@@ -1451,6 +1485,38 @@ export interface SpendingUpdate {
   notice: string | null;
 }
 
+/** A type of security alert the Security page lists (#377, docs/adr/0086). */
+export type AlertType = 'dependabot' | 'code-scanning' | 'secret-scanning';
+export type AlertSeverity = 'critical' | 'high' | 'medium' | 'low' | 'none';
+
+/** One open alert, as the bridge's `security-alerts.ts` answers it: never a secret's value. */
+export interface SecurityAlert {
+  type: AlertType;
+  repo: string;
+  number: number;
+  title: string;
+  severity: AlertSeverity;
+  url: string;
+  createdAt: string;
+  where?: string;
+  note?: string;
+}
+
+/** What reading one type of alert on one repository came to. */
+export type AlertTypeState =
+  | { state: 'read'; alerts: SecurityAlert[]; truncated: boolean }
+  | { state: 'off' }
+  | { state: 'unreadable'; permission: string }
+  | { state: 'failed'; reason: string }
+  | { state: 'admins-only' }
+  | { state: 'not-installed' };
+
+/** `GET /v1/security/alerts`: each managed repository's open alerts, by type. */
+export interface SecurityAlertsView {
+  readAt: string;
+  repos: { repo: string; fullName: string; types: Record<AlertType, AlertTypeState> }[];
+}
+
 /** One window's numbers, overall or for a repository; `GET /v1/insights` (the bridge's `insights.ts`). */
 export interface InsightSummary {
   merged: number;
@@ -1788,6 +1854,8 @@ export const api = {
   costs: () => get<CostsView>('/v1/costs'),
   insights: (options: { repo?: string | null; days: 7 | 30 }) =>
     get<InsightsView>(`/v1/insights?days=${options.days}${options.repo ? `&repo=${encodeURIComponent(options.repo)}` : ''}`),
+  securityAlerts: (options: { repo?: string | null } = {}) =>
+    get<SecurityAlertsView>(`/v1/security/alerts${options.repo ? `?repo=${encodeURIComponent(options.repo)}` : ''}`),
   spendingLimits: () => get<SpendingLimitsView>('/v1/spending/limits'),
   notifications: () => get<NotificationSettingsView>('/v1/settings/notifications'),
   pushDevices: () => get<PushDevicesView>('/v1/me/push'),

@@ -44,7 +44,7 @@ export interface NeedsItem {
   item: string | null;
 }
 
-export type Page = 'board' | 'crew' | 'costs' | 'insights' | 'releases' | 'settings' | 'needs-you';
+export type Page = 'board' | 'crew' | 'costs' | 'insights' | 'security' | 'releases' | 'settings' | 'needs-you';
 
 export function headerData(input: {
   repos: readonly string[];
@@ -111,6 +111,8 @@ export const PAGES: readonly NavPage[] = [
   { page: 'crew', label: 'Crew', href: () => '/crew' },
   { page: 'costs', label: 'Costs', href: () => '/costs' },
   { page: 'insights', label: 'Insights', href: () => '/insights' },
+  // Each repository's open security alerts (#377); secret scanning is shown to admins alone.
+  { page: 'security', label: 'Security', href: () => '/security' },
   // The releasing repositories, and cutting one (#345); anyone may watch a release.
   { page: 'releases', label: 'Releases', href: () => '/releases' },
   { page: 'settings', label: 'Settings', href: () => '/settings' },

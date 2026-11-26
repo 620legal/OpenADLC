@@ -749,6 +749,27 @@ organization owns), then:
    accept the new permission, on the installation's page; the same check links
    there until it is accepted.
 
+### An app created before the Security page
+
+The console's Security page lists each repository's open Dependabot,
+code-scanning and secret-scanning alerts, read as the app. A new app is created
+with the three read permissions it needs; an app created before it has none of
+them, and the page shows each type as "not readable". Nothing else stops: they
+are optional, so the `app-permissions` check does not ask for them, and the
+`security-alerts` check raises a warning card per type instead, on the board and
+in `openadlc doctor`. On the app's **Permissions & events** page, under
+**Repository permissions**:
+
+1. **Dependabot alerts:** Read-only.
+2. **Code scanning alerts:** Read-only.
+3. **Secret scanning alerts:** Read-only.
+4. **Save changes**, then accept them on each installation's page. Until an
+   installation accepts them, GitHub keeps refusing the reads there and the
+   card stays; it clears by itself on the first read that succeeds.
+
+Only GETs are made with them; OpenADLC never dismisses or changes an alert
+([security](security.md#the-security-page)).
+
 OpenADLC acts as the app for the repository's administration and its merge
 line: inviting a collaborator, writing the repository's rules and environments,
 committing CODEOWNERS and the templates when you press Apply, merging, the
@@ -2775,6 +2796,16 @@ GitHub's webhook deliveries are rows in the `events` table too. The daily
 `OPENADLC_EVENT_RETENTION_DAYS`, 30 by default, keeping the newest; 0 keeps
 them for good. A delivery for a repository the install does not manage keeps
 only its type, delivery id and repository name ([security](security.md)).
+
+Each managed repository's project map is a file under hostd's work root,
+`<work root>/maps/<owner>__<name>.md`, and never in the repository
+([architecture](architecture.md#the-project-map)). The `maps` job
+(`OPENADLC_JOB_MAPS_MINUTES`, every 15 minutes; 0 turns it off) asks hostd
+to look at each default branch's head and rebuild a map whose commit moved.
+The first pass after the bridge starts, and one a day after that, rebuilds
+every map, and the merge job asks for a pass after it merges something. A
+build that fails keeps the previous map and raises a `project-map` card
+saying why. Deleting `maps/` is safe: the next pass makes each map again.
 
 ## Engine updates
 

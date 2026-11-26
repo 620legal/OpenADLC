@@ -224,6 +224,53 @@ export interface RunningTask {
   since: string | null;
 }
 
+/** What names a task's row: its bot, its subject, its repository, its title and what it opens. */
+export type NamedTask = Pick<RunningTask, 'id' | 'bot' | 'kind' | 'skill' | 'round' | 'subject' | 'repo' | 'title' | 'opens'>;
+
+/** What `nameTask` names a task from, as `namingFacts` reads it. */
+export interface NamingContext {
+  bots: readonly { id: string; name: string }[];
+  repos: readonly { id: string; name: string }[];
+  requests: readonly { id: string; repoId: string | null; text: string }[];
+  issues: readonly Pick<IssueFacts, 'repoName' | 'number' | 'prNumber' | 'title'>[];
+}
+
+/**
+ * A task named as the board's running list names it, whatever its state: the
+ * side panel names paused and finished tasks with it too, so a row reads the
+ * same in both places (ADR 0085). A subject nothing read titles is still
+ * named, by its subject.
+ */
+export function nameTask(task: TaskFacts, ctx: NamingContext): NamedTask {
+  const subject = task.subjectRef;
+  let repo: string | null = repoOfSubject(subject);
+  let title: string | null = null;
+  let opens: string | null = null;
+  if (parseRef(subject)) {
+    opens = subject;
+    title = issueForSubject(subject, ctx.issues)?.title ?? null;
+  } else if (subject.startsWith('request:')) {
+    opens = subject;
+    const id8 = subject.slice('request:'.length).toLowerCase();
+    const request = ctx.requests.find((one) => one.id.toLowerCase().startsWith(id8));
+    if (request) {
+      title = requestTitle(request.text);
+      repo = ctx.repos.find((one) => one.id === request.repoId)?.name ?? null;
+    }
+  }
+  return {
+    id: task.id,
+    bot: ctx.bots.find((bot) => bot.id === task.botId)?.name ?? 'a bot',
+    kind: task.kind,
+    skill: task.skill ?? null,
+    round: task.round,
+    subject,
+    repo,
+    title,
+    opens,
+  };
+}
+
 /**
  * One row for every running task given, none left out: a row the list drops
  * is a task the count says and nothing names. A subject nothing read titles
@@ -231,50 +278,51 @@ export interface RunningTask {
  *
  * Oldest first, so the rows stand still between polls.
  */
-export function runningList(
-  running: readonly TaskFacts[],
-  ctx: {
-    bots: readonly { id: string; name: string }[];
-    repos: readonly { id: string; name: string }[];
-    requests: readonly { id: string; repoId: string | null; text: string }[];
-    issues: readonly Pick<IssueFacts, 'repoName' | 'number' | 'prNumber' | 'title'>[];
-    since?: ReadonlyMap<string, string | null>;
-  },
-): RunningTask[] {
+export function runningList(running: readonly TaskFacts[], ctx: NamingContext & { since?: ReadonlyMap<string, string | null> }): RunningTask[] {
   const rows = running
     .filter((task) => task.state === 'running')
-    .map((task): RunningTask => {
-      const subject = task.subjectRef;
-      let repo: string | null = repoOfSubject(subject);
-      let title: string | null = null;
-      let opens: string | null = null;
-      if (parseRef(subject)) {
-        opens = subject;
-        title = issueForSubject(subject, ctx.issues)?.title ?? null;
-      } else if (subject.startsWith('request:')) {
-        opens = subject;
-        const id8 = subject.slice('request:'.length).toLowerCase();
-        const request = ctx.requests.find((one) => one.id.toLowerCase().startsWith(id8));
-        if (request) {
-          title = requestTitle(request.text);
-          repo = ctx.repos.find((one) => one.id === request.repoId)?.name ?? null;
-        }
-      }
-      return {
-        id: task.id,
-        bot: ctx.bots.find((bot) => bot.id === task.botId)?.name ?? 'a bot',
-        kind: task.kind,
-        skill: task.skill ?? null,
-        round: task.round,
-        subject,
-        repo,
-        title,
-        opens,
+    .map(
+      (task): RunningTask => ({
+        ...nameTask(task, ctx),
         since: ctx.since?.has(task.id) ? (ctx.since.get(task.id) ?? null) : task.startedAt,
-      };
-    });
+      }),
+    );
   const at = (row: RunningTask) => (row.since ? Date.parse(row.since) : Number.POSITIVE_INFINITY);
   return rows.sort((a, b) => at(a) - at(b) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+}
+
+/** What `namingFacts` read: the context `nameTask` takes, and the links and issues the activity poll groups its cards by. */
+export interface NamingFacts {
+  bots: Awaited<ReturnType<typeof botStore.listBots>>;
+  repos: Awaited<ReturnType<typeof repoStore.listRepos>>;
+  requests: Awaited<ReturnType<typeof requestStore.listRequests>>;
+  /** Whether the install's history is numbered into work items (`workItems.isNumbered`). */
+  numbered: boolean;
+  /** The work items' links of the tasks' subjects; none on an install not numbered. */
+  links: BoardLink[];
+  /** The issues read for the tasks, through `withItemPulls`: what the board's cards are drawn from. */
+  listed: IssueFacts[];
+  /** `listed`, and the issues `untitledIssues` read for subjects it did not hold: what rows are titled from. */
+  issues: IssueFacts[];
+}
+
+/**
+ * The reads that title a list of tasks' rows, as the board's activity poll
+ * has made them: numbered, the work items each task's subject is on
+ * (`liveItems`), so a pull request's review task is titled through its item;
+ * not numbered, a repository's issues, or every repository's. Then the issue
+ * each `repo#n` subject still untitled names. The side panel names its rows
+ * through this too, so a row reads the same on the board and in the panel.
+ */
+export async function namingFacts(tasks: readonly TaskFacts[], repoName?: string): Promise<NamingFacts> {
+  const numbered = await (async () => workItemStore.isNumbered())().catch(() => false);
+  const [bots, repos, requests] = await Promise.all([botStore.listBots(), repoStore.listRepos(), requestStore.listRequests(200)]);
+  const { links, listed: read } = numbered
+    ? await liveItems(tasks, repos, requests)
+    : { links: [] as BoardLink[], listed: await issueStore.listIssues(repoName) };
+  const listed = withItemPulls(read, links, repos);
+  const titled = await untitledIssues(tasks, listed, repos);
+  return { numbered, bots, repos, requests, links, listed, issues: [...listed, ...titled] };
 }
 
 /**
@@ -854,17 +902,8 @@ export async function readBoardActivity(repoName: string | undefined, now = new 
   // way. Said by their own refs, a second issue's or a linked pull's running
   // task named a card the board does not show, and the console read the
   // whole board again every five seconds.
-  const numbered = await (async () => workItemStore.isNumbered())().catch(() => false);
-  const [crew, repoList, requestList, sessionList] = await Promise.all([
-    botStore.listBots(),
-    repoStore.listRepos(),
-    requestStore.listRequests(200),
-    sessionStore.listSessions(),
-  ]);
-  const { links, listed } = numbered
-    ? await liveItems(runningNow, repoList, requestList)
-    : { links: [] as BoardLink[], listed: await issueStore.listIssues(repoName) };
-  const issueList = withItemPulls(listed, links, repoList);
+  const [naming, sessionList] = await Promise.all([namingFacts(runningNow, repoName), sessionStore.listSessions()]);
+  const { numbered, bots: crew, repos: repoList, requests: requestList, links, listed: issueList } = naming;
   // A request's card is on its repository's board, or on the board of all of them.
   const requests = repoName ? requestList.filter((request) => repoList.find((repo) => repo.id === request.repoId)?.name === repoName) : requestList;
   const shown = onTheBoard(issueList, repoList);
@@ -874,10 +913,10 @@ export async function readBoardActivity(repoName: string | undefined, now = new 
   // Every running task is named, on a card shown or not: the list is
   // install-wide, as the count is. One read of since when for all of them,
   // and the steps only for the cards'.
-  const [titled, timedLive] = await Promise.all([untitledIssues(runningNow, issueList, repoList), readLive(live, sessionList, runningNow)]);
+  const timedLive = await readLive(live, sessionList, runningNow);
   // Titled from the rows the board titles from, `withItemPulls`', so a row
   // keeps its title between a read of the whole board and a poll.
-  const runningTasks = runningList(runningNow, { bots: crew, repos: repoList, requests: requestList, issues: [...issueList, ...titled], since: timedLive.since });
+  const runningTasks = runningList(runningNow, { ...naming, since: timedLive.since });
   if (live.length === 0) return { running, runningTasks, cards: [] };
 
   const liveSubjects = new Set(live.map((task) => task.subjectRef));

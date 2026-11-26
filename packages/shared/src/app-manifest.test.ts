@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { APP_NAME_LIMIT, accessInWords, buildAppManifest, manifestPostUrl, missingPermissions, MANIFEST_PERMISSIONS, PERMISSION_NAMES } from './app-manifest.js';
+import { APP_NAME_LIMIT, accessInWords, buildAppManifest, manifestPostUrl, missingPermissions, MANIFEST_PERMISSIONS, PERMISSION_NAMES, SECURITY_ALERT_PERMISSIONS } from './app-manifest.js';
 import { REQUIRED_APP_PERMISSIONS, WEBHOOK_EVENTS, appPermissionsUrl, installationSettingsUrl } from './onboarding.js';
 import { PROJECT_NAME, PROJECT_URL } from './project.js';
 
@@ -11,6 +11,19 @@ describe('the app OpenADLC asks GitHub to create', () => {
     // reading a table, one for GitHub's API — and their drifting apart would mean
     // the app created here is not the app the page described.
     expect(Object.keys(MANIFEST_PERMISSIONS)).toHaveLength(REQUIRED_APP_PERMISSIONS.length);
+  });
+
+  it('creates a new app able to read alerts, without making them a permission every older app is blocked on', () => {
+    const asked = buildAppManifest(INPUT).default_permissions;
+    expect(asked).toMatchObject({ vulnerability_alerts: 'read', security_events: 'read', secret_scanning_alerts: 'read' });
+    expect(asked).toMatchObject(MANIFEST_PERMISSIONS);
+    for (const name of Object.keys(SECURITY_ALERT_PERMISSIONS)) {
+      expect(MANIFEST_PERMISSIONS[name], name).toBeUndefined();
+      expect(PERMISSION_NAMES[name]?.section, name).toBe('Repository');
+    }
+    expect(PERMISSION_NAMES.vulnerability_alerts?.label).toBe('Dependabot alerts');
+    expect(PERMISSION_NAMES.security_events?.label).toBe('Code scanning alerts');
+    expect(PERMISSION_NAMES.secret_scanning_alerts?.label).toBe('Secret scanning alerts');
   });
 
   it('asks for administration, without which no bot can accept its invitation', () => {
