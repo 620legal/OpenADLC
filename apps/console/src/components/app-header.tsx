@@ -6,6 +6,7 @@ import { CommandPalette } from '@/components/command-palette';
 import { IntakeDialog } from '@/components/intake-dialog';
 import { KeysHelp } from '@/components/keys-help';
 import { ActivityBell } from '@/components/activity-bell';
+import { HandsOffBadge } from '@/components/hands-off-badge';
 import {
   ActivityIcon,
   BoardIcon,
@@ -327,6 +328,8 @@ export function AppHeader({ page, repo = 'all', data }: { page: Page; repo?: str
             {crewLine(data.counts)}
           </span>
           {data.spend && <Spend spend={data.spend} />}
+          {/* A hands-off window answering routine gates, its time left and Turn off (#383). */}
+          <HandsOffBadge initial={data.handsOff} />
           {/* What the crew has done since this browser last looked (#374). */}
           <ActivityBell repos={data.repos} crew={data.crew} />
           {/* Every role's, unlike Settings: how this browser says something waits. */}
@@ -352,6 +355,7 @@ export function AppHeader({ page, repo = 'all', data }: { page: Page; repo?: str
           </Link>
           <RepoSwitcher repos={data.repos} colors={data.repoColors} current={repo} compact />
           <div className="ml-auto flex shrink-0 items-center">
+            <HandsOffBadge initial={data.handsOff} compact />
             <ActivityBell repos={data.repos} crew={data.crew} compact />
             <AlertsMenu compact />
           </div>

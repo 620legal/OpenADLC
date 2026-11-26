@@ -1032,6 +1032,8 @@ export function registerInternalApi(
       consequences?: unknown;
       /** The person role it is for, by name; `Gates.open` resolves it and ignores it on a plan change. */
       role?: unknown;
+      /** The option the bot would take; hands-off mode answers with it when it is one of the options (`Gates.open`). */
+      recommended?: unknown;
     }>();
     // A list with one entry that is not a string is dropped whole: filtering
     // the entry out would pair every later choice with the next one's consequence.
@@ -1049,6 +1051,7 @@ export function registerInternalApi(
       addressedTo: input.addressedTo ?? null,
       planChange: input.planChange ?? null,
       role: typeof input.role === 'string' ? input.role : null,
+      recommended: typeof input.recommended === 'string' ? input.recommended : null,
     });
   });
 

@@ -2,6 +2,7 @@ import type { AttentionItem, CrewMember, Role } from './api';
 import { groupCounts, groupOf, waiting } from './attention-card';
 import type { BotFacts } from './bot-label';
 import { crewCounts, type CrewCounts } from './crew';
+import type { HandsOffView } from './hands-off';
 import { notificationText } from './needs-you-alerts';
 import type { RepoColorMap } from './repo-colors';
 
@@ -33,6 +34,12 @@ export interface HeaderData {
   needsItems: NeedsItem[] | null;
   /** Enough of the crew to name the bot that takes a request. */
   crew: BotFacts[];
+  /**
+   * The open hands-off windows, and whether this person may turn one on
+   * (#383). Null when the read failed, and the header is drawn without the
+   * badge; absent when the page read nothing, and the badge reads it itself.
+   */
+  handsOff?: HandsOffView | null;
 }
 
 /** One piece of work waiting on the person, as an alert names it and opens it. */
@@ -54,6 +61,8 @@ export function headerData(input: {
   needsYou: number | null;
   /** What waits, to say it as work and system; the count alone when absent. */
   attention?: readonly AttentionItem[] | null;
+  /** The hands-off windows, null when they could not be read; absent, the badge reads them. */
+  handsOff?: HandsOffView | null;
 }): HeaderData {
   return {
     repos: [...input.repos],
@@ -81,6 +90,7 @@ export function headerData(input: {
       authorization: bot.authorization,
       githubLogin: bot.githubLogin,
     })),
+    ...(input.handsOff !== undefined ? { handsOff: input.handsOff } : {}),
   };
 }
 

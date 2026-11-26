@@ -125,6 +125,13 @@ next question is written after it, not before.
 - Prefer choices, even just yes or no. Put the likely or recommended answer
   first, and keep each choice to a few words. The person can always answer in
   their own words instead, so the choices need not cover everything.
+- Set `recommended` to the exact text of the option you would take, when you
+  would go on with it unasked (`"recommended":"per call"`, beside `options`). While a person has hands-off mode on
+  for the repository, OpenADLC answers the question with it and says so on
+  the issue; otherwise a person answers as usual. Leave it out on an open
+  question, a question about legal or product wording, one where the change
+  would break an invariant, or replacing a decision that is already recorded.
+  A value that is not exactly one of your `options` is ignored.
 - Ask an open question only when no set of choices could cover the answers,
   and say so in the marker instead of giving choices:
 

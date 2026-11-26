@@ -93,9 +93,11 @@ function warn(what: string): (error: unknown) => void {
 /**
  * What keeps these paths for a person: those under Human review on the base
  * branch, or every one when the rules cannot be read, which is said as that,
- * with why when the read says.
+ * with why when the read says. Hands-off mode holds a plan change, and the
+ * Expected paths of an issue whose question it would answer, to the same
+ * read (`hands-off.ts`).
  */
-async function keptFor(
+export async function keptFor(
   read: PlanChangeDeps['humanReviewRules'],
   repo: { fullName: string; defaultBranch?: string | null },
   paths: readonly string[],

@@ -1,7 +1,7 @@
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { AskedRow, HeldAuditRow, LiveTaskRow, MergedRow, StartedRow } from '@openadlc/db';
+import type { AskedRow, HandsOffAuditRow, HeldAuditRow, LiveTaskRow, MergedRow, StartedRow } from '@openadlc/db';
 import {
   BoardFeed,
   leadSeatOf,
@@ -76,6 +76,7 @@ function fakeStore() {
     approvals: [] as ApprovalRow[],
     releases: [] as ReleasePublishedRow[],
     heldLine: [] as HeldLineRow[],
+    handsOff: [] as HandsOffAuditRow[],
     line: [] as LineEntry[],
     live: [] as LiveTaskRow[],
     facts: FACTS,
@@ -99,6 +100,7 @@ function fakeStore() {
     approvalsIn: async (window) => read(tables.approvals, window, (row) => row.reviewId),
     releasesPublishedIn: async (window) => read(tables.releases, window, (row) => row.runId),
     heldLineIn: async (window) => read(tables.heldLine, window, (row) => row.id),
+    handsOffAuditIn: async (window) => read(tables.handsOff, window, (row) => row.auditId),
     liveTasks: async () => tables.live,
     mergeLine: async () => tables.line,
     facts: async () => {
@@ -361,7 +363,25 @@ function release(id: string, at: string): ReleasePublishedRow {
   };
 }
 
-/** One row of each of the eight types, at +1 s to +8 s. */
+function handsOffRow(auditId: string, at: string, fields: Partial<HandsOffAuditRow>): HandsOffAuditRow {
+  return {
+    auditId,
+    at,
+    action: 'hands_off.on',
+    actor: 'jane@example.com',
+    repo: '620legal/OpenADLC',
+    setByLogin: 'janedoe',
+    duration: '8h',
+    by: null,
+    why: null,
+    subject: null,
+    question: null,
+    answer: null,
+    ...fields,
+  };
+}
+
+/** One row of each of the eight types, at +1 s to +8 s, and the three of hands-off mode at +10 s to +12 s. */
 function seedEveryType(tables: ReturnType<typeof fakeStore>['tables']): void {
   tables.started.push(started('t1', later(1)));
   tables.asked.push({ gateId: 'g1', at: later(2), bot: 'system-engineer', subjectRef: 'OpenADLC#227', question: 'Which?', options: ['a', 'b'] });
@@ -374,6 +394,9 @@ function seedEveryType(tables: ReturnType<typeof fakeStore>['tables']): void {
   // A merge-line hold: the stream sees it in the line, the history in the entry's row.
   tables.line.push({ id: 'e1', repoName: 'OpenADLC', prNumber: 231, state: 'merging', detail: HELD_DETAIL });
   tables.heldLine.push({ id: 'e1', at: later(9), repoName: 'OpenADLC', prNumber: 231, state: 'merging', detail: HELD_DETAIL });
+  tables.handsOff.push(handsOffRow('h1', later(10), {}));
+  tables.handsOff.push(handsOffRow('h2', later(11), { action: 'gate.answer', repo: null, duration: null, subject: 'OpenADLC#227', question: 'Which?', answer: 'b' }));
+  tables.handsOff.push(handsOffRow('h3', later(12), { action: 'hands_off.off', by: 'openadlc', why: 'expired' }));
 }
 
 /** What both reads must agree on: everything but a merge-line hold's time, which the stream takes as when it saw it. */
@@ -406,7 +429,19 @@ describe('the new event types', () => {
     const history = await readHistory(store);
 
     expect(new Set(heard.map((event) => event.type))).toEqual(
-      new Set(['task.started', 'question.asked', 'task.capped', 'merged', 'pull_request.held', 'pull_request.opened', 'pull_request.lead_approved', 'release.published']),
+      new Set([
+        'task.started',
+        'question.asked',
+        'task.capped',
+        'merged',
+        'pull_request.held',
+        'pull_request.opened',
+        'pull_request.lead_approved',
+        'release.published',
+        'hands_off.on',
+        'hands_off.answered',
+        'hands_off.off',
+      ]),
     );
     expect(shape(history.events)).toEqual(shape(heard));
     // The merge-line hold has one id in both, so a client that has both shows it once.
@@ -473,6 +508,26 @@ describe('the new event types', () => {
         text: '620legal/OpenADLC v1.4.2 published, cut by @orzelig',
       },
     ]);
+  });
+
+  it('says a hands-off window turned on and off, and each gate it answered, with who set it', async () => {
+    const { tables, store } = fakeStore();
+    tables.handsOff.push(handsOffRow('h1', later(1), {}));
+    tables.handsOff.push(handsOffRow('h2', later(2), { action: 'gate.answer', repo: null, duration: null, subject: 'OpenADLC#227', question: 'Which store?', answer: 'Postgres' }));
+    tables.handsOff.push(handsOffRow('h3', later(3), { action: 'hands_off.off', by: 'sam@example.com', why: 'turned_off' }));
+    tables.handsOff.push(handsOffRow('h4', later(4), { action: 'hands_off.off', by: 'openadlc', why: 'cap' }));
+    tables.handsOff.push(handsOffRow('h5', later(5), { action: 'hands_off.off', by: 'openadlc', why: 'expired', duration: '1h' }));
+    tables.now = new Date(NOW.getTime() + 60_000);
+    const { events } = await readHistory(store);
+    expect(events.map((event) => [event.id, event.type, event.bot, event.text])).toEqual([
+      ['hands_off.off:h5', 'hands_off.off', null, 'hands-off off for 620legal/OpenADLC: expired'],
+      ['hands_off.off:h4', 'hands_off.off', null, 'hands-off off for 620legal/OpenADLC: a cap was reached'],
+      ['hands_off.off:h3', 'hands_off.off', null, 'hands-off off for 620legal/OpenADLC: turned off by sam@example.com'],
+      ['hands_off.answered:h2', 'hands_off.answered', null, 'hands-off mode answered Which store? on 620legal/OpenADLC#227: Postgres'],
+      ['hands_off.on:h1', 'hands_off.on', null, 'hands-off on for 620legal/OpenADLC for 8 hours, set by janedoe'],
+    ]);
+    expect(events.find((event) => event.type === 'hands_off.answered')!.item).toMatchObject({ ref: 'OpenADLC#227', repo: '620legal/OpenADLC' });
+    expect(events.find((event) => event.type === 'hands_off.on')!.item).toEqual({ ref: 'hands-off:620legal/OpenADLC', repo: '620legal/OpenADLC', url: null });
   });
 
   it('names the lead seat as the crew names it now', () => {

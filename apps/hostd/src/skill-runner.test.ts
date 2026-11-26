@@ -461,6 +461,24 @@ describe('a real engine asking a person', () => {
     expect(to('gate').map((call) => call.body)).toEqual([{ question: 'May the notice say this?', options: ['yes', 'no'], role: 'Legal' }]);
   }, 30_000);
 
+  it('passes on the option a question recommends, which hands-off mode answers with', async () => {
+    const marker = { event: 'question', question: 'Which?', options: ['A', 'B'], recommended: ' B ' };
+    const bin = fakeClaude([assistant('msg-1', `<!-- openadlc:${JSON.stringify(marker)} -->`, 1500, 60), result(0.1)]);
+
+    expect(await runTriage(bin)).toBe(0);
+
+    expect(to('gate').map((call) => call.body)).toEqual([{ question: 'Which?', options: ['A', 'B'], recommended: 'B' }]);
+  }, 30_000);
+
+  it('sends no recommendation when it names none of the options', async () => {
+    const marker = { event: 'question', question: 'Which?', options: ['A', 'B'], recommended: 'C' };
+    const bin = fakeClaude([assistant('msg-1', `<!-- openadlc:${JSON.stringify(marker)} -->`, 1500, 60), result(0.1)]);
+
+    expect(await runTriage(bin)).toBe(0);
+
+    expect(to('gate').map((call) => call.body)).toEqual([{ question: 'Which?', options: ['A', 'B'] }]);
+  }, 30_000);
+
   it('leaves out consequences that do not pair with the choices, and keeps the decision', async () => {
     const marker = { event: 'question', question: 'Where?', options: ['the root', 'docs/'], decision: 'Where it is served.', consequences: ['Served at /'] };
     const bin = fakeClaude([assistant('msg-1', `<!-- openadlc:${JSON.stringify(marker)} -->`, 1500, 60), result(0.1)]);

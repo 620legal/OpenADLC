@@ -27,4 +27,7 @@
 /apps/bridge/src/release-service.ts   @orzelig
 /apps/bridge/src/release-publish.ts   @orzelig
 /apps/bridge/src/release-routes.ts    @orzelig
+/apps/bridge/src/hands-off.ts         @orzelig
+/apps/bridge/src/hands-off-routes.ts  @orzelig
+/packages/db/src/store/hands-off.ts   @orzelig
 /crew/skills/*/tools.yaml             @orzelig

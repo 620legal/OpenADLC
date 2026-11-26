@@ -166,6 +166,14 @@ A change that makes one of these possible is wrong even when its tests pass:
   URL, once per run, and the tag goes on the pinned SHA only after the
   signing, never on the default branch's head
   (docs/adr/0071-a-release-is-tagged-and-published-as-the-app-only-after-it-is-signed.md).
+- A hands-off window answers only in `Gates.open`: a plan change with no
+  Human-review path, and a question whose valid `recommended` comes from an
+  intake, spec, implement or request task on an issue or request, that the
+  person who set it could have answered. It never reaches the merge decision,
+  a held approval, a release, deploy, promote, host check, label or setting.
+  Only a linked account with Approves on turns it on, after a fresh
+  device-code proof. It ends at expiry or a monthly cap
+  (docs/adr/0093-a-hands-off-window-answers-routine-gates-and-never-the-excluded-ones.md).
 - A bot never approves a deploy; the repository's environment rules release
   it — a required reviewer, or a soak timer when it ships automatically — or,
   where GitHub's plan cannot hold a reviewer, a person releasing the promote
@@ -209,8 +217,9 @@ decision and gates, the access, authorship, human-review and scope rules, the
 workflows and the scripts they run, who GitHub asks to review each path, what
 each skill may run, the host check's boundary — when a pull request's code
 runs on the machine, as whom and with what, and the record the merge reads —
-and the release's boundary — who cuts a release, as whom it builds, what is
-signed and with which key. Everything else, skill prose, roles and
+the release's boundary — who cuts a release, as whom it builds, what is
+signed and with which key — and hands-off mode, which answers gates in a
+person's name. Everything else, skill prose, roles and
 templates included, is left to the crew's review, so the crew can keep
 improving itself. `.github/CODEOWNERS` lists the same paths.
 
@@ -237,4 +246,7 @@ improving itself. `.github/CODEOWNERS` lists the same paths.
 - `apps/bridge/src/release-service.ts` @orzelig
 - `apps/bridge/src/release-publish.ts` @orzelig
 - `apps/bridge/src/release-routes.ts` @orzelig
+- `apps/bridge/src/hands-off.ts` @orzelig
+- `apps/bridge/src/hands-off-routes.ts` @orzelig
+- `packages/db/src/store/hands-off.ts` @orzelig
 - `crew/skills/*/tools.yaml` @orzelig

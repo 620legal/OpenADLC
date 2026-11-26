@@ -2310,3 +2310,147 @@ describe('which answers from GitHub are approvals', () => {
     expect(await judging.needsApprover({ id: 'gate-9', options: [] })).toBe(false);
   });
 });
+
+/**
+ * A hands-off window on the repository (#383): `Gates.open` settles what its
+ * cover says it covers, as it is asked, and asks a person for anything else.
+ * What the cover decides is `hands-off.test.ts`; here it is a fake.
+ */
+describe('a gate a hands-off window settles', () => {
+  const answers = () => vi.mocked(audit).mock.calls.map(([entry]) => entry).filter((entry) => entry.action === 'gate.answer');
+  const said = () => client.comment.mock.calls.map((call) => String((call as unknown[])[2]));
+  const notifier = { send: vi.fn(async () => undefined) };
+  const WINDOW = {
+    id: 'window-1',
+    repoId: 'repo-1',
+    setBy: 'jane@example.com',
+    setByLogin: 'janedoe',
+    setByGithubId: 4242,
+    duration: '8h' as const,
+    setAt: '2026-11-25T10:00:00.000Z',
+    endsAt: '2026-11-25T18:00:00.000Z',
+    endedAt: null,
+    endedBy: null,
+    endedWhy: null,
+    endedNote: null,
+  };
+  const cover = vi.fn();
+  const handsOff = new Gates(actors as never, notifier as never);
+  handsOff.useHandsOff(cover);
+  const covering = (reply: string) => cover.mockImplementation(async () => ({ covers: true, window: WINDOW, reply }));
+
+  beforeEach(() => {
+    cover.mockReset();
+    cover.mockImplementation(async () => null);
+  });
+
+  it('approves a plan change as it is asked, with nobody asked and one record naming who set the window', async () => {
+    covering('Approve');
+    store.planChange = { paths: ['apps/hostd/src/skill-runner.ts'], reason: 'the runner drops the field', held: null };
+
+    await handsOff.open({ taskId: 'task-1', question: 'Add these?', options: ['Approve', 'Refuse'], planChange: { paths: ['apps/hostd/src/skill-runner.ts'], reason: 'the runner drops the field' } });
+
+    expect(cover).toHaveBeenCalledWith(expect.objectContaining({ planChange: { paths: ['apps/hostd/src/skill-runner.ts'], reason: 'the runner drops the field' }, recommended: null }));
+    expect(store.gate).toMatchObject({ state: 'answered', answer: 'Approve', answeredBy: 'jane@example.com' });
+    expect(leases.widenPaths).toHaveBeenCalledWith('lease-1', ['apps/hostd/src/skill-runner.ts']);
+    expect(said()).toHaveLength(1);
+    expect(said()[0]).toContain('**Answered by hands-off mode**, set by `janedoe` at 2026-11-25 10:00 UTC.');
+    expect(said()[0]).not.toContain('@janedoe');
+    expect(client.addLabels).not.toHaveBeenCalled();
+    expect(notifier.send).not.toHaveBeenCalled();
+    expect(answers()).toEqual([
+      expect.objectContaining({
+        actor: 'jane@example.com',
+        payload: expect.objectContaining({
+          channel: 'hands_off',
+          decidedBy: 'hands_off',
+          grant: 'plan_change_approved',
+          handsOff: { windowId: 'window-1', setBy: 'jane@example.com', setByLogin: 'janedoe', setAt: '2026-11-25T10:00:00.000Z' },
+        }),
+      }),
+    ]);
+    expect(store.messages.at(-1)).toMatchObject({ kind: 'sys', author: 'openadlc', text: expect.stringContaining('answered by hands-off mode, set by janedoe at 2026-11-25 10:00 UTC') });
+  });
+
+  it('answers a question with the option the bot recommended, and the task is left to resume', async () => {
+    covering('B');
+
+    await handsOff.open({ taskId: 'task-1', question: 'Which store?', options: ['A', 'B'], recommended: 'B' });
+
+    expect(cover).toHaveBeenCalledWith(expect.objectContaining({ options: ['A', 'B'], recommended: 'B', planChange: null }));
+    expect(store.gate).toMatchObject({ state: 'answered', answer: 'B', answeredBy: 'jane@example.com' });
+    expect(store.task.state).toBe('paused');
+    expect(said()).toHaveLength(1);
+    expect(said()[0]).toContain('**Answered by hands-off mode**, set by `janedoe` at 2026-11-25 10:00 UTC.');
+    expect(said()[0]).toContain('> Which store?');
+    expect(said()[0]).toContain('Answer: B');
+    expect(notifier.send).not.toHaveBeenCalled();
+    expect(answers()).toEqual([
+      expect.objectContaining({
+        actor: 'jane@example.com',
+        payload: expect.objectContaining({ channel: 'hands_off', answer: 'B', handsOff: expect.objectContaining({ setByLogin: 'janedoe' }) }),
+      }),
+    ]);
+  });
+
+  it('asks a person as before when the window does not cover a gate, says why in the thread, and is left on', async () => {
+    cover.mockImplementation(async () => ({ covers: false, window: WINDOW, why: 'the bot recommended no answer' }));
+
+    await handsOff.open({ taskId: 'task-1', question: 'Which store?', options: ['A', 'B'] });
+
+    expect(store.gate).toMatchObject({ state: 'open' });
+    expect(said()[0]).toContain('1. A\n2. B');
+    expect(client.addLabels).toHaveBeenCalledWith('acme/openadlc', 78, ['needs-human']);
+    expect(notifier.send).toHaveBeenCalledWith(expect.objectContaining({ event: 'gate_opened' }));
+    expect(store.messages.some((message) => message.text === 'Hands-off is on for acme/openadlc, but the bot recommended no answer, so a person answers this one')).toBe(true);
+    expect(answers()).toEqual([]);
+  });
+
+  it('asks a person as before when the cover cannot be read', async () => {
+    cover.mockRejectedValue(new Error('the database is down'));
+    vi.spyOn(console, 'warn').mockImplementationOnce(() => undefined);
+
+    await handsOff.open({ taskId: 'task-1', question: 'Which store?', options: ['A', 'B'], recommended: 'B' });
+
+    expect(store.gate).toMatchObject({ state: 'open' });
+    expect(notifier.send).toHaveBeenCalled();
+  });
+
+  it('leaves the question for a person when the answer cannot be applied, and says so', async () => {
+    covering('C');
+    vi.spyOn(console, 'warn').mockImplementationOnce(() => undefined);
+
+    await handsOff.open({ taskId: 'task-1', question: 'Which store?', options: ['A', 'B'], recommended: 'B' });
+
+    expect(store.gate).toMatchObject({ state: 'open' });
+    expect(notifier.send).toHaveBeenCalledWith(expect.objectContaining({ event: 'gate_opened' }));
+    expect(store.messages.some((message) => String(message.text).includes('Hands-off mode, set by janedoe, could not answer this'))).toBe(true);
+  });
+
+  it('never gives any answer but the one it was given, nor any on the cost-cap question or a refusal', async () => {
+    const decided = (reply: string) => ({ by: 'hands_off' as const, windowId: 'w', setBy: 'jane@example.com', setByLogin: 'janedoe', setAt: WINDOW.setAt, reply, question: 'q', issue: 78 });
+    openGate({ question: 'Which store?', options: ['A', 'B'] });
+    await expect(gates.answer({ gateId: 'gate-1', reply: 'A', answeredBy: 'jane@example.com', via: 'hands_off', decided: decided('B') })).rejects.toThrow(/hands-off window was given/);
+    await expect(gates.answer({ gateId: 'gate-1', reply: 'C', answeredBy: 'jane@example.com', via: 'hands_off', decided: decided('C') })).rejects.toThrow(/hands-off window was given/);
+    openGate({ question: 'Stopped at the cap', options: ['continue for another $15', 'hand to a person', 'abandon this task'] });
+    await expect(
+      gates.answer({ gateId: 'gate-1', reply: 'continue for another $15', answeredBy: 'jane@example.com', via: 'hands_off', decided: decided('continue for another $15') }),
+    ).rejects.toThrow(/hands-off window was given/);
+    openGate();
+    store.planChange = { ...REQUEST };
+    await expect(gates.answer({ gateId: 'gate-1', reply: 'Refuse', answeredBy: 'jane@example.com', via: 'hands_off', decided: decided('Refuse') })).rejects.toThrow(/hands-off window was given/);
+    expect(store.gate).toMatchObject({ state: 'open' });
+  });
+
+  it('is not asked when a standing approval already settles the plan change', async () => {
+    const both = new Gates(actors as never, notifier as never);
+    both.useStandingApprovals(async () => ({ covers: true, setBy: 'sam', setAt: '2026-10-22T10:00:00.000Z', humanReview: [] }));
+    both.useHandsOff(cover);
+    store.planChange = { paths: ['apps/hostd/src/skill-runner.ts'], reason: 'r', held: null };
+
+    await both.open({ taskId: 'task-1', question: 'Add these?', options: ['Approve', 'Refuse'], planChange: { paths: ['apps/hostd/src/skill-runner.ts'], reason: 'r' } });
+
+    expect(cover).not.toHaveBeenCalled();
+    expect(answers()).toEqual([expect.objectContaining({ payload: expect.objectContaining({ channel: 'standing' }) })]);
+  });
+});

@@ -1,3 +1,4 @@
+import type { HandsOffView } from './hands-off';
 import type { EngineUpdatesView } from '@/components/engine-updates';
 import type { SelfUpdateView } from '@/components/self-update';
 import type { InstallSettings } from '@/components/install-settings';
@@ -2085,6 +2086,8 @@ export const api = {
   hostCheck: (id: string) => get<{ run: HostCheckRun }>(`/v1/host-checks/${encodeURIComponent(id)}`).then((body) => body.run),
   /** Every routine, the templates a new one starts from, and whether this viewer may change them (#369). */
   routines: () => get<RoutinesView>('/v1/routines'),
+  // The open hands-off windows, and whether this person may turn one on (#383).
+  handsOff: () => get<HandsOffView>('/v1/hands-off'),
   /** The repositories set to release, each with its latest run (#345). */
   releases: () =>
     get<{ repos: { name: string; fullName: string; releaseRepo: string | null; latest: ReleaseRunView | null }[] }>('/v1/releases').then((body) => body.repos),

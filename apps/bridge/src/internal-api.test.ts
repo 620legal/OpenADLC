@@ -369,6 +369,16 @@ describe('a question for a person role', () => {
   });
 });
 
+describe('a question that recommends an option', () => {
+  it('has the recommendation passed to the gate it opens, and anything but words dropped', async () => {
+    await post('/internal/tasks/task-1/gate', { question: 'Which one?', options: ['a', 'b'], recommended: 'b' });
+    expect(open).toHaveBeenLastCalledWith(expect.objectContaining({ recommended: 'b' }));
+
+    await post('/internal/tasks/task-1/gate', { question: 'Which one?', options: ['a', 'b'], recommended: { pick: 'b' } });
+    expect(open).toHaveBeenLastCalledWith(expect.objectContaining({ recommended: null }));
+  });
+});
+
 describe('a task ending, which may let go of paths a plan change was waiting for', () => {
   it.each(['done', 'failed', 'stopped'])('resumes the tasks whose paths are free once one is %s', async (state) => {
     applyHeld.mockResolvedValueOnce(['task-7', 'task-8']);
