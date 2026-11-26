@@ -314,3 +314,22 @@ describe('why the item isn’t moving, on the board’s sheet', () => {
     expect(opened).toEqual(['api#22']);
   });
 });
+
+describe('what the item’s pull request needs to merge (#373)', () => {
+  const strip = () => container.querySelector('[data-how-this-works="merge-state"]');
+
+  it('is said, open, while its pull request is open', async () => {
+    await mount();
+    expect(strip()).not.toBeNull();
+    const toggle = strip()!.querySelector('button')!;
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    expect(toggle.textContent).toContain('What this pull request needs to merge');
+    expect(strip()!.querySelector('a')!.getAttribute('href')).toBe('https://github.com/620legal/OpenADLC/blob/main/AGENTS.md#invariants');
+  });
+
+  it('is not said once the item is merged', async () => {
+    item = { ...ITEM, stage: 'merged', issue: { ...ITEM.issue!, stage: 'merged' } };
+    await mount();
+    expect(strip()).toBeNull();
+  });
+});
