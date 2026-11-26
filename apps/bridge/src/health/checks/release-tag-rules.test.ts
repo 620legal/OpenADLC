@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { RuleApi } from '@openadlc/github';
-import { RELEASE_TAG_RULES_CHECK, likelyNextTag, releaseTagRulesCheck, type ReleaseTagRulesReader } from './release-tag-rules.js';
+import { RELEASE_TAG_RULES_CHECK, judgeReleaseTag, likelyNextTag, releaseTagRulesCheck, type ReleaseTagRulesReader } from './release-tag-rules.js';
 
 const RULESET = {
   id: 7,
@@ -102,5 +102,18 @@ describe('whether the app may create release tags (#344)', () => {
     const { results, reader } = check({ releasing: [{ fullName: 'acme/app', releaseRepo: 'acme/app-releases' }] });
     await results;
     expect(reader.lastVersion).toHaveBeenCalledWith('acme/app-releases');
+  });
+});
+
+describe('judging one repository’s tag, as the release page’s readiness does (#371)', () => {
+  it('judges the exact tag it is given, with only the app’s client', async () => {
+    const app = { app: vi.fn(async () => rulesetsApi([{ ...RULESET, conditions: { ref_name: { include: ['refs/tags/v2.0.0'], exclude: [] } } }])) };
+    await expect(judgeReleaseTag(app, 'acme/app', 'acme/app', 'v2.0.0', false)).resolves.toMatchObject({ ok: false, facts: { tag: 'v2.0.0' } });
+    await expect(judgeReleaseTag(app, 'acme/app', 'acme/app', 'v2.0.1', false)).resolves.toMatchObject({ ok: true });
+    expect(app.app).toHaveBeenCalledWith('acme/app');
+  });
+
+  it('has no answer for the source repository when the app cannot be asked', async () => {
+    await expect(judgeReleaseTag({ app: async () => null }, 'acme/app', 'acme/app', 'v1.0.0', false)).resolves.toMatchObject({ ok: null });
   });
 });

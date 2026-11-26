@@ -69,7 +69,7 @@ export function releaseTagRulesCheck(reader: ReleaseTagRulesReader): HealthCheck
         for (const name of new Set([source, target])) {
           if (judged.has(name.toLowerCase())) continue;
           judged.add(name.toLowerCase());
-          results.push(await judge(reader, name, source, tag, name !== source));
+          results.push(await judgeReleaseTag(reader, name, source, tag, name !== source));
         }
       }
       return results;
@@ -77,7 +77,18 @@ export function releaseTagRulesCheck(reader: ReleaseTagRulesReader): HealthCheck
   };
 }
 
-async function judge(reader: ReleaseTagRulesReader, name: string, source: string, tag: string, isReleaseRepo: boolean): Promise<CheckResult> {
+/**
+ * Whether the app may create `tag` on `name`: the card's judgement of one
+ * repository, exported so the release page's readiness (#371, docs/adr/0084)
+ * judges the head's tag the same way.
+ */
+export async function judgeReleaseTag(
+  reader: Pick<ReleaseTagRulesReader, 'app'>,
+  name: string,
+  source: string,
+  tag: string,
+  isReleaseRepo: boolean,
+): Promise<CheckResult> {
   const api = await reader.app(name).catch(() => null);
   if (!api) {
     if (!isReleaseRepo) return { subject: name, ok: null, reason: `OpenADLC's app cannot be asked about ${name}; the app's own checks say why` };

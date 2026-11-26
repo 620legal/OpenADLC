@@ -25,6 +25,7 @@ import {
   ensureConsoleSecret,
   ensureInternalSecret,
   FileSecretStore,
+  hasReleaseSigningKey,
   internalSecretRef,
   isReleaseSigningKeyRef,
   isRetiredNotifyTargetRef,
@@ -78,6 +79,48 @@ describe('a release signing key ref', () => {
     expect(isReleaseSigningKeyRef('release-signing-key:')).toBe(false);
     expect(isReleaseSigningKeyRef('release-signing-key:acme')).toBe(false);
     expect(isReleaseSigningKeyRef(appPrivateKeyRef())).toBe(false);
+  });
+});
+
+describe('whether a release signing key is filed', () => {
+  /** A store whose `get` throws: the answer must come from `list` alone. */
+  function listOnly(refs: string[]) {
+    const store = {
+      list: vi.fn(async (prefix = '') => refs.filter((ref) => ref.startsWith(prefix))),
+      get: vi.fn(async () => {
+        throw new Error('the key was read');
+      }),
+      set: vi.fn(async () => undefined),
+      delete: vi.fn(async () => undefined),
+    };
+    return store;
+  }
+
+  it('is yes when the repository’s ref is listed, in any capitals, without reading it', async () => {
+    const store = listOnly([releaseSigningKeyRef('acme/app'), 'app-private-key']);
+    await expect(hasReleaseSigningKey('Acme/App', store)).resolves.toBe(true);
+    expect(store.list).toHaveBeenCalledWith('release-signing-key:');
+    expect(store.get).not.toHaveBeenCalled();
+  });
+
+  it('is no when only another repository’s key is listed', async () => {
+    const store = listOnly([releaseSigningKeyRef('acme/other')]);
+    await expect(hasReleaseSigningKey('acme/app', store)).resolves.toBe(false);
+    expect(store.get).not.toHaveBeenCalled();
+  });
+
+  it('reads a file store’s names, never the file', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'release-has-'));
+    try {
+      const store = new FileSecretStore(root);
+      await store.set(releaseSigningKeyRef('acme/app'), '{"v":1}');
+      const get = vi.spyOn(store, 'get');
+      await expect(hasReleaseSigningKey('acme/app', store)).resolves.toBe(true);
+      await expect(hasReleaseSigningKey('acme/none', store)).resolves.toBe(false);
+      expect(get).not.toHaveBeenCalled();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

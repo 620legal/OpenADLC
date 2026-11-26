@@ -4,6 +4,7 @@ import { parseRepoVersion, repoVersionFrom, repoVersionGate, repoVersionNotAbove
 import { LINK_ACCOUNT_URL, PEOPLE_URL } from './human-review-decide.js';
 import { personKey, type FlowView, type GitHubViewer, type PersonFlows, type PersonGitHubDeps } from './person-github.js';
 import type { Preparation } from './release-prepare.js';
+import type { ReleaseReadiness } from './release-readiness.js';
 import type { LastRelease, ReleaseRepo, ReleaseService } from './release-service.js';
 import { HttpFailure, type Router } from './router.js';
 
@@ -457,8 +458,13 @@ export class ReleaseCuts {
     return { compare, blocked: null };
   }
 
-  /** The version at the pinned SHA, held above the last release by hostd's own rule. */
-  private async version(
+  /**
+   * The version at the pinned SHA, held above the last release by hostd's own
+   * rule. The release page's readiness (#371, docs/adr/0084) reads it too, at
+   * the head it read, so the checklist and the cut judge a version alike; it
+   * reads only, and pins nothing.
+   */
+  async version(
     client: ReleaseReader,
     repo: ReleaseRepo,
     setting: ReleaseSetting,
@@ -786,8 +792,15 @@ export function liveReleaseCuts(input: {
   });
 }
 
-export function registerReleaseRoutes(router: Router, cuts: ReleaseCuts): void {
+/**
+ * `readiness` answers the release page's checklist (#371, docs/adr/0084). It
+ * is a read, given apart from `cuts` so the route holds no handle that could
+ * start, pin or sign anything.
+ */
+export function registerReleaseRoutes(router: Router, cuts: ReleaseCuts, readiness?: Pick<ReleaseReadiness, 'read'>): void {
   router.get('/v1/releases', async () => cuts.list());
+
+  if (readiness) router.get('/v1/repos/:name/release/readiness', async ({ params }) => readiness.read(params.name ?? ''));
 
   router.post('/v1/repos/:name/release/views', async ({ params, identity }) => cuts.view(params.name ?? '', identity));
 

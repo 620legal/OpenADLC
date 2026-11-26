@@ -55,6 +55,7 @@ export {
   audit,
   listAudit,
   lastAudit,
+  lastAuditHaving,
   recordEvent,
   markEventProcessed,
   listEvents,

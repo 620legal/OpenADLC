@@ -238,3 +238,21 @@ export async function lastAudit(action: string, target: string): Promise<AuditEn
   }>('select id, actor, action, target, payload, at from audit where action = $1 and target = $2 order by at desc limit 1', [action, target]);
   return row ? { id: Number(row.id), actor: row.actor, action: row.action, target: row.target, payload: row.payload, at: row.at.toISOString() } : null;
 }
+
+/**
+ * The newest entry of one action on one target whose payload carries `key`;
+ * null when there is none. A repository's `repo.settings` row holds only what
+ * that save sent, so `lastAudit` would answer a save of its colour as who set
+ * its release recipe (#371): this finds the newest save that sent the key.
+ */
+export async function lastAuditHaving(action: string, target: string, key: string): Promise<AuditEntry | null> {
+  const [row] = await query<{
+    id: string;
+    actor: string;
+    action: string;
+    target: string;
+    payload: Record<string, unknown> | null;
+    at: Date;
+  }>('select id, actor, action, target, payload, at from audit where action = $1 and target = $2 and payload ? $3 order by at desc limit 1', [action, target, key]);
+  return row ? { id: Number(row.id), actor: row.actor, action: row.action, target: row.target, payload: row.payload, at: row.at.toISOString() } : null;
+}

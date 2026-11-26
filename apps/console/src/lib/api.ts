@@ -830,6 +830,28 @@ export interface ReleasePreparation {
   unknown: boolean;
 }
 
+/** One item of a repository's release readiness (#371, docs/adr/0084), as the bridge reads it. */
+export interface ReleaseReadinessItem {
+  id: 'account' | 'signing_key' | 'recipe' | 'release_tag' | 'version' | 'last_build';
+  title: string;
+  /** `unknown` is "could not check": `says` holds why. */
+  status: 'pass' | 'fail' | 'unknown';
+  says: string;
+  /** On fail: the command or setting that fixes it. */
+  fix?: string;
+  action?: { label: string; href: string } | { label: string; url: string } | { label: string; command: string };
+  /** Shown apart and never counted toward ready: the last build. */
+  informational?: true;
+}
+
+/** What a cut of a repository needs, checked: always six items, in the bridge's order. It never stops a cut. */
+export interface ReleaseReadiness {
+  repo: string;
+  fullName: string;
+  checkedAt: string;
+  items: ReleaseReadinessItem[];
+}
+
 /** Builds and pins a compare view: a POST, since each one is a new pin. */
 async function pinReleaseView(repo: string): Promise<ReleaseView> {
   const path = `/v1/repos/${encodeURIComponent(repo)}/release/views`;
@@ -1974,6 +1996,8 @@ export const api = {
   releaseRuns: (repo: string) => get<{ runs: ReleaseRunView[] }>(`/v1/repos/${encodeURIComponent(repo)}/releases`).then((body) => body.runs),
   /** A repository's project map, whole, with the commit it was built from (docs/adr/0088). */
   projectMap: (repo: string) => get<ProjectMapRead>(`/v1/repos/${encodeURIComponent(repo)}/map`),
+  /** What a cut of a repository needs, checked (#371): a read, which pins nothing. */
+  releaseReadiness: (repo: string) => get<ReleaseReadiness>(`/v1/repos/${encodeURIComponent(repo)}/release/readiness`),
   /** Pins a new compare view of a repository's default branch. */
   releaseView: (repo: string) => pinReleaseView(repo),
   attention: () => get<{ items: AttentionItem[] }>('/v1/attention'),
