@@ -34,7 +34,7 @@ families.
 - `src/provider-models.ts`, `src/model-catalog.ts` — what a key or a subscription token can call, cached for a few minutes.
 - `src/readiness.ts` — whether each bot's engine and model credential are ready to run a task, saying how sure that answer is.
 - `src/pricing.ts` — default prices per million tokens, which the install's `config/models.yaml`, where it has one, overrides (copy `config/models.example.yaml`; git ignores the copy). hostd and the bridge read and check that file from `OPENADLC_CONFIG_ROOT` at start (`readModelPrices`); a session takes the prices only from `OPENADLC_MODEL_PRICES`, which hostd hands it (`loadModelPrices`), and never reads a file from its working directory, the managed repository's checkout.
-- `src/tools.ts` — a skill's `tools.yaml` (`crew/skills/<name>/tools.yaml`): the shell allow-list, the write scope, and `OPENADLC_TOOLS_POLICY`, the git and GitHub rules that OpenADLC's own `git` and `gh` (`apps/hostd/bin/`) apply on every engine.
+- `src/tools.ts` — a skill's `tools.yaml` (`crew/skills/<name>/tools.yaml`): the shell allow-list, the write scope, and `OPENADLC_TOOLS_POLICY`, the git and GitHub rules that OpenADLC's own `git`, `gh` and `rg` (`apps/hostd/bin/`) apply on every engine. Its `readOnly` is true for a skill that writes nothing but `.openadlc-scratch/**` and `docs/adr/**` (`READ_ONLY_WRITE_SCOPES`, `isReadOnly`), and holds that skill's `git` and `rg` to refusing what runs a program or writes a file (docs/security.md).
 
 ## Testing
 

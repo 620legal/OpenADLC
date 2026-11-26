@@ -60,7 +60,33 @@ export function resolveWriteScope(policy: ToolsPolicy, declaredPaths: readonly s
  */
 export const TOOLS_POLICY_ENV = 'OPENADLC_TOOLS_POLICY';
 
-/** What OpenADLC's `git` and `gh` read, as the environment an engine runs under. */
+/**
+ * The write scopes that still leave a skill read-only to OpenADLC's `git` and
+ * `rg` (`readOnly` in OPENADLC_TOOLS_POLICY). The guard against `--output`,
+ * `-c core.pager=…` and `rg --pre` was first written for skills with no write
+ * scope at all, which left out four of the five skills that write nothing a
+ * repository keeps: discover, triage and pr-review write their GitHub bodies to
+ * `.openadlc-scratch/**`, and spec writes ADRs too. Neither scope is a place a
+ * write runs a program from: `.openadlc-scratch/**` is never committed and
+ * holds only what the session posts with `--body-file` or its own notes, and
+ * `docs/adr/**` is Markdown that reaches the repository only in a pull request
+ * the merge line holds like any other — not a hook, configuration, or code the
+ * host runs (docs/adr/0097-a-skill-that-writes-only-scratch-and-adrs-is-read-only-to-openadlcs-git-and-rg.md).
+ */
+export const READ_ONLY_WRITE_SCOPES = ['.openadlc-scratch/**', 'docs/adr/**'] as const;
+
+/**
+ * Whether a skill writes nothing but scratch and ADRs, so OpenADLC's `git` and
+ * `rg` refuse it what runs a program or writes a file. Derived from the write
+ * scope rather than a flag in `tools.yaml`, so a new skill is guarded from the
+ * start rather than once someone remembers to set it.
+ */
+export function isReadOnly(policy: ToolsPolicy): boolean {
+  const scopes: readonly string[] = READ_ONLY_WRITE_SCOPES;
+  return (policy.allow.files?.writeWithin ?? []).every((entry) => scopes.includes(entry));
+}
+
+/** What OpenADLC's `git`, `gh` and `rg` read, as the environment an engine runs under. */
 export function toolsPolicyEnv(policy: ToolsPolicy): Record<string, string> {
   return {
     [TOOLS_POLICY_ENV]: JSON.stringify({
@@ -68,6 +94,7 @@ export function toolsPolicyEnv(policy: ToolsPolicy): Record<string, string> {
       forcePush: policy.allow.git?.forcePush ?? false,
       localCi: policy.allow.git?.localCi ?? false,
       denyGithub: policy.deny.github,
+      readOnly: isReadOnly(policy),
     }),
   };
 }

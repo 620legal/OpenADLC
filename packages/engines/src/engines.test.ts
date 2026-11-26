@@ -32,7 +32,7 @@ import {
   resetModelPrices,
   setModelPrice,
 } from './pricing.js';
-import { isShellAllowed, loadToolsPolicy, resolveWriteScope, TOOLS_POLICY_ENV, toolsPolicyEnv } from './tools.js';
+import { isReadOnly, isShellAllowed, loadToolsPolicy, READ_ONLY_WRITE_SCOPES, resolveWriteScope, TOOLS_POLICY_ENV, toolsPolicyEnv } from './tools.js';
 import type { Engine, EngineEvent, EngineRunInput, EngineUsage, ToolsPolicy } from './types.js';
 
 const CONFIG_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'config');
@@ -2428,6 +2428,7 @@ describe('the git and GitHub rules every engine carries', () => {
         forcePush: false,
         localCi: false,
         denyGithub: ['pr review', 'api'],
+        readOnly: false,
       });
     });
   }
@@ -2439,6 +2440,7 @@ describe('the git and GitHub rules every engine carries', () => {
       forcePush: false,
       localCi: false,
       denyGithub: ['pr merge'],
+      readOnly: true,
     });
   });
 
@@ -2447,5 +2449,41 @@ describe('the git and GitHub rules every engine carries', () => {
     expect(JSON.parse(toolsPolicyEnv(build)[TOOLS_POLICY_ENV] ?? '')).toMatchObject({ pushBranchPrefix: 'agent/', localCi: true });
     expect(build.allow.shell).toContain('openadlc-ci');
     expect(build.deny.github).toContain('pr merge');
+  });
+
+  it('marks a skill read-only when it writes nothing but scratch and ADRs', () => {
+    const withScope = (writeWithin?: string[]): ToolsPolicy => ({
+      allow: { shell: ['git'], ...(writeWithin ? { files: { writeWithin } } : {}) },
+      deny: { shell: [], github: [] },
+    });
+    const readOnlyOf = (writeWithin?: string[]) => JSON.parse(toolsPolicyEnv(withScope(writeWithin))[TOOLS_POLICY_ENV] ?? '').readOnly;
+
+    expect(READ_ONLY_WRITE_SCOPES).toEqual(['.openadlc-scratch/**', 'docs/adr/**']);
+    for (const scope of [undefined, [], ['.openadlc-scratch/**'], ['docs/adr/**', '.openadlc-scratch/**']]) {
+      expect(isReadOnly(withScope(scope)), JSON.stringify(scope)).toBe(true);
+      expect(readOnlyOf(scope)).toBe(true);
+    }
+    for (const scope of [['.openadlc-scratch/**', '<declared_paths>'], ['docs/runbooks/**'], ['docs/**'], ['tests/**']]) {
+      expect(isReadOnly(withScope(scope)), JSON.stringify(scope)).toBe(false);
+      expect(readOnlyOf(scope)).toBe(false);
+    }
+  });
+
+  it('holds the shipped skills that write nothing to the read-only rules, and only those', () => {
+    // Moving a skill across — a write scope added to a reviewer, or one taken
+    // from a builder — changes what OpenADLC's git and rg refuse it, so it is
+    // a change someone reviews here rather than a side effect of a tools.yaml edit.
+    const READ_ONLY = ['discover', 'plan-change-review', 'pr-review', 'spec', 'triage'];
+    const WRITES = ['deploy', 'implement', 'qa', 'resolve-conflict'];
+    const skills = join(import.meta.dirname, '..', '..', '..', 'crew', 'skills');
+    const shipped = readdirSync(skills, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && existsSync(join(skills, entry.name, 'tools.yaml')))
+      .map((entry) => entry.name)
+      .sort();
+    expect(shipped).toEqual([...READ_ONLY, ...WRITES].sort());
+    for (const skill of shipped) {
+      const env = toolsPolicyEnv(loadToolsPolicy(join(skills, skill, 'tools.yaml')));
+      expect(JSON.parse(env[TOOLS_POLICY_ENV] ?? '').readOnly, skill).toBe(READ_ONLY.includes(skill));
+    }
   });
 });

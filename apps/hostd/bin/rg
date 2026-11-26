@@ -1,0 +1,79 @@
+#!/bin/sh
+# OpenADLC's `rg`, first on a task session's PATH beside OpenADLC's `git` and
+# `gh`. A skill that writes nothing but scratch and ADRs (`readOnly` in
+# OPENADLC_TOOLS_POLICY, `isReadOnly` in packages/engines/src/tools.ts) may
+# search, but `rg --pre CMD` runs CMD on every file it searches. No engine
+# can refuse that: Claude's and Grok's rules match a command's first words, and
+# Codex applies no shell lists. So this refuses `--pre`, `--pre-glob` and
+# `--hostname-bin`, anywhere before `--`, and drops RIPGREP_CONFIG_PATH, a
+# config file that could supply `--pre` for it
+# (docs/adr/0097-a-skill-that-writes-only-scratch-and-adrs-is-read-only-to-openadlcs-git-and-rg.md).
+#
+# Plain sh rather than a Node check, as git has: rg is the most-run reader, and
+# a Node start on every search costs more than a case match. Names are matched
+# exactly, not by prefix: `--pre` is a prefix of the real `--pretty`, and rg
+# takes no abbreviation. A word that is another option's value (`-e --pre`) is
+# refused too, which fails closed.
+#
+# A person's shell, a skill with a write scope, and a policy written before
+# `readOnly` existed run the real rg untouched. Like the git beside it, this is
+# a guard against a task that forgets or is talked into it, not a boundary:
+# docs/security.md says what it cannot stop.
+
+self_dir=$(dirname "$0")
+
+# Only an rg after this one on PATH, and never one in another copy of this
+# folder (one with git-check.mjs beside it): the git beside this file took
+# another copy of itself, and a stand-in before it that ran it, for the real
+# git, and they exec'd each other for good until the container could start no
+# process. See that file for both. Run by its full path from a PATH that does
+# not hold it, it takes the first rg there.
+real=
+saved_ifs=$IFS
+IFS=:
+on_path=
+for dir in $PATH; do
+  if [ -n "$dir" ] && [ "$dir/rg" -ef "$0" ]; then
+    on_path=1
+    break
+  fi
+done
+before_me=$on_path
+for dir in $PATH; do
+  if [ -n "$dir" ] && [ "$dir/rg" -ef "$0" ]; then
+    before_me=
+  elif [ -z "$before_me" ] && [ -n "$dir" ] && [ "$dir" != "$self_dir" ] && [ -x "$dir/rg" ] && ! [ -e "$dir/git-check.mjs" ]; then
+    real="$dir/rg"
+    break
+  fi
+done
+IFS=$saved_ifs
+
+if [ -z "$real" ]; then
+  if [ -n "$on_path" ]; then
+    echo "rg: no rg after OpenADLC's ($self_dir) on PATH; put the real rg's directory after it" >&2
+  else
+    echo "rg: rg is not installed on this host" >&2
+  fi
+  exit 127
+fi
+
+# `toolsPolicyEnv` writes the policy with JSON.stringify, which puts no space
+# after the colon.
+case "$OPENADLC_TOOLS_POLICY" in
+  *'"readOnly":true'*) ;;
+  *) exec "$real" "$@" ;;
+esac
+
+for arg in "$@"; do
+  case "$arg" in
+    --) break ;;
+    --pre | --pre=* | --pre-glob | --pre-glob=* | --hostname-bin | --hostname-bin=*)
+      echo "rg: not running — rg ${arg%%=*} is how rg runs a program of its own, and this task's skill writes nothing" >&2
+      exit 2
+      ;;
+  esac
+done
+
+unset RIPGREP_CONFIG_PATH
+exec "$real" "$@"

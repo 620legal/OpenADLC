@@ -628,6 +628,7 @@ exactly what holds, engine by engine:
 | `allow.files.write_within` | Yes or no: any entry allows the file tools everywhere, none refuses them (`--disallowedTools`) | Yes or no, the same way; none also refuses a shell `>` | **Not enforced** |
 | `allow.git.push_branch_prefix`, `force_push` | OpenADLC's `git` | OpenADLC's `git` | OpenADLC's `git` |
 | `deny.github` | OpenADLC's `gh` | OpenADLC's `gh` | OpenADLC's `gh` |
+| No `write_within` beyond scratch and ADRs (`readOnly`) | OpenADLC's `git` and `rg` | OpenADLC's `git` and `rg` | OpenADLC's `git` and `rg` |
 
 **A repository's own engine configuration does not reach a task.** Claude
 Code is started with `--setting-sources user --strict-mcp-config`: it reads
@@ -685,11 +686,42 @@ A session cannot put on or take off `scope:cross-cutting`, `revert` or `deps`
 itself (OpenADLC's `gh`), since each changes who reviews the pull request or
 what CI holds it to.
 
-**OpenADLC's `git` and `gh`** (`apps/hostd/bin/`) are first on every session's
-PATH, whatever the engine. The engine hands them the skill's rules in
+**OpenADLC's `git`, `gh` and `rg`** (`apps/hostd/bin/`) are first on every
+session's PATH, whatever the engine. The engine hands them the skill's rules in
 `OPENADLC_TOOLS_POLICY`, which a task's own environment cannot override. A
 person's shell in the same session has no `OPENADLC_TOOLS_POLICY` and is held to
 none of it.
+
+- **A skill that writes nothing** is held to more. That is a skill whose
+  `write_within` holds only `.openadlc-scratch/**` and `docs/adr/**`, or nothing
+  (`READ_ONLY_WRITE_SCOPES` and `isReadOnly`, `packages/engines/src/tools.ts`).
+  Today those skills are discover, triage, spec, plan-change-review and
+  pr-review. The policy carries `readOnly: true` for them, derived from the
+  scope rather than set in `tools.yaml`, so a new skill is held from the start.
+  A policy without the field reads as `false`, because `apps/hostd/bin` is
+  mounted live into containers already running
+  (docs/adr/0097-a-skill-that-writes-only-scratch-and-adrs-is-read-only-to-openadlcs-git-and-rg.md).
+  For such a skill, before anything runs the real git:
+  - `git` refuses every `-c` and `--config-env`, not a list of keys.
+  - It refuses `--git-dir`, `--work-tree` and `--exec-path=`.
+  - It refuses any `GIT_CONFIG_*` entry other than the five hostd sets
+    (`gpg.format`, `user.signingkey`, `commit.gpgsign`, and
+    `gpg.ssh.program` and `credential.https://github.com.helper` with hostd's
+    own values).
+  - It refuses `--output` and any prefix of it on every command, `-o` on
+    `format-patch` and `archive`, `difftool`, `mergetool` and `instaweb`, and a
+    `git config` that writes or opens an editor. Only `--get*`, `--list`, `get`,
+    `list` or a single key pass.
+  - It runs git with `GIT_PAGER` and `PAGER` set to `cat`, and `GIT_EDITOR`
+    and `GIT_SEQUENCE_EDITOR` set to `true`. It takes out `GIT_EXTERNAL_DIFF`,
+    `GIT_SSH`, `GIT_SSH_COMMAND`, `GIT_ASKPASS`, `SSH_ASKPASS` and
+    `GIT_EXEC_PATH`.
+  - `rg` refuses `--pre`, `--pre-glob` and `--hostname-bin`, by exact name, in
+    either spelling and in any position before `--`, the value of another
+    option included. It runs the real rg without `RIPGREP_CONFIG_PATH`, a file
+    that could supply `--pre`.
+  - Each refusal exits non-zero and runs nothing. A skill with a write scope
+    is held to none of this, and its `rg` runs untouched.
 
 - **`git`** reads every command a task runs (`git-check.mjs`). It resolves an
   alias as git would, and refuses a shell alias it cannot read. It refuses an
@@ -791,6 +823,22 @@ stop the rest, which is not a closed list:
   `core.fsmonitor`, `core.sshCommand`, `core.hooksPath`, `diff.external`,
   `*.textconv`, and merge, diff and filter drivers;
 - `push --receive-pack`/`--exec` to a remote on this machine.
+
+For a skill that writes nothing, the `-c` and environment settings in that list
+are now held, and so are the file-writing options. That skill's guard still does
+not stop:
+- configuration already in a file git reads: the worktree's `.git/config`,
+  `GIT_CONFIG_GLOBAL` or `GIT_CONFIG_SYSTEM` naming a file, or an `include`;
+- a hook already present;
+- a decompressor that `rg -z` finds on PATH;
+- a spelling of an option or a key that git or rg accepts and the check does
+  not recognise;
+- the real `git` or `rg` run by full path, or with `OPENADLC_TOOLS_POLICY`
+  unset;
+- any program started other than through `git` or `rg`, which on Codex is any
+  program its sandbox allows.
+
+It is a guard against a session that is talked into it, not a boundary.
 
 **Nothing on GitHub stops a crew account pushing to a branch.** The `agent/**`
 and `system/**` ruleset refuses only a force-push and a deletion
