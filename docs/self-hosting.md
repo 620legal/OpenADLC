@@ -749,6 +749,27 @@ organization owns), then:
    accept the new permission, on the installation's page; the same check links
    there until it is accepted.
 
+### An app created before the Security page
+
+The console's Security page lists each repository's open Dependabot,
+code-scanning and secret-scanning alerts, read as the app. A new app is created
+with the three read permissions it needs; an app created before it has none of
+them, and the page shows each type as "not readable". Nothing else stops: they
+are optional, so the `app-permissions` check does not ask for them, and the
+`security-alerts` check raises a warning card per type instead, on the board and
+in `openadlc doctor`. On the app's **Permissions & events** page, under
+**Repository permissions**:
+
+1. **Dependabot alerts:** Read-only.
+2. **Code scanning alerts:** Read-only.
+3. **Secret scanning alerts:** Read-only.
+4. **Save changes**, then accept them on each installation's page. Until an
+   installation accepts them, GitHub keeps refusing the reads there and the
+   card stays; it clears by itself on the first read that succeeds.
+
+Only GETs are made with them; OpenADLC never dismisses or changes an alert
+([security](security.md#the-security-page)).
+
 OpenADLC acts as the app for the repository's administration and its merge
 line: inviting a collaborator, writing the repository's rules and environments,
 committing CODEOWNERS and the templates when you press Apply, merging, the
