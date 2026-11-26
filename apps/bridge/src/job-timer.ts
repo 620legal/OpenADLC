@@ -49,6 +49,11 @@ export const DEFAULT_INTERVALS: Record<Job, number> = {
   attachments: 60,
   // GitHub deliveries past OPENADLC_EVENT_RETENTION_DAYS; kept for weeks, so daily.
   events: 24 * 60,
+  // Each managed repository's project map: a look at its default branch's
+  // head, rebuilt only when it moved. The app is not subscribed to `push`, so
+  // this is what catches a person's merge on GitHub; one pass a day is forced
+  // (`ProjectMapRefresher`), and the merge job nudges it after a merge.
+  maps: 15,
 };
 
 /** Reads `OPENADLC_JOB_<NAME>_MINUTES`; 0 turns a job off. */

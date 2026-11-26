@@ -4,6 +4,7 @@ import { stoppedByTheBridge } from './bridge-stops.js';
 import { sweepDesignMemory } from './design-memory.js';
 import { leadOnlyResolutionTo, resolutionCheckBrief } from './conflict-round.js';
 import type { Stacking } from './stacking.js';
+import type { ProjectMapRefresher } from './project-map.js';
 import type { UnlabeledIntake } from './unlabeled-intake.js';
 import { actsForOn } from './people.js';
 import { DEFAULT_PATH_POLICY, REVIEW_GATE_CHECK, actsFor, deliveryRulesFrom, envInt, type PathPolicy, type TaskKind, type TaskState, dedupeMarker, hasIgnoreLabel } from '@openadlc/shared';
@@ -54,6 +55,7 @@ export const SCHEDULED_JOBS = [
   'releases',
   'attachments',
   'events',
+  'maps',
 ] as const;
 
 /**
@@ -1276,6 +1278,13 @@ export class Scheduler {
     this.selfUpdate = update;
   }
 
+  private projectMaps: Pick<ProjectMapRefresher, 'refreshAll'> | null = null;
+
+  /** Each managed repository's project map (`project-map.ts`): its clock is the `maps` job, and a merge nudges it. */
+  useProjectMaps(maps: Pick<ProjectMapRefresher, 'refreshAll'>): void {
+    this.projectMaps = maps;
+  }
+
   /** Starts work that depends on work in review from its branch, and holds it when that is sent back (`stacking.ts`); run with the merge job. */
   useStacking(stacking: Pick<Stacking, 'sweep'>): void {
     this.stacking = stacking;
@@ -1977,7 +1986,17 @@ export class Scheduler {
         // The plan has the status view regenerate on a merge, not only on the
         // clock: a board that is a quarter of an hour stale after something
         // landed is the moment it is most looked at.
-        const refreshed = merged.some((line) => line.includes('merged')) ? await this.refreshStatus() : [];
+        const landed = merged.some((line) => line.includes('merged'));
+        const refreshed = landed ? await this.refreshStatus() : [];
+        // The default branch moved, so its project map is stale. Not awaited:
+        // a first fetch of a large repository would hold up the next merge;
+        // a pass already going is joined (`ProjectMapRefresher.refreshAll`).
+        if (landed && this.projectMaps) {
+          void this.projectMaps.refreshAll().then(
+            (lines) => lines.forEach((line) => console.log(`[bridge] ${line}`)),
+            (error: unknown) => console.warn(`[bridge] could not refresh the project maps after a merge: ${error instanceof Error ? error.message : error}`),
+          );
+        }
         return { job, actions: [...merged, ...refreshed] };
       }
       case 'qa':
@@ -2003,6 +2022,8 @@ export class Scheduler {
         return { job, actions: await this.sweepAttachments() };
       case 'events':
         return { job, actions: await this.pruneEvents() };
+      case 'maps':
+        return { job, actions: this.projectMaps ? await this.projectMaps.refreshAll() : ['project maps are not wired into this bridge'] };
       default:
         return { job, actions: [`no job named ${job}`] };
     }

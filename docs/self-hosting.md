@@ -2797,6 +2797,16 @@ GitHub's webhook deliveries are rows in the `events` table too. The daily
 them for good. A delivery for a repository the install does not manage keeps
 only its type, delivery id and repository name ([security](security.md)).
 
+Each managed repository's project map is a file under hostd's work root,
+`<work root>/maps/<owner>__<name>.md`, and never in the repository
+([architecture](architecture.md#the-project-map)). The `maps` job
+(`OPENADLC_JOB_MAPS_MINUTES`, every 15 minutes; 0 turns it off) asks hostd
+to look at each default branch's head and rebuild a map whose commit moved.
+The first pass after the bridge starts, and one a day after that, rebuilds
+every map, and the merge job asks for a pass after it merges something. A
+build that fails keeps the previous map and raises a `project-map` card
+saying why. Deleting `maps/` is safe: the next pass makes each map again.
+
 ## Engine updates
 
 Settings calls this System. The tools it can move are the engine CLIs —
