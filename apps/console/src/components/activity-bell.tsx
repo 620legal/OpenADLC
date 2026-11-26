@@ -30,9 +30,10 @@ const PANEL_ROWS = 30;
  * The crew's recent events and how many this browser has not seen. They are
  * listed from the history; the live stream only says that something happened,
  * and the event it carries is merged in by id. The history is read when the
- * button mounts, whenever the stream opens (which is how a reconnect catches
- * up), and on the hook's five-second timer where there is no EventSource —
- * never on a timer per tab otherwise (docs/adr/0081).
+ * stream opens (the first time, and on a reconnect, which is how it catches
+ * up), when the stream cannot open, and on the hook's five-second timer where
+ * there is no EventSource — never on a timer per tab otherwise
+ * (docs/adr/0081).
  *
  * The time seen is read after mounting, as every per-browser choice is: the
  * server has no storage. A browser with none stores the newest event's time
@@ -80,8 +81,6 @@ export function useActivity(fetcher?: typeof fetch) {
     mounted.current = true;
     const stored = readSeen();
     if (stored) keepSeen(stored);
-    // With no EventSource the hook reads on its five-second timer; the first read is not left that long.
-    if (typeof EventSource === 'undefined') void loadOnce();
     const turn = setTimeout(() => setStreaming(true), 0);
     const off = onSeenChange(() => {
       const now = readSeen();

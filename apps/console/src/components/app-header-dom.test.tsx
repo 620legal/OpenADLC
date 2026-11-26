@@ -261,6 +261,52 @@ describe('the pinned navigation', () => {
   });
 });
 
+describe('the activity button (#374)', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('sits beside the alerts menu in both headers', () => {
+    const wide = container.querySelector('[data-wide-header]')!;
+    const phone = [...container.querySelectorAll('header')].find((one) => classes(one).includes('md:hidden'))!;
+    for (const header of [wide, phone]) {
+      const bell = header.querySelector('[data-activity-bell]');
+      expect(bell).not.toBeNull();
+      expect(bell?.nextElementSibling?.querySelector('button[aria-label="Alerts"]')).not.toBeNull();
+    }
+  });
+
+  it('says the history cannot be read inside its panel, and the header draws as it did', async () => {
+    act(() => root.unmount());
+    // A stream the bridge refuses: the button reads the history to say why.
+    vi.stubGlobal(
+      'EventSource',
+      class {
+        static readonly CLOSED = 2;
+        readyState = 0;
+        private listeners = new Map<string, () => void>();
+        constructor() {
+          setTimeout(() => this.listeners.get('error')?.(), 0);
+        }
+        addEventListener(type: string, listener: () => void) {
+          this.listeners.set(type, listener);
+        }
+        close() {}
+      },
+    );
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ error: 'the bridge is not answering' }, { status: 502 })));
+    root = createRoot(container);
+    await act(async () => root.render(<AppHeader page="crew" repo="all" data={DATA} />));
+    await act(async () => {
+      for (let round = 0; round < 6; round += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    const wide = container.querySelector('[data-wide-header]')!;
+    expect(wide.querySelector('[data-activity-error]')?.textContent).toBe('Activity can’t be read: the bridge is not answering');
+    expect(wide.querySelector('[data-activity-badge]')).toBeNull();
+    expect(wide.querySelector('nav[aria-label="Console"]')).not.toBeNull();
+    expect(wide.textContent).toContain('3 need you · 10 system');
+    expect(wide.textContent).toContain('New request');
+  });
+});
+
 describe('the header below 768px', () => {
   it('wraps its second line between its parts, never inside one', () => {
     const phone = [...container.querySelectorAll('header')].find((one) => classes(one).includes('md:hidden'))!;
