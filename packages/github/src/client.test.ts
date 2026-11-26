@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DELETED_ACCOUNT, GitHubApiError, GitHubClient } from './client.js';
+import { DELETED_ACCOUNT, GitHubApiError, GitHubClient, nextLinkPath } from './client.js';
 
 /**
  * A GitHub that lists a pull request's commits the way the real one does: a
@@ -1420,5 +1420,59 @@ describe('uploading a release asset (#344)', () => {
     const refused = client.uploadReleaseAsset('acme/app', 991, 'manifest.json', '{}\n', 3, 'application/json');
     await expect(refused).rejects.toBeInstanceOf(GitHubApiError);
     await expect(client.uploadReleaseAsset('acme/app', 991, 'manifest.json', '{}\n', 3, 'application/json')).rejects.toThrow(/→ 422/);
+  });
+});
+
+describe('a list read by its next links', () => {
+  /** A GitHub that pages with cursors, as Dependabot's alert list does, and links each page to the next. */
+  function cursorPaged(pages: number) {
+    const asked: { method: string; path: string }[] = [];
+    const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
+      const address = new URL(String(url));
+      asked.push({ method: init?.method ?? 'GET', path: `${address.pathname}${address.search}` });
+      const at = Number(address.searchParams.get('after') ?? '0');
+      const headers: Record<string, string> = {};
+      if (at + 1 < pages) {
+        headers.link = `<https://api.github.com/repos/o/r/dependabot/alerts?per_page=1&after=${at + 1}>; rel="next", <https://api.github.com/repos/o/r/dependabot/alerts?per_page=1>; rel="first"`;
+      }
+      return new Response(JSON.stringify([{ number: at }]), { status: 200, headers });
+    }) as typeof fetch;
+    return { client: new GitHubClient({ token: 'token', actingAs: 'openadlc-app', fetchImpl }), asked };
+  }
+
+  it('follows rel="next" until GitHub sends none, with GETs only', async () => {
+    const { client, asked } = cursorPaged(3);
+    const read = await client.getPaged<{ number: number }>('/repos/o/r/dependabot/alerts?per_page=1');
+    expect(read).toEqual({ items: [{ number: 0 }, { number: 1 }, { number: 2 }], truncated: false });
+    expect(asked.map((call) => call.path)).toEqual([
+      '/repos/o/r/dependabot/alerts?per_page=1',
+      '/repos/o/r/dependabot/alerts?per_page=1&after=1',
+      '/repos/o/r/dependabot/alerts?per_page=1&after=2',
+    ]);
+    expect(asked.every((call) => call.method === 'GET')).toBe(true);
+  });
+
+  it('stops at maxPages and says the list was cut short', async () => {
+    const { client, asked } = cursorPaged(5);
+    const read = await client.getPaged<{ number: number }>('/repos/o/r/dependabot/alerts?per_page=1', { maxPages: 2 });
+    expect(read).toEqual({ items: [{ number: 0 }, { number: 1 }], truncated: true });
+    expect(asked).toHaveLength(2);
+  });
+
+  it('throws GitHub’s refusal with its status and body', async () => {
+    const fetchImpl = (async () =>
+      new Response('{"message":"Resource not accessible by integration"}', { status: 403 })) as unknown as typeof fetch;
+    const client = new GitHubClient({ token: 'token', actingAs: 'openadlc-app', fetchImpl });
+    await expect(client.getPaged('/repos/o/r/code-scanning/alerts')).rejects.toMatchObject({
+      status: 403,
+      body: expect.stringContaining('Resource not accessible'),
+    });
+  });
+
+  it('never follows a next link to another host', () => {
+    expect(nextLinkPath('<https://evil.example/x?page=2>; rel="next"')).toBeNull();
+    expect(nextLinkPath('<https://api.github.com/x?page=2>; rel="next"')).toBe('/x?page=2');
+    expect(nextLinkPath('<https://api.github.com/x?page=1>; rel="prev"')).toBeNull();
+    expect(nextLinkPath(null)).toBeNull();
   });
 });

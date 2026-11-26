@@ -1451,6 +1451,38 @@ export interface SpendingUpdate {
   notice: string | null;
 }
 
+/** A type of security alert the Security page lists (#377, docs/adr/0086). */
+export type AlertType = 'dependabot' | 'code-scanning' | 'secret-scanning';
+export type AlertSeverity = 'critical' | 'high' | 'medium' | 'low' | 'none';
+
+/** One open alert, as the bridge's `security-alerts.ts` answers it: never a secret's value. */
+export interface SecurityAlert {
+  type: AlertType;
+  repo: string;
+  number: number;
+  title: string;
+  severity: AlertSeverity;
+  url: string;
+  createdAt: string;
+  where?: string;
+  note?: string;
+}
+
+/** What reading one type of alert on one repository came to. */
+export type AlertTypeState =
+  | { state: 'read'; alerts: SecurityAlert[]; truncated: boolean }
+  | { state: 'off' }
+  | { state: 'unreadable'; permission: string }
+  | { state: 'failed'; reason: string }
+  | { state: 'admins-only' }
+  | { state: 'not-installed' };
+
+/** `GET /v1/security/alerts`: each managed repository's open alerts, by type. */
+export interface SecurityAlertsView {
+  readAt: string;
+  repos: { repo: string; fullName: string; types: Record<AlertType, AlertTypeState> }[];
+}
+
 /** One window's numbers, overall or for a repository; `GET /v1/insights` (the bridge's `insights.ts`). */
 export interface InsightSummary {
   merged: number;
@@ -1788,6 +1820,8 @@ export const api = {
   costs: () => get<CostsView>('/v1/costs'),
   insights: (options: { repo?: string | null; days: 7 | 30 }) =>
     get<InsightsView>(`/v1/insights?days=${options.days}${options.repo ? `&repo=${encodeURIComponent(options.repo)}` : ''}`),
+  securityAlerts: (options: { repo?: string | null } = {}) =>
+    get<SecurityAlertsView>(`/v1/security/alerts${options.repo ? `?repo=${encodeURIComponent(options.repo)}` : ''}`),
   spendingLimits: () => get<SpendingLimitsView>('/v1/spending/limits'),
   notifications: () => get<NotificationSettingsView>('/v1/settings/notifications'),
   pushDevices: () => get<PushDevicesView>('/v1/me/push'),

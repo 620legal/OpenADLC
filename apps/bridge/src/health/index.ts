@@ -5,13 +5,14 @@ import { signInKind } from '../sign-in.js';
 import { revokeGate, settledSigningKey } from '../signing-keys.js';
 import { createHash } from 'node:crypto';
 import { attributions, audit, bots, credentials, deployRuns, externalSigningKeys, identities, issues, lastAudit, lastGithubDelivery, leases, listEventsOfType, modelAccounts, pushDevices, repos, settings, tasks } from '@openadlc/db';
-import { parseEgressHosts } from '@openadlc/shared';
+import { installationSettingsUrl, parseEgressHosts } from '@openadlc/shared';
 import {
   GcpSecretStore,
   GitHubClient,
   accountExists,
   accountOf,
   appClientSecretRef,
+  appJwt,
   appPrivateKeyRef,
   clientSecretAccepted,
   credentialKind,
@@ -36,6 +37,8 @@ import { defaultModelAccountDeps, listAccountModels } from '../model-accounts.js
 import type { RepoSetup } from '../repo-setup.js';
 import type { WebhookSetup } from '../webhook-setup.js';
 import { appChecks } from './checks/app.js';
+import { securityAlertsCheck } from './checks/security-alerts.js';
+import { securityReadsAsApp } from '../security-alerts.js';
 import { cloudNamesCheck } from './checks/cloud-names.js';
 import { commitEmailCheck } from './checks/commit-email.js';
 import { crewChecks, type RepoRef } from './checks/crew.js';
@@ -297,6 +300,30 @@ export function defaultChecks(wiring: HealthWiring): HealthCheck[] {
     app.tokenExpiry,
     app.clientSecret,
     app.selection,
+    // Whether the app can read each type of alert the Security page lists:
+    // a warning of its own, apart from app-permissions, so an app made before
+    // these permissions gets no blocking card for an optional page (#377).
+    securityAlertsCheck({
+      reads: securityReadsAsApp({ credentials: appCredentials, api: APP_API, repositories }),
+      app: async () => {
+        const credentials = await appCredentials();
+        if (!credentials) return null;
+        const described = await APP_API.request<{ slug?: string; owner?: { login?: string; type?: string } | null }>('GET', '/app', appJwt(credentials));
+        if (!described.slug) return null;
+        return { slug: described.slug, organization: described.owner?.type === 'Organization' ? (described.owner.login ?? null) : null };
+      },
+      installationUrl: async (fullName) => {
+        const credentials = await appCredentials();
+        if (!credentials) return null;
+        const found = await APP_API.request<{ id?: number; account?: { login?: string; type?: string } | null }>(
+          'GET',
+          `/repos/${fullName}/installation`,
+          appJwt(credentials),
+        );
+        if (!found.id) return null;
+        return installationSettingsUrl(found.id, found.account?.type === 'Organization' ? (found.account.login ?? null) : null);
+      },
+    }),
     githubAccountsCheck({
       // The same read settings uses. A seatless account is asked of the token
       // broker: a stored token nothing has refreshed is not a working sign-in.

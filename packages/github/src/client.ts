@@ -62,6 +62,23 @@ export class GitHubApiError extends Error {
   }
 }
 
+/**
+ * The path and query of a `Link` header's `rel="next"`, relative to `baseUrl`,
+ * or null when there is none or it points at another host: the token goes with
+ * every request, so a link is followed only where the client was pointed.
+ */
+export function nextLinkPath(link: string | null, baseUrl: string = API): string | null {
+  if (!link) return null;
+  for (const part of link.split(',')) {
+    const match = /<([^>]+)>\s*;\s*rel="?next"?/.exec(part.trim());
+    if (!match) continue;
+    const url = match[1]!;
+    const base = baseUrl.replace(/\/$/, '');
+    return url.startsWith(`${base}/`) ? url.slice(base.length) : null;
+  }
+  return null;
+}
+
 /** The accepted-permissions header of a response, or null when GitHub sent none. */
 export function acceptedPermissionsOf(response: Response): string | null {
   return response.headers.get(ACCEPTED_PERMISSIONS_HEADER)?.trim() || null;
@@ -243,6 +260,37 @@ export class GitHubClient {
     const text = await response.text();
     if (!response.ok) throw new GitHubApiError(response.status, path, text.slice(0, 400), acceptedPermissionsOf(response));
     return (text ? JSON.parse(text) : {}) as T;
+  }
+
+  /**
+   * A list endpoint read page by page, following GitHub's `Link: rel="next"`
+   * until it is absent or `maxPages` pages were read. Dependabot's alert list
+   * deprecated `page` for cursors, so a `page=` counter would read its first
+   * page again and again; the `next` link is the one way that works for every
+   * list. Only GETs, and the next link is followed only on GitHub's own host.
+   */
+  async getPaged<T>(path: string, options: { maxPages?: number; timeoutMs?: number } = {}): Promise<{ items: T[]; truncated: boolean }> {
+    const maxPages = Math.max(1, options.maxPages ?? 10);
+    const items: T[] = [];
+    let next: string | null = path;
+    for (let page = 0; page < maxPages && next; page += 1) {
+      const response: Response = await this.fetchImpl(`${this.baseUrl}${next}`, {
+        method: 'GET',
+        signal: AbortSignal.timeout(options.timeoutMs ?? REQUEST_TIMEOUT_MS),
+        headers: {
+          accept: 'application/vnd.github+json',
+          authorization: `Bearer ${this.options.token}`,
+          'x-github-api-version': '2022-11-28',
+          'user-agent': `openadlc (acting as ${this.options.actingAs})`,
+        },
+      });
+      const text = await response.text();
+      if (!response.ok) throw new GitHubApiError(response.status, next, text.slice(0, 400), acceptedPermissionsOf(response));
+      const body = (text ? JSON.parse(text) : []) as T[];
+      if (Array.isArray(body)) items.push(...body);
+      next = nextLinkPath(response.headers.get('link'), this.baseUrl);
+    }
+    return { items, truncated: next !== null };
   }
 
   async viewer(): Promise<{ login: string; id: number }> {
