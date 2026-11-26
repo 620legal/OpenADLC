@@ -16,6 +16,7 @@ import { crewApprovedHead, type HostCheckService } from './host-check-service.js
 import type { ReleaseService } from './release-service.js';
 import { fastPathOf, pullAuthorOf, seatsWaitedOn, type Automation } from './automation.js';
 import { causeOfFailure, isPrerequisiteRow } from './health/checks/crew.js';
+import { MODEL_LIMIT_CHECK, limitRowOf } from './health/checks/model-limit.js';
 import { DEPLOY_PATH_BRANCH_PREFIX, REVIEW_ROUND_OPENED, endedBySendingBack, headInRepository, issueForSubject, issueNumberFromBranch, parseRef, stageOfTask } from './work.js';
 import { asAutomation, automationBotName, findOwnOpenIssue } from './automation-bot.js';
 import { effectiveConfig } from './effective-config.js';
@@ -260,6 +261,16 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  * end is what bounds them. A claim on one that is older than a retry takes
  * is taken back (`GITHUB_RETRY_CLAIM_MS`), and a seat whose retry GitHub did
  * not answer again has no more of them this pass.
+ *
+ * And it starts again work held on its model account's usage limit (ADR
+ * 0096): a task that ended `held`, or was not started because the account
+ * was held. Read without the board's window (`listHeldTasks`), since a monthly
+ * limit can last weeks. One is due once its seat's account has no failing
+ * `model-limit` row, and either the seat still thinks with the account it was
+ * held on and that row was put right after the task ended, or the seat now
+ * thinks with another account: a seat moved to a working account is not left
+ * waiting on the old one. The task started for it is not claimed, so one
+ * held again is started again when the account next works.
  */
 export async function retryAfterRecovery(fixed: readonly string[] | null, deps: RecoveryDeps): Promise<string[]> {
   const justFixed = fixed ? new Set(fixed.filter(isPrerequisiteRow)) : null;
@@ -267,12 +278,25 @@ export async function retryAfterRecovery(fixed: readonly string[] | null, deps: 
 
   const now = deps.now?.() ?? new Date();
   const windowStart = now.getTime() - ATTENTION_WINDOW_DAYS * DAY_MS;
-  const [recent, repoList, issueList, rows] = await Promise.all([
+  const [recent, repoList, issueList, rows, heldList] = await Promise.all([
     tasks.listTasksSince(new Date(windowStart)),
     repos.listRepos(),
     issues.listIssues(),
     justFixed ? Promise.resolve<Awaited<ReturnType<typeof health.listHealth>>>([]) : health.listHealth(),
+    (async () => tasks.listHeldTasks())().catch(() => [] as Awaited<ReturnType<typeof tasks.listHeldTasks>>),
   ]);
+  // Held tasks older than the window are read on their own; one inside it is
+  // in `recent` already.
+  const seen = new Set(recent.map((task) => task.id));
+  const candidates = [...recent, ...heldList.filter((task) => !seen.has(task.id))];
+  // Who each seat thinks with now, and what the checks say of it now, read
+  // once and only for work held on a model account's limit.
+  let crewNow: Promise<Map<string, { modelAccountId: string | null; name: string }>> | null = null;
+  const seatOf = (botId: string) =>
+    (crewNow ??= (async () => new Map((await bots.listBots()).map((bot) => [bot.id, bot] as const)))().catch(() => new Map()))
+      .then((crew) => crew.get(botId) ?? null);
+  let rowsNow: Promise<Awaited<ReturnType<typeof health.listHealth>>> | null = null;
+  const liveRows = () => (rowsNow ??= justFixed ? (async () => health.listHealth())().catch(() => []) : Promise.resolve(rows));
   // When each prerequisite row that passes now last turned from failing.
   const fixedAt = new Map(
     rows.filter((row) => isPrerequisiteRow(row.id) && row.state === 'ok' && row.fixedAt).map((row) => [row.id, Date.parse(row.fixedAt ?? '')]),
@@ -292,8 +316,8 @@ export async function retryAfterRecovery(fixed: readonly string[] | null, deps: 
   // start hostd refused: each would ask GitHub again, and wait, before the
   // gates and the merge line had their turn, and spend a retry doing it.
   const unansweredFor = new Set<string>();
-  for (const task of recent) {
-    if (task.state !== 'failed' && task.state !== 'stopped') continue;
+  for (const task of candidates) {
+    if (task.state !== 'failed' && task.state !== 'stopped' && task.state !== 'held') continue;
     // GitHub did not answer its start: run again once its wait is out, by the
     // sweep alone. Its time is put off while the sweep holds a claim on it,
     // so one past its time here is a claim a bridge exited holding.
@@ -301,17 +325,31 @@ export async function retryAfterRecovery(fixed: readonly string[] | null, deps: 
     const staleClaim = Boolean(githubDue && task.autoRetriedAt);
     if (task.autoRetriedAt && !staleClaim) continue;
     const endedAt = Date.parse(task.endedAt ?? task.startedAt ?? task.createdAt);
-    if (endedAt < windowStart) continue;
+    if (endedAt < windowStart && task.state !== 'held') continue;
     if (triedAgain(task, recent)) continue;
 
     const parsed = parseRef(task.subjectRef);
     const repoName = repoList.find((repo) => repo.id === task.repoId)?.name ?? parsed?.repo ?? null;
     if (githubDue && (githubDue.at.getTime() > now.getTime() || unansweredFor.has(task.botId))) continue;
-    const healthCause = githubDue ? null : causeOfFailure(task.exitReason, { botId: task.botId, repoName });
+    const seat = task.state === 'held' || /was not started: /.test(task.exitReason ?? '') ? await seatOf(task.botId) : null;
+    const healthCause = githubDue ? null : causeOfFailure(task.exitReason, { botId: task.botId, repoName, modelAccountId: seat?.modelAccountId ?? null });
+    const limitCause = healthCause?.startsWith(`${MODEL_LIMIT_CHECK}:`) ? healthCause : null;
+    // A held task whose words name no account it can wait on waits for a person.
+    if (task.state === 'held' && !limitCause) continue;
     const capHeld = !healthCause && !justFixed && Boolean(deps.costs) && heldAtCap(task.exitReason);
     const restartHeld = !healthCause && !justFixed && heldForRestart(task.exitReason);
     if (restartHeld && deps.restartPending?.()) continue;
-    if (healthCause ? !putRight(healthCause, endedAt) : !capHeld && !githubDue && !restartHeld) continue;
+    let movedAccount = false;
+    if (limitCause) {
+      if (!seat) continue;
+      // Its seat's account now, whichever it is, has to work.
+      if (limitRowOf(await liveRows(), seat.modelAccountId)) continue;
+      movedAccount = seat.modelAccountId !== limitCause.slice(MODEL_LIMIT_CHECK.length + 1);
+      // A hold with no row at all — a restore, which brings back no health
+      // rows — has nothing left to wait for.
+      const known = (await liveRows()).some((row) => row.id === limitCause);
+      if (!movedAccount && known && !putRight(limitCause, endedAt)) continue;
+    } else if (healthCause ? !putRight(healthCause, endedAt) : !capHeld && !githubDue && !restartHeld) continue;
     const cause = healthCause ?? (capHeld ? SPENDING_CAP_CAUSE : restartHeld ? RESTART_CAUSE : GITHUB_UNANSWERED_CAUSE);
 
     // The card has moved past the stage this work was for: whatever failed no
@@ -345,7 +383,9 @@ export async function retryAfterRecovery(fixed: readonly string[] | null, deps: 
       startedFor.set(task.botId, (startedFor.get(task.botId) ?? 0) + 1);
       if (task.kind === 'implement') startedBuild(startedIn, task.repoId, issue);
       // A request's triage may be waiting its turn for intake; it starts from the queue.
-      if (retried.task && !githubDue) await tasks.claimAutoRetry(retried.task.taskId);
+      // Work started again after a usage limit is not claimed: held again, it
+      // is started again the next time the account works.
+      if (retried.task && !githubDue && !limitCause) await tasks.claimAutoRetry(retried.task.taskId);
       await audit({
         actor: RECOVERY_ACTOR,
         action: 'task.auto_retried',
@@ -359,7 +399,9 @@ export async function retryAfterRecovery(fixed: readonly string[] | null, deps: 
             ? `${task.subjectRef}: ${retried.bot}’s ${task.kind} started, now that OpenADLC has restarted`
           : githubDue
             ? `${task.subjectRef}: ${retried.bot}’s ${task.kind} run again (retry ${githubDue.attempt} of ${githubDue.of}), as GitHub did not answer when it started`
-            : `${task.subjectRef}: ${retried.bot}’s ${task.kind} run again, now that ${cause} passes`,
+            : movedAccount
+              ? `${task.subjectRef}: ${retried.bot}’s ${task.kind} run again, now that it thinks with a model account that is not at its limit`
+              : `${task.subjectRef}: ${retried.bot}’s ${task.kind} run again, now that ${cause} passes`,
       );
     } catch (error) {
       const why = error instanceof Error ? error.message : String(error);

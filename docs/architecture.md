@@ -565,7 +565,15 @@ asks you on the card, and the work waits for your answer. In detail:
    audit row with the reason. Nothing in the crew picks it up, so Needs you
    shows a `triage_failed` card (`parked:<repo>#<n>`) with that reason and what
    to do, in any stage, until the label comes off, the issue closes or it is
-   labelled `openadlc:ignore`. Otherwise the dispatcher **leases** the
+   labelled `openadlc:ignore`. A builder whose model account is at its usage
+   or spend limit is passed over. The hold is the health row
+   `model-limit:<accountId>`, read like the `bot-sign-in`, `bot-access` and
+   `hostd` blockers, and under scripted engines too. A task that ends on the
+   limit ends `held` (`tasks.state`, beside `queued`, `running`, `paused`,
+   `stopped`, `done` and `failed`). It is never counted toward parking an
+   issue, and the recovery starts it again once a check of the account passes
+   (docs/adr/0096-a-model-accounts-usage-limit-is-a-health-row-and-its-tasks-end-held.md).
+   Otherwise the dispatcher **leases** the
    issue to that builder — the issue, the bot, the declared paths, an expiry —
    and the bridge opens an `implement` task. hostd clones the repository's
    mirror for the task, on a branch

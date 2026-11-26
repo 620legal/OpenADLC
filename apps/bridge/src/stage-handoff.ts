@@ -174,6 +174,8 @@ export class StageHandoff {
   private async intakeGaveUp(subjectRef: string): Promise<boolean> {
     const since = Date.now() - INTAKE_TRIES_WINDOW_MS;
     const ended = (await tasks.listTasksOnSubjects([subjectRef]).catch(() => [])).filter(
+      // A triage held on its model account's usage limit was not a try: the
+      // account was, and the recovery starts it again once it works.
       (task) => task.kind === 'intake' && ['done', 'failed', 'stopped'].includes(task.state) && Date.parse(task.createdAt) >= since,
     );
     if (ended.length < INTAKE_TRIES) return false;

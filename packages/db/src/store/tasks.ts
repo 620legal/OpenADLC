@@ -224,6 +224,22 @@ export async function listTasksSince(since: Date): Promise<TaskRecord[]> {
 }
 
 /**
+ * Every held task — ended on its model account's usage limit — whose work has
+ * not been started again since, oldest first: what the recovery starts once
+ * the account works (`retryAfterRecovery`). Without the window `listTasksSince`
+ * is read with: a monthly spend limit can last weeks, and a held task that
+ * fell out of the window would never be started again, with nothing saying so.
+ */
+export async function listHeldTasks(): Promise<TaskRecord[]> {
+  const rows = await query<TaskRow>(
+    `${SELECT}
+     where state = 'held' and ${NO_LATER_TASK}
+     order by created_at`,
+  );
+  return rows.map(toTask);
+}
+
+/**
  * Tasks that ended since a moment — done, failed or stopped — newest first,
  * at most `limit`: the console's side panel's Recent tab (ADR 0085).
  * `ended_at` is set on each of those three ways out (`updateTaskState`,
@@ -457,6 +473,10 @@ export async function failUnstarted(id: string, reason: string): Promise<TaskRec
  * on the same issue. A task that has ended stays ended, and a `done` one is
  * not changed at all. A failed one may still be stopped: the card's Stop on
  * it. Writing an ending a task already has again is harmless and allowed.
+ *
+ * A held task (its model account at its usage limit) is an ending too: it is
+ * never written `done` or `failed`, and never written `held` over either. Stop
+ * on one drops it, so the recovery does not start it again.
  */
 export const TASK_STATE_FROM: Record<TaskState, readonly TaskState[]> = {
   queued: ['queued', 'running', 'paused'],
@@ -464,7 +484,8 @@ export const TASK_STATE_FROM: Record<TaskState, readonly TaskState[]> = {
   paused: ['queued', 'running', 'paused'],
   done: ['queued', 'running', 'paused'],
   failed: ['queued', 'running', 'paused', 'failed'],
-  stopped: ['queued', 'running', 'paused', 'failed', 'stopped'],
+  stopped: ['queued', 'running', 'paused', 'failed', 'stopped', 'held'],
+  held: ['queued', 'running', 'paused', 'held'],
 };
 
 /**
@@ -497,7 +518,7 @@ export async function updateTaskState(
        container = coalesce($7, container),
        host_id = coalesce($8::uuid, host_id),
        started_at = case when $2 = 'running' and started_at is null then now() else started_at end,
-       ended_at = case when $2 in ('done','failed','stopped') then now() else ended_at end,
+       ended_at = case when $2 in ('done','failed','stopped','held') then now() else ended_at end,
        -- Only on the way in: the runner reports a pause again after the
        -- gate's own, and a second stamp could land after a quick answer.
        paused_at = case when $2 = 'paused' and state <> 'paused' then now() else paused_at end,

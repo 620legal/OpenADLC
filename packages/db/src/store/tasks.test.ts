@@ -27,6 +27,7 @@ import {
   staleUnstarted,
   listTasksSince,
   listFinishedSince,
+  listHeldTasks,
   liveTaskOn,
   noteStoppedByPerson,
   pausedWithAnswer,
@@ -304,6 +305,22 @@ describe('the tasks "needs you" reads', () => {
   });
 });
 
+describe('the held tasks the recovery starts again', () => {
+  it('are every held task not started again since, however long ago it was held', async () => {
+    vi.mocked(query).mockResolvedValueOnce([{ ...ROW, state: 'held', created_at: new Date('2026-08-01T00:00:00.000Z') }]);
+
+    const held = await listHeldTasks();
+
+    const [sql, params] = vi.mocked(query).mock.calls[0] ?? [];
+    const flat = String(sql).replace(/\s+/g, ' ');
+    expect(flat).toContain("where state = 'held' and not exists ( select 1 from tasks later");
+    // No window: a monthly spend limit can last weeks.
+    expect(flat).not.toMatch(/created_at >= \$1|ended_at >= \$1/);
+    expect(params).toBeUndefined();
+    expect(held.map((task) => task.state)).toEqual(['held']);
+  });
+});
+
 describe('the tasks the side panel lists as recent (#376)', () => {
   it('are the ones done, failed or stopped since the moment, newest end first, up to the limit', async () => {
     vi.mocked(query).mockResolvedValueOnce([
@@ -475,6 +492,23 @@ describe('moving a task from one state to another', () => {
       ['failed', 'stopped'],
     ];
     for (const [from, to] of allowed) expect(may(from, to), `${from} → ${to}`).toBe(true);
+  });
+
+  it('holds a task only while it is live, never over done or failed, and lets Stop drop a held one', () => {
+    for (const from of ['queued', 'running', 'paused', 'held']) expect(may(from, 'held'), `${from} → held`).toBe(true);
+    for (const from of ['done', 'failed', 'stopped']) expect(may(from, 'held'), `${from} → held`).toBe(false);
+    for (const to of ['queued', 'running', 'paused', 'done', 'failed'] as const) expect(may('held', to), `held → ${to}`).toBe(false);
+    expect(may('held', 'stopped')).toBe(true);
+  });
+
+  it('stamps the end of a held task as of any other ending', async () => {
+    vi.mocked(queryOne).mockResolvedValueOnce({ ...ROW, state: 'held' });
+
+    await updateTaskState('task-1', 'held', { exitReason: 'held on model account acct-1: limit' });
+
+    const [sql, params] = vi.mocked(queryOne).mock.calls.at(-1) ?? [];
+    expect(String(sql).replace(/\s+/g, ' ')).toContain("ended_at = case when $2 in ('done','failed','stopped','held') then now() else ended_at end");
+    expect(params?.[8]).toEqual(['queued', 'running', 'paused', 'held']);
   });
 
   it('decides in the write itself, so nothing can end the task between a read and the write', async () => {

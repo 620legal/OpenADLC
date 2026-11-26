@@ -932,6 +932,11 @@ const STAGE_ORDER: readonly string[] = STAGE_KEYS;
 /**
  * Tasks that ended without finishing: failed, or stopped under them by OpenADLC
  * — a restart, a container that went. Nothing runs either again on its own.
+ *
+ * Not `held`: a task held on its model account's usage limit is started again
+ * by the recovery once the account works, and the account's health card
+ * (`model-limit:<accountId>`) stands for every task held on it, so it has no
+ * card of its own (ADR 0096).
  */
 const ENDED_UNFINISHED: readonly TaskFacts['state'][] = ['failed', 'stopped'];
 
@@ -2033,6 +2038,8 @@ export function attentionItems(given: AttentionInput): AttentionItem[] {
       other.botId === failed.botId || (account !== null && botsById.get(other.botId)?.modelAccountId === account);
     return input.tasks.some((other) => {
       if (other.id === failed.id || !other.startedAt || Date.parse(other.startedAt) <= endedAt(failed) || !sameCause(other)) return false;
+      // Held on the account's limit is the account still not working.
+      if (other.state === 'held') return false;
       if (!ENDED_UNFINISHED.includes(other.state)) return true;
       const otherBot = botsById.get(other.botId);
       const again = explainFailure(other.exitReason, { bot: botInWords(otherBot), account: accountOf(otherBot), permissionsUrl });

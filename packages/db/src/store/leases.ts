@@ -560,7 +560,9 @@ export async function settlePausedLeases(input: {
  * lease the bridge refused, or whose task never started (hostd down, the bot
  * out of the repository, the host full), is released with nothing tried, and
  * a build that was stopped — by a person, or by its session going away with
- * its host — said nothing about the issue. Every one of those counted, so a
+ * its host — said nothing about the issue, nor did one held on its model
+ * account's usage limit, which was the account's state (ADR 0096): on
+ * 2026-11-25 a spend limit parked nine issues this way. Every one of those counted, so a
  * few refused passes sent a ready issue to triage with a comment blaming the
  * issue. `started_at` is set only once hostd has the session running.
  *
@@ -574,7 +576,7 @@ export async function attemptsWithoutPullRequest(repoId: string, issueNumber: nu
       where l.repo_id = $1 and l.issue_number = $2 and l.pr_number is null
         and l.state in ('released', 'expired')
         and exists (select 1 from tasks t
-                     where t.lease_id = l.id and t.kind = 'implement' and t.started_at is not null and t.state <> 'stopped')
+                     where t.lease_id = l.id and t.kind = 'implement' and t.started_at is not null and t.state not in ('stopped', 'held'))
         and l.created_at > coalesce(
           (select max(a.at) from audit a, repos r
             where r.id = $1 and a.action = 'issue.triaged' and a.target = r.name || '#' || $2::int),
