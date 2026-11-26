@@ -871,3 +871,72 @@ describe('a message that starts its role’s work on the item', () => {
     expect(fromMessage).toEqual([]);
   });
 });
+
+describe('why an item’s pull request is red', () => {
+  let server: Server;
+  let base: string;
+  const asked: string[] = [];
+  let pullState = 'open';
+
+  beforeEach(async () => {
+    asked.length = 0;
+    pullState = 'open';
+    const { registerItemCiFailureRoute } = await import('./item-routes.js');
+    const { Router } = await import('./router.js');
+    const router = new Router(undefined, undefined, undefined, async () => 'user');
+    const table: Record<string, unknown> = {
+      '/repos/acme/api/actions/runs': { workflow_runs: [{ id: 9, name: 'ci', run_attempt: 1, status: 'completed', conclusion: 'failure' }] },
+      '/repos/acme/api/actions/runs/9/attempts/1/jobs': {
+        total_count: 2,
+        jobs: [
+          { id: 31, name: 'check', status: 'completed', conclusion: 'failure', html_url: 'https://github.com/acme/api/actions/runs/9/job/31', steps: [{ name: 'make ci', conclusion: 'failure' }] },
+          { id: 32, name: 'ci', status: 'completed', conclusion: 'failure', steps: [] },
+        ],
+      },
+    };
+    registerItemCiFailureRoute(router, {
+      resolve: async (subject) =>
+        (subject === 'api#31' ? { item: { pr: 31, issue: null }, repo: { fullName: 'acme/api' } } : subject === 'api#12' ? { item: { pr: null, issue: null }, repo: { fullName: 'acme/api' } } : null) as never,
+      reads: async () => ({
+        get: async <T,>(path: string): Promise<T> => {
+          asked.push(path);
+          if (path === '/repos/acme/api/pulls/31') return { state: pullState, head: { sha: 'a'.repeat(40) } } as T;
+          const answer = table[path.split('?')[0]!];
+          if (!answer) throw Object.assign(new Error('Not Found'), { status: 404 });
+          return answer as T;
+        },
+        jobLog: async (_repo, id) => {
+          asked.push(`log ${id}`);
+          return { text: '2026-11-20T10:00:00.0Z ##[error]tests failed' };
+        },
+      }),
+    });
+    server = createServer((request, response) => void router.handle(request, response));
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  });
+
+  afterEach(async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  const read = async (subject: string) => {
+    const response = await fetch(`${base}/v1/items/${encodeURIComponent(subject)}/ci-failure`, { headers: { 'x-openadlc-identity': 'jane@acme.test' } });
+    return { status: response.status, body: (await response.json()) as Record<string, unknown> };
+  };
+
+  it('names the failing job, its step and the error, reading GitHub only with GETs', async () => {
+    const { status, body } = await read('api#31');
+    expect(status).toBe(200);
+    expect(body).toMatchObject({ state: 'red', jobs: [{ name: 'check', step: 'make ci', excerpt: ['tests failed'] }] });
+    expect(asked).toContain('log 31');
+    expect(asked).not.toContain('log 32');
+  });
+
+  it('has nothing to say for an item with no open pull request, and 404 for no item', async () => {
+    expect((await read('api#12')).body).toEqual({ state: 'none' });
+    pullState = 'closed';
+    expect((await read('api#31')).body).toEqual({ state: 'none' });
+    expect((await read('api#999')).status).toBe(404);
+  });
+});

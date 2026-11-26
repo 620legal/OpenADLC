@@ -178,3 +178,39 @@ describe('the New request form’s starters', () => {
     expect(starters()).not.toBeNull();
   });
 });
+
+describe('the New request form opened with a prefill (#372)', () => {
+  const FLAKY = {
+    repo: 'api',
+    kind: 'defect',
+    text: 'Flaky CI job: integration',
+    details: 'integration in ci failed and then passed on the same head 2 times in the last 30 runs:',
+    replaceLabel: 'Replace it with this flaky job’s request',
+  };
+
+  async function openWith(prefill: typeof FLAKY | undefined): Promise<void> {
+    const { IntakeDialog } = await import('./intake-dialog');
+    await act(async () => root.render(<IntakeDialog repos={['api', 'web']} open={true} onOpenChange={() => undefined} {...(prefill ? { prefill } : {})} />));
+    await settle();
+  }
+
+  it('fills an empty form with the words, the kind and the repository, and sends nothing', async () => {
+    await openWith(FLAKY);
+    expect(areas().text.value).toBe(FLAKY.text);
+    expect(areas().details.value).toBe(FLAKY.details);
+    expect(selects().kind.value).toBe('defect');
+    expect(selects().repo.value).toBe('api');
+    expect(filing.sent).toEqual([]);
+  });
+
+  it('keeps a half-written draft and offers to replace it, by the label it was given', async () => {
+    await openWith(undefined);
+    await type(areas().text, 'My own words');
+    await openWith({ ...FLAKY });
+    expect(areas().text.value).toBe('My own words');
+    expect(dialog().textContent).toContain('Your draft is kept.');
+    await press(FLAKY.replaceLabel);
+    expect(areas().text.value).toBe(FLAKY.text);
+    expect(filing.sent).toEqual([]);
+  });
+});

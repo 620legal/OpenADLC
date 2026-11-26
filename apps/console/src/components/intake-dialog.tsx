@@ -54,6 +54,12 @@ export interface RequestPrefill {
   kind: string;
   text: string;
   details: string;
+  /**
+   * The button that replaces a draft with it, naming what it is: the Checks
+   * page's flaky job is not an alert. "Replace your draft with this alert"
+   * when absent.
+   */
+  replaceLabel?: string;
 }
 
 /**
@@ -244,7 +250,7 @@ export function IntakeDialog({
               <div role="status" className="mt-3 flex flex-wrap items-center gap-2 rounded-md border border-edge bg-surface px-2.5 py-1.5 text-[12px] text-soft">
                 <span>Your draft is kept.</span>
                 <Button type="button" size="sm" variant="ghost" onClick={() => takePrefill(offered)}>
-                  Replace your draft with this alert
+                  {offered.replaceLabel ?? 'Replace your draft with this alert'}
                 </Button>
               </div>
             )}

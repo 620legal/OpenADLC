@@ -3,6 +3,7 @@ import type { GitHubClient } from '@openadlc/github';
 import { hasIgnoreLabel } from '@openadlc/shared';
 import { attachmentIds, claimableFor, claimWindowStart } from './attachment-routes.js';
 import type { ApiDeps } from './api.js';
+import { ciFailureOf, unreachableReason, type CiFailure, type GitHubReads } from './ci-failure.js';
 import type { WaitChain } from './wait-chain.js';
 import { readItem, requestSubject, resolveItem, routeItemMessage, type Item } from './items.js';
 import { requestPrefixOf } from './request-context.js';
@@ -246,6 +247,39 @@ export function heldAbout(value: unknown): { kind: 'held_merge'; head: string } 
   if (about.kind === 'held_merge' && commit(about.head)) return { kind: 'held_merge', head: about.head };
   if (about.kind === 'held_promote' && commit(about.sha)) return { kind: 'held_promote', sha: about.sha };
   return null;
+}
+
+/** What an item's CI failure section reads; real ones in api.ts. */
+export interface ItemCiFailureDeps {
+  resolve(subject: string): Promise<{ item: Item; repo: { fullName: string } | null } | null>;
+  /** GET-only reads of GitHub as the automation account; null when none is connected. */
+  reads(): Promise<GitHubReads | null>;
+}
+
+/**
+ * Why an item's pull request is red: its head's newest `ci` run, the failing
+ * jobs and steps, and the first lines of each error (`ci-failure.ts`). Its
+ * own route, not part of the item's read: the item is read again on every
+ * change its stream reports, and a job log must not be fetched each time.
+ * An item with no open pull request has nothing to say.
+ */
+export function registerItemCiFailureRoute(router: Router, deps: ItemCiFailureDeps): void {
+  router.get('/v1/items/:subject/ci-failure', async ({ params }): Promise<CiFailure> => {
+    const subject = params.subject ?? '';
+    const resolved = shown(subject, await deps.resolve(subject));
+    const { item } = resolved;
+    if (item.pr === null || !resolved.repo) return { state: 'none' };
+    const reads = await deps.reads().catch(() => null);
+    if (!reads) return { state: 'unreachable', reason: 'no GitHub account can read it: reconnect the automation account from Settings → GitHub → Connected accounts' };
+    let pull: { state?: string; head?: { sha?: string } };
+    try {
+      pull = await reads.get(`/repos/${resolved.repo.fullName}/pulls/${item.pr}`);
+    } catch (error) {
+      return { state: 'unreachable', reason: unreachableReason(error) };
+    }
+    if (pull.state !== 'open' || !pull.head?.sha) return { state: 'none' };
+    return ciFailureOf(reads, resolved.repo.fullName, pull.head.sha);
+  });
 }
 
 /** A managed repository, as linking by hand reads it. */
