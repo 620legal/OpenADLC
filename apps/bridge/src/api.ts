@@ -1,6 +1,7 @@
 import { signInKind } from './sign-in.js';
 import { aggregateInsights, withoutIgnored } from './insights.js';
 import { SecurityAlertsReader, securityReadsAsApp } from './security-alerts.js';
+import { readSecurityFindings } from './security-findings.js';
 import { insights } from '@openadlc/db';
 import { heldForPerson } from './merge-line.js';
 import { monthStart, parseCap, summarize as summarizeCi } from './ci-usage.js';
@@ -29,6 +30,7 @@ import {
   recordEvent,
   repos,
   requests,
+  securityReviews,
   sessions,
   settings,
   stageMoves,
@@ -2209,6 +2211,19 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
     }),
   );
   router.get('/v1/security/alerts', async ({ query, role }) => securityAlerts.view({ role, repo: query.get('repo') || null }));
+
+  // The security seat's unfixed findings, from its signed reviews of pull
+  // requests that merged or were closed (docs/adr/0087). Read from the
+  // database, apart from the alerts and their GitHub-only reader.
+  router.get('/v1/security/findings', async ({ query }) =>
+    readSecurityFindings(
+      {
+        repositories: async () => (await repos.listRepos()).map((repo) => ({ id: repo.id, name: repo.name, fullName: repo.fullName })),
+        unfixed: (repoIds) => securityReviews.unfixed(repoIds),
+      },
+      query.get('repo') || null,
+    ),
+  );
 
   router.get('/v1/costs', async ({ query }) => {
     const period = query.get('period') ?? costs.currentPeriod();

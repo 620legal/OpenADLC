@@ -7,6 +7,7 @@ import {
   costCapGate,
   acceptsCrossCutting,
   ownReviewMarker,
+  reviewFindings,
   markerOptions,
   messageKindFor,
   normalisePlanPaths,
@@ -639,5 +640,62 @@ describe('text a person wrote, posted through a crew account', () => {
   it('keeps the words as written, and leaves text with no comment in it alone', () => {
     expect(inertMarkup('Use <b>bold</b> here, and <!-- this --> too.')).toBe('Use <b>bold</b> here, and &lt;!-- this --> too.');
     expect(inertMarkup('Ship it.')).toBe('Ship it.');
+  });
+});
+
+describe('the security seat’s findings list', () => {
+  const review = (marker: Record<string, unknown>) => `Two problems.\n\n<!-- openadlc:${JSON.stringify({ event: 'review_posted', ...marker })} -->`;
+  const finding = { severity: 'blocker', summary: 'The webhook route skips the HMAC check', file: 'apps/bridge/src/webhooks.ts', line: 412 };
+
+  it('is null for a marker without one: an old review, or another seat', () => {
+    expect(reviewFindings(ownReviewMarker(review({ verdict: 'approve', lens: 'security' })))).toBeNull();
+    expect(reviewFindings(ownReviewMarker(review({ verdict: 'approve' })))).toBeNull();
+    expect(reviewFindings(ownReviewMarker(review({ verdict: 'request_changes', lens: 'second' })))).toBeNull();
+    expect(reviewFindings(null)).toBeNull();
+  });
+
+  it('is empty for a review that found nothing', () => {
+    expect(reviewFindings(ownReviewMarker(review({ verdict: 'approve', lens: 'security', findings: [] })))).toEqual([]);
+  });
+
+  it('parses each valid entry, with line null when it is left out', () => {
+    const parsed = reviewFindings(
+      ownReviewMarker(
+        review({
+          verdict: 'request_changes',
+          lens: 'security',
+          findings: [finding, { severity: 'minor', summary: '  Logs the token length  ', file: 'docs/my notes.md' }],
+        }),
+      ),
+    );
+    expect(parsed).toEqual([finding, { severity: 'minor', summary: 'Logs the token length', file: 'docs/my notes.md', line: null }]);
+  });
+
+  const malformed: [string, unknown][] = [
+    ['a severity on the page’s scale', [{ ...finding, severity: 'high' }]],
+    ['a severity in the wrong case', [{ ...finding, severity: 'Blocker' }]],
+    ['an empty summary', [{ ...finding, summary: '   ' }]],
+    ['a summary of 501 characters', [{ ...finding, summary: 'x'.repeat(501) }]],
+    ['a file with a newline', [{ ...finding, file: 'a.ts\nb.ts' }]],
+    ['a file with a tab', [{ ...finding, file: 'a\tb.ts' }]],
+    ['an absolute file', [{ ...finding, file: '/etc/passwd' }]],
+    ['no file', [{ severity: 'major', summary: 'Missing' }]],
+    ['a line of 0', [{ ...finding, line: 0 }]],
+    ['a fractional line', [{ ...finding, line: 1.5 }]],
+    ['a list that is an object', {}],
+    ['an entry that is not an object', ['blocker']],
+    ['51 entries', Array.from({ length: 51 }, () => finding)],
+    ['one bad entry among good ones', [finding, { ...finding, severity: 'critical' }, finding]],
+  ];
+  it.each(malformed)('rejects the whole list for %s, and the verdict still reads', (_name, findings) => {
+    const body = review({ verdict: 'request_changes', lens: 'security', findings });
+    expect(reviewFindings(ownReviewMarker(body))).toBe('malformed');
+    expect(ownReviewMarker(body)?.verdict).toBe('request_changes');
+  });
+
+  it('accepts 50 entries and a 500-character summary', () => {
+    const many = Array.from({ length: 50 }, () => ({ ...finding, summary: 'y'.repeat(500) }));
+    const parsed = reviewFindings(ownReviewMarker(review({ verdict: 'approve', lens: 'security', findings: many })));
+    expect(Array.isArray(parsed) && parsed.length).toBe(50);
   });
 });
