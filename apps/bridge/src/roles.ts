@@ -75,6 +75,8 @@ export const ROUTE_ROLES: Readonly<Record<string, Role>> = {
   'POST /v1/attention/leave': 'user',
   'GET /v1/health': 'user',
   'GET /v1/costs': 'user',
+  // The Costs page's range figures, read by the same people as the month's.
+  'GET /v1/costs/usage': 'user',
   'GET /v1/insights': 'user',
   // Dependabot and code scanning for everyone; the route leaves secret
   // scanning out of a user's answer without reading it (#377, docs/adr/0086).
