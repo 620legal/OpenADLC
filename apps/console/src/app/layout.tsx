@@ -4,6 +4,7 @@ import { BrandProvider, RoleProvider } from '../components/app-header';
 import { ConsoleUpdatedNotice } from '../components/console-updated';
 import { EarlyClicks } from '../components/early-clicks';
 import { NoAdmin, NotAUser } from '../components/not-a-user';
+import { ViewerProvider } from '../components/viewer';
 import { readBrand, readMe } from '../lib/api';
 import { EARLY_CLICKS_SCRIPT } from '../lib/early-clicks';
 import { consoleName } from '../lib/needs-you-alerts';
@@ -73,7 +74,10 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
           me.noAdmin ? <NoAdmin email={me.email} /> : <NotAUser email={me.email} admins={me.admins} />
         ) : (
           <RoleProvider role={me?.role ?? 'admin'}>
-            <BrandProvider brand={brand}>{children}</BrandProvider>
+            {/* Who is looking, only to key their own browser state; never what they may do (ADR 0082). */}
+            <ViewerProvider identity={me?.known && me.email ? me.email : null}>
+              <BrandProvider brand={brand}>{children}</BrandProvider>
+            </ViewerProvider>
           </RoleProvider>
         )}
         <EarlyClicks />

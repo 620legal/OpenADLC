@@ -170,6 +170,26 @@ never the scratch hostd. To use take-over there, export
 `tests/scratch.sh up`; hostd admits only the origin of the console it was
 started with, so the `next dev` console on :57301 cannot use it.
 
+#### The "How this works" strips
+
+Needs you, a repository's Releases, a host check's page, Costs and an item's
+open pull request each open with a collapsible strip of three or four steps
+and a link to the record behind them (`HowThisWorks`,
+`apps/console/src/components/how-this-works.tsx`). The wording of all five is
+in that file's `HOW_THIS_WORKS`, so it is reviewed in one place; each step is
+a fact its linked ADR or `AGENTS.md` states, and changes when that record
+does. Links go to OpenADLC's file on GitHub, since the console does not serve
+`docs/`, and a test fails for a link to a file the repository does not have.
+
+A strip is open on a first visit. Whether a person collapsed it is kept in
+this browser's `localStorage` under
+`openadlc.howThisWorks.<strip>.<encoded identity>`, never on the bridge
+(`lib/how-this-works-preferences.ts`). The identity is the one the bridge
+answered `/v1/me` with, handed down by the root layout through
+`ViewerProvider` (`components/viewer.tsx`) only to key that browser state
+(ADR 0082). With no identity, or storage that throws, the strip draws open and
+stores nothing.
+
 ## The integration suites
 
 The suites in `tests/*.mjs` write to the install they run against: leases,

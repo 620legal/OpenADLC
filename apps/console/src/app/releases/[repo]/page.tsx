@@ -2,6 +2,7 @@ import { notFound } from 'next/navigation';
 import { AppShell } from '@/components/app-header';
 import { BridgeDown } from '@/components/bridge-down';
 import { CutRelease } from '@/components/cut-release';
+import { HOW_THIS_WORKS, HowThisWorks } from '@/components/how-this-works';
 import { PrepareVersion, Preparing } from '@/components/prepare-version';
 import { api, type ReleaseView } from '@/lib/api';
 import { BridgeAnswered } from '@/lib/bridge-answered';
@@ -50,6 +51,7 @@ export default async function ReleasePage({ params }: { params: Promise<{ repo: 
     <AppShell page="releases" data={header}>
       <main className="mx-auto flex w-full max-w-[920px] flex-col gap-5 px-4 py-6 md:px-6 md:py-7">
         <h1 className="text-[16px] font-semibold text-body">Releases of {repo}</h1>
+        <HowThisWorks {...HOW_THIS_WORKS.releases} />
         {'refused' in view ? (
           <section className="flex flex-col gap-3">
             <p data-refused className="text-[12.5px] text-soft">

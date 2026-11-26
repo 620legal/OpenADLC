@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { AppShell } from '@/components/app-header';
+import { HOW_THIS_WORKS, HowThisWorks } from '@/components/how-this-works';
 import { ItemView } from '@/components/item-view';
 import { NEEDS_YOU_PAGE, NeedsList, OthersWaitingList, type CardKeys, type OpenBot, type OpenItem } from '@/components/needs-you';
 import { ThreadPanel } from '@/components/thread-panel';
@@ -126,6 +127,7 @@ export function NeedsYouPage({
           <h1 className="text-[17px] font-semibold text-body">Needs you</h1>
           <span className="text-[12.5px] text-muted">Once there is an issue, the bot that asked posts your answer on it, with your name.</span>
         </div>
+        <HowThisWorks {...HOW_THIS_WORKS['needs-you']} />
         <Tabs value={tab} onValueChange={(value) => switchTo(value === 'system' ? 'system' : 'work')}>
           <div className="border-b border-edge">
             <TabsList aria-label="Which list">

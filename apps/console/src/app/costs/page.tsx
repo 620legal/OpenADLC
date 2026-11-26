@@ -2,6 +2,7 @@ import { AppShell } from '@/components/app-header';
 import { BridgeDown } from '@/components/bridge-down';
 import { CiMinutes } from '@/components/ci-minutes';
 import { DayBars } from '@/components/day-bars';
+import { HOW_THIS_WORKS, HowThisWorks } from '@/components/how-this-works';
 import { Chip } from '@/components/ui/chip';
 import { api } from '@/lib/api';
 import { labelIn, type BotLabel } from '@/lib/bot-label';
@@ -44,6 +45,8 @@ export default async function CostsPage() {
           </p>
         </div>
       </div>
+
+      <HowThisWorks {...HOW_THIS_WORKS.costs} className="mt-5" />
 
       <section className="mt-5 rounded-lg border border-edge bg-panel/40 p-4">
         <div className="flex flex-wrap items-baseline justify-between gap-2">
