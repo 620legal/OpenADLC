@@ -122,6 +122,7 @@ describe('the console’s pages', () => {
       'Releases /releases',
       'Map /map',
       'Activity /activity',
+      'Routines /routines',
       'Settings /settings',
     ]);
     expect(PAGES.find((item) => item.page === 'board')?.href('api')).toBe('/?board=1&repo=api');
@@ -129,7 +130,7 @@ describe('the console’s pages', () => {
 
   it('are all there for everyone signed in, Settings too: a user’s Settings is Notifications (ADR 0053)', () => {
     for (const role of ['admin', 'user'] as const) {
-      expect(navFor(role).map((item) => item.page), role).toEqual(['board', 'needs-you', 'crew', 'costs', 'insights', 'security', 'releases', 'map', 'activity', 'settings']);
+      expect(navFor(role).map((item) => item.page), role).toEqual(['board', 'needs-you', 'crew', 'costs', 'insights', 'security', 'releases', 'map', 'activity', 'routines', 'settings']);
       expect(navFor(role)).toBe(PAGES);
     }
     expect(navFor('user').find((item) => item.page === 'settings')?.href('all')).toBe('/settings');
@@ -163,6 +164,14 @@ describe('the console’s pages', () => {
     expect(navFor('admin').find((item) => item.page === 'activity')?.href('api')).toBe('/activity');
     expect(NAV_PIN_DEFAULTS).not.toContain('activity');
   });
+
+  it('has Routines after Activity, for everyone, and not pinned by default (#369)', () => {
+    const pages = navFor('user').map((item) => item.page);
+    expect(pages.indexOf('routines')).toBe(pages.indexOf('activity') + 1);
+    expect(navFor('user').find((item) => item.page === 'routines')).toMatchObject({ label: 'Routines' });
+    expect(navFor('admin').find((item) => item.page === 'routines')?.href('api')).toBe('/routines');
+    expect(NAV_PIN_DEFAULTS).not.toContain('routines');
+  });
 });
 
 describe('the pinned pages and the rest', () => {
@@ -171,7 +180,7 @@ describe('the pinned pages and the rest', () => {
   it('shows the pinned pages in the order they were pinned, and the rest in the list’s order', () => {
     const pins = ['releases', 'board', 'costs'] as const;
     expect(pages(pinnedNav(PAGES, pins))).toEqual(['releases', 'board', 'costs']);
-    expect(pages(unpinnedNav(PAGES, pins))).toEqual(['needs-you', 'crew', 'insights', 'security', 'map', 'activity', 'settings']);
+    expect(pages(unpinnedNav(PAGES, pins))).toEqual(['needs-you', 'crew', 'insights', 'security', 'map', 'activity', 'routines', 'settings']);
   });
 
   it('shows nothing but More when nothing is pinned', () => {

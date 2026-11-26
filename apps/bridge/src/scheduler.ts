@@ -35,6 +35,7 @@ import { askPeopleAgain, awaitPeople, crewReviewsOn, heldAtCap, heldForRestart, 
 import type { Notifier } from './notify.js';
 import type { EngineUpdates } from './engine-updates.js';
 import type { SelfUpdate } from './self-update.js';
+import type { RoutineService } from './routines.js';
 
 export interface JobResult {
   job: string;
@@ -57,6 +58,7 @@ export const SCHEDULED_JOBS = [
   'attachments',
   'events',
   'maps',
+  'routines',
 ] as const;
 
 /**
@@ -1327,6 +1329,13 @@ export class Scheduler {
     this.projectMaps = maps;
   }
 
+  private routines: Pick<RoutineService, 'fire'> | null = null;
+
+  /** Routines (`routines.ts`, docs/adr/0090): its clock is the `routines` job, which files those that fall due. */
+  useRoutines(routines: Pick<RoutineService, 'fire'>): void {
+    this.routines = routines;
+  }
+
   /** Starts work that depends on work in review from its branch, and holds it when that is sent back (`stacking.ts`); run with the merge job. */
   useStacking(stacking: Pick<Stacking, 'sweep'>): void {
     this.stacking = stacking;
@@ -2066,6 +2075,9 @@ export class Scheduler {
         return { job, actions: await this.pruneEvents() };
       case 'maps':
         return { job, actions: this.projectMaps ? await this.projectMaps.refreshAll() : ['project maps are not wired into this bridge'] };
+      case 'routines':
+        // Every minute: a look at which routines fall due, and one line per firing.
+        return { job, actions: this.routines ? await this.routines.fire(new Date()) : ['routines are not wired into this bridge'] };
       default:
         return { job, actions: [`no job named ${job}`] };
     }

@@ -80,6 +80,7 @@ describe('the header', () => {
       'Releases true Unpin Releases',
       'Map false Pin Map',
       'Activity false Pin Activity',
+      'Routines false Pin Routines',
       'Settings false Pin Settings',
     ]);
     expect(panel).toMatch(/<input[^>]*type="search"[^>]*aria-label="Find a page"/);

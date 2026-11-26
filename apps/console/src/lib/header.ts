@@ -44,7 +44,7 @@ export interface NeedsItem {
   item: string | null;
 }
 
-export type Page = 'board' | 'crew' | 'costs' | 'insights' | 'security' | 'releases' | 'map' | 'activity' | 'settings' | 'needs-you';
+export type Page = 'board' | 'crew' | 'costs' | 'insights' | 'security' | 'releases' | 'map' | 'activity' | 'routines' | 'settings' | 'needs-you';
 
 export function headerData(input: {
   repos: readonly string[];
@@ -119,6 +119,8 @@ export const PAGES: readonly NavPage[] = [
   { page: 'map', label: 'Map', href: (repo) => (repo && repo !== 'all' ? `/map/${encodeURIComponent(repo)}` : '/map') },
   // The crew's last thirty days, across repositories (#374); the header's activity button opens the newest.
   { page: 'activity', label: 'Activity', href: () => '/activity' },
+  // Requests that file themselves on a schedule (#369); anyone may watch them, an approver changes them.
+  { page: 'routines', label: 'Routines', href: () => '/routines' },
   { page: 'settings', label: 'Settings', href: () => '/settings' },
 ];
 

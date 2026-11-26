@@ -71,7 +71,7 @@ describe('the commands', () => {
   const ids = (role: 'admin' | 'user', paused: boolean | null) => paletteCommands({ role, paused }).map((command) => command.id);
 
   it('go to every page an admin has, Needs you among them', () => {
-    expect(ids('admin', false)).toEqual(['go:board', 'go:needs-you', 'go:crew', 'go:costs', 'go:insights', 'go:security', 'go:releases', 'go:map', 'go:activity', 'go:settings', 'new-request', 'board-view', 'pause']);
+    expect(ids('admin', false)).toEqual(['go:board', 'go:needs-you', 'go:crew', 'go:costs', 'go:insights', 'go:security', 'go:releases', 'go:map', 'go:activity', 'go:routines', 'go:settings', 'new-request', 'board-view', 'pause']);
   });
 
   it('go to every page, pinned or not, each with its label and link, as they did before the navigation was pinned (ADR 0080)', () => {
@@ -90,13 +90,15 @@ describe('the commands', () => {
       ['go:map', 'Map', '/map/api'],
       // The crew's last thirty days (#374), listed through PAGES like every page.
       ['go:activity', 'Activity', '/activity'],
+      // Requests that file themselves on a schedule (#369).
+      ['go:routines', 'Routines', '/routines'],
     ];
     expect(go('admin')).toEqual([...pages, ['go:settings', 'Settings', '/settings']]);
     expect(go('user')).toEqual(pages);
   });
 
   it('leave Settings, Pause work and Resume out for a user', () => {
-    expect(ids('user', true)).toEqual(['go:board', 'go:needs-you', 'go:crew', 'go:costs', 'go:insights', 'go:security', 'go:releases', 'go:map', 'go:activity', 'new-request', 'board-view']);
+    expect(ids('user', true)).toEqual(['go:board', 'go:needs-you', 'go:crew', 'go:costs', 'go:insights', 'go:security', 'go:releases', 'go:map', 'go:activity', 'go:routines', 'new-request', 'board-view']);
   });
 
   it('group the board the other way from how it is, for an admin and a user alike', () => {

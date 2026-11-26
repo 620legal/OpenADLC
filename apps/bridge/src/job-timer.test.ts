@@ -177,6 +177,13 @@ describe('how often each job runs', () => {
     expect(intervalsFromEnv({ OPENADLC_JOB_MAPS_MINUTES: '0' } as never).maps).toBe(0);
   });
 
+  it('looks for routines that fall due every minute unless told otherwise, and 0 turns them off', () => {
+    expect(DEFAULT_INTERVALS.routines).toBe(1);
+    expect(intervalsFromEnv({} as never).routines).toBe(1);
+    expect(intervalsFromEnv({ OPENADLC_JOB_ROUTINES_MINUTES: '5' } as never).routines).toBe(5);
+    expect(intervalsFromEnv({ OPENADLC_JOB_ROUTINES_MINUTES: '0' } as never).routines).toBe(0);
+  });
+
   it('turns a job off at zero rather than treating it as unset', () => {
     // An install that does not want the dependency sweep should not have to
     // patch the source.

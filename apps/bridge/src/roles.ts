@@ -149,6 +149,16 @@ export const ROUTE_ROLES: Readonly<Record<string, Role>> = {
   // the task is held to the caps every task is.
   'POST /v1/repos/:name/discover': 'user',
   'GET /v1/repos/:name/discover/runs/:id': 'user',
+  // Routines (#369, docs/adr/0090): requests that file themselves on a
+  // schedule. Anyone may read them; every change is refused by the bridge
+  // unless the caller's linked account has Approves on in People
+  // (`routine-routes.ts`). Approves is per person, not a role, as for the cut.
+  'GET /v1/routines': 'user',
+  'POST /v1/routines': 'user',
+  'PATCH /v1/routines/:id': 'user',
+  'POST /v1/routines/:id/pause': 'user',
+  'POST /v1/routines/:id/resume': 'user',
+  'DELETE /v1/routines/:id': 'user',
   'GET /v1/items/:subject/ci-failure': 'user',
   'POST /v1/repos/:name/release/views': 'user',
   'POST /v1/repos/:name/release/cut': 'user',

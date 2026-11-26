@@ -1,6 +1,6 @@
 import { heldBySeatPause, registerSeatPauseRoutes, seatPausedReason } from './seat-pause.js';
 import { createServer } from 'node:http';
-import { audit as auditEntry, bots, bridgeGaps, ciUsage, closePool, costs, deployRuns, inFlight, issues as issueStore, leases as leaseStore, recordEvent, repos, settings, tasks, threads as threadStore, waitForDatabase } from '@openadlc/db';
+import { audit as auditEntry, bots, bridgeGaps, ciUsage, closePool, costs, deployRuns, inFlight, issues as issueStore, leases as leaseStore, people, recordEvent, repos, routines as routineStore, settings, tasks, threads as threadStore, waitForDatabase } from '@openadlc/db';
 import { registerPauseRoutes, restorePause } from './pause-work.js';
 import { accountOf, appPrivateKeyRef, appVisibility, ensureAlertsSecret, ensureConsoleSecret, ensureInternalSecret, getSecretStore, installationTokenFor, openadlcHome, redeliverFailedSince } from '@openadlc/github';
 import { sameLogin } from '@openadlc/shared';
@@ -50,6 +50,7 @@ import { Reconciler } from './reconciler.js';
 import { startGap, startHeartbeat } from './bridge-gap.js';
 import { KeepAwake, SLEPT_EVENT } from './keep-awake.js';
 import { JobTimer } from './job-timer.js';
+import { RoutineService } from './routines.js';
 import { Router } from './router.js';
 import { REQUEST_SWEEP_MS, RequestQueue } from './request-queue.js';
 import { WatermarkStream } from './thread-stream.js';
@@ -554,6 +555,23 @@ async function main(): Promise<void> {
   scheduler.useHostChecks(hostChecks);
   scheduler.useReleaseRuns(releaseRuns);
   scheduler.useStacking(stacking);
+  // Routines (docs/adr/0090): the `routines` job files those that fall due,
+  // through `fileRequest`, which the console's API gives it when it registers.
+  const routineService = new RoutineService({
+    store: routineStore,
+    paused: (repo) => dispatchGate.paused(repo),
+    // The cap that stops leasing: reached, with `onCap.stopLeasing` on.
+    capReached: async () => {
+      if (!config.costs.onCap.stopLeasing) return null;
+      const budget = await costs.getBudget(costs.currentPeriod());
+      return budget?.state === 'stopped' ? { spentUsd: budget.spentUsd, capUsd: budget.capUsd } : null;
+    },
+    approves: async (githubUserId) => (await people.personByGithubId(githubUserId))?.approves === true,
+    audit: async (entry) => {
+      await auditEntry(entry);
+    },
+  });
+  scheduler.useRoutines(routineService);
   // Each managed repository's project map on hostd (docs/adr/0087): the
   // `maps` job is its clock, a merge nudges it, and one pass a day is forced.
   scheduler.useProjectMaps(
@@ -861,6 +879,7 @@ async function main(): Promise<void> {
     // the compare view reads GitHub as the last release is read.
     // The readiness checklist judges the tag as the app, as the publish makes it.
     releaseCuts: { service: releaseRuns, reader: deployClient, app: (fullName: string) => appGate.client(fullName).catch(() => null) },
+    routines: routineService,
   };
   // Stops the look at Needs you for a waiting merge or a stopped review (`notify-waiting.ts`).
   const stopConsoleApi = registerConsoleApi(router, deps);

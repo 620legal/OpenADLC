@@ -96,7 +96,21 @@ describe('a new request', () => {
     expect(await createRequest(input)).toMatchObject({ id: 'b71c09e2-3ae8-450b-abe9-0c93eb4d67dc', state: 'queued' });
     expect(queryOne).toHaveBeenCalledTimes(2);
     // The id is the column's default, never one the store made up.
-    expect(String(vi.mocked(queryOne).mock.calls[1]?.[0])).toMatch(/insert into requests \(text, context, repo_id, kind, requested_by, state\)/);
+    expect(String(vi.mocked(queryOne).mock.calls[1]?.[0])).toMatch(/insert into requests \(text, context, repo_id, kind, requested_by, state, routine_id\)/);
+  });
+
+  it('records the routine that filed it, and none for a request a person filed', async () => {
+    const id = 'c71c09e2-3ae8-450b-abe9-0c93eb4d67dc';
+    const routineId = '0b6f1d1c-6c55-4c1c-9a59-1f4a4b8f2a10';
+    vi.mocked(queryOne).mockResolvedValueOnce({ ...row(id), state: 'queued', routine_id: routineId });
+
+    expect(await createRequest({ ...input, routineId })).toMatchObject({ id, routineId });
+    expect(vi.mocked(queryOne).mock.calls[0]?.[1]).toEqual(['Add a dark mode.', null, 'repo-1', 'feature', 'janedoe', 'queued', routineId]);
+    expect(String(vi.mocked(queryOne).mock.calls[0]?.[0])).toContain('routine_id');
+
+    vi.mocked(queryOne).mockResolvedValueOnce({ ...row(id), state: 'queued' });
+    expect(await createRequest(input)).toMatchObject({ routineId: null });
+    expect(vi.mocked(queryOne).mock.calls[1]?.[1]?.[6]).toBeNull();
   });
 
   it('gets its work item in the transaction that creates it', async () => {
