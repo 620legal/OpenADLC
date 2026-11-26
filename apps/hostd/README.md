@@ -31,7 +31,7 @@ service for a bot's GitHub token when a task starts (`src/token-client.ts`).
 - **Configuration.** `src/config.ts`. `OPENADLC_HOSTD_DRIVER` picks the driver, and
   `openadlc up` sets it from `install.json` over anything exported. Work lives in
   `OPENADLC_WORK_ROOT` (`~/.openadlc/work`: `mirrors/`, a task's `slots/<task>/`,
-  the local driver's `cache/`), subscription sign-ins in
+  `maps/` with each managed repository's project map, the local driver's `cache/`), subscription sign-ins in
   `OPENADLC_LOGIN_ROOT` (`~/.openadlc/logins/<account>`); the image is `OPENADLC_BOT_IMAGE`
   (`openadlc-bot:latest`, built by `infra/local/build-bot-image.sh`).
 
@@ -55,6 +55,7 @@ bridge's `/internal/tasks/:id/*` with the task token.
 
 - `src/main.ts` — picks the driver, registers the host with its capacity, carries paused tasks' branches out of the per-bot mirrors from before, makes the task network and the task database server, retires the seats' old containers, takes back computers that outlived the last hostd, fills the warm pool, starts the server. Under the local driver it brings each bot's idle shell up.
 - `src/server.ts`, `src/auth.ts` — the HTTP API, and what a caller has to prove.
+- `src/project-map.ts` — each managed repository's project map, `<work root>/maps/<owner>__<name>.md`: built by plain code from the default branch's tree in the tasks' mirror, without a checkout, written atomically and only when it changed, and served on `/project-maps` to the bridge's `maps` job and its `project-map` health check ([docs/architecture.md](../../docs/architecture.md#the-project-map), docs/adr/0087).
 - `src/task-runner.ts` — a task end to end: model, the host's room, a computer of its own (`acquire`), a clone, `make setup` against its own database, context files, session; at its end its branch kept in the mirror and its computer released; a paused one's computer given back after `OPENADLC_PAUSED_KEEP_MINUTES`.
 - `src/task-attachments.ts` — the files a task's work item carries, fetched from the bridge (`/internal/attachments/:id`), checked against their hash and written under `<context dir>/attachments/` and listed in `attachments.md`. A text file is also a context document, so its text goes into the prompt. Images and PDFs never are: they are passed by path in `OPENADLC_ATTACHMENTS`.
 - `src/skill-runner.ts`, `src/engine-choice.ts` — the process a session runs: the engine, usage to the ledger as it arrives, a gate at the cap.

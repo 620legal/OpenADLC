@@ -268,6 +268,59 @@ desk's accessible name holds the bot, its state and its full task. The poses
 differ by shape, so under `prefers-reduced-motion` the two animations
 (`office-busy`, `office-wave` in `globals.css`) stop and the states still read.
 
+### The project map
+
+Every managed repository has a project map: one Markdown file that summarises
+its default branch. hostd keeps it at `<work root>/maps/<owner>__<name>.md`
+(folder 0700, file 0600). It is never committed, and it is never written into
+the repository or a task's clone
+([ADR 0087](adr/0087-a-project-map-is-generated-by-hostd-from-its-mirror-and-kept-under-the-work-root.md)).
+
+**What it holds.** A header with the commit it was built from and when it was
+built. Then:
+
+- the root README's first paragraph
+- the areas and packages, each with what it owns, its entry point, its tests
+  and its README
+- the key ADRs: those AGENTS.md links to, then all of them, newest first
+- the Human-review paths, as `parseHumanReviewPaths` reads AGENTS.md on the
+  default branch
+
+A section with nothing to read from is left out.
+
+**How it is built.** `apps/hostd/src/project-map.ts` builds it with plain code,
+not a model. It fetches the repository's mirror, the one tasks are cloned from,
+under the mirror's lock. It reads the default branch's tree with `git ls-tree`
+and the few blobs it needs with `git cat-file`, skipping any over 256 KiB.
+Nothing is checked out, so only merged text reaches the map.
+
+Every string taken from a file is sanitised: it goes through `redactSecrets`,
+loses HTML comments (so no `openadlc:` marker can ride along), is folded to one
+line and is capped at 400 characters. The map never holds the remote's URL or
+anything from the environment.
+
+The same commit gives the same bytes. Paths sort by code unit, and the file is
+written only when the commit, the format version or the body changed. A write
+goes through a tmp file, `fsync` and `rename`, so a reader never sees half a
+map.
+
+**When it is rebuilt.** The bridge's `maps` job (`apps/bridge/src/project-map.ts`)
+asks hostd for each repository every 15 minutes (`OPENADLC_JOB_MAPS_MINUTES`),
+one repository at a time. The app is not subscribed to `push`, so this look is
+what catches a person's merge on GitHub. The merge job asks for a pass as soon
+as it has merged something, without waiting for it. The first pass after the
+bridge starts, and one every 24 hours, is forced: it reads every tree even when
+the commit has not moved. A map of a repository that is no longer managed is
+deleted.
+
+**When it fails.** A failed build keeps the previous file untouched. hostd
+remembers the reason until its next try, and the `project-map` health check
+turns it into a card that names the repository, the reason, and the commit of
+the map that was kept.
+
+**Routes.** hostd serves `POST` and `DELETE /project-maps/:owner/:name` and
+`GET /project-maps`, behind the internal secret, for the bridge only.
+
 ## How the parts trust each other
 
 - **Console → bridge.** On a local install the bridge takes the console user

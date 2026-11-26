@@ -147,6 +147,22 @@ export interface SignedReleaseRun {
 
 /** A start or a read of a host check is hostd queueing or looking up; the run itself is reported. */
 const HOST_CHECK_CALL_TIMEOUT_MS = 30_000;
+/** A project map's first build fetches the whole repository into hostd's mirror, which for a large one is slow. */
+const PROJECT_MAP_REFRESH_TIMEOUT_MS = 5 * 60_000;
+const PROJECT_MAP_CALL_TIMEOUT_MS = 30_000;
+
+/** One repository's project map as hostd holds it (`apps/hostd/src/project-map.ts`). */
+export interface ProjectMapView {
+  repo: string;
+  path: string;
+  commit: string | null;
+  builtAt: string | null;
+  /** `never`: hostd has not tried since it started. */
+  state: 'written' | 'unchanged' | 'failed' | 'never';
+  /** Redacted by hostd. */
+  error: string | null;
+  triedAt: string | null;
+}
 /** The probe runs a few commands through sudo. */
 const HOST_CHECK_PROBE_TIMEOUT_MS = 60_000;
 
@@ -565,6 +581,25 @@ export class HostdClient {
     return this.call('GET', '/host-check/account', { timeoutMs: HOST_CHECK_PROBE_TIMEOUT_MS });
   }
 
+  /**
+   * Has hostd rebuild a repository's project map from its default branch
+   * (docs/adr/0087). `force` reads the tree even when the commit is the one
+   * the map was built from; the bytes still change only when the map does.
+   */
+  async refreshProjectMap(repoFullName: string, input: { defaultBranch: string; bot: string; force?: boolean }): Promise<{ map: ProjectMapView }> {
+    return this.call('POST', `/project-maps/${projectMapPath(repoFullName)}`, { body: input, timeoutMs: PROJECT_MAP_REFRESH_TIMEOUT_MS });
+  }
+
+  /** Every project map hostd holds, and every repository whose last attempt failed. */
+  async projectMaps(): Promise<{ maps: ProjectMapView[] }> {
+    return this.call('GET', '/project-maps', { timeoutMs: PROJECT_MAP_CALL_TIMEOUT_MS });
+  }
+
+  /** Deletes the map of a repository OpenADLC no longer manages. */
+  async removeProjectMap(repoFullName: string): Promise<{ deleted: boolean }> {
+    return this.call('DELETE', `/project-maps/${projectMapPath(repoFullName)}`, { timeoutMs: PROJECT_MAP_CALL_TIMEOUT_MS });
+  }
+
   /** Whether the release account is fit to build one, proved by its effect; `null` when hostd names none (`ReleaseAccount.probe`). */
   async releaseAccount(): Promise<{ probe: ReleaseAccountProbe | null }> {
     return this.call('GET', '/release/account', { timeoutMs: HOST_CHECK_PROBE_TIMEOUT_MS });
@@ -761,4 +796,10 @@ export class HostdClient {
       notAnswering: HOSTD_NOT_ANSWERING_FOR_ATTACH,
     });
   }
+}
+
+/** `owner/name` as two path segments, each encoded, so hostd's route reads them apart. */
+function projectMapPath(repoFullName: string): string {
+  const [owner = '', ...rest] = repoFullName.split('/');
+  return `${encodeURIComponent(owner)}/${encodeURIComponent(rest.join('/'))}`;
 }
