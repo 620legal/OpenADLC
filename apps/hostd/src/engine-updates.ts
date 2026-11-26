@@ -666,6 +666,17 @@ export function candidateCredential(input: {
 }
 
 /**
+ * What the engine update's throwaway containers are named after:
+ * `<botPrefix>engines`, or `openadlc-engines` for the default install. A
+ * second install on the same Docker daemon used the same fixed names, so its
+ * run was refused ("name already in use") and its `rm -f` before each run
+ * could remove the other install's probe or model call mid-run.
+ */
+export function engineContainerPrefix(botPrefix: string | null | undefined): string {
+  return botPrefix ? `${botPrefix}engines` : 'openadlc-engines';
+}
+
+/**
  * How a task would resolve its model if it ran on `image`: the task runner's
  * own decision, with an xAI seat's list asked of that image's grok, once per
  * seat per run. A chooser per run, so nothing a candidate listed outlives it.
@@ -727,7 +738,7 @@ export interface EngineUpdaterOptions {
    * container like any other, and the firewall refuses it everything else.
    */
   buildProxy?: string;
-  /** Names every throwaway container a run makes. */
+  /** Names every throwaway container a run makes; see `engineContainerPrefix`. */
   containerPrefix?: string;
   /** Runs docker, npm and the build script. A test answers for all three. */
   run?: CommandRunner;
@@ -793,7 +804,7 @@ export class EngineUpdater {
   constructor(private readonly options: EngineUpdaterOptions) {
     this.run = options.run ?? runCommand;
     this.now = options.now ?? (() => new Date());
-    this.prefix = options.containerPrefix ?? 'openadlc-engines';
+    this.prefix = options.containerPrefix ?? engineContainerPrefix(null);
     this.log = options.log ?? ((line) => console.log(line));
   }
 

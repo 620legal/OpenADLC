@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { modelAccounts } from '@openadlc/db';
 import type { AccountCheck, EngineUpdateResult } from '@openadlc/shared';
 
 vi.mock('@openadlc/db', () => ({
@@ -15,7 +16,9 @@ import {
   EngineUpdater,
   ENGINES_LABEL,
   RECIPE_LABEL,
+  candidateModels,
   compareVersions,
+  engineContainerPrefix,
   ghPackagesUrl,
   imageTags,
   newestOldEnough,
@@ -1494,6 +1497,97 @@ describe('the versions in use', () => {
     const probes = world.calls.filter((call) => call.args[0] === 'run');
     expect(probes).toHaveLength(1);
     expect(probes[0]?.args).toContain('openadlc-engines-versions-in-use');
+  });
+});
+
+describe('the names of the containers a run starts', () => {
+  // Two installs on one Docker daemon both used `openadlc-engines-*`: the
+  // second's probe was refused ("The container name ... is already in use")
+  // for every engine, week after week, and each one's `rm -f` before a run
+  // could remove the other's probe or model call mid-run.
+
+  /** A run that probes both images and calls a model, as a weekly update does on an image built before the label. */
+  async function namesOf(containerPrefix?: string): Promise<{ ran: string[]; removed: string[]; called: string[] }> {
+    const world = new World();
+    world.tags.set('openadlc-bot:latest', world.image(PINS, false));
+    world.npm[CODEX] = '0.156.1';
+    const { service, calls } = updater(world, containerPrefix === undefined ? {} : { containerPrefix });
+
+    const result = await service.updateAndWait({ trigger: 'schedule' });
+
+    expect(result.state).toBe('updated');
+    const docker = world.calls.filter((call) => call.command === 'docker');
+    return {
+      ran: docker.filter((call) => call.args[0] === 'run').map((call) => call.args[call.args.indexOf('--name') + 1] ?? ''),
+      removed: docker.filter((call) => call.args[0] === 'rm').map((call) => call.args[call.args.indexOf('-f') + 1] ?? ''),
+      called: calls.map((call) => call.name),
+    };
+  }
+
+  it('are named after the bot prefix, or openadlc-engines for the default install', () => {
+    expect(engineContainerPrefix('bot2-')).toBe('bot2-engines');
+    expect(engineContainerPrefix(null)).toBe('openadlc-engines');
+    expect(engineContainerPrefix(undefined)).toBe('openadlc-engines');
+    expect(engineContainerPrefix('')).toBe('openadlc-engines');
+  });
+
+  it('runs, removes and calls only under its own prefix', async () => {
+    const names = await namesOf(engineContainerPrefix('bot2-'));
+
+    expect(names.ran).toEqual(expect.arrayContaining(['bot2-engines-versions-in-use', 'bot2-engines-versions-candidate']));
+    expect(names.removed).toEqual(expect.arrayContaining(['bot2-engines-versions-in-use', 'bot2-engines-versions-candidate']));
+    expect(names.called).toEqual(['bot2-engines-call-1']);
+    for (const name of [...names.ran, ...names.removed, ...names.called]) expect(name).toMatch(/^bot2-engines-/);
+  });
+
+  it('keeps the default install’s names when no prefix is given', async () => {
+    const names = await namesOf();
+
+    expect(names.ran).toEqual(expect.arrayContaining(['openadlc-engines-versions-in-use', 'openadlc-engines-versions-candidate']));
+    expect(names.called).toEqual(['openadlc-engines-call-1']);
+    for (const name of [...names.ran, ...names.removed, ...names.called]) expect(name).toMatch(/^openadlc-engines-/);
+  });
+
+  it('never shares a name with another install’s run, so neither uses nor removes the other’s', async () => {
+    const ours = await namesOf(engineContainerPrefix(null));
+    const theirs = await namesOf(engineContainerPrefix('bot2-'));
+    const models: Record<string, string[]> = { ours: [], theirs: [] };
+    for (const [who, prefix] of [['ours', engineContainerPrefix(null)], ['theirs', engineContainerPrefix('bot2-')]] as const) {
+      await askedForModels(prefix, (name) => models[who]?.push(name));
+    }
+
+    const all = (names: { ran: string[]; removed: string[]; called: string[] }, listed: string[]) =>
+      new Set([...names.ran, ...names.removed, ...names.called, ...listed]);
+    const a = all(ours, models.ours ?? []);
+    const b = all(theirs, models.theirs ?? []);
+    expect(a.size).toBeGreaterThan(0);
+    expect(b.size).toBeGreaterThan(0);
+    expect([...a].filter((name) => b.has(name))).toEqual([]);
+  });
+
+  /** Resolves newest:grok on an xAI seat through `candidateModels`, which asks the seat's CLI in a named container. */
+  async function askedForModels(prefix: string, named: (name: string) => void): Promise<SessionModel> {
+    vi.mocked(modelAccounts.get).mockImplementation(async (id: string) =>
+      id === OPENAI ? { id, provider: 'xai', kind: 'subscription', label: 'SuperGrok', createdAt: '2026-09-24T00:00:00.000Z' } : null,
+    );
+    try {
+      const choose = candidateModels(async (_accountId, _image, name) => {
+        named(name);
+        return [{ id: 'grok-4.7', createdAt: null, isDefault: true }];
+      }, prefix);
+      return await choose('openadlc-bot:candidate')(bot({ name: 'grok', engine: 'grok', model: 'newest:grok', modelAccountId: OPENAI }));
+    } finally {
+      vi.mocked(modelAccounts.get).mockImplementation(async () => null);
+    }
+  }
+
+  it('asks the candidate for a seat’s models in a container under its own prefix', async () => {
+    const names: string[] = [];
+
+    const chosen = await askedForModels(engineContainerPrefix('bot2-'), (name) => names.push(name));
+
+    expect(chosen.model).toBe('grok-4.7');
+    expect(names).toEqual(['bot2-engines-models']);
   });
 });
 
