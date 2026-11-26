@@ -26,6 +26,7 @@ import {
   issues,
   leases,
   listAudit,
+  localCiRuns,
   mergeLines,
   recordEvent,
   repos,
@@ -145,7 +146,9 @@ import { registerBoardPanelRoute } from './board-panel.js';
 import { answerFromConsole, sendThreadMessage } from './thread-messages.js';
 import { setApproversFromLogins } from './people-routes.js';
 import { checkConsoleLogo, checkConsoleName, decodeLogo, LOGO_POLICY, logoMediaType } from './brand.js';
-import { defaultItemLinkDeps, registerItemLinkRoutes, registerItemRoutes } from './item-routes.js';
+import { defaultItemLinkDeps, registerItemCiFailureRoute, registerItemLinkRoutes, registerItemRoutes } from './item-routes.js';
+import { githubReadsOf } from './ci-failure.js';
+import { registerChecksRoutes } from './checks-routes.js';
 import { registerItemSearchRoutes } from './item-search-routes.js';
 import { itemKey, itemOf, offeredGate, requestSubject, resolveItem } from './items.js';
 import { PlanChanges, registerPlanChangeRoutes } from './plan-changes.js';
@@ -1880,6 +1883,25 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
   });
   registerAttachmentRoutes(router);
   registerDesignMemoryRoutes(router);
+  // The Checks page and an item's CI failure: GETs on GitHub as the automation
+  // account, and the bridge's own records; neither writes anything (ADR 0083).
+  const checksReads = async () => {
+    const client = await asAutomation(deps.actors, config);
+    return client ? githubReadsOf(client) : null;
+  };
+  registerItemCiFailureRoute(router, { resolve: resolveItem, reads: checksReads });
+  registerChecksRoutes(router, {
+    repo: async (name) => {
+      const repo = await repos.getRepoByName(name);
+      return repo ? { id: repo.id, name: repo.name, fullName: repo.fullName, defaultBranch: repo.defaultBranch } : null;
+    },
+    reads: checksReads,
+    records: {
+      hostCheck: (repoId) => repos.getHostCheck(repoId),
+      hostCheckRun: (repoId, prNumber) => hostCheckRuns.latestFor(repoId, prNumber),
+      localCi: (repoId, headSha) => localCiRuns.latestFor(repoId, headSha),
+    },
+  });
   // A repository's own Postgres servers for its tasks, a person's to set (`task-postgres-routes.ts`).
   // Its Compose file is read as the account the bridge reads GitHub with.
   registerTaskPostgresRoutes(
