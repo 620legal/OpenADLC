@@ -77,6 +77,9 @@ export const ROUTE_ROLES: Readonly<Record<string, Role>> = {
   // Dependabot and code scanning for everyone; the route leaves secret
   // scanning out of a user's answer without reading it (#377, docs/adr/0086).
   'GET /v1/security/alerts': 'user',
+  // The security seat's unfixed findings: already on each pull request on
+  // GitHub, from reviews the console shows users anyway (#378, docs/adr/0087).
+  'GET /v1/security/findings': 'user',
   'GET /v1/spending/limits': 'user',
   'GET /v1/work/pause': 'user',
   // How long the bridge was away; anyone who saw it may dismiss it for everyone.

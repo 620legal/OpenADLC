@@ -55,6 +55,12 @@ export interface Marker {
    * (`acceptsCrossCutting`).
    */
   scope?: string;
+  /**
+   * On the security seat's `review_posted`: every finding it raised, as
+   * `{severity, summary, file, line?}`, `[]` when it found none. Read only by
+   * `reviewFindings`, and only from a review the seat signed (docs/adr/0087).
+   */
+  findings?: unknown;
   [key: string]: unknown;
 }
 
@@ -118,6 +124,69 @@ export function ownReviewMarker(body: string | null | undefined): Marker | null 
  */
 export function acceptsCrossCutting(body: string | null | undefined): boolean {
   return ownReviewMarker(body)?.scope === 'cross-cutting';
+}
+
+/** The security seat's own grades for a finding (`crew/roles/review_security.md`). */
+export const SEAT_SEVERITIES = ['blocker', 'major', 'minor'] as const;
+export type SeatSeverity = (typeof SEAT_SEVERITIES)[number];
+
+/** One finding of the security seat's review, as its marker's `findings` list carries it. */
+export interface ReviewFinding {
+  severity: SeatSeverity;
+  summary: string;
+  file: string;
+  line: number | null;
+}
+
+/** The most findings one review lists; more is a list that cannot be trusted. */
+export const MAX_REVIEW_FINDINGS = 50;
+export const MAX_FINDING_SUMMARY = 500;
+export const MAX_FINDING_FILE = 300;
+
+// A path: no control character, no whitespace but a plain space, and not
+// absolute. It is shown on the Security page and put in a task's details.
+const FINDING_FILE_BAD = /[\u0000-\u001f\u007f-\u009f\ufeff]|[^\S ]/;
+
+function findingFrom(raw: unknown): ReviewFinding | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const entry = raw as Record<string, unknown>;
+  const severity = entry.severity;
+  if (typeof severity !== 'string' || !(SEAT_SEVERITIES as readonly string[]).includes(severity)) return null;
+  const summary = typeof entry.summary === 'string' ? entry.summary.trim() : '';
+  if (summary.length < 1 || summary.length > MAX_FINDING_SUMMARY) return null;
+  const file = entry.file;
+  if (typeof file !== 'string' || file.length < 1 || file.length > MAX_FINDING_FILE) return null;
+  if (FINDING_FILE_BAD.test(file) || file.startsWith('/') || file.trim().length === 0) return null;
+  let line: number | null = null;
+  if (entry.line !== undefined && entry.line !== null) {
+    if (typeof entry.line !== 'number' || !Number.isInteger(entry.line) || entry.line < 1) return null;
+    line = entry.line;
+  }
+  return { severity: severity as SeatSeverity, summary, file, line };
+}
+
+/**
+ * The findings a review's own marker lists: `null` when it has no `findings`
+ * key (an old review, or any seat but security), `[]` when it found nothing,
+ * and `'malformed'` when the list cannot be trusted.
+ *
+ * One bad entry rejects the whole list. Keeping the good ones would quietly
+ * drop a finding the seat meant to report, and the latest list is read as the
+ * seat's whole judgement, so a short one would look like a fix. Whether the
+ * list is malformed never changes the verdict: that is read from the same
+ * marker's `verdict`, as before.
+ */
+export function reviewFindings(marker: Marker | null): ReviewFinding[] | null | 'malformed' {
+  if (!marker || !Object.prototype.hasOwnProperty.call(marker, 'findings')) return null;
+  const list = marker.findings;
+  if (!Array.isArray(list) || list.length > MAX_REVIEW_FINDINGS) return 'malformed';
+  const findings: ReviewFinding[] = [];
+  for (const raw of list) {
+    const finding = findingFrom(raw);
+    if (!finding) return 'malformed';
+    findings.push(finding);
+  }
+  return findings;
 }
 
 /** A stage asking to send its work back to the one before it, and why. */

@@ -5,7 +5,7 @@ import { useState } from 'react';
 import { IntakeDialog, type RequestPrefill } from '@/components/intake-dialog';
 import { ExternalIcon } from '@/components/icons';
 import { Button } from '@/components/ui/button';
-import type { AlertSeverity, AlertType, AlertTypeState, SecurityAlert, SecurityAlertsView } from '@/lib/api';
+import type { AlertSeverity, AlertType, AlertTypeState, SecurityAlert, SecurityAlertsView, SecurityFinding, SecurityFindingsView } from '@/lib/api';
 import { cn } from '@/lib/cn';
 import {
   ALERT_TYPES,
@@ -15,6 +15,10 @@ import {
   severityPhrase,
   alertCount,
   filterAlerts,
+  filterFindings,
+  findingCount,
+  findingRequest,
+  findingWhere,
   securityHref,
   securityRequest,
   type SecurityFilters,
@@ -26,13 +30,37 @@ import {
  * wrote is drawn as text. A secret-scanning alert is the secret type's name
  * and its link: the bridge never sends the value, and a user is never sent
  * secret scanning at all.
+ *
+ * Beside them, each repository lists the security seat's unfixed findings,
+ * from its signed reviews of pull requests that merged or were closed (#378,
+ * docs/adr/0087), filed on the same severity scale.
  */
-export function SecurityBody({ view, repos, filters }: { view: SecurityAlertsView; repos: readonly string[]; filters: SecurityFilters }) {
+export function SecurityBody({
+  view,
+  repos,
+  filters,
+  findings = null,
+  findingsError = null,
+}: {
+  view: SecurityAlertsView;
+  repos: readonly string[];
+  filters: SecurityFilters;
+  /** The security seat's unfixed findings (#378, docs/adr/0087); null when they were not read. */
+  findings?: SecurityFindingsView | null;
+  /** Why the findings could not be read; the alerts show all the same. */
+  findingsError?: string | null;
+}) {
   const shown = filterAlerts(view, filters);
+  const shownFindings = findings ? filterFindings(findings, filters) : null;
+  const findingsOf = (repo: string): SecurityFinding[] => shownFindings?.repos.find((one) => one.repo === repo)?.findings ?? [];
   const [prefill, setPrefill] = useState<RequestPrefill | undefined>(undefined);
   const [open, setOpen] = useState(false);
   const file = (alert: SecurityAlert): void => {
     setPrefill(securityRequest(alert));
+    setOpen(true);
+  };
+  const fileFinding = (finding: SecurityFinding): void => {
+    setPrefill(findingRequest(finding));
     setOpen(true);
   };
 
@@ -65,7 +93,16 @@ export function SecurityBody({ view, repos, filters }: { view: SecurityAlertsVie
         {alertCount(shown)} open {alertCount(shown) === 1 ? 'alert' : 'alerts'}
         {filters.severity ? ` ${severityPhrase(filters.severity)}` : ''}, read from GitHub at{' '}
         {new Date(view.readAt).toLocaleTimeString()}.
+        {shownFindings && findingCount(shownFindings) > 0
+          ? ` ${findingCount(shownFindings)} unfixed security review ${findingCount(shownFindings) === 1 ? 'finding' : 'findings'}.`
+          : ''}
       </p>
+
+      {findingsError && (
+        <p className="text-[12px] text-attention" data-findings-notice>
+          The security review findings could not be read: {findingsError}
+        </p>
+      )}
 
       {shown.repos.length === 0 && <p className="text-[12.5px] text-soft">No repository to show.</p>}
 
@@ -76,6 +113,7 @@ export function SecurityBody({ view, repos, filters }: { view: SecurityAlertsVie
             {ALERT_TYPES.map((type) => (
               <TypeBlock key={type} type={type} state={repo.types[type]} severity={filters.severity} onFile={file} />
             ))}
+            {findingsOf(repo.repo).length > 0 && <FindingsBlock findings={findingsOf(repo.repo)} onFile={fileFinding} />}
           </div>
         </section>
       ))}
@@ -157,6 +195,44 @@ function AlertRow({ alert, onFile }: { alert: SecurityAlert; onFile: (alert: Sec
         File as task
       </Button>
     </li>
+  );
+}
+
+/**
+ * The security seat's findings on one repository: those of its latest review
+ * of each pull request that merged or was closed. The seat wrote the summary
+ * and the file, so both are drawn as text, as GitHub's alert text is.
+ */
+function FindingsBlock({ findings, onFile }: { findings: SecurityFinding[]; onFile: (finding: SecurityFinding) => void }) {
+  return (
+    <div className="px-3.5 py-2.5" data-findings>
+      <h3 className="text-[11px] font-medium uppercase tracking-wider text-muted">Security review findings</h3>
+      <ul className="mt-1.5 flex flex-col gap-1.5">
+        {findings.map((finding, index) => (
+          <li
+            key={`${finding.reviewId}:${index}`}
+            className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px]"
+            data-finding={`${finding.pr}:${index}`}
+          >
+            <SeverityBadge severity={finding.severity} />
+            <span className="text-[11px] text-muted" data-seat-severity>
+              · {finding.seatSeverity}
+            </span>
+            <span className="min-w-0 flex-1 text-body">{finding.summary}</span>
+            <span className="font-mono text-[11.5px] text-muted">{findingWhere(finding)}</span>
+            <span className="text-[11.5px] text-muted">
+              #{finding.pr} {finding.prState}
+            </span>
+            <a href={finding.reviewUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-[11.5px] text-link hover:underline">
+              Review <ExternalIcon size={11} />
+            </a>
+            <Button type="button" size="sm" variant="ghost" onClick={() => onFile(finding)}>
+              File as task
+            </Button>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 

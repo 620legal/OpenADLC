@@ -16,6 +16,7 @@ import {
   markEventProcessed,
   recordEvent,
   repos,
+  securityReviews,
   settings,
   spendingLimits,
   stageMoves,
@@ -53,6 +54,7 @@ import {
   isIgnoreLabel,
   missingLabels,
   REPO_DEFAULTS,
+  resolveBotRef,
 } from '@openadlc/shared';
 import { touchesConfig, type GitHubClient } from '@openadlc/github';
 import { mergeabilityOf, type Decide, type MergeabilityWait } from './mergeability.js';
@@ -72,6 +74,7 @@ import { endStandingApproval } from './plan-changes.js';
 import { askedForCi, latestByName, verdictFor, type MergeLine } from './merge-line.js';
 import { itemLink, type Notifier } from './notify.js';
 import { recordDesignMemory, type CommentSignature } from './design-memory.js';
+import { recordSecurityReview } from './security-findings.js';
 import { NO_TESTING_URL, openQaRun, qaTarget, taskGaveUp } from './scheduler.js';
 import { stageAfterIntake, type StageHandoff } from './stage-handoff.js';
 import { retakeLease, SendBack } from './send-back.js';
@@ -202,7 +205,7 @@ interface WebhookPayload {
     line?: number | null;
     author_association?: string;
   };
-  review?: { id?: number; state: string; body?: string | null; html_url?: string; user: { login: string; id?: number }; author_association?: string; commit_id?: string };
+  review?: { id?: number; state: string; body?: string | null; html_url?: string; user: { login: string; id?: number }; author_association?: string; commit_id?: string; submitted_at?: string };
   /** On `labeled` and `unlabeled`: the label. */
   label?: { name: string };
   repository?: { name: string; full_name: string; default_branch?: string };
@@ -727,7 +730,7 @@ export class Webhooks {
       case 'pull_request':
         return this.onPullRequest(payload);
       case 'pull_request_review':
-        return this.onReview(payload);
+        return this.onReview(payload, signature);
       case 'workflow_run':
         return this.onWorkflowRun(payload);
       case 'check_suite':
@@ -3856,7 +3859,7 @@ export class Webhooks {
       .catch(step('comment'));
   }
 
-  private async onReview(payload: WebhookPayload): Promise<void> {
+  private async onReview(payload: WebhookPayload, signature: CommentSignature | null = null): Promise<void> {
     const pr = payload.pull_request;
     const review = payload.review;
     const repoFullName = payload.repository?.full_name;
@@ -3864,6 +3867,30 @@ export class Webhooks {
     if (!pr || !review || !repoFullName || !repoName) return;
 
     const crew = await bots.listBots();
+
+    // The security seat's signed findings list, for the Security page
+    // (docs/adr/0087). Stored apart from everything below: a failure here
+    // never delays or fails the review gate, and the merge line reads none of it.
+    await (async () => {
+      if (!signature?.verified) return;
+      const security = this.automation.reviewRules(crew).reviewers.find((entry) => entry.lens === 'security');
+      const securitySeat = security ? (resolveBotRef(crew, security.seat)?.name ?? security.seat) : null;
+      if (!securitySeat) return;
+      const managed = await repos.getRepoByName(repoName);
+      await recordSecurityReview(
+        {
+          action: payload.action,
+          repo: managed ? { id: managed.id, name: managed.name, fullName: managed.fullName } : null,
+          fork: fromFork(pr, repoFullName),
+          prNumber: pr.number,
+          review,
+          signature,
+        },
+        { record: securityReviews.record, securitySeat },
+      );
+    })().catch((error: unknown) =>
+      console.warn(`[bridge] ${repoName}#${pr.number}: security review findings not recorded: ${error instanceof Error ? error.message : error}`),
+    );
 
     // A person's review is of the commit it was submitted on, and only this
     // delivery says which: GitHub moves a review's `commit_id` onto a later
