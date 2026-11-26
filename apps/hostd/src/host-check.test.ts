@@ -124,7 +124,12 @@ beforeEach(() => {
 
 afterEach(() => {
   process.env = { ...saved };
-  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  // GitHub's runner image 20261122 (git 2.56) failed this cleanup with
+  // ENOTEMPTY on a submodule fixture's .git and .git/objects/pack: a git the
+  // test started (background maintenance, most likely) was still writing
+  // there as the folder was removed. Retrying waits for that writer to finish
+  // rather than failing a test whose assertions had already passed.
+  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 });
 
 const START = { runId: 'run-1', repo: 'acme/mac-app', pr: 7, head: HEAD, command: 'make host-ci', timeoutMinutes: 90, bot: 'atlas' };
