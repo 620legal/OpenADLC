@@ -2,7 +2,7 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { HandsOffWindow } from '@openadlc/db';
+import type { HandsOffDuration, HandsOffWindow } from '@openadlc/db';
 import { HandsOff, HANDS_OFF_OFF, HANDS_OFF_ON, HANDS_OFF_REFUSED } from './hands-off.js';
 import { HandsOffRoutes, registerHandsOffRoutes, type HandsOffRouteDeps } from './hands-off-routes.js';
 import { PersonFlows, type GitHubViewer, type PersonGitHubDeps } from './person-github.js';
@@ -30,7 +30,7 @@ function rig() {
     store: {
       openFor: vi.fn(async () => state.open),
       listOpen: vi.fn(async () => (state.open ? [state.open] : [])),
-      turnOn: vi.fn(async (input) => {
+      turnOn: vi.fn(async (input: { repoId: string; setBy: string; setByLogin: string; setByGithubId: number; duration: HandsOffDuration }) => {
         if (state.open) return { window: state.open, created: false };
         const ms = { '1h': HOURS, '8h': 8 * HOURS, '24h': 24 * HOURS, until_off: null }[input.duration];
         state.open = {
