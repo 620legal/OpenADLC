@@ -91,6 +91,7 @@ describe('the console’s pages', () => {
       'Crew /crew',
       'Costs /costs',
       'Insights /insights',
+      'Security /security',
       'Releases /releases',
       'Settings /settings',
     ]);
@@ -99,10 +100,16 @@ describe('the console’s pages', () => {
 
   it('are all there for everyone signed in, Settings too: a user’s Settings is Notifications (ADR 0053)', () => {
     for (const role of ['admin', 'user'] as const) {
-      expect(navFor(role).map((item) => item.page), role).toEqual(['board', 'needs-you', 'crew', 'costs', 'insights', 'releases', 'settings']);
+      expect(navFor(role).map((item) => item.page), role).toEqual(['board', 'needs-you', 'crew', 'costs', 'insights', 'security', 'releases', 'settings']);
       expect(navFor(role)).toBe(PAGES);
     }
     expect(navFor('user').find((item) => item.page === 'settings')?.href('all')).toBe('/settings');
+  });
+
+  it('has Security for everyone, under More rather than pinned (#377)', () => {
+    for (const role of ['admin', 'user'] as const) {
+      expect(navFor(role).find((item) => item.page === 'security')?.href('all'), role).toBe('/security');
+    }
   });
 
   it('has Releases for everyone, since anyone may watch a release (#345)', () => {
@@ -117,7 +124,7 @@ describe('the pinned pages and the rest', () => {
   it('shows the pinned pages in the order they were pinned, and the rest in the list’s order', () => {
     const pins = ['releases', 'board', 'costs'] as const;
     expect(pages(pinnedNav(PAGES, pins))).toEqual(['releases', 'board', 'costs']);
-    expect(pages(unpinnedNav(PAGES, pins))).toEqual(['needs-you', 'crew', 'insights', 'settings']);
+    expect(pages(unpinnedNav(PAGES, pins))).toEqual(['needs-you', 'crew', 'insights', 'security', 'settings']);
   });
 
   it('shows nothing but More when nothing is pinned', () => {

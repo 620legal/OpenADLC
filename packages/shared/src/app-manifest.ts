@@ -57,6 +57,22 @@ export const MANIFEST_PERMISSIONS: Record<string, 'read' | 'write'> = {
 };
 
 /**
+ * The three read permissions the Security page reads alerts with (ADR 0086).
+ *
+ * Kept out of `MANIFEST_PERMISSIONS` on purpose: the `app-permissions` check
+ * raises a blocking card for each of those an app lacks, and an accept card on
+ * every installation that has not taken a new one, so listing these there
+ * would block every install made before them over an optional page. A new app
+ * is created with them (`buildAppManifest`), and the `security-alerts` check
+ * proves each by a real read and warns while one fails.
+ */
+export const SECURITY_ALERT_PERMISSIONS: Record<string, 'read'> = {
+  vulnerability_alerts: 'read',
+  security_events: 'read',
+  secret_scanning_alerts: 'read',
+};
+
+/**
  * Each permission as the app's settings page names it, and the heading it is
  * under there.
  *
@@ -81,6 +97,9 @@ export const PERMISSION_NAMES: Record<string, { label: string; section: 'Reposit
   deployments: { label: 'Deployments', section: 'Repository' },
   metadata: { label: 'Metadata', section: 'Repository' },
   git_signing_ssh_public_keys: { label: 'SSH signing keys', section: 'Account' },
+  vulnerability_alerts: { label: 'Dependabot alerts', section: 'Repository' },
+  security_events: { label: 'Code scanning alerts', section: 'Repository' },
+  secret_scanning_alerts: { label: 'Secret scanning alerts', section: 'Repository' },
 };
 
 /** GitHub's own words for a level, as the permission's dropdown offers it. */
@@ -197,7 +216,7 @@ export function buildAppManifest(input: ManifestInput): AppManifest {
       url: input.webhookUrl || PLACEHOLDER_HOOK_URL,
       active: Boolean(input.webhookUrl),
     },
-    default_permissions: MANIFEST_PERMISSIONS,
+    default_permissions: { ...MANIFEST_PERMISSIONS, ...SECURITY_ALERT_PERMISSIONS },
     default_events: [...WEBHOOK_EVENTS],
   };
 }

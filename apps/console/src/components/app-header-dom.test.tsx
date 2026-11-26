@@ -169,7 +169,7 @@ describe('the pinned navigation', () => {
     expect(more().getAttribute('aria-expanded')).toBe('true');
     expect(panel().hidden).toBe(false);
     expect(document.activeElement?.getAttribute('aria-label')).toBe('Find a page');
-    expect(rows()).toEqual(['Board', 'Needs you', 'Crew', 'Costs', 'Insights', 'Releases', 'Settings']);
+    expect(rows()).toEqual(['Board', 'Needs you', 'Crew', 'Costs', 'Insights', 'Security', 'Releases', 'Settings']);
     expect(toggle('Pin Costs')?.getAttribute('aria-pressed')).toBe('false');
     expect(toggle('Unpin Crew')?.getAttribute('aria-pressed')).toBe('true');
 

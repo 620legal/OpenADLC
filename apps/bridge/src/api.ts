@@ -1,5 +1,6 @@
 import { signInKind } from './sign-in.js';
 import { aggregateInsights, withoutIgnored } from './insights.js';
+import { SecurityAlertsReader, securityReadsAsApp } from './security-alerts.js';
 import { insights } from '@openadlc/db';
 import { heldForPerson } from './merge-line.js';
 import { monthStart, parseCap, summarize as summarizeCi } from './ci-usage.js';
@@ -2191,6 +2192,22 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
     const [data, issueList] = await Promise.all([insights.readInsightData(since), issues.listIssues()]);
     return aggregateInsights(withoutIgnored(data, issueList), { days, repo: query.get('repo') || null });
   });
+
+  // Each managed repository's open security alerts, read from GitHub as the
+  // app when the page opens, only with GETs (docs/adr/0086). A user's answer
+  // never reads secret scanning; it is an admin's (#377).
+  const securityAlerts = new SecurityAlertsReader(
+    securityReadsAsApp({
+      api: APP_API,
+      credentials: async () => {
+        const clientId = (await effectiveConfig(config)).gitHubClientId;
+        const privateKey = await getSecretStore().get(appPrivateKeyRef());
+        return clientId && privateKey ? { clientId, privateKey } : null;
+      },
+      repositories: async () => (await repos.listRepos()).map((repo) => ({ name: repo.name, fullName: repo.fullName })),
+    }),
+  );
+  router.get('/v1/security/alerts', async ({ query, role }) => securityAlerts.view({ role, repo: query.get('repo') || null }));
 
   router.get('/v1/costs', async ({ query }) => {
     const period = query.get('period') ?? costs.currentPeriod();
