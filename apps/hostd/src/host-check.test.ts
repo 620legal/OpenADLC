@@ -128,7 +128,9 @@ afterEach(() => {
   // ENOTEMPTY on a submodule fixture's .git and .git/objects/pack: a git the
   // test started (background maintenance, most likely) was still writing
   // there as the folder was removed. Retrying waits for that writer to finish
-  // rather than failing a test whose assertions had already passed.
+  // rather than failing a test whose assertions had already passed. The
+  // receive script no longer starts that maintenance (#411); the retry stays
+  // for a git the tests' own fixtures run, and for the #411 test without its fix.
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 });
 
@@ -513,10 +515,10 @@ describe('the git steps the account runs', () => {
         return readFileSync(path);
       },
       /** RECEIVE as hostd runs it, with only the command's environment. */
-      receive(head: string, bundle: Buffer) {
+      receive(head: string, bundle: Buffer, env: Record<string, string> = {}) {
         return spawnSync('/bin/sh', ['-c', RECEIVE, 'sh', folder, head], {
           input: bundle,
-          env: { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: home, LANG: 'en_US.UTF-8' },
+          env: { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: home, LANG: 'en_US.UTF-8', ...env },
           encoding: 'utf8',
         });
       },
@@ -653,6 +655,54 @@ describe('the git steps the account runs', () => {
     const after = statSync(join(f.folder, 'src', 'a.c'), { bigint: true });
     expect(after.ino).toBe(unchanged.ino);
     expect(after.mtimeNs).toBe(unchanged.mtimeNs);
+  });
+
+  it('starts no git maintenance or gc that outlives the run (#411)', () => {
+    const f = fixture();
+    const first = f.commit({ Makefile: 'host-ci:\n\ttrue\n' });
+    const firstReceived = f.receive(first, f.bundle());
+    expect(firstReceived.stderr).toBe('');
+    expect(firstReceived.status).toBe(0);
+
+    // The kept objects after about 50 runs, each of which added a pack: past
+    // gc.autoPackLimit (50), so a fetch with auto maintenance on starts it.
+    const packs = join(f.folder, '.git', 'objects', 'pack');
+    for (let n = 0; n < 51; n += 1) {
+      const oid = execFileSync('git', ['hash-object', '-w', '--stdin'], { cwd: f.folder, env: clean, input: `planted ${n}\n`, encoding: 'utf8' }).trim();
+      execFileSync('git', ['pack-objects', '--quiet', '.git/objects/pack/pack'], { cwd: f.folder, env: clean, input: `${oid}\n` });
+    }
+    const planted = readdirSync(packs).filter((name) => name.endsWith('.pack'));
+    expect(planted.length).toBeGreaterThanOrEqual(52);
+
+    // One trace2 file per git process: git writes the parent's child_start
+    // before it spawns a detached child, so this fails without timing.
+    const trace = join(f.root, 'trace');
+    mkdirSync(trace);
+    const second = f.commit({ 'src/a.c': 'int a;\n' });
+    const received = f.receive(second, f.bundle(first), { GIT_TRACE2_EVENT: trace });
+    expect(received.stderr).toBe('');
+    expect(received.status).toBe(0);
+    expect(git(f.folder, 'rev-parse', 'HEAD')).toBe(second);
+
+    const events = readdirSync(trace).flatMap((file) =>
+      readFileSync(join(trace, file), 'utf8')
+        .split('\n')
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as { event: string; sid: string; argv?: string[] }),
+    );
+    expect(events.some((event) => event.event === 'start')).toBe(true);
+    const background = events.filter((event) => event.event === 'child_start' && (event.argv ?? []).some((arg) => arg === 'maintenance' || arg === 'gc'));
+    expect(background.map((event) => event.argv)).toEqual([]);
+    const started = new Set(events.filter((event) => event.event === 'start').map((event) => event.sid));
+    const ended = new Set(events.filter((event) => event.event === 'exit' || event.event === 'atexit').map((event) => event.sid));
+    expect([...started].filter((sid) => !ended.has(sid))).toEqual([]);
+
+    const gitDir = join(f.folder, '.git');
+    for (const left of ['gc.pid', 'gc.log', join('objects', 'maintenance.lock')]) expect(existsSync(join(gitDir, left))).toBe(false);
+    const kept = /^(objects|refs|packed-refs|HEAD|index|sharedindex\..+|shallow|modules|config|description|info)$/;
+    expect(readdirSync(gitDir).filter((name) => !kept.test(name))).toEqual([]);
+    const after = readdirSync(packs).filter((name) => name.endsWith('.pack'));
+    for (const pack of planted) expect(after).toContain(pack);
   });
 
   describe("a submodule's git dir (#365)", () => {
@@ -1001,10 +1051,10 @@ describe('the receive script, shared with the release run (#343)', () => {
   it('is the host check’s RECEIVE, byte for byte as it was last changed on purpose', () => {
     expect(RECEIVE).toBe(receiveScript('host-check'));
     // The sha256 of RECEIVE: a change to the host check's script has to
-    // change this test on purpose. Last changed by #365, which keeps and
-    // cleans each submodule's git dir and stops the fetch recursing into
-    // submodules (docs/adr/0079); it was fe7e3274… before.
-    expect(createHash('sha256').update(RECEIVE).digest('hex')).toBe('bf42cfe908dead00c04715b09770bb44a1aa1dea4ad86470e01c2491f532102e');
+    // change this test on purpose. Last changed by #411, which stops git
+    // starting background maintenance (docs/adr/0097); it was bf42cfe9…
+    // before, after #365's submodule git dirs (docs/adr/0079).
+    expect(createHash('sha256').update(RECEIVE).digest('hex')).toBe('6b5e64ae87cd8fbf9576c3a87785a1ea78a0805446dacad192f9c38973ec79f3');
   });
 
   it('fetches only the release refs for a release, and keeps the same .git cleaning', () => {
