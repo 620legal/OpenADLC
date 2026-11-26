@@ -6,7 +6,8 @@ import type { ReactNode } from 'react';
  *
  * Several reproduce Lucide icons (https://lucide.dev, ISC License): ExternalIcon,
  * CheckIcon, QuestionIcon, CrewIcon, CostsIcon, CloseIcon, ComputerIcon,
- * TerminalIcon, PlusIcon and ChevronDownIcon. SettingsIcon, ShipIcon and
+ * TerminalIcon, PlusIcon, ChevronDownIcon, NeedsYouIcon (inbox), PinIcon (pin)
+ * and MoreIcon (ellipsis). SettingsIcon, ShipIcon and
  * WarningIcon reproduce Feather icons (https://feathericons.com, MIT License,
  * Copyright (c) 2013-2017 Cole Bemis). The licence texts are in
  * THIRD_PARTY_NOTICES at the repository's root.
@@ -31,6 +32,31 @@ function Icon({ size = 14, stroke = 2, className, children }: { size?: number; s
 }
 
 type Props = { size?: number; className?: string };
+
+/** The Needs you page, where what waits on a person is listed. */
+export const NeedsYouIcon = (props: Props) => (
+  <Icon {...props}>
+    <path d="M22 12h-6l-2 3h-4l-2-3H2" />
+    <path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" />
+  </Icon>
+);
+
+/** Keeps a page in the navigation. */
+export const PinIcon = (props: Props) => (
+  <Icon {...props}>
+    <path d="M12 17v5" />
+    <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z" />
+  </Icon>
+);
+
+/** More: the pages that are not pinned. */
+export const MoreIcon = (props: Props) => (
+  <Icon {...props}>
+    <circle cx="12" cy="12" r="1" />
+    <circle cx="19" cy="12" r="1" />
+    <circle cx="5" cy="12" r="1" />
+  </Icon>
+);
 
 export const PlusIcon = (props: Props) => (
   <Icon {...props}>

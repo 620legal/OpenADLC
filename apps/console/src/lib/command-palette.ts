@@ -1,6 +1,6 @@
 import type { JumpItem, Role } from '@/lib/api';
 import type { ViewName } from '@/lib/board-state';
-import { NAV } from '@/lib/header';
+import { PAGES } from '@/lib/header';
 
 /** How many items the palette lists for a query; past that, typing more is quicker than scrolling. */
 export const JUMP_ROWS = 50;
@@ -89,11 +89,10 @@ export function paletteCommands({
   view?: ViewName;
 }): PaletteCommand[] {
   const admin = role === 'admin';
-  const nav = NAV.filter((item) => admin || item.page !== 'settings').map(
+  // Every page, pinned in the navigation or not: the palette is how a page under More is reached by keyboard.
+  const go = PAGES.filter((item) => admin || item.page !== 'settings').map(
     (item): PaletteCommand => ({ id: `go:${item.page}`, group: 'go', label: item.label, href: item.href(repo) }),
   );
-  // Needs you is reached from the header's badge, not the navigation, and is a place to go all the same.
-  const go: PaletteCommand[] = [nav[0]!, { id: 'go:needs-you', group: 'go', label: 'Needs you', href: '/needs-you' }, ...nav.slice(1)];
   const act: PaletteCommand[] = [
     { id: 'new-request', group: 'act', label: 'New request' },
     view === 'state'

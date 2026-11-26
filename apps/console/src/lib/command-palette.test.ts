@@ -74,6 +74,23 @@ describe('the commands', () => {
     expect(ids('admin', false)).toEqual(['go:board', 'go:needs-you', 'go:crew', 'go:costs', 'go:insights', 'go:releases', 'go:settings', 'new-request', 'board-view', 'pause']);
   });
 
+  it('go to every page, pinned or not, each with its label and link, as they did before the navigation was pinned (ADR 0080)', () => {
+    const go = (role: 'admin' | 'user') =>
+      paletteCommands({ role, paused: false, repo: 'api' })
+        .filter((command) => command.group === 'go')
+        .map((command) => [command.id, command.label, 'href' in command ? command.href : null]);
+    const pages = [
+      ['go:board', 'Board', '/?board=1&repo=api'],
+      ['go:needs-you', 'Needs you', '/needs-you'],
+      ['go:crew', 'Crew', '/crew'],
+      ['go:costs', 'Costs', '/costs'],
+      ['go:insights', 'Insights', '/insights'],
+      ['go:releases', 'Releases', '/releases'],
+    ];
+    expect(go('admin')).toEqual([...pages, ['go:settings', 'Settings', '/settings']]);
+    expect(go('user')).toEqual(pages);
+  });
+
   it('leave Settings, Pause work and Resume out for a user', () => {
     expect(ids('user', true)).toEqual(['go:board', 'go:needs-you', 'go:crew', 'go:costs', 'go:insights', 'go:releases', 'new-request', 'board-view']);
   });
