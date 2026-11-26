@@ -4,7 +4,8 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CrewMember } from '@/lib/api';
 import { headerData } from '@/lib/header';
-import { AppHeader, AppShell, BrandProvider } from './app-header';
+import { NAV_PINS_KEY } from '@/lib/nav-pins';
+import { AppHeader, AppShell, BottomNav, BrandProvider } from './app-header';
 
 // The shell's live refresh and the palette's links read the router.
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push: () => undefined, refresh: () => undefined, replace: () => undefined }) }));
@@ -64,6 +65,7 @@ beforeEach(async () => {
 afterEach(() => {
   act(() => root.unmount());
   document.body.innerHTML = '';
+  localStorage.clear();
 });
 
 const classes = (element: Element | null | undefined): string[] => (element?.getAttribute('class') ?? '').split(/\s+/);
@@ -75,7 +77,10 @@ describe('the header from 768px up', () => {
     // The badge, the button and the links keep their width; what is left goes to the repository.
     const [where, nav, right] = [...wide.children];
     expect(nav?.tagName).toBe('NAV');
-    expect(classes(nav)).toContain('shrink-0');
+    // Seven pins scroll inside their row rather than push the right side off; More stays outside it.
+    expect(classes(nav)).toContain('min-w-0');
+    expect(classes(nav?.querySelector('[data-pinned]'))).toEqual(expect.arrayContaining(['min-w-0', 'overflow-x-auto']));
+    expect(nav?.lastElementChild?.querySelector('button')?.textContent).toBe('More');
     expect(classes(right)).toEqual(expect.arrayContaining(['ml-auto', 'shrink-0']));
     expect(right?.textContent).toContain('3 need you · 10 system');
     expect(classes(where)).toContain('min-w-0');
@@ -94,6 +99,165 @@ describe('the header from 768px up', () => {
     const button = [...wide.querySelectorAll('button')].find((one) => one.textContent?.startsWith('New'))!;
     expect(button.textContent).toBe('New request');
     expect(classes(button.querySelector('span'))).toEqual(['sr-only', 'lg:not-sr-only']);
+  });
+});
+
+describe('the pinned navigation', () => {
+  /**
+   * The header and the phone's bar, as a page draws them, on `page`, freshly
+   * mounted on the same storage: what loading the page is. Drawn into the
+   * outer root instead, the header would keep the pins it read before.
+   */
+  async function draw(page: 'crew' | 'costs' | 'needs-you' = 'crew'): Promise<void> {
+    act(() => root.unmount());
+    root = createRoot(container);
+    await act(async () =>
+      root.render(
+        <>
+          <AppHeader page={page} repo="all" data={DATA} />
+          <BottomNav page={page} repo="all" />
+        </>,
+      ),
+    );
+  }
+  const reload = draw;
+  const wideNav = () => container.querySelector('[data-wide-header] nav')!;
+  const bar = () => [...container.querySelectorAll('nav')].find((one) => classes(one).includes('md:hidden'))!;
+  const pinned = (nav: Element) => [...nav.querySelector('[data-pinned]')!.querySelectorAll('a')].map((link) => link.textContent);
+  const bothBars = () => ({ wide: pinned(wideNav()), phone: pinned(bar()) });
+  const more = (nav: Element = wideNav()) => [...nav.querySelectorAll('button')].find((one) => one.textContent === 'More')!;
+  const panel = (nav: Element = wideNav()) => document.getElementById(more(nav).getAttribute('aria-controls')!)!;
+  const toggle = (name: string, nav: Element = wideNav()) => panel(nav).querySelector<HTMLButtonElement>(`button[aria-label="${name}"]`);
+  const rows = (nav: Element = wideNav()) => [...panel(nav).querySelectorAll('li')].map((row) => row.querySelector('a')!.textContent);
+  async function click(element: Element | null): Promise<void> {
+    await act(async () => (element as HTMLElement).click());
+  }
+  async function type(input: HTMLInputElement, value: string): Promise<void> {
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, value);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+  }
+
+  it('shows Board, Needs you, Crew and Releases in both bars when nothing is stored, then More', async () => {
+    await draw();
+    expect(bothBars()).toEqual({ wide: ['Board', 'Needs you', 'Crew', 'Releases'], phone: ['Board', 'Needs you', 'Crew', 'Releases'] });
+    expect(more(wideNav())).toBeDefined();
+    expect(more(bar())).toBeDefined();
+    expect(classes(bar())).not.toEqual(expect.arrayContaining(['grid-cols-4']));
+  });
+
+  it('shows what this browser pinned, in the order it was pinned', async () => {
+    localStorage.setItem(NAV_PINS_KEY, '["costs","board"]');
+    await draw();
+    expect(bothBars()).toEqual({ wide: ['Costs', 'Board'], phone: ['Costs', 'Board'] });
+  });
+
+  it('falls back to the defaults for a value it cannot read, and drops a page it does not know', async () => {
+    localStorage.setItem(NAV_PINS_KEY, 'not json');
+    await draw();
+    expect(bothBars().wide).toEqual(['Board', 'Needs you', 'Crew', 'Releases']);
+    localStorage.setItem(NAV_PINS_KEY, '["insights","nope"]');
+    await reload();
+    expect(bothBars()).toEqual({ wide: ['Insights'], phone: ['Insights'] });
+  });
+
+  it('opens a list of every page from More, each with a pin named for it, and pins and unpins at once in both bars', async () => {
+    await draw();
+    expect(more().getAttribute('aria-expanded')).toBe('false');
+    await click(more());
+    expect(more().getAttribute('aria-expanded')).toBe('true');
+    expect(panel().hidden).toBe(false);
+    expect(document.activeElement?.getAttribute('aria-label')).toBe('Find a page');
+    expect(rows()).toEqual(['Board', 'Needs you', 'Crew', 'Costs', 'Insights', 'Releases', 'Settings']);
+    expect(toggle('Pin Costs')?.getAttribute('aria-pressed')).toBe('false');
+    expect(toggle('Unpin Crew')?.getAttribute('aria-pressed')).toBe('true');
+
+    await click(toggle('Pin Costs'));
+    expect(bothBars()).toEqual({ wide: ['Board', 'Needs you', 'Crew', 'Releases', 'Costs'], phone: ['Board', 'Needs you', 'Crew', 'Releases', 'Costs'] });
+    expect(JSON.parse(localStorage.getItem(NAV_PINS_KEY)!)).toEqual(['board', 'needs-you', 'crew', 'releases', 'costs']);
+    // The list stays open, to pin several in a row, and the toggle now unpins.
+    expect(panel().hidden).toBe(false);
+    expect(toggle('Unpin Costs')?.getAttribute('aria-pressed')).toBe('true');
+
+    await click(toggle('Unpin Crew'));
+    expect(bothBars().wide).not.toContain('Crew');
+    expect(bothBars().phone).not.toContain('Crew');
+
+    await reload();
+    expect(bothBars()).toEqual({ wide: ['Board', 'Needs you', 'Releases', 'Costs'], phone: ['Board', 'Needs you', 'Releases', 'Costs'] });
+  });
+
+  it('follows a pin made from the phone’s More in the wide header too', async () => {
+    await draw();
+    await click(more(bar()));
+    await click(toggle('Pin Settings', bar()));
+    expect(bothBars().wide.at(-1)).toBe('Settings');
+  });
+
+  it('filters the list by label as the person types, and says when nothing matches', async () => {
+    await draw();
+    await click(more());
+    const search = panel().querySelector<HTMLInputElement>('input[type="search"]')!;
+    expect(search.getAttribute('aria-label')).toBe('Find a page');
+    await type(search, 'COS');
+    expect(rows()).toEqual(['Costs']);
+    await type(search, 'zzz');
+    expect(rows()).toEqual([]);
+    expect(panel().textContent).toContain('No page matches');
+  });
+
+  it('closes on Escape and gives the focus back to More', async () => {
+    await draw();
+    await click(more());
+    await act(async () => {
+      document.activeElement!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    });
+    expect(more().getAttribute('aria-expanded')).toBe('false');
+    expect(panel().hidden).toBe(true);
+    expect(document.activeElement).toBe(more());
+  });
+
+  it('closes on a click outside and gives the focus back to More', async () => {
+    await draw();
+    await click(more());
+    expect(document.activeElement?.getAttribute('aria-label')).toBe('Find a page');
+    await act(async () => {
+      document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+      await new Promise((done) => setTimeout(done, 0));
+    });
+    expect(more().getAttribute('aria-expanded')).toBe('false');
+    expect(panel().hidden).toBe(true);
+    expect(document.activeElement).toBe(more());
+  });
+
+  it('leaves the focus on a control clicked outside More, rather than taking it back', async () => {
+    await draw();
+    await click(more());
+    const board = wideNav().querySelector('[data-pinned] a') as HTMLAnchorElement;
+    await act(async () => {
+      board.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+      board.focus();
+      await new Promise((done) => setTimeout(done, 0));
+    });
+    expect(panel().hidden).toBe(true);
+    expect(document.activeElement).toBe(board);
+  });
+
+  it('marks More as where the person is when their page is not pinned', async () => {
+    await draw('costs');
+    expect(classes(more())).toContain('bg-well');
+    await draw('crew');
+    expect(classes(more())).not.toContain('bg-well');
+  });
+
+  it('links Needs you, when pinned, beside the chip that stays as it was', async () => {
+    await draw('needs-you');
+    const link = [...wideNav().querySelectorAll('a')].find((one) => one.textContent === 'Needs you')!;
+    expect(link.getAttribute('href')).toBe('/needs-you');
+    expect(link.getAttribute('aria-current')).toBe('page');
+    const chip = [...container.querySelectorAll('[data-wide-header] a')].find((one) => one.textContent === '3 need you · 10 system');
+    expect(chip?.getAttribute('href')).toBe('/needs-you');
   });
 });
 

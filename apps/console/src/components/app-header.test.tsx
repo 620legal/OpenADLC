@@ -43,19 +43,67 @@ function wide(html: string): string {
 }
 
 describe('the header', () => {
-  it('names the four places, and marks the one you are on', () => {
-    for (const page of ['board', 'crew', 'costs', 'settings'] as const) {
+  it('names the four pinned places by default, then More, and marks the one you are on', () => {
+    for (const page of ['board', 'needs-you', 'crew', 'releases'] as const) {
       const html = wide(header(page));
-      const links = [...html.matchAll(/<a ([^>]*)>(Board|Crew|Costs|Settings)<\/a>/g)].map(
+      const pinned = /<div data-pinned[^>]*>([\s\S]*?)<\/div>/.exec(html)?.[1] ?? '';
+      const links = [...pinned.matchAll(/<a ([^>]*)>([^<]+)<\/a>/g)].map(
         (match) => `${match[2]} ${/href="([^"]+)"/.exec(match[1]!)?.[1]}${match[1]!.includes('aria-current="page"') ? ' *' : ''}`,
       );
       expect(links).toEqual([
         `Board /?board=1${page === 'board' ? ' *' : ''}`,
+        `Needs you /needs-you${page === 'needs-you' ? ' *' : ''}`,
         `Crew /crew${page === 'crew' ? ' *' : ''}`,
-        `Costs /costs${page === 'costs' ? ' *' : ''}`,
-        `Settings /settings${page === 'settings' ? ' *' : ''}`,
+        `Releases /releases${page === 'releases' ? ' *' : ''}`,
       ]);
+      expect(html).toMatch(/<\/div><div class="relative"><button type="button" aria-expanded="false"[^>]*>More<svg/);
     }
+  });
+
+  it('lists every page under More, each with its pin, and marks More for a page that is not pinned', () => {
+    const html = wide(header('costs'));
+    const more = /<button type="button" aria-expanded="false" aria-controls="([^"]+)" class="([^"]*)">More/.exec(html)!;
+    expect(more[2]).toContain('bg-well');
+    const panel = html.slice(html.indexOf(`id="${more[1]}"`));
+    const rows = [...panel.matchAll(/<li[^>]*>([\s\S]*?)<\/li>/g)].map(([, row]) => {
+      const label = /<a [^>]*>([^<]+)<\/a>/.exec(row!)?.[1];
+      const toggle = /<button type="button" aria-pressed="(true|false)" aria-label="([^"]+)"/.exec(row!);
+      return `${label}${row!.includes('aria-current="page"') ? ' *' : ''} ${toggle?.[1]} ${toggle?.[2]}`;
+    });
+    expect(rows).toEqual([
+      'Board true Unpin Board',
+      'Needs you true Unpin Needs you',
+      'Crew true Unpin Crew',
+      'Costs * false Pin Costs',
+      'Insights false Pin Insights',
+      'Releases true Unpin Releases',
+      'Settings false Pin Settings',
+    ]);
+    expect(panel).toMatch(/<input[^>]*type="search"[^>]*aria-label="Find a page"/);
+    // Closed until it is opened.
+    expect(panel).toMatch(/^id="[^"]+" hidden=""/);
+    // A pinned page is marked in the bar, not on More.
+    expect(/>More</.exec(wide(header('crew')))).not.toBeNull();
+    expect(/class="([^"]*)">More/.exec(wide(header('crew')))?.[1]).not.toContain('bg-well');
+  });
+
+  it('keeps the needs-you chip as it was, beside the page in the navigation', () => {
+    const html = wide(header('needs-you'));
+    expect(html).toMatch(/<a [^>]*href="\/needs-you"[^>]*>3 need you<\/a>/);
+    expect(html).toMatch(/<a aria-current="page" [^>]*href="\/needs-you">Needs you<\/a>/);
+  });
+
+  it('gives the phone’s bar the same pinned pages, then More', () => {
+    const html = renderToStaticMarkup(
+      <AppShell page="crew" data={headerData({ repos: ['openadlc-testbed'], crew: CREW, budget: null, needsYou: 1 })}>
+        <p>page</p>
+      </AppShell>,
+    ).replace(/<!-- -->/g, '');
+    const bar = html.slice(html.lastIndexOf('<nav aria-label="Console"'));
+    const pinned = /<div data-pinned[^>]*>([\s\S]*?)<\/div><div/.exec(bar)?.[1] ?? '';
+    expect([...pinned.matchAll(/<\/svg>([^<]+)<\/a>/g)].map((match) => match[1])).toEqual(['Board', 'Needs you', 'Crew', 'Releases']);
+    expect(bar).toMatch(/<button type="button" aria-expanded="false"[^>]*><svg[\s\S]*?<\/svg>More<\/button>/);
+    expect(bar).not.toContain('grid-cols');
   });
 
   it('shows the subscription estimate beside billed spend, labelled as not billed, and nothing when there is none', () => {
@@ -244,7 +292,7 @@ describe('the alerts menu', () => {
       expect(html.match(/aria-label="Alerts"/g)).toHaveLength(2);
       expect(html).toContain('Count in the tab title');
       expect(html).toContain('Desktop notifications');
-      // A user's Settings is Notifications alone; it is in their header too.
+      // A user's Settings is Notifications alone; it is in their header too, under More until they pin it.
       expect(wide(html)).toMatch(/<a [^>]*href="\/settings"[^>]*>Settings<\/a>/);
     }
   });

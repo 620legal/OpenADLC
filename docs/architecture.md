@@ -1301,6 +1301,23 @@ task's session, rather than waiting for the role's next task
   card's own handler, and Enter opens it. Every single-key rule yields while
   typing in a field, while a dialog is open, or with a modifier held
   (`lib/keys.ts`).
+- **Navigation.** `PAGES` (`lib/header.ts`) is the one list of the console's
+  pages: Board, Needs you, Crew, Costs, Insights, Releases, Settings. The
+  header, the phone's bar (`BottomNav`), More and the command palette all
+  read it, and `navFor(role)` decides which a person may see. The bars show
+  only the pages this browser pinned, in the order they were pinned, then
+  More: a button opening every page the person may see, with a search box
+  ("Find a page") and a pin toggle on each (`aria-pressed`, "Pin Costs" or
+  "Unpin Costs"). Pins are kept per browser in localStorage under
+  `openadlc.nav.pins`, a JSON array of page ids, and never sent to the
+  bridge (`lib/nav-pins.ts`). Nothing stored, or nothing readable, means
+  Board, Needs you, Crew and Releases; an unknown or repeated entry is
+  dropped, and `[]` leaves only More. The server draws the defaults and the
+  bars read storage once mounted, and a pin is announced to the tab
+  (`openadlc:nav-pins-changed`) and to other tabs (`storage`), so both bars
+  follow it. The palette lists every page, pinned or not, and the Needs you
+  chip stays at the right of the header whatever is pinned
+  ([ADR 0080](adr/0080-the-consoles-navigation-is-pinned-per-browser-from-one-list-of-pages.md)).
 - **The board reads the issues it can show**, numbered or not: those not in
   Done, and those in Done whose row changed in the week Done shows
   (`boardIssues`, indexed by migration 0151), and of the tasks only theirs

@@ -5,7 +5,20 @@ import { createContext, useContext, useEffect, useId, useRef, useState, type Rea
 import { CommandPalette } from '@/components/command-palette';
 import { IntakeDialog } from '@/components/intake-dialog';
 import { KeysHelp } from '@/components/keys-help';
-import { BoardIcon, CheckIcon, ChevronDownIcon, CostsIcon, CrewIcon, InsightsIcon, PlusIcon, SettingsIcon, ShipIcon } from '@/components/icons';
+import {
+  BoardIcon,
+  CheckIcon,
+  ChevronDownIcon,
+  CostsIcon,
+  CrewIcon,
+  InsightsIcon,
+  MoreIcon,
+  NeedsYouIcon,
+  PinIcon,
+  PlusIcon,
+  SettingsIcon,
+  ShipIcon,
+} from '@/components/icons';
 import { LiveRefresh } from '@/components/live-refresh';
 import { AlertsMenu, NeedsYouAlerts } from '@/components/needs-you-alerts';
 import { RepoColorsProvider, RepoDot } from '@/components/repo-badge';
@@ -13,7 +26,8 @@ import { labelIn } from '@/lib/bot-label';
 import { cn } from '@/lib/cn';
 import { crewLine, needsYouLine } from '@/lib/crew';
 import type { Brand, Role } from '@/lib/api';
-import { boardHref, NAV, navFor, spendLevel, type HeaderData, type Page } from '@/lib/header';
+import { boardHref, navFor, pinnedNav, spendLevel, type HeaderData, type NavPage, type Page } from '@/lib/header';
+import { NAV_PIN_DEFAULTS, onPinsChange, pin, storedPins, unpin } from '@/lib/nav-pins';
 import type { RepoColorMap } from '@/lib/repo-colors';
 import { consoleName } from '@/lib/needs-you-alerts';
 import { money } from '@/lib/when';
@@ -75,9 +89,172 @@ function BrandMark({ compact = false }: { compact?: boolean }) {
   );
 }
 
-/** The navigation this person has (`navFor`). */
-function useNav(): typeof NAV {
-  return navFor(useRole());
+/**
+ * The pages this browser pinned (`nav-pins.ts`). The defaults first, then
+ * what storage holds once mounted: the server has no storage and draws the
+ * defaults, so a first client drawing that read it would not match what the
+ * server sent. Every change after, in this tab or another, is followed.
+ */
+function usePins(): readonly Page[] {
+  const [pins, setPins] = useState<readonly Page[]>(NAV_PIN_DEFAULTS);
+  useEffect(() => {
+    const follow = () => setPins(storedPins());
+    follow();
+    return onPinsChange(follow);
+  }, []);
+  return pins;
+}
+
+/**
+ * Every page this person may see (`navFor`), each with its pin, behind a
+ * button named More, with a search box over them. Built like the repository
+ * switcher: a button that opens a list, Escape or a click anywhere else
+ * closing it and giving the focus back to the button, and every control a native button, input or link, so a
+ * keyboard and a screen reader already know them. A toggle leaves the list
+ * open, to pin several in a row; following a link closes it.
+ *
+ * The wide header opens it below its button; the phone's bar opens it above.
+ */
+function MoreMenu({
+  pages,
+  pins,
+  page,
+  repo,
+  compact = false,
+}: {
+  pages: readonly NavPage[];
+  pins: readonly Page[];
+  page: Page;
+  repo: string;
+  compact?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const root = useRef<HTMLDivElement>(null);
+  const button = useRef<HTMLButtonElement>(null);
+  const search = useRef<HTMLInputElement>(null);
+  const refocusTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const panel = useId();
+
+  useEffect(() => {
+    if (!open) return;
+    search.current?.focus();
+    const away = (event: PointerEvent) => {
+      if (root.current?.contains(event.target as Node)) return;
+      setOpen(false);
+      // The focus was in the search box, which closing removes; left there it
+      // falls to the page's body and a keyboard starts again from the top. A
+      // click on a control of its own keeps the focus it takes. Anywhere else
+      // the browser's own mousedown, which follows this event, would blur the
+      // button again, so the focus goes back once that has run.
+      const target = event.target instanceof Element ? event.target : null;
+      if (target?.closest('a[href], button, input, select, textarea, [tabindex]')) return;
+      refocusTimer.current = setTimeout(() => button.current?.focus(), 0);
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      setOpen(false);
+      button.current?.focus();
+    };
+    document.addEventListener('pointerdown', away);
+    document.addEventListener('keydown', escape);
+    return () => {
+      document.removeEventListener('pointerdown', away);
+      document.removeEventListener('keydown', escape);
+    };
+  }, [open]);
+  // The cleanup above runs as soon as the menu closes, before the deferred
+  // focus is due, so the timer is cleared only when the header itself goes.
+  useEffect(() => () => clearTimeout(refocusTimer.current), []);
+
+  const q = query.trim().toLowerCase();
+  const found = q ? pages.filter((one) => one.label.toLowerCase().includes(q)) : pages;
+  // Where the person is, when that page is not in the bar beside it.
+  const here = pages.some((one) => one.page === page) && !pins.includes(page);
+
+  return (
+    <div ref={root} className={cn('relative', compact && 'flex w-16 shrink-0')}>
+      <button
+        ref={button}
+        type="button"
+        aria-expanded={open}
+        aria-controls={panel}
+        onClick={() => {
+          setQuery('');
+          setOpen((shown) => !shown);
+        }}
+        className={cn(
+          'focus-visible:outline-2 focus-visible:outline-link',
+          compact
+            ? cn('flex flex-1 flex-col items-center justify-center gap-[3px] text-[11px]', here || open ? 'font-medium text-body' : 'text-muted')
+            : cn(
+                'flex h-8 items-center gap-1 rounded-md px-2 text-[13px] transition-colors lg:px-2.5 xl:px-3',
+                here ? 'bg-well font-medium text-body' : 'text-muted hover:text-body',
+              ),
+        )}
+      >
+        {compact && <MoreIcon size={20} />}
+        More
+        {!compact && <ChevronDownIcon className="shrink-0" />}
+      </button>
+      <div
+        id={panel}
+        hidden={!open}
+        className={cn(
+          'absolute z-40 w-[15rem] max-w-[calc(100vw-1rem)] rounded-lg border border-edge-strong bg-panel p-1 shadow-xl',
+          compact ? 'bottom-full right-1 mb-1' : 'left-0 top-full mt-1',
+        )}
+      >
+        <input
+          ref={search}
+          type="search"
+          aria-label="Find a page"
+          placeholder="Find a page"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          className="mb-1 h-11 w-full rounded-md border border-edge bg-surface px-2.5 text-[13px] text-body placeholder:text-dim focus-visible:outline-2 focus-visible:outline-link md:h-8 md:text-[12.5px]"
+        />
+        {found.length === 0 ? (
+          <p className="px-2.5 py-2 text-[12.5px] text-muted">No page matches</p>
+        ) : (
+          <ul aria-label="Pages">
+            {found.map((one) => {
+              const pinned = pins.includes(one.page);
+              const current = one.page === page;
+              return (
+                <li key={one.page} className="flex items-center gap-1">
+                  <Link
+                    href={one.href(repo)}
+                    aria-current={current ? 'page' : undefined}
+                    onClick={() => setOpen(false)}
+                    className={cn(
+                      'block h-11 min-w-0 flex-1 truncate rounded-md px-2.5 text-[13px] leading-[2.75rem] focus-visible:outline-2 focus-visible:outline-link md:h-8 md:text-[12.5px] md:leading-8',
+                      current ? 'bg-well font-medium text-body' : 'text-soft hover:bg-well hover:text-body',
+                    )}
+                  >
+                    {one.label}
+                  </Link>
+                  <button
+                    type="button"
+                    aria-pressed={pinned}
+                    aria-label={`${pinned ? 'Unpin' : 'Pin'} ${one.label}`}
+                    title={pinned ? 'Unpin from the navigation' : 'Pin to the navigation'}
+                    onClick={() => (pinned ? unpin(one.page) : pin(one.page))}
+                    className={cn(
+                      'flex size-11 shrink-0 items-center justify-center rounded-md focus-visible:outline-2 focus-visible:outline-link md:size-8',
+                      pinned ? 'text-body' : 'text-dim hover:text-soft',
+                    )}
+                  >
+                    <PinIcon size={14} className={pinned ? undefined : 'opacity-60'} />
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
 }
 
 /**
@@ -106,7 +283,9 @@ export function AppHeader({ page, repo = 'all', data }: { page: Page; repo?: str
   const needsHref = '/needs-you';
   const working = data.counts.working > 0;
   const ready = data.counts.total > 0 && data.counts.connected === data.counts.total;
-  const nav = useNav();
+  const pages = navFor(useRole());
+  const pins = usePins();
+  const nav = pinnedNav(pages, pins);
 
   return (
     <>
@@ -118,20 +297,24 @@ export function AppHeader({ page, repo = 'all', data }: { page: Page; repo?: str
           <RepoSwitcher repos={data.repos} colors={data.repoColors} current={repo} />
         </div>
 
-        <nav aria-label="Console" className="flex shrink-0 items-center gap-0.5">
-          {nav.map((item) => (
-            <Link
-              key={item.page}
-              href={item.href(repo)}
-              aria-current={item.page === page ? 'page' : undefined}
-              className={cn(
-                'flex h-8 items-center rounded-md px-2 text-[13px] transition-colors lg:px-2.5 xl:px-3',
-                item.page === page ? 'bg-well font-medium text-body' : 'text-muted hover:text-body',
-              )}
-            >
-              {item.label}
-            </Link>
-          ))}
+        {/* The pinned links scroll inside their row rather than push the right side off at 768px; More sits outside it, so its list is not clipped. */}
+        <nav aria-label="Console" className="flex min-w-0 items-center gap-0.5">
+          <div data-pinned className="flex min-w-0 items-center gap-0.5 overflow-x-auto">
+            {nav.map((item) => (
+              <Link
+                key={item.page}
+                href={item.href(repo)}
+                aria-current={item.page === page ? 'page' : undefined}
+                className={cn(
+                  'flex h-8 shrink-0 items-center rounded-md px-2 text-[13px] transition-colors lg:px-2.5 xl:px-3',
+                  item.page === page ? 'bg-well font-medium text-body' : 'text-muted hover:text-body',
+                )}
+              >
+                {item.label}
+              </Link>
+            ))}
+          </div>
+          <MoreMenu pages={pages} pins={pins} page={page} repo={repo} />
         </nav>
 
         <div className="ml-auto flex shrink-0 items-center gap-2.5 lg:gap-3 xl:gap-[18px]">
@@ -415,9 +598,10 @@ function SwitcherItem({
   );
 }
 
-// Only the pages in the navigation: Needs you is reached from the header's badge.
-const NAV_ICONS: Record<Exclude<Page, 'needs-you'>, (props: { size?: number }) => ReactNode> = {
+// Every page in `PAGES`, since any of them may be pinned to the phone's bar.
+const NAV_ICONS: Record<Page, (props: { size?: number }) => ReactNode> = {
   board: BoardIcon,
+  'needs-you': NeedsYouIcon,
   crew: CrewIcon,
   costs: CostsIcon,
   insights: InsightsIcon,
@@ -428,32 +612,39 @@ const NAV_ICONS: Record<Exclude<Page, 'needs-you'>, (props: { size?: number }) =
 /**
  * The phone's navigation, at the bottom where a thumb is. Not fixed: it is the
  * last thing in the page's column, so it cannot sit over anything that scrolls.
+ *
+ * It shows the same pinned pages as the wide header, then More, which opens
+ * the same list above the bar. The pinned cells share the width and scroll
+ * rather than crush once there are more than fit (seven and More at 320px);
+ * More stays outside that row, always in reach.
  */
 export function BottomNav({ page, repo = 'all', className }: { page: Page; repo?: string; className?: string }) {
-  const nav = useNav();
+  const pages = navFor(useRole());
+  const pins = usePins();
+  const nav = pinnedNav(pages, pins);
   return (
-    <nav
-      aria-label="Console"
-      className={cn('grid h-16 shrink-0 border-t border-edge bg-panel md:hidden', nav.length >= 5 ? 'grid-cols-5' : nav.length === 4 ? 'grid-cols-4' : 'grid-cols-3', className)}
-    >
-      {nav.map((item) => {
-        const Icon = NAV_ICONS[item.page];
-        const current = item.page === page;
-        return (
-          <Link
-            key={item.page}
-            href={item.href(repo)}
-            aria-current={current ? 'page' : undefined}
-            className={cn(
-              'flex flex-col items-center justify-center gap-[3px] text-[11px]',
-              current ? 'font-medium text-body' : 'text-muted',
-            )}
-          >
-            <Icon size={20} />
-            {item.label}
-          </Link>
-        );
-      })}
+    <nav aria-label="Console" className={cn('flex h-16 shrink-0 border-t border-edge bg-panel md:hidden', className)}>
+      <div data-pinned className="flex min-w-0 flex-1 overflow-x-auto">
+        {nav.map((item) => {
+          const Icon = NAV_ICONS[item.page];
+          const current = item.page === page;
+          return (
+            <Link
+              key={item.page}
+              href={item.href(repo)}
+              aria-current={current ? 'page' : undefined}
+              className={cn(
+                'flex min-w-[4rem] flex-1 flex-col items-center justify-center gap-[3px] whitespace-nowrap text-[11px]',
+                current ? 'font-medium text-body' : 'text-muted',
+              )}
+            >
+              <Icon size={20} />
+              {item.label}
+            </Link>
+          );
+        })}
+      </div>
+      <MoreMenu pages={pages} pins={pins} page={page} repo={repo} compact />
     </nav>
   );
 }
