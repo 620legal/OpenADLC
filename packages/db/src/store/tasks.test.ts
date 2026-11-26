@@ -26,6 +26,7 @@ import {
   setBilled,
   staleUnstarted,
   listTasksSince,
+  listFinishedSince,
   liveTaskOn,
   noteStoppedByPerson,
   pausedWithAnswer,
@@ -300,6 +301,31 @@ describe('the tasks "needs you" reads', () => {
 
     expect(vi.mocked(query).mock.calls[0]?.[1]).toEqual(['review.stalled', new Date('2026-09-17T00:00:00.000Z')]);
     expect(events).toEqual([{ id: 7, at: '2026-09-24T11:20:00.000Z', payload: { repo: 'openadlc', pr: 31 } }]);
+  });
+});
+
+describe('the tasks the side panel lists as recent (#376)', () => {
+  it('are the ones done, failed or stopped since the moment, newest end first, up to the limit', async () => {
+    vi.mocked(query).mockResolvedValueOnce([
+      { ...ROW, id: 'task-new', state: 'done', ended_at: new Date('2026-09-24T12:00:00.000Z') },
+      { ...ROW, id: 'task-old', state: 'stopped', ended_at: new Date('2026-09-24T11:00:00.000Z') },
+    ]);
+    const since = new Date('2026-09-23T12:00:00.000Z');
+
+    const tasks = await listFinishedSince(since, 20);
+
+    const [sql, params] = vi.mocked(query).mock.calls[0] ?? [];
+    const flat = String(sql).replace(/\s+/g, ' ');
+    // Only the three ways out: a running, paused or queued task has no end to list.
+    expect(flat).toContain("where state in ('done','failed','stopped') and ended_at >= $1");
+    expect(flat).not.toMatch(/'running'|'paused'|'queued'/);
+    expect(flat).toContain('order by ended_at desc, id desc');
+    expect(flat).toContain('limit $2');
+    expect(params).toEqual([since, 20]);
+    expect(tasks.map((task) => [task.id, task.endedAt])).toEqual([
+      ['task-new', '2026-09-24T12:00:00.000Z'],
+      ['task-old', '2026-09-24T11:00:00.000Z'],
+    ]);
   });
 });
 

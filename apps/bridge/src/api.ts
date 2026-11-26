@@ -137,6 +137,7 @@ import type { WaitChain } from './wait-chain.js';
 import type { WaitingReads } from './waiting.js';
 import { describeSubject } from './thread-view.js';
 import { registerBoardEventRoutes } from './board-events.js';
+import { registerBoardPanelRoute } from './board-panel.js';
 import { answerFromConsole, sendThreadMessage } from './thread-messages.js';
 import { setApproversFromLogins } from './people-routes.js';
 import { checkConsoleLogo, checkConsoleName, decodeLogo, LOGO_POLICY, logoMediaType } from './brand.js';
@@ -1633,6 +1634,10 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
   // What the crew is doing as it happens, and the tasks live now: what
   // `openadlc watch` and `openadlc ls` read (`board-events.ts`).
   registerBoardEventRoutes(router);
+
+  // The console's side panel: tasks running or paused, each with its state
+  // and spend, and the ones that ended in the last day (`board-panel.ts`).
+  registerBoardPanelRoute(router);
 
   router.get('/v1/bots', async ({ role }) => {
     const [crew, issueList, openGates, repoList, checks, seatPauses, requestList] = await Promise.all([

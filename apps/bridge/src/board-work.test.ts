@@ -1,6 +1,20 @@
 import { describe, expect, it, vi } from 'vitest';
 import { DEFAULT_PATH_POLICY } from '@openadlc/shared';
-import { activityOf, boardWork, FILED_SHOWN_MS, itemCards, lonePulls, loosePulls, readBoardActivity, readBoardWork, requestsOnCards, withItemPulls, type BoardLink } from './board-work.js';
+import {
+  activityOf,
+  boardWork,
+  FILED_SHOWN_MS,
+  itemCards,
+  lonePulls,
+  loosePulls,
+  nameTask,
+  readBoardActivity,
+  readBoardWork,
+  requestsOnCards,
+  runningList,
+  withItemPulls,
+  type BoardLink,
+} from './board-work.js';
 import type { IssueFacts, TaskFacts } from './work.js';
 
 /** What `readBoardWork` and `readBoardActivity` read, for the tests of them that read anything. */
@@ -734,6 +748,40 @@ describe('what a running task is doing, in words', () => {
       activityOf(['[tool] Bash: export TOKEN=hunter2 && ./deploy.sh']),
     ];
     expect(said).toEqual(['reading the web', 'reading the code', 'running a command']);
+  });
+});
+
+describe('a task named for a row (#376)', () => {
+  const ctx = {
+    bots: [{ id: 'bot-intake', name: 'ottoexampleco' }],
+    repos: [{ id: 'repo-1', name: 'api' }],
+    requests: [{ id: 'b4378305-aaaa-4bbb-8ccc-dddddddddddd', repoId: 'repo-1', text: 'Open the running count into a list' }],
+    issues: [{ repoName: 'api', number: 7, prNumber: 31, title: 'Cache the prices' }],
+  };
+
+  it('is named the same paused or finished as running, so the panel and the board read alike', () => {
+    for (const subject of ['api#31', 'request:b4378305', 'api@3f2c1a9']) {
+      const [running, paused, done] = (['running', 'paused', 'done'] as const).map((state) => nameTask({ ...triage(subject, state), id: 'task-x' }, ctx));
+      expect(paused).toEqual(running);
+      expect(done).toEqual(running);
+    }
+    expect(nameTask({ ...triage('api#31', 'paused'), id: 'task-x' }, ctx)).toEqual({
+      id: 'task-x',
+      bot: 'ottoexampleco',
+      kind: 'intake',
+      skill: null,
+      round: 0,
+      subject: 'api#31',
+      repo: 'api',
+      // A pull request's task is titled by its issue's row.
+      title: 'Cache the prices',
+      opens: 'api#31',
+    });
+  });
+
+  it('is what the running list names its rows with, adding only since when', () => {
+    const task = { ...triage('request:b4378305', 'running'), id: 'task-y' };
+    expect(runningList([task], ctx)).toEqual([{ ...nameTask(task, ctx), since: task.startedAt }]);
   });
 });
 
