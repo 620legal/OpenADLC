@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AttentionItem } from './api';
-import { headerData, navFor, PAGES, pinnedNav, spendLevel, unpinnedNav } from './header';
+import { COSTS_HREF, headerData, navFor, PAGES, pinnedNav, spendChip, spendLevel, unpinnedNav } from './header';
 import { NAV_PIN_DEFAULTS } from './nav-pins';
 
 const header = (budget: { spentUsd: number; capUsd: number; state: string }) =>
@@ -22,6 +22,32 @@ describe('the header’s spend and the subscription estimate', () => {
   it('colours the bar from billed spend alone', () => {
     const spend = headerData({ repos: [], crew: [], budget: { spentUsd: 10, capUsd: 100, estimateUsd: 5000 }, needsYou: 0 }).spend!;
     expect(spendLevel(spend)).toMatchObject({ width: 10, tone: 'signal' });
+  });
+});
+
+describe('the header’s spend chip (#368)', () => {
+  it('links to Costs, as the navigation does', () => {
+    expect(COSTS_HREF).toBe('/costs');
+    expect(COSTS_HREF).toBe(PAGES.find((one) => one.page === 'costs')?.href('all'));
+  });
+
+  it('turns amber when the bridge warns, and not at a threshold of its own', () => {
+    expect(spendChip({ spentUsd: 900, capUsd: 1000, state: 'warning' })).toMatchObject({ capped: true, tone: 'attention', percent: 90 });
+    // warningAt 0.8, set on the install: the bridge warns at 80 percent, and so does the chip.
+    expect(spendChip({ spentUsd: 800, capUsd: 1000, state: 'warning' })).toMatchObject({ capped: true, tone: 'attention', percent: 80 });
+    // The default warningAt 0.9: at 80 and at 92 percent with the bridge saying ok, it stays green.
+    expect(spendChip({ spentUsd: 800, capUsd: 1000, state: 'ok' })).toMatchObject({ tone: 'signal' });
+    expect(spendChip({ spentUsd: 920, capUsd: 1000, state: 'ok' })).toMatchObject({ tone: 'signal' });
+    expect(spendChip({ spentUsd: 1000, capUsd: 1000, state: 'stopped' })).toMatchObject({ tone: 'alarm' });
+  });
+
+  it('gives the fraction of the cap spent', () => {
+    expect(spendChip({ spentUsd: 375, capUsd: 1500, state: 'ok' })).toMatchObject({ percent: 25, width: 25 });
+  });
+
+  it('is neutral, with no fraction, when no cap is set', () => {
+    expect(spendChip({ spentUsd: 40, capUsd: 0, state: 'stopped' })).toEqual({ capped: false });
+    expect(spendChip({ spentUsd: 0, capUsd: 0 })).toEqual({ capped: false });
   });
 });
 

@@ -22,6 +22,9 @@ import {
   spendByRepo,
   spendForBot,
   spendForRepo,
+  spendByBotSince,
+  usageByModel,
+  usageSeries,
 } from './costs.js';
 
 beforeEach(() => {
@@ -325,5 +328,86 @@ describe('spend by day', () => {
     expect(text).toContain('left join ledger l');
     expect(text).toContain('coalesce(sum(l.cost_usd), 0)');
     expect(params).toEqual(['2026-09']);
+  });
+});
+
+/**
+ * The Costs page's range (docs/adr/0091): reads only, held to `since` (or the
+ * whole ledger for null), with billed and estimated summed apart.
+ */
+describe('usage by range', () => {
+  const since = new Date('2026-11-18T12:00:00.000Z');
+
+  it('sums per model, engine and billed since a moment, or over the whole ledger', async () => {
+    vi.mocked(query).mockResolvedValue([
+      { model: 'claude-opus-5', engine: 'claude', billed: true, cost_usd: '1.5000', tokens_in: '1000', tokens_out: '20', cache_read: '600', cache_write: '100', invocations: '3' },
+      // A row from before 0171 sums to 0 in both cache columns.
+      { model: 'gpt-5-codex', engine: 'codex', billed: false, cost_usd: '0.2500', tokens_in: '400', tokens_out: '5', cache_read: '0', cache_write: '0', invocations: '1' },
+    ]);
+
+    const rows = await usageByModel(since);
+    expect(rows).toEqual([
+      { model: 'claude-opus-5', engine: 'claude', billed: true, costUsd: 1.5, tokensIn: 1000, tokensOut: 20, cacheRead: 600, cacheWrite: 100, invocations: 3 },
+      { model: 'gpt-5-codex', engine: 'codex', billed: false, costUsd: 0.25, tokensIn: 400, tokensOut: 5, cacheRead: 0, cacheWrite: 0, invocations: 1 },
+    ]);
+    const [sql, params] = vi.mocked(query).mock.calls[0] ?? [];
+    expect(String(sql)).toContain('group by model, engine, billed');
+    expect(String(sql)).toContain('sum(tokens_cache_read)');
+    expect(String(sql)).toContain('($1::timestamptz is null or at >= $1)');
+    expect(params).toEqual([since]);
+
+    await usageByModel(null);
+    expect(vi.mocked(query).mock.calls[1]?.[1]).toEqual([null]);
+  });
+
+  it('gives every bucket of the range, billed and estimated apart, held to since itself', async () => {
+    vi.mocked(query).mockResolvedValue([
+      { at: '2026-11-18T00:00:00Z', billed_usd: '0', estimate_usd: '0', tokens_in: '0', tokens_out: '0', cache_read: '0', cache_write: '0' },
+      { at: '2026-11-19T00:00:00Z', billed_usd: '2.5', estimate_usd: '1', tokens_in: '300', tokens_out: '7', cache_read: '200', cache_write: '50' },
+    ]);
+
+    const rows = await usageSeries(since, 'day');
+    expect(rows).toEqual([
+      { at: '2026-11-18T00:00:00Z', billedUsd: 0, estimateUsd: 0, tokensIn: 0, tokensOut: 0, cacheRead: 0, cacheWrite: 0 },
+      { at: '2026-11-19T00:00:00Z', billedUsd: 2.5, estimateUsd: 1, tokensIn: 300, tokensOut: 7, cacheRead: 200, cacheWrite: 50 },
+    ]);
+    const sql = String(vi.mocked(query).mock.calls[0]?.[0]);
+    expect(sql).toContain('generate_series');
+    expect(sql).toContain("date_trunc('day'");
+    expect(sql).toContain("interval '1 day'");
+    expect(sql).toContain('filter (where l.billed)');
+    expect(sql).toContain('filter (where not l.billed)');
+    // The first bucket starts before `since`; rows before it are not the range's.
+    expect(sql).toContain('($1::timestamptz is null or l.at >= $1)');
+    // All starts at the ledger's first row.
+    expect(sql).toContain('(select min(at) from ledger)');
+
+    await usageSeries(null, 'hour');
+    expect(String(vi.mocked(query).mock.calls[1]?.[0])).toContain("interval '1 hour'");
+  });
+
+  it('refuses a bucket that is not an hour or a day before any query runs', async () => {
+    await expect(usageSeries(since, 'week' as never)).rejects.toThrow(/an hour or a day/);
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it('sums each bot’s billed and estimated cost apart since a moment', async () => {
+    vi.mocked(query).mockResolvedValue([{ bot: 'builder', billed_usd: '3', estimate_usd: '4.5', tasks: '2' }]);
+
+    expect(await spendByBotSince(since)).toEqual([{ bot: 'builder', billedUsd: 3, estimateUsd: 4.5, tasks: 2 }]);
+    const [sql, params] = vi.mocked(query).mock.calls[0] ?? [];
+    expect(String(sql)).toContain('left join ledger l on l.bot_id = b.id and ($1::timestamptz is null or l.at >= $1)');
+    expect(params).toEqual([since]);
+  });
+
+  it('lists the latest rows since a moment, and the latest of all without one', async () => {
+    vi.mocked(query).mockResolvedValue([]);
+
+    await listLedger(50, since);
+    await listLedger(50);
+    expect(String(vi.mocked(query).mock.calls[0]?.[0])).toContain('where at >= $2');
+    expect(vi.mocked(query).mock.calls[0]?.[1]).toEqual([50, since]);
+    expect(String(vi.mocked(query).mock.calls[1]?.[0])).not.toContain('where');
+    expect(vi.mocked(query).mock.calls[1]?.[1]).toEqual([50]);
   });
 });

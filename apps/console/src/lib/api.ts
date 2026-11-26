@@ -1648,6 +1648,50 @@ export interface CostsView {
   ci?: CiMinutesView;
 }
 
+/** The Costs page's ranges, as `/v1/costs/usage?range=` takes them; 30 days when none is named. */
+export const USAGE_RANGES = ['24h', '7d', '30d', '90d', 'all'] as const;
+export type UsageRange = (typeof USAGE_RANGES)[number];
+
+/** Tokens by how they are billed; `input` is the uncached part. */
+export interface UsageTokens {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+}
+
+/** 0..1 of its own kind's total: billed of billed, estimated of estimated. */
+export interface UsageShare {
+  billed: number;
+  estimate: number;
+}
+
+/**
+ * Billed and estimated, never summed (docs/adr/0050); the cache's savings are
+ * always an estimate, whichever kind they are on.
+ */
+export interface UsageFigures {
+  billedUsd: number;
+  estimateUsd: number;
+  invocations: number;
+  tokens: UsageTokens;
+  cacheSavings: { billedUsd: number; estimateUsd: number };
+}
+
+/** The bridge's `CostUsage` (`apps/bridge/src/cost-usage.ts`, docs/adr/0091). */
+export interface CostUsageView {
+  range: UsageRange;
+  since: string | null;
+  until: string;
+  bucket: 'hour' | 'day';
+  totals: UsageFigures;
+  byModel: (UsageFigures & { model: string; engines: string[]; share: UsageShare })[];
+  byEngine: (UsageFigures & { engine: string; share: UsageShare })[];
+  byBot: { bot: string; billedUsd: number; estimateUsd: number; tasks: number }[];
+  series: { at: string; billedUsd: number; estimateUsd: number; tokens: UsageTokens }[];
+  ledger: (CostsView['ledger'][number] & { cacheRead: number; cacheWrite: number })[];
+}
+
 /** The bridge's `CiSummary` (`apps/bridge/src/ci-usage.ts`). */
 export interface CiMinutesView {
   since: string;
@@ -1978,6 +2022,8 @@ export const api = {
     get<{ entries: DesignMemoryEntry[] }>(`/v1/repos/${encodeURIComponent(repo)}/design-memory`).then((body) => body.entries),
   taskPostgres: (repo: string) => get<TaskPostgresView>(`/v1/repos/${encodeURIComponent(repo)}/task-postgres`),
   costs: () => get<CostsView>('/v1/costs'),
+  /** What the Costs page shows under its range picker (#368). */
+  costUsage: (range: UsageRange) => get<CostUsageView>(`/v1/costs/usage?range=${encodeURIComponent(range)}`),
   insights: (options: { repo?: string | null; days: 7 | 30 }) =>
     get<InsightsView>(`/v1/insights?days=${options.days}${options.repo ? `&repo=${encodeURIComponent(options.repo)}` : ''}`),
   securityAlerts: (options: { repo?: string | null } = {}) =>

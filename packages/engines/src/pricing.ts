@@ -261,9 +261,8 @@ export function modelPrice(model: string): ModelPrice {
  */
 export function exactCost(model: string, tokens: TokenCounts): number {
   const price = modelPrice(model);
-  const claude = model.startsWith('claude-');
-  const read = price.cachedInPerMtok ?? (claude ? price.inPerMtok * 0.1 : price.inPerMtok);
-  const write = price.cacheWritePerMtok ?? (claude ? price.inPerMtok * 1.25 : price.inPerMtok);
+  const read = cacheReadRate(model, price);
+  const write = price.cacheWritePerMtok ?? (model.startsWith('claude-') ? price.inPerMtok * 1.25 : price.inPerMtok);
   return (
     (Math.max(tokens.input, 0) * price.inPerMtok +
       Math.max(tokens.cacheRead, 0) * read +
@@ -271,6 +270,24 @@ export function exactCost(model: string, tokens: TokenCounts): number {
       Math.max(tokens.output, 0) * price.outPerMtok) /
     1_000_000
   );
+}
+
+/** What a cache read is charged at, per million tokens: the one rate `exactCost` and the savings estimate both use. */
+function cacheReadRate(model: string, price: ModelPrice): number {
+  return price.cachedInPerMtok ?? (model.startsWith('claude-') ? price.inPerMtok * 0.1 : price.inPerMtok);
+}
+
+/**
+ * What the cache saved on these cache-read tokens: the full input rate less
+ * the cache-read rate, at today's prices, unrounded and never below 0. It is
+ * an estimate, and the Costs page says so (docs/adr/0091). A model with no
+ * cache-read rate that is not `claude-*` is charged the full input rate on a
+ * cache read, so it saves $0, which is what the table says.
+ */
+export function cacheReadSavingsUsd(model: string, cacheReadTokens: number): number {
+  if (!(cacheReadTokens > 0)) return 0;
+  const price = modelPrice(model);
+  return Math.max(0, (cacheReadTokens * (price.inPerMtok - cacheReadRate(model, price))) / 1_000_000);
 }
 
 /** `cachedIn` is the part of `tokensIn` the provider served from its cache. */

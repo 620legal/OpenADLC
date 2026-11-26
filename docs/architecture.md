@@ -316,6 +316,47 @@ reads
 ([ADR 0083](adr/0083-the-checks-page-reads-actions-and-the-bridges-records-and-writes-nothing.md)).
 Each repository's view is kept for a minute.
 
+### The Costs page
+
+The Costs page (`/costs`) has two parts. **This month** comes first, from
+`GET /v1/costs`, the read every page's header makes: the month's billed spend
+against the cap, CI minutes, and the tasks stopped at the cap. The cap is
+monthly, so none of these follow the range.
+
+Under them, a range picker (`?range=24h|7d|30d|90d|all`, 30 days by default)
+drives everything below it, from `GET /v1/costs/usage?range=`
+(`apps/bridge/src/cost-usage.ts`, a `user` route; any other range is a 400
+that names the five). It gives:
+
+- totals and the token split: uncached input (`tokens_in − cache_read −
+  cache_write`, floored at 0), output, cache read and cache write;
+- the cache's savings;
+- a chart, one bar per hour for 24 hours and per UTC day otherwise, with quiet
+  buckets drawn as 0. `?show=cost|tokens` draws it in dollars, billed and
+  estimated side by side, or in the four token types stacked;
+- by model (`ledger.model`), by engine and by bot;
+- the latest invocations, with their cache columns.
+
+Billed and estimated are never summed in any field or figure, and each share
+is taken within its own kind (ADR 0050). A row from before migration 0171 reads
+0 in both cache columns, so all of its input counts as uncached and it saves $0.
+The reads are `costs.usageByModel`, `usageSeries`, `spendByBotSince` and
+`listLedger(limit, since)`. None of them feed a cap.
+
+The cache's savings are always an estimate:
+`cacheReadSavingsUsd(model, cacheRead)` in `pricing.ts` prices cache-read
+tokens at the input rate less the cache-read rate `exactCost` charges, at
+today's prices, never below 0. A model other than `claude-*` with no
+`cachedInPerMtok` saves $0. The bridge prices with the install's
+`config/models.yaml`: `loadBridgeConfig` passes `readModelPrices`' table to
+`setModelPrice`.
+
+The header's spend chip shows this month's billed spend against the cap and
+links to Costs. Its colour comes from `spendLevel`, which follows the bridge's
+budget state: amber at `warningAt` (0.9 by default) and red when stopped. With
+no cap (`capUsd <= 0`) it shows the spend alone, neutral and without a bar
+([ADR 0091](adr/0091-the-costs-page-reads-usage-by-range-and-the-header-chip-follows-the-budget-state.md)).
+
 ### The project map
 
 Every managed repository has a project map: one Markdown file that summarises
