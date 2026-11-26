@@ -6,6 +6,7 @@ import { insights } from '@openadlc/db';
 import { heldForPerson } from './merge-line.js';
 import { monthStart, parseCap, summarize as summarizeCi } from './ci-usage.js';
 import { readHolds } from './item-hold.js';
+import { readProjectMap } from './project-map.js';
 import type { Attribution } from './attribution.js';
 import { abandonRequest, moveRequest } from './request-lifecycle.js';
 import {
@@ -2552,6 +2553,22 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
     const run = await hostCheckRuns.byId(params.id ?? '');
     if (!run) throw new HttpFailure(404, 'no such host check run');
     return { run };
+  });
+
+  /**
+   * A repository's project map, whole, for the console's Map page: read from
+   * hostd's work root, where hostd builds it from the default branch, never
+   * from a worktree (docs/adr/0088). `content` is null where there is no map
+   * yet. Every console user may read it, as the Releases view.
+   */
+  router.get('/v1/repos/:name/map', async ({ params }) => {
+    const repo = await repos.getRepoByName(params.name ?? '');
+    if (!repo) throw new HttpFailure(404, `not a repository OpenADLC manages: ${params.name}`);
+    try {
+      return await readProjectMap(hostd, repo.fullName);
+    } catch (error) {
+      throw new HttpFailure(502, `hostd did not answer for the project map: ${error instanceof Error ? error.message : String(error)}. Run: openadlc doctor`);
+    }
   });
 
   /**

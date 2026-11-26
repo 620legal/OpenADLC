@@ -44,7 +44,7 @@ export interface NeedsItem {
   item: string | null;
 }
 
-export type Page = 'board' | 'crew' | 'costs' | 'insights' | 'security' | 'releases' | 'settings' | 'needs-you';
+export type Page = 'board' | 'crew' | 'costs' | 'insights' | 'security' | 'releases' | 'map' | 'settings' | 'needs-you';
 
 export function headerData(input: {
   repos: readonly string[];
@@ -115,6 +115,8 @@ export const PAGES: readonly NavPage[] = [
   { page: 'security', label: 'Security', href: () => '/security' },
   // The releasing repositories, and cutting one (#345); anyone may watch a release.
   { page: 'releases', label: 'Releases', href: () => '/releases' },
+  // Each repository's project map (#380): the chosen repository's, or the list of them.
+  { page: 'map', label: 'Map', href: (repo) => (repo && repo !== 'all' ? `/map/${encodeURIComponent(repo)}` : '/map') },
   { page: 'settings', label: 'Settings', href: () => '/settings' },
 ];
 

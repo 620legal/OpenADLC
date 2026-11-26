@@ -78,6 +78,7 @@ describe('the header', () => {
       'Insights false Pin Insights',
       'Security false Pin Security',
       'Releases true Unpin Releases',
+      'Map false Pin Map',
       'Settings false Pin Settings',
     ]);
     expect(panel).toMatch(/<input[^>]*type="search"[^>]*aria-label="Find a page"/);

@@ -636,6 +636,7 @@ describe('project maps, through hostd', () => {
       refresh: vi.fn(async () => VIEW),
       list: vi.fn(() => [VIEW]),
       remove: vi.fn(async () => true),
+      read: vi.fn((repo: string) => ({ view: { ...VIEW, repo }, content: '# Project map: acme/demo\n' })),
     };
   }
 
@@ -645,6 +646,8 @@ describe('project maps, through hostd', () => {
     expect((await server.call('POST', '/project-maps/acme/demo', {}, { defaultBranch: 'main', bot: 'builder' })).status).toBe(401);
     expect((await server.call('GET', '/project-maps', {})).status).toBe(401);
     expect((await server.call('DELETE', '/project-maps/acme/demo', {})).status).toBe(401);
+    expect((await server.call('GET', '/project-maps/acme/demo', {})).status).toBe(401);
+    expect(maps.read).not.toHaveBeenCalled();
     expect(maps.refresh).not.toHaveBeenCalled();
     expect(maps.remove).not.toHaveBeenCalled();
   });
@@ -658,6 +661,17 @@ describe('project maps, through hostd', () => {
     expect((await server.call('GET', '/project-maps')).body).toEqual({ maps: [VIEW] });
     expect((await server.call('DELETE', '/project-maps/acme/demo')).body).toEqual({ deleted: true });
     expect(maps.remove).toHaveBeenCalledWith('acme/demo');
+  });
+
+  it('reads one map whole, with its view', async () => {
+    const maps = projectMaps();
+    server = await start(undefined, { projectMaps: maps });
+    const read = await server.call('GET', '/project-maps/acme/demo');
+    expect(read).toEqual({ status: 200, body: { map: VIEW, content: '# Project map: acme/demo\n' } });
+    expect(maps.read).toHaveBeenCalledWith('acme/demo');
+    expect((await server.call('GET', `/project-maps/acme/${encodeURIComponent('..')}`)).status).toBe(400);
+    expect((await server.call('GET', '/project-maps/a/b/c')).status).toBe(400);
+    expect(maps.read).toHaveBeenCalledTimes(1);
   });
 
   it('refuses a name that is not owner/name, and a body with no default branch', async () => {
@@ -679,6 +693,7 @@ describe('project maps, through hostd', () => {
     const answered = await server.call('GET', '/project-maps');
     expect(answered.status).toBe(501);
     expect(String(answered.body.error)).toContain('ProjectMaps');
+    expect((await server.call('GET', '/project-maps/acme/demo')).status).toBe(501);
   });
 });
 

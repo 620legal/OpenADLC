@@ -34,6 +34,11 @@ beforeAll(async () => {
       response.writeHead(brand.status, { 'content-type': 'application/json' });
       return response.end(JSON.stringify(brand.body));
     }
+    // A repository's project map, under a name that has to be encoded.
+    if (request.url?.startsWith('/v1/repos/') && request.url.endsWith('/map')) {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      return response.end(JSON.stringify({ repo: 'acme/my widgets', commit: null, builtAt: null, state: 'never', error: null, triedAt: null, content: null, asked: request.url }));
+    }
     if (request.url !== '/v1/me') return;
     setTimeout(() => response.end(JSON.stringify({ email: 'bob@exampleco.com', role: 'user', ...mode })), 2_000);
   });
@@ -78,6 +83,15 @@ describe('who is asking, read for the layout', () => {
     } finally {
       mode = {};
     }
+  });
+});
+
+describe('a repository’s project map, for the Map page', () => {
+  it('asks for it by the repository’s name, encoded as one path segment', async () => {
+    const { api } = await import('./api');
+    const read = await api.projectMap('my widgets/x');
+    expect((read as unknown as { asked: string }).asked).toBe('/v1/repos/my%20widgets%2Fx/map');
+    expect(read).toMatchObject({ state: 'never', content: null });
   });
 });
 

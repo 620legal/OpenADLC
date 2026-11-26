@@ -503,6 +503,12 @@ describe('project maps on hostd', () => {
     expect(asked[1]).toMatchObject({ url: '/project-maps/ac%20me/x%20y', method: 'DELETE' });
   });
 
+  it('reads one map, its owner and name encoded apart', async () => {
+    answer = { status: 200, body: { map: { repo: 'ac me/x y', state: 'never' }, content: null } };
+    await expect(client.projectMap('ac me/x y')).resolves.toEqual({ map: { repo: 'ac me/x y', state: 'never' }, content: null });
+    expect(asked[0]).toMatchObject({ url: '/project-maps/ac%20me/x%20y', method: 'GET', secret: SECRET });
+  });
+
   it('lists the maps', async () => {
     answer = { status: 200, body: { maps: [] } };
     await expect(client.projectMaps()).resolves.toEqual({ maps: [] });

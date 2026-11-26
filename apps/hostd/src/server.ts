@@ -129,7 +129,7 @@ export function createHostdServer(input: {
   /** The host's task database server, under the docker driver (`task-db.ts`). Absent, its route answers `none`. */
   taskDatabases?: Pick<TaskDatabases, 'status' | 'ensure'>;
   /** Builds and keeps each managed repository's project map (`project-map.ts`). Absent, its routes answer 501. */
-  projectMaps?: Pick<ProjectMaps, 'refresh' | 'list' | 'remove'>;
+  projectMaps?: Pick<ProjectMaps, 'refresh' | 'list' | 'remove' | 'read'>;
 }): Server {
   const { config, driver, runner, attachTokens } = input;
 
@@ -731,7 +731,7 @@ export function createHostdServer(input: {
     // Each managed repository's project map, built from the default branch in
     // its mirror and kept under the work root, for the bridge only: it asks
     // for a refresh on its schedule and after a merge, and reads the list for
-    // its health card (docs/adr/0087).
+    // its health card (docs/adr/0087), and reads one map whole (docs/adr/0088).
     if (path === '/project-maps' || path.startsWith('/project-maps/')) {
       if (!input.projectMaps) return send(response, 501, { error: 'this hostd keeps no project maps: start it with its ProjectMaps wired in (apps/hostd/src/main.ts)' });
       if (method === 'GET' && path === '/project-maps') return send(response, 200, { maps: input.projectMaps.list() });
@@ -750,6 +750,13 @@ export function createHostdServer(input: {
         return send(response, 200, { map: await input.projectMaps.refresh(refresh) });
       }
       if (method === 'DELETE') return send(response, 200, { deleted: await input.projectMaps.remove(repo) });
+      // The map itself, for the console's Map page and the context of spec
+      // and implement tasks: read from the work root, never a worktree, so a
+      // pull request cannot rewrite what its own builder or reviewer is told.
+      if (method === 'GET') {
+        const { view, content } = input.projectMaps.read(repo);
+        return send(response, 200, { map: view, content });
+      }
     }
 
     const resumeMatch = /^\/tasks\/([^/]+)\/resume$/.exec(path);
