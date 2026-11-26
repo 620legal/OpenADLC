@@ -76,6 +76,7 @@ describe('the header', () => {
       'Crew true Unpin Crew',
       'Costs * false Pin Costs',
       'Insights false Pin Insights',
+      'Security false Pin Security',
       'Releases true Unpin Releases',
       'Settings false Pin Settings',
     ]);

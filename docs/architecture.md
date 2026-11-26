@@ -1332,7 +1332,7 @@ task's session, rather than waiting for the role's next task
   typing in a field, while a dialog is open, or with a modifier held
   (`lib/keys.ts`).
 - **Navigation.** `PAGES` (`lib/header.ts`) is the one list of the console's
-  pages: Board, Needs you, Crew, Costs, Insights, Releases, Settings. The
+  pages: Board, Needs you, Crew, Costs, Insights, Security, Releases, Settings. The
   header, the phone's bar (`BottomNav`), More and the command palette all
   read it, and `navFor(role)` decides which a person may see. The bars show
   only the pages this browser pinned, in the order they were pinned, then
