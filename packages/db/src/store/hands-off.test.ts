@@ -48,7 +48,7 @@ beforeEach(() => {
 describe('a hands-off window', () => {
   it('is opened once per repository, ending at its duration, and a second turn-on is the one already open', async () => {
     vi.mocked(queryOne).mockResolvedValueOnce(ROW);
-    await expect(turnOn({ ...INPUT, duration: '8h' })).resolves.toEqual({ window: OPEN, created: true });
+    await expect(turnOn({ ...INPUT, duration: '8h' })).resolves.toEqual({ window: OPEN, created: true, expired: [] });
     const [sql, params] = vi.mocked(queryOne).mock.calls[0] ?? [];
     expect(String(sql)).toMatch(/on conflict \(repo_id\) where ended_at is null do nothing/);
     expect(params).toEqual(['repo-1', 'jane@example.com', 'janedoe', 4242, '8h', 8 * 60 * 60_000]);
@@ -64,10 +64,24 @@ describe('a hands-off window', () => {
     expect(vi.mocked(queryOne).mock.calls[0]?.[1]?.[5]).toBeNull();
   });
 
-  it('ends one whose time has passed before opening another, so a lapsed one never refuses a new one', async () => {
+  it('ends one whose time has passed before opening another, so a lapsed one never refuses a new one, and answers it to be audited', async () => {
+    const lapsed = { ...ROW, id: 'window-0', ended_at: new Date('2026-11-25T18:00:30.000Z'), ended_by: 'openadlc', ended_why: 'expired' };
+    vi.mocked(query).mockResolvedValueOnce([lapsed]);
     vi.mocked(queryOne).mockResolvedValueOnce(ROW);
-    await turnOn({ ...INPUT, duration: '1h' });
-    expect(String(vi.mocked(query).mock.calls[0]?.[0])).toMatch(/ended_why = 'expired'[\s\S]*ends_at <= now\(\)/);
+    const opened = await turnOn({ ...INPUT, duration: '1h' });
+    expect(String(vi.mocked(query).mock.calls[0]?.[0])).toMatch(/ended_why = 'expired'[\s\S]*ends_at <= now\(\)[\s\S]*returning/);
+    expect(opened).toMatchObject({ created: true, expired: [{ id: 'window-0', endedWhy: 'expired', endedBy: 'openadlc' }] });
+
+    vi.mocked(queryOne).mockResolvedValueOnce(ROW);
+    await expect(turnOn({ ...INPUT, duration: '1h' })).resolves.toMatchObject({ expired: [] });
+  });
+
+  it('records one ended after its time as expired by OpenADLC, whoever pressed Turn off', async () => {
+    vi.mocked(queryOne).mockResolvedValueOnce({ ...ROW, ended_at: new Date('2026-11-25T18:00:30.000Z'), ended_by: 'openadlc', ended_why: 'expired' });
+    await expect(end({ repoId: 'repo-1', by: 'sam', why: 'turned_off' })).resolves.toMatchObject({ endedBy: 'openadlc', endedWhy: 'expired' });
+    const sql = String(vi.mocked(queryOne).mock.calls[0]?.[0]);
+    expect(sql).toMatch(/ended_by = case when ends_at is not null and ends_at <= now\(\) then 'openadlc' else \$2 end/);
+    expect(sql).toMatch(/ended_why = case when ends_at is not null and ends_at <= now\(\) then 'expired' else \$3 end/);
   });
 
   it('is read as open only while its time has not passed, even before the sweep ends it', async () => {

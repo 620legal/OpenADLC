@@ -297,7 +297,7 @@ export class HandsOffRoutes {
     if (!repo) throw new HttpFailure(404, `${repoName} is not a repository this install manages.`);
     const ended = await this.deps.handsOff.turnOff(repo, identity);
     if (!ended) throw new HttpFailure(404, `Hands-off mode is not on for ${repo.name}.`);
-    return { ended: { ...(await this.view(ended, [repo])), endedBy: identity } };
+    return { ended: { ...(await this.view(ended, [repo])), endedBy: ended.endedBy ?? identity } };
   }
 }
 

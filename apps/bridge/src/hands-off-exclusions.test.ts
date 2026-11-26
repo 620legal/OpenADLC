@@ -40,7 +40,7 @@ beforeEach(() => {
     store: {
       openFor: vi.fn(async () => WINDOW),
       listOpen: vi.fn(async () => [WINDOW]),
-      turnOn: vi.fn(async () => ({ window: WINDOW, created: false })),
+      turnOn: vi.fn(async () => ({ window: WINDOW, created: false, expired: [] })),
       end: vi.fn(async () => null),
       endExpired: vi.fn(async () => []),
     },

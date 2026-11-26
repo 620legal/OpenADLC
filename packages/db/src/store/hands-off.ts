@@ -60,6 +60,9 @@ const COLUMNS = 'id, repo_id, set_by, set_by_login, set_by_github_id, duration, 
  */
 const OPEN = 'ended_at is null and (ends_at is null or ends_at > now())';
 
+/** Past its end: what `end` records as expired, whoever asked. */
+const LAPSED = 'ends_at is not null and ends_at <= now()';
+
 function toWindow(row: Row): HandsOffWindow {
   return {
     id: row.id,
@@ -94,7 +97,9 @@ export async function listOpen(): Promise<HandsOffWindow[]> {
  * two people turning it on at once leave one, and the second is told whose.
  * `created` says which. A row whose time has passed but that the sweep has
  * not ended yet still holds the one open slot; it is ended here first, so a
- * window that ran out a moment ago does not refuse a new one.
+ * window that ran out a moment ago does not refuse a new one, and answered
+ * in `expired`: an end the caller does not audit would be the one end of a
+ * window that left no `hands_off.off` row (review of #409).
  */
 export async function turnOn(input: {
   repoId: string;
@@ -102,12 +107,15 @@ export async function turnOn(input: {
   setByLogin: string;
   setByGithubId: number;
   duration: HandsOffDuration;
-}): Promise<{ window: HandsOffWindow; created: boolean }> {
-  await query(
-    `update hands_off_windows set ended_at = now(), ended_by = 'openadlc', ended_why = 'expired'
-      where repo_id = $1 and ended_at is null and ends_at is not null and ends_at <= now()`,
-    [input.repoId],
-  );
+}): Promise<{ window: HandsOffWindow; created: boolean; expired: HandsOffWindow[] }> {
+  const expired = (
+    await query<Row>(
+      `update hands_off_windows set ended_at = now(), ended_by = 'openadlc', ended_why = 'expired'
+        where repo_id = $1 and ended_at is null and ends_at is not null and ends_at <= now()
+        returning ${COLUMNS}`,
+      [input.repoId],
+    )
+  ).map(toWindow);
   const ms = DURATION_MS[input.duration];
   const row = await queryOne<Row>(
     `insert into hands_off_windows (repo_id, set_by, set_by_login, set_by_github_id, duration, ends_at)
@@ -116,19 +124,26 @@ export async function turnOn(input: {
      returning ${COLUMNS}`,
     [input.repoId, input.setBy, input.setByLogin, input.setByGithubId, input.duration, ms],
   );
-  if (row) return { window: toWindow(row), created: true };
+  if (row) return { window: toWindow(row), created: true, expired };
   const on = await openFor(input.repoId);
   if (!on) throw new Error('a hands-off window could not be turned on or read; try again');
-  return { window: on, created: false };
+  return { window: on, created: false, expired };
 }
 
 /**
  * Ends the window open on a repository, saying who and why; null when none
- * was open, so two enders at once record it once.
+ * was open, so two enders at once record it once. One whose time has already
+ * passed, but that the sweep has not reached, is recorded as expired by
+ * OpenADLC whoever ends it: it was already off for every gate, and a Turn off
+ * pressed a moment after its end would otherwise read as that person's.
  */
 export async function end(input: { repoId: string; by: string; why: HandsOffEnd; note?: string | null }): Promise<HandsOffWindow | null> {
   const row = await queryOne<Row>(
-    `update hands_off_windows set ended_at = now(), ended_by = $2, ended_why = $3, ended_note = $4
+    `update hands_off_windows
+        set ended_at = now(),
+            ended_by = case when ${LAPSED} then 'openadlc' else $2 end,
+            ended_why = case when ${LAPSED} then 'expired' else $3 end,
+            ended_note = case when ${LAPSED} then null else $4 end
       where repo_id = $1 and ended_at is null
       returning ${COLUMNS}`,
     [input.repoId, input.by, input.why, input.note ?? null],

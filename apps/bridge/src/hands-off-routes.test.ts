@@ -31,7 +31,7 @@ function rig() {
       openFor: vi.fn(async () => state.open),
       listOpen: vi.fn(async () => (state.open ? [state.open] : [])),
       turnOn: vi.fn(async (input: { repoId: string; setBy: string; setByLogin: string; setByGithubId: number; duration: HandsOffDuration }) => {
-        if (state.open) return { window: state.open, created: false };
+        if (state.open) return { window: state.open, created: false, expired: [] };
         const ms = { '1h': HOURS, '8h': 8 * HOURS, '24h': 24 * HOURS, until_off: null }[input.duration];
         state.open = {
           id: 'window-1',
@@ -47,7 +47,7 @@ function rig() {
           endedWhy: null,
           endedNote: null,
         };
-        return { window: state.open, created: true };
+        return { window: state.open, created: true, expired: [] };
       }),
       end: vi.fn(async (input) => {
         if (!state.open) return null;

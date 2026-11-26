@@ -159,7 +159,20 @@ export class HandsOff {
     }
   }
 
-  /** Opens a window, audited as `hands_off.on`; `created` false when one was already open, which is left as it was. */
+  /** Audits a window's end as the store recorded it, which may be expired rather than what was asked. */
+  private auditedEnd(window: HandsOffWindow, repo: HandsOffRepo | null, asked: { by: string; why: HandsOffEnd; note?: string | null }): Promise<void> {
+    const by = window.endedBy ?? asked.by;
+    const why = window.endedWhy ?? asked.why;
+    const note = window.endedWhy ? window.endedNote : (asked.note ?? null);
+    return this.audited(HANDS_OFF_OFF, by, window, repo, { by, why, note });
+  }
+
+  /**
+   * Opens a window, audited as `hands_off.on`; `created` false when one was
+   * already open, which is left as it was. A window the store ended first
+   * because its time had passed is audited as `hands_off.off` before the new
+   * one's `hands_off.on`, so every end leaves a row and a feed event.
+   */
   async turnOn(input: { repo: HandsOffRepo; setBy: string; setByLogin: string; setByGithubId: number; duration: HandsOffDuration }): Promise<{ window: HandsOffWindow; created: boolean }> {
     const opened = await this.deps.store.turnOn({
       repoId: input.repo.id,
@@ -168,14 +181,15 @@ export class HandsOff {
       setByGithubId: input.setByGithubId,
       duration: input.duration,
     });
+    for (const lapsed of opened.expired) await this.auditedEnd(lapsed, input.repo, { by: 'openadlc', why: 'expired', note: null });
     if (opened.created) await this.audited(HANDS_OFF_ON, input.setBy, opened.window, input.repo);
-    return opened;
+    return { window: opened.window, created: opened.created };
   }
 
   /** Ends the window on a repository, audited as `hands_off.off`; null when none was open. */
   async end(repo: HandsOffRepo, input: { by: string; why: HandsOffEnd; note?: string | null }): Promise<HandsOffWindow | null> {
     const ended = await this.deps.store.end({ repoId: repo.id, by: input.by, why: input.why, note: input.note ?? null });
-    if (ended) await this.audited(HANDS_OFF_OFF, input.by, ended, repo, { by: input.by, why: input.why, note: input.note ?? null });
+    if (ended) await this.auditedEnd(ended, repo, input);
     return ended;
   }
 

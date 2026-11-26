@@ -48,9 +48,9 @@ function deps(): HandsOffDeps {
       openFor: vi.fn(async () => open),
       listOpen: vi.fn(async () => (open ? [open] : [])),
       turnOn: vi.fn(async (input) => {
-        if (open) return { window: open, created: false };
+        if (open) return { window: open, created: false, expired: [] };
         open = { ...WINDOW, setBy: input.setBy, setByLogin: input.setByLogin, setByGithubId: input.setByGithubId, duration: input.duration };
-        return { window: open, created: true };
+        return { window: open, created: true, expired: [] };
       }),
       end: vi.fn(async (input) => {
         if (!open) return null;
@@ -274,6 +274,25 @@ describe('the window', () => {
     const again = await handsOff.turnOn({ repo: REPO, setBy: 'sam@example.com', setByLogin: 'sam', setByGithubId: 7, duration: '1h' });
     expect(again).toMatchObject({ created: false, window: { setByLogin: 'janedoe' } });
     expect(audits).toHaveLength(1);
+  });
+
+  it('audits a lapsed window the turn-on ended before the new one, so that end is recorded too', async () => {
+    const lapsed: HandsOffWindow = { ...WINDOW, id: 'window-0', endsAt: '2026-11-25T11:00:00.000Z', endedAt: '2026-11-25T12:00:00.000Z', endedBy: 'openadlc', endedWhy: 'expired' };
+    const d = deps();
+    d.store.turnOn = vi.fn(async () => ({ window: { ...WINDOW, id: 'window-2', setByLogin: 'sam' }, created: true, expired: [lapsed] }));
+    await new HandsOff(d).turnOn({ repo: REPO, setBy: 'sam@example.com', setByLogin: 'sam', setByGithubId: 7, duration: '1h' });
+    expect(audits.map((a) => [a.action, a.actor, a.payload.windowId])).toEqual([
+      ['hands_off.off', 'openadlc', 'window-0'],
+      ['hands_off.on', 'sam@example.com', 'window-2'],
+    ]);
+    expect(audits[0]?.payload).toMatchObject({ by: 'openadlc', why: 'expired', note: null, setByLogin: 'janedoe' });
+  });
+
+  it('audits a turn-off the store recorded as expired as expired, not as the person’s', async () => {
+    const d = deps();
+    d.store.end = vi.fn(async () => ({ ...WINDOW, endedAt: '2026-11-25T12:00:00.000Z', endedBy: 'openadlc', endedWhy: 'expired' as const, endedNote: null }));
+    await new HandsOff(d).turnOff(REPO, 'sam@example.com');
+    expect(audits).toEqual([expect.objectContaining({ actor: 'openadlc', action: 'hands_off.off', payload: expect.objectContaining({ by: 'openadlc', why: 'expired' }) })]);
   });
 
   it('is turned off at once, recording who did, and a second turn-off records nothing', async () => {

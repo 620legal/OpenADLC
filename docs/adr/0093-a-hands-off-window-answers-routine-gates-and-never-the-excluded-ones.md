@@ -28,7 +28,9 @@ spec gate.
 - It records who set it: the console identity, and the GitHub login and id
   the device-code sign-in proved. It records when it was set and when it ends.
 - It ends in one of three ways: `expired`, `cap` (with the cap's words), or
-  `turned_off` (with who did it).
+  `turned_off` (with who did it). A window whose time has passed is recorded
+  as `expired` whichever path ends it — the sweep, a new turn-on, or a Turn
+  off pressed after its end — and every end writes a `hands_off.off` row.
 - The table is not backed up, so a restore starts with every window off.
 
 **Who turns it on and off.** `apps/bridge/src/hands-off-routes.ts` turns a
