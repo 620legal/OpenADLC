@@ -1624,7 +1624,9 @@ export class GitHubClient {
     } catch {
       return { missing: 'unreachable' };
     }
-    if (!location || !/^https:\/\//.test(location)) return { missing: 'unreachable' };
+    // Checked before the fetch, not after: a redirect GitHub answers is still
+    // data, and following it anywhere would let the bridge reach any host.
+    if (!location || !isJobLogLocation(location, this.baseUrl)) return { missing: 'unreachable' };
     try {
       const blob = await this.fetchImpl(location, {
         method: 'GET',
@@ -1723,6 +1725,43 @@ export class GitHubClient {
     const text = await response.text();
     if (!response.ok) throw new GitHubApiError(response.status, path, text.slice(0, 400), acceptedPermissionsOf(response));
     return JSON.parse(text) as ReleaseAsset;
+  }
+}
+
+/**
+ * The hosts GitHub.com serves Actions job logs from, behind the logs URL's
+ * redirect: its Actions storage under `actions.githubusercontent.com`, and
+ * the Azure storage accounts it names `productionresultssa<n>`. Not every
+ * `blob.core.windows.net` host: anyone can create one of those.
+ */
+const DOTCOM_JOB_LOG_HOSTS: readonly RegExp[] = [
+  /^([a-z0-9-]+\.)*actions\.githubusercontent\.com$/,
+  /^productionresultssa\d+\.blob\.core\.windows\.net$/,
+];
+
+/**
+ * Whether `jobLog` may fetch a redirect's target (#372). Only `https`, on the
+ * default port, with no credentials in the URL, and only a host GitHub serves
+ * logs from: one of `DOTCOM_JOB_LOG_HOSTS` when the client talks to
+ * GitHub.com, or, for any other base (a GitHub Enterprise Server), that
+ * server's own host. A server that keeps its logs in external storage is
+ * refused, and the page says the log is unreachable and links to the run:
+ * its storage host is the server's setting, which the bridge cannot know.
+ */
+export function isJobLogLocation(location: string, baseUrl: string = API): boolean {
+  let url: URL;
+  try {
+    url = new URL(location);
+  } catch {
+    return false;
+  }
+  if (url.protocol !== 'https:' || url.port !== '' || url.username !== '' || url.password !== '') return false;
+  const host = url.hostname.toLowerCase();
+  if (baseUrl.replace(/\/$/, '') === API) return DOTCOM_JOB_LOG_HOSTS.some((pattern) => pattern.test(host));
+  try {
+    return host === new URL(baseUrl).hostname.toLowerCase();
+  } catch {
+    return false;
   }
 }
 

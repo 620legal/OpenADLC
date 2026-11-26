@@ -292,7 +292,9 @@ workflow, a missing Makefile, GitHub unreachable, or a partial flake scan.
 An item whose pull request's `ci` is red shows the failing jobs, the step each
 failed at, and up to 20 redacted lines of the error, read from
 `GET /v1/items/:subject/ci-failure` (`apps/bridge/src/ci-failure.ts`). The job
-log is fetched from GitHub's redirect without the token (`GitHubClient.jobLog`).
+log is fetched from GitHub's redirect without the token (`GitHubClient.jobLog`),
+and only from a host GitHub serves logs from (`isJobLogLocation`); a redirect
+anywhere else is refused before it is fetched.
 When GitHub no longer has the log, the section says so and links to the job.
 
 Both reads go to GitHub only through `GitHubReads`, which can GET and read a

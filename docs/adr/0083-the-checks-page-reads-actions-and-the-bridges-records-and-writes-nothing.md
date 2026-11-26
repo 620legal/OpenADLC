@@ -43,7 +43,15 @@ crew token could set (ADR 0064).
   default-branch commit, found with `GET /commits/{sha}/pulls`. The
   `host-check` status is never read.
 - A job log is fetched from GitHub's redirect without the token, capped at
-  8 MiB, and every excerpt line is passed through `redactSecrets`.
+  8 MiB, and every excerpt line is passed through `redactSecrets`. The
+  redirect is followed only to a host GitHub serves logs from
+  (`isJobLogLocation`): on GitHub.com `*.actions.githubusercontent.com` and
+  `productionresultssa<n>.blob.core.windows.net`, on a GitHub Enterprise
+  Server that server's own host, and always `https` on the default port.
+  Any other target is refused before it is fetched, and the page says the
+  log is unreachable. A server whose logs live in external storage gets no
+  excerpt until that host is known; GitHub moving its log storage is what
+  would make the list worth revisiting.
 
 ## What this rules out
 

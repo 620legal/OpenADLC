@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DELETED_ACCOUNT, GitHubApiError, GitHubClient, nextLinkPath } from './client.js';
+import { DELETED_ACCOUNT, GitHubApiError, GitHubClient, isJobLogLocation, nextLinkPath } from './client.js';
 
 /**
  * A GitHub that lists a pull request's commits the way the real one does: a
@@ -1479,22 +1479,62 @@ describe('a list read by its next links', () => {
 
 describe("a job's log", () => {
   /** GitHub's logs URL redirecting to a blob host, which records whether a token reached it. */
-  function logsAt(blob: () => Response, first: () => Response = () => new Response(null, { status: 302, headers: { location: 'https://blob.example/log?sig=x' } })) {
+  const BLOB = 'https://productionresultssa3.blob.core.windows.net/actions-results/log?sig=x';
+  function redirectTo(location: string) {
+    return () => new Response(null, { status: 302, headers: { location } });
+  }
+  function logsAt(blob: () => Response, first: () => Response = redirectTo(BLOB), baseUrl?: string) {
     const seen: { url: string; method: string; authorization: string | null; redirect: string | undefined }[] = [];
     const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
       const headers = new Headers(init?.headers);
       seen.push({ url: String(url), method: init?.method ?? 'GET', authorization: headers.get('authorization'), redirect: init?.redirect });
-      return String(url).startsWith('https://blob.example') ? blob() : first();
+      return String(url).includes('/actions/jobs/') ? first() : blob();
     }) as typeof fetch;
-    return { client: new GitHubClient({ token: 'secret-token', actingAs: 'openadlc-flow', fetchImpl }), seen };
+    return { client: new GitHubClient({ token: 'secret-token', actingAs: 'openadlc-flow', fetchImpl, baseUrl }), seen };
   }
+
+  it('fetches nothing from a redirect to a host GitHub does not serve logs from', async () => {
+    for (const location of [
+      'https://evil.example/log',
+      'https://attacker.blob.core.windows.net/log',
+      'https://productionresultssa3.blob.core.windows.net.evil.example/log',
+      'https://actions.githubusercontent.com.evil.example/log',
+      'https://productionresultssa3.blob.core.windows.net:8443/log',
+      'https://user:pw@productionresultssa3.blob.core.windows.net/log',
+      'http://productionresultssa3.blob.core.windows.net/log',
+      'https://169.254.169.254/latest/meta-data',
+      'not a url',
+    ]) {
+      const { client, seen } = logsAt(() => new Response('leaked'), redirectTo(location));
+      expect(await client.jobLog('acme/api', 7), location).toEqual({ missing: 'unreachable' });
+      expect(seen, location).toHaveLength(1);
+    }
+  });
+
+  it('accepts the hosts GitHub.com serves Actions logs from', () => {
+    expect(isJobLogLocation(BLOB)).toBe(true);
+    expect(isJobLogLocation('https://pipelines.actions.githubusercontent.com/abc/_apis/log')).toBe(true);
+    expect(isJobLogLocation('https://results-receiver.actions.githubusercontent.com/x')).toBe(true);
+    expect(isJobLogLocation('https://PRODUCTIONRESULTSSA0.blob.core.windows.net/x')).toBe(true);
+    expect(isJobLogLocation('https://ghe.acme.test/storage/log')).toBe(false);
+  });
+
+  it('on a GitHub Enterprise Server, follows a redirect only to that server', async () => {
+    const base = 'https://ghe.acme.test/api/v3';
+    expect(isJobLogLocation('https://ghe.acme.test/storage/actions/log?sig=x', base)).toBe(true);
+    expect(isJobLogLocation(BLOB, base)).toBe(false);
+    expect(isJobLogLocation('https://other.acme.test/log', base)).toBe(false);
+    const { client, seen } = logsAt(() => new Response('ok'), redirectTo('https://ghe.acme.test/storage/actions/log?sig=x'), base);
+    expect(await client.jobLog('acme/api', 7)).toEqual({ text: 'ok' });
+    expect(seen[1]).toMatchObject({ url: 'https://ghe.acme.test/storage/actions/log?sig=x', authorization: null });
+  });
 
   it('follows the redirect by hand, without the token, and reads the text', async () => {
     const { client, seen } = logsAt(() => new Response('2026-01-01T00:00:00.0000000Z hello\n', { status: 200 }));
     expect(await client.jobLog('acme/api', 7)).toEqual({ text: '2026-01-01T00:00:00.0000000Z hello\n' });
     expect(seen).toHaveLength(2);
     expect(seen[0]).toMatchObject({ url: 'https://api.github.com/repos/acme/api/actions/jobs/7/logs', redirect: 'manual', authorization: 'Bearer secret-token' });
-    expect(seen[1]).toMatchObject({ url: 'https://blob.example/log?sig=x', authorization: null });
+    expect(seen[1]).toMatchObject({ url: BLOB, authorization: null });
     expect(seen.every((one) => one.method === 'GET')).toBe(true);
   });
 

@@ -153,9 +153,11 @@ export async function flakesOf(
     for (const run of [...list].sort((a, b) => a.id - b.id)) {
       for (let attempt = 1; attempt <= (run.run_attempt ?? 1); attempt += 1) attempts.push({ run, attempt });
     }
+    // Stop rather than skip: skipping would read a smaller, older head after
+    // leaving out a newer one, and the page says the oldest were left out.
     if (jobReads + attempts.length > MAX_JOB_READS) {
       partial = true;
-      continue;
+      break;
     }
     jobReads += attempts.length;
     const failedBefore = new Set<string>();
