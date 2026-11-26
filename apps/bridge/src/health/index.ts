@@ -73,6 +73,7 @@ import { defaultLoginItemReader, loginItemCheck, type LoginItemReader } from './
 import { hostCheckAccountCheck } from './checks/host-check-account.js';
 import { releaseAccountCheck } from './checks/release-account.js';
 import { releaseTagRulesCheck } from './checks/release-tag-rules.js';
+import { projectMapCheck } from './checks/project-map.js';
 import { AppGate } from '../app-gate.js';
 import { lastVersionOnGitHub } from '../release-service.js';
 import { SLEPT_EVENT, type KeepAwake } from '../keep-awake.js';
@@ -491,6 +492,12 @@ export function defaultChecks(wiring: HealthWiring): HealthCheck[] {
       releasing: () => repos.releasing(),
       app: (repoFullName) => releaseApp.client(repoFullName).catch(() => null),
       lastVersion: lastVersionOnGitHub((repoFullName) => releaseApp.client(repoFullName).catch(() => null)),
+    }),
+    // Each managed repository's project map, as hostd's last attempt left it
+    // (docs/adr/0087): a failed build keeps the old map and raises this card.
+    projectMapCheck({
+      repositories: repos,
+      maps: async () => (await hostd.projectMaps()).maps,
     }),
   ];
 }

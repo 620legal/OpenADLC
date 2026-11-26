@@ -17,6 +17,7 @@ import { retryTask } from './task-retry.js';
 import { AppReach } from './app-reach.js';
 import { capReason as ciCapReason, monthStart as ciMonthStart, parseCap as parseCiCap, recordRun as recordCiRun, everyJob } from './ci-usage.js';
 import { asAutomation, automationBotName } from './automation-bot.js';
+import { ProjectMapRefresher } from './project-map.js';
 import { accountIdOf, accountTypeOf } from './github-accounts.js';
 import { defaultBackupDeps, registerBackupRoutes } from './backup.js';
 import { sweepExpiredUndo } from './restore-into.js';
@@ -550,6 +551,15 @@ async function main(): Promise<void> {
   scheduler.useHostChecks(hostChecks);
   scheduler.useReleaseRuns(releaseRuns);
   scheduler.useStacking(stacking);
+  // Each managed repository's project map on hostd (docs/adr/0087): the
+  // `maps` job is its clock, a merge nudges it, and one pass a day is forced.
+  scheduler.useProjectMaps(
+    new ProjectMapRefresher({
+      repositories: repos,
+      hostd,
+      bot: () => automationBotName(config),
+    }),
+  );
   // OpenADLC updating itself from the releases a person tags (`self-update.ts`):
   // its clock is the `releases` job; while it waits to restart, the gate holds
   // new work and a task's start is refused as busy.

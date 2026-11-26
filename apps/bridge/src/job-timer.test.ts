@@ -170,6 +170,13 @@ describe('how often each job runs', () => {
     expect(intervalsFromEnv({ OPENADLC_JOB_EVENTS_MINUTES: '0' } as never).events).toBe(0);
   });
 
+  it('looks at the project maps every quarter hour unless told otherwise', () => {
+    expect(DEFAULT_INTERVALS.maps).toBe(15);
+    expect(intervalsFromEnv({} as never).maps).toBe(15);
+    expect(intervalsFromEnv({ OPENADLC_JOB_MAPS_MINUTES: '60' } as never).maps).toBe(60);
+    expect(intervalsFromEnv({ OPENADLC_JOB_MAPS_MINUTES: '0' } as never).maps).toBe(0);
+  });
+
   it('turns a job off at zero rather than treating it as unset', () => {
     // An install that does not want the dependency sweep should not have to
     // patch the source.
