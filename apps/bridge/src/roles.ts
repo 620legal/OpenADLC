@@ -141,6 +141,12 @@ export const ROUTE_ROLES: Readonly<Record<string, Role>> = {
   // views of Actions and the bridge's own records, which run and write nothing
   // (#372, docs/adr/0083).
   'GET /v1/repos/:name/checks': 'user',
+  // A Discover run (#370, docs/adr/0089): an intake-seat task that reads a
+  // repository's default branch and stores proposals, writing nothing to
+  // GitHub. Any user may start one and read it, as any may file a request;
+  // the task is held to the caps every task is.
+  'POST /v1/repos/:name/discover': 'user',
+  'GET /v1/repos/:name/discover/runs/:id': 'user',
   'GET /v1/items/:subject/ci-failure': 'user',
   'POST /v1/repos/:name/release/views': 'user',
   'POST /v1/repos/:name/release/cut': 'user',

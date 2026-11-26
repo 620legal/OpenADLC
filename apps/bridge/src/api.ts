@@ -156,6 +156,7 @@ import { registerChecksRoutes } from './checks-routes.js';
 import { registerItemSearchRoutes } from './item-search-routes.js';
 import { itemKey, itemOf, offeredGate, requestSubject, resolveItem } from './items.js';
 import { PlanChanges, registerPlanChangeRoutes } from './plan-changes.js';
+import { DiscoverService, liveDiscoverDeps, registerDiscoverRoutes } from './discover.js';
 import { humanReviewReader } from './human-review-read.js';
 import { readSeatPauses, seatPausedReason } from './seat-pause.js';
 import type { HealthAction } from '@openadlc/shared';
@@ -220,6 +221,8 @@ export interface ApiDeps {
   afterwards?: Afterwards;
   /** Approve all, the designer's judgement and a refusal after the fact (`plan-changes.ts`); one is made where none is given. */
   planChanges?: PlanChanges;
+  /** Discover runs: their start, their page, and what their sessions report (`discover.ts`); one is made where none is given. */
+  discover?: DiscoverService;
   /**
    * Told when a seat may have room — a task of its ended, its tasks at once
    * went up — so what it turned away while full starts now (`StageRunner`).
@@ -384,6 +387,24 @@ export function planChangesFor(deps: ApiDeps): PlanChanges {
       answerAsPerson: (input) => answerFromConsole(deps, input),
       ...(deps.afterwards ? { later: (what: string, work: () => Promise<unknown>) => deps.afterwards!.run({}, what, work) } : {}),
     })
+  );
+}
+
+/**
+ * Discover runs, wired to this bridge's task service and to GitHub as the
+ * automation account, which is asked only whether the default branch has a
+ * commit. Everything it keeps is in the database, so one made per caller is
+ * the same service.
+ */
+export function discoverFor(deps: Pick<ApiDeps, 'discover' | 'taskService' | 'actors' | 'config'>): DiscoverService {
+  return (
+    deps.discover ??
+    new DiscoverService(
+      liveDiscoverDeps({
+        open: (input) => deps.taskService.open(input),
+        github: () => asAutomation(deps.actors, deps.config),
+      }),
+    )
   );
 }
 
@@ -1913,6 +1934,8 @@ export function registerConsoleApi(router: Router, deps: ApiDeps): () => void {
   });
   registerAttachmentRoutes(router);
   registerDesignMemoryRoutes(router);
+  // Discover runs: started by any console user, read-only on GitHub (#370, docs/adr/0089).
+  registerDiscoverRoutes(router, discoverFor(deps));
   // The Checks page and an item's CI failure: GETs on GitHub as the automation
   // account, and the bridge's own records; neither writes anything (ADR 0083).
   const checksReads = async () => {

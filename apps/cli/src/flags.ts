@@ -15,6 +15,8 @@ export const FLAGS: Readonly<Record<string, readonly string[]>> = {
   doctor: [],
   ls: ['json'],
   watch: ['json'],
+  // A Discover run (#370): the repository is its argument, and `--run` follows one started.
+  discover: ['lens', 'detach', 'run', 'json'],
   // A command with subcommands is listed by subcommand. Listed by command, a flag
   // one subcommand reads was taken by its siblings and ignored:
   // `github apply --repo acme/one` wrote to every repository, and

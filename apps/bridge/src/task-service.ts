@@ -2,7 +2,7 @@ import { audit, bots, costs, hasEventOfType, health, hosts, lastEventAt, leases,
 import { githubDidNotAnswer } from '@openadlc/github';
 import { attachmentsForTask } from './attachment-routes.js';
 import { stoppedByTheBridge } from './bridge-stops.js';
-import { botAtStart, hasEnded, headerFor, leaseExpiryFrom, maxTasksOf, pathMatches, resolveBotRef, sameLogin, seatOf, withoutHeader, type ContextDocument, type HumanReviewRule, type Task, type TaskKind } from '@openadlc/shared';
+import { botAtStart, discoverRunPrefixOf, hasEnded, headerFor, leaseExpiryFrom, maxTasksOf, pathMatches, resolveBotRef, sameLogin, seatOf, withoutHeader, type ContextDocument, type HumanReviewRule, type Task, type TaskKind } from '@openadlc/shared';
 import type { Actors } from './actors.js';
 import type { BridgeConfig } from './config.js';
 import type { Context } from './context.js';
@@ -648,6 +648,13 @@ export class TaskService {
    */
   restartPending: () => string | null = () => null;
 
+  /**
+   * The documents a Discover run's session reads (`discover.ts`). Imported
+   * when first asked for: `discover.ts` opens its tasks through this class,
+   * and a static import each way would be a cycle. Replaced in tests.
+   */
+  discoverContext: (subjectRef: string) => Promise<ContextDocument[]> = async (subjectRef) => (await import('./discover.js')).discoverContext(subjectRef);
+
   /** Whether a subject is closed on GitHub. Not when it cannot be read: the task resumes as it would have. */
   private async subjectIsClosed(repoFullName: string, number: number): Promise<boolean> {
     try {
@@ -702,6 +709,16 @@ export class TaskService {
     // number on GitHub: it is read from the request, at open and at resume.
     if (requestPrefixOf(input.subjectRef)) {
       return this.context.forRequest(input.subjectRef).catch((error: unknown) => {
+        console.warn(`[bridge] no context for ${input.subjectRef}: ${error instanceof Error ? error.message : error}`);
+        return [];
+      });
+    }
+
+    // A Discover run has no issue either: its subject is the run, read from
+    // the platform database at open and at resume alike, since `extraContext`
+    // is not kept across a resume (docs/adr/0089).
+    if (discoverRunPrefixOf(input.subjectRef)) {
+      return this.discoverContext(input.subjectRef).catch((error: unknown) => {
         console.warn(`[bridge] no context for ${input.subjectRef}: ${error instanceof Error ? error.message : error}`);
         return [];
       });

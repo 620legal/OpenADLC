@@ -289,6 +289,37 @@ describe('a review seat’s part and lens', () => {
   });
 });
 
+describe('a Discover run’s context (#370)', () => {
+  const DOCUMENTS = [
+    { name: 'discover-run.md', title: 'The Discover run you are on', content: 'Repository: acme/api' },
+    { name: 'earlier-proposals.md', title: 'What the last Discover run proposed', content: '- `finish-csv-export`' },
+  ];
+
+  it('is the run’s two documents, read at the start and again on a resume, and never the request’s or an issue’s', async () => {
+    const startTask = vi.fn(async (_input: object) => ({ session: 'intake/discover', worktree: 'w' }));
+    const resumeTask = vi.fn(async () => ({ session: 'intake/discover' }));
+    const forRequest = vi.fn(async () => []);
+    const forSubject = vi.fn(async () => []);
+    const tasksService = new TaskService(
+      { costs: { perTaskCapUsd: 15, monthlyCapUsd: 1500 } } as unknown as BridgeConfig,
+      { startTask, resumeTask } as unknown as HostdClient,
+      { forRequest, forSubject } as unknown as Context,
+    );
+    const discoverContext = vi.fn(async (_subjectRef: string) => DOCUMENTS);
+    tasksService.discoverContext = discoverContext;
+    vi.mocked(tasks.getTask).mockResolvedValue({ id: 'task-1', botId: 'bot-1', repoId: null, kind: 'intake', subjectRef: 'discover:0b6f1d1c', skill: 'discover' } as never);
+
+    await tasksService.open({ bot: 'builder', kind: 'intake', subjectType: 'request', subjectRef: 'discover:0b6f1d1c', skill: 'discover' });
+    await tasksService.resume('task-1');
+
+    expect(discoverContext).toHaveBeenCalledWith('discover:0b6f1d1c');
+    expect(startTask).toHaveBeenCalledWith(expect.objectContaining({ subjectRef: 'discover:0b6f1d1c', skill: 'discover', context: DOCUMENTS }));
+    expect(resumeTask).toHaveBeenCalledWith('task-1', DOCUMENTS, expect.any(String), expect.any(Array), undefined, undefined);
+    expect(forRequest).not.toHaveBeenCalled();
+    expect(forSubject).not.toHaveBeenCalled();
+  });
+});
+
 describe('whether a pull request a lease would wait for is open', () => {
   const openadlc = { id: 'repo-1', name: 'openadlc', fullName: 'janedoe/OpenADLC' };
   const reader = (getPullRequest: (repo: string, number: number) => Promise<{ state: string }>) =>

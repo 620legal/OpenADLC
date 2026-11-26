@@ -10,6 +10,7 @@ import {
   reviewFindings,
   markerOptions,
   messageKindFor,
+  headlineFor,
   normalisePlanPaths,
   parseMarker,
   parseQuestion,
@@ -562,6 +563,15 @@ describe('a send-back a session asks for', () => {
       verdict: 'request_changes',
       lens: 'security',
     });
+  });
+});
+
+describe('a Discover run’s proposals (#370)', () => {
+  it('is an event of its own, a milestone in the thread, with a line a person reads', () => {
+    const marker = parseMarker('<!-- openadlc:{"event":"discover_proposals","proposals":[]} -->');
+    expect(marker?.event).toBe('discover_proposals');
+    expect(messageKindFor('discover_proposals')).toBe('sys');
+    expect(headlineFor('discover_proposals')).toBe('proposed new work');
   });
 });
 

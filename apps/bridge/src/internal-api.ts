@@ -12,6 +12,7 @@ import {
 import {
   OPENADLC_EVENTS,
   PLAN_CHANGE_REVIEW_SKILL,
+  DISCOVER_SKILL,
   botAtStart,
   headlineFor,
   messageKindFor,
@@ -30,7 +31,8 @@ import {
   stepNamed,
   unreadablePathLines,
 } from '@openadlc/shared';
-import { planChangesFor, type ApiDeps } from './api.js';
+import { discoverFor, planChangesFor, type ApiDeps } from './api.js';
+import type { DiscoverService } from './discover.js';
 import { bodyDigest } from './attribution.js';
 import { STAMP_REFUSED, STAMP_SIGNED } from './health/checks/attribution.js';
 import { MODEL_LIMIT_CHECK, limitFailure } from './health/checks/model-limit.js';
@@ -187,6 +189,8 @@ export function registerInternalApi(
     hostChecks?: Pick<HostCheckService, 'record'> | null;
     /** Records what hostd reports of a release build (`release-service.ts`). Absent, the route says so. */
     releases?: Pick<ReleaseService, 'record'> | null;
+    /** A Discover run's proposals, its missing result and its end (`discover.ts`); one is made where none is given. */
+    discoverRuns?: Pick<DiscoverService, 'record' | 'missing' | 'ended'> | null;
   },
 ): void {
   /**
@@ -208,6 +212,9 @@ export function registerInternalApi(
 
   // The designer's verdict on a plan change reaches the bridge here, from its own session (`plan-changes.ts`).
   const planChanges = planChangesFor(deps);
+
+  // A Discover run's proposals reach the bridge here, from its own session through hostd (`discover.ts`).
+  const discoverRuns = deps.discoverRuns ?? discoverFor(deps);
 
   /**
    * Registers a route a task's own session may reach, about itself.
@@ -495,6 +502,15 @@ export function registerInternalApi(
           reason = missing;
         }
       }
+      // And a Discover run's when its proposals are stored: one that ended
+      // without them read "done", and so would its run (`DiscoverService.missing`).
+      if (current?.skill === DISCOVER_SKILL) {
+        const missing = await discoverRuns.missing(current).catch(() => null);
+        if (missing) {
+          state = 'failed';
+          reason = missing;
+        }
+      }
     }
     // An engine that ended on its model account's usage or spend limit did not
     // fail: the account is at its limit, and every task on it would end the
@@ -565,6 +581,14 @@ export function registerInternalApi(
     // it arrived now: the task is no longer live. After the answer, since a
     // start can wait on GitHub; the sweep catches one this misses.
     if (state === 'paused' || hasEnded(state)) settleInbox(ended.id, ended.subjectRef);
+
+    // A Discover run ends with its task: done once its proposals are stored,
+    // failed with the task's reason on any other end.
+    if (hasEnded(state) && ended.skill === DISCOVER_SKILL) {
+      await discoverRuns
+        .ended(ended, state, reason)
+        .catch((error: unknown) => console.warn(`[bridge] ${ended.subjectRef}: its Discover run was not ended: ${error instanceof Error ? error.message : error}`));
+    }
 
     if (hasEnded(state)) {
       await deps.hostd.cleanupTask(ended.id, reason ?? state).catch(() => undefined);
@@ -736,6 +760,19 @@ export function registerInternalApi(
       to: typeof input.to === 'string' ? input.to.trim() : '',
       reason: typeof input.reason === 'string' ? input.reason : '',
     });
+  });
+
+  /**
+   * A Discover run's proposals (`discover.ts`). The runner reads the
+   * `discover_proposals` marker from its own session's output, keeps each
+   * `file:line` that exists at the snapshot's commit, and posts the rest here
+   * with the task's token, while the task runs. The bridge checks them again
+   * and stores them once; a second report, or one from any other task, is
+   * refused.
+   */
+  taskPost('/internal/tasks/:id/discover', { states: ['running'], refusal: 'proposals are recorded only by a task that is running' }, async ({ params, body }) => {
+    const input = await body<{ commit?: unknown; proposals?: unknown; dropped?: unknown; note?: unknown }>();
+    return discoverRuns.record(params.id ?? '', input ?? {});
   });
 
   /**

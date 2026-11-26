@@ -353,6 +353,19 @@ describe('what is refused', () => {
     expect(opened).toEqual([]);
   });
 
+  it('is a Discover run’s task: its run has ended, and a new run is started instead (#370)', async () => {
+    const { retryTask } = await import('./task-retry.js');
+    for (const state of ['failed', 'stopped', 'held']) {
+      store.tasks = [task({ id: 'task-discover', botId: 'bot-intake', kind: 'intake', subjectType: 'request', subjectRef: 'discover:0b6f1d1c', skill: 'discover', state })];
+      await expect(retryTask('task-discover', 'janedoe', await deps())).rejects.toMatchObject({
+        status: 409,
+        message: 'a Discover run is not run again; start a new one: openadlc discover janedoe/openadlc-testbed',
+      });
+    }
+    expect(opened).toEqual([]);
+    expect(triages).toEqual([]);
+  });
+
   it('is anything at all while work is paused, before it looks at the task', async () => {
     const { retryTask } = await import('./task-retry.js');
     store.tasks = [task({ id: 'task-review', botId: 'bot-lead', kind: 'review', subjectType: 'pr', subjectRef: 'openadlc-testbed#2', state: 'failed' })];

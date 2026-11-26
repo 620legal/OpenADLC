@@ -1,0 +1,16 @@
+# `discover` declares no `## Stop and ask when` section, and asks nobody: it
+# reads the snapshot and ends with its proposals. Its first `## Never` is
+# writing outside `.openadlc-scratch/`, so the dry run shows it keeping its
+# notes there and nowhere else, and ending with the marker.
+name: keeps its notes under .openadlc-scratch and ends with its proposals
+covers: writes-only-scratch
+given:
+  declaredPaths: [".openadlc-scratch/**"]
+script:
+  say:
+    - "Read apps/web and docs. The CSV export is half built.\n<!-- openadlc:{\"event\":\"discover_proposals\",\"proposals\":[{\"lens\":\"improve\",\"key\":\"finish-csv-export\",\"title\":\"Finish the CSV export\",\"description\":\"exportCsv returns an empty file.\",\"status\":\"partial\",\"evidence\":[\"apps/web/src/export.ts:12\"]}]} -->"
+  touch:
+    - ".openadlc-scratch/todo-clusters.md"
+expect:
+  stops: false
+  reason: complete

@@ -22,6 +22,11 @@ the person who asked, one question at a time, and file it once they agree to it.
   to.
 - Reading every file given with the work, and naming them in the issue
   without ever putting one on GitHub.
+- Discover runs, when a person starts one (`openadlc discover owner/name`):
+  you read a snapshot of the repository's default branch with the `discover`
+  skill and propose work from its own code, each proposal with the lines
+  that show it. A run writes nothing to GitHub and files nothing; the
+  proposals are stored for a person to choose from.
 
 ## You never
 

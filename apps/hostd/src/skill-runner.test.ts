@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -1012,6 +1012,109 @@ describe('a session sending its work back', () => {
     const last = to('state').at(-1)?.body;
     expect(last?.state).toBe('stopped');
     expect(String(last?.reason)).toMatch(/^send-back refused: .*a person decides now$/);
+  }, 30_000);
+});
+
+/**
+ * A Discover run's proposals reach the bridge only from its own session's
+ * marker, through the runner, which checks each `file:line` against the
+ * commit the clone was at before the model ran (#370, docs/adr/0089).
+ */
+describe('a Discover session saying its proposals', () => {
+  /** The worktree as a git repository at one commit, which a Discover task's clone is; answers the commit. */
+  function snapshot(): string {
+    const git = (...args: string[]) => execFileSync('git', args, { cwd: dir, encoding: 'utf8' }).trim();
+    git('init', '--quiet');
+    git('config', 'user.email', 'test@example.com');
+    git('config', 'user.name', 'test');
+    writeFileSync(join(dir, 'export.ts'), 'export function exportCsv() {\n  return "";\n}\n');
+    git('add', 'export.ts');
+    git('commit', '--quiet', '-m', 'snapshot');
+    return git('rev-parse', 'HEAD');
+  }
+
+  const proposal = (key: string, evidence: string[]) => ({
+    lens: 'improve',
+    key,
+    title: `Finish ${key}`,
+    description: 'Half built.',
+    status: 'partial',
+    evidence,
+  });
+  const marker = (proposals: unknown[], note?: string) =>
+    `<!-- openadlc:${JSON.stringify({ event: 'discover_proposals', proposals, ...(note ? { note } : {}) })} -->`;
+  const DISCOVER = { OPENADLC_SKILL: 'discover', OPENADLC_SUBJECT_REF: 'discover:0b6f1d1c' };
+
+  it('posts once, with the commit read before the session and only the evidence that exists there', async () => {
+    const commit = snapshot();
+    const said = `Read export.ts.\n\n${marker([proposal('csv-export', ['export.ts:2', 'export.ts:9']), proposal('imagined', ['nowhere.ts:1'])], 'One file.')}`;
+    const bin = fakeClaude([
+      assistant('msg-1', said, 1500, 120),
+      // An engine that carries on after its proposals is not read.
+      assistant('msg-2', `Changed my mind.\n\n${marker([proposal('other', ['export.ts:1'])])}`, 1600, 30),
+      result(0.2),
+    ]);
+
+    expect(await runTriage(bin, DISCOVER)).toBe(0);
+
+    expect(to('discover').map((call) => call.body)).toEqual([
+      {
+        commit,
+        proposals: [{ ...proposal('csv-export', []), evidence: [{ file: 'export.ts', line: 2 }] }],
+        // The one with no evidence left.
+        dropped: 1,
+        note: 'One file.',
+      },
+    ]);
+    const thread = to('message').map((call) => String(call.body.text));
+    expect(thread).toContain('Read export.ts.');
+    expect(thread.some((text) => text.includes('Changed my mind'))).toBe(false);
+    expect(to('usage').length).toBeGreaterThan(0);
+    expect(to('state').at(-1)?.body).toEqual({ state: 'done', reason: 'stored 1 proposal' });
+  }, 30_000);
+
+  it('posts nothing from another skill saying the same marker', async () => {
+    snapshot();
+    const bin = fakeClaude([assistant('msg-1', `Filed it.\n\n${marker([proposal('csv-export', ['export.ts:2'])])}`, 1500, 120), result(0.2)]);
+
+    expect(await runTriage(bin)).toBe(0);
+
+    expect(to('discover')).toEqual([]);
+    expect(to('state').at(-1)?.body).toEqual({ state: 'done', reason: 'complete' });
+  }, 30_000);
+
+  it('fails, saying why, when its marker cannot be read', async () => {
+    snapshot();
+    const bin = fakeClaude([assistant('msg-1', `Done.\n${marker([]).replace('[]', '"none"')}`, 1500, 60), result(0.1)]);
+
+    expect(await runTriage(bin, DISCOVER)).toBe(1);
+
+    expect(to('discover')).toEqual([]);
+    const last = to('state').at(-1)?.body;
+    expect(last?.state).toBe('failed');
+    expect(String(last?.reason)).toContain('could not be read');
+  }, 30_000);
+
+  it('fails with the bridge’s words when the bridge does not store them', async () => {
+    snapshot();
+    statuses.discover = [409];
+    const bin = fakeClaude([assistant('msg-1', marker([proposal('csv-export', ['export.ts:2'])]), 1500, 60), result(0.1)]);
+
+    expect(await runTriage(bin, DISCOVER)).toBe(1);
+
+    const last = to('state').at(-1)?.body;
+    expect(last?.state).toBe('failed');
+    expect(String(last?.reason)).toMatch(/^the bridge did not store its proposals: the bridge answered 409/);
+  }, 30_000);
+
+  it('does not start the engine when its worktree has no commit to check evidence against', async () => {
+    const reached = join(dir, 'reached');
+    const bin = fakeClaude([assistant('msg-1', marker([]), 10, 10), result(0.1)], reached);
+
+    expect(await runTriage(bin, DISCOVER)).toBe(1);
+
+    expect(existsSync(reached)).toBe(false);
+    expect(String(to('state').at(-1)?.body.reason)).toContain('could not read the commit of its snapshot');
   }, 30_000);
 });
 

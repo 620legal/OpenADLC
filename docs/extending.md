@@ -67,6 +67,7 @@ rebuilt and hostd restarted).
    | `pr-review` | `apps/bridge/src/webhooks.ts` for the first reviewers; `apps/bridge/src/task-service.ts` for the lead's review (`openLeadReview`) and the gate sweep's (`openMissingReviews`) |
    | `resolve-conflict` | `apps/bridge/src/conflict-round.ts` |
    | `deploy`, `qa` | `apps/bridge/src/webhooks.ts` and `apps/bridge/src/scheduler.ts` |
+   | `discover` | `apps/bridge/src/discover.ts`, for a Discover run a person starts (`POST /v1/repos/:name/discover`, `openadlc discover`); run on the intake seat, and refused by Try again |
 
    **Try again** on a task whose row recorded no skill falls back to the
    `SKILL` map in `apps/bridge/src/task-retry.ts`, one skill per kind of task.

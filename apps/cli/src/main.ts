@@ -10,6 +10,7 @@ import { authLogin, authStatus } from './commands/auth.js';
 import { backup, restore, selectionFromFlags } from './commands/backup.js';
 import { cloud, memberArguments } from './commands/cloud.js';
 import { bridgeHeaders, consoleLink } from './console-link.js';
+import { discover, discoverTarget } from './commands/discover.js';
 import { doctor, status } from './commands/doctor.js';
 import { githubApply, githubCheck, syncLabels } from './commands/github.js';
 import { init } from './commands/init.js';
@@ -66,6 +67,17 @@ openadlc — a crew of agents that takes a request to a reviewed, deployed chang
   openadlc watch [--json]          what the crew does as it happens, one line per event,
                                     until Ctrl-C. Both read the running bridge, never the
                                     database; --json prints JSON for a script to read
+  openadlc discover OWNER/NAME [--lens LIST] [--detach] [--json]
+                                    a read-only Discover run: the intake seat reads the
+                                    repository's default branch and proposes work from its
+                                    own code, each proposal with the lines that show it.
+                                    It writes nothing to GitHub. Waits for the run and
+                                    prints its proposals; --lens improve names the lenses
+                                    (improve is the only one), --detach starts it and
+                                    leaves it, --json prints JSON. Ctrl-C stops waiting,
+                                    not the run
+  openadlc discover OWNER/NAME --run ID [--json]
+                                    follow a Discover run already started, and print it
   openadlc auth login --bot NAME   connect one bot's GitHub account with the device flow
   openadlc auth login --all        connect every bot in turn; run openadlc up first,
                                     since the bridge connects each seat
@@ -312,6 +324,21 @@ async function main(): Promise<void> {
     case 'ls':
       process.exitCode = await ls(config, { json: has('json') });
       return;
+
+    // Reads the bridge alone, so it is not in DATABASE_COMMANDS either.
+    case 'discover': {
+      const stop = new AbortController();
+      process.once('SIGINT', () => stop.abort());
+      process.exitCode = await discover(config, {
+        repo: discoverTarget(args),
+        lens: flag('lens'),
+        run: flag('run'),
+        detach: has('detach'),
+        json: has('json'),
+        signal: stop.signal,
+      });
+      return;
+    }
 
     case 'watch': {
       const stop = new AbortController();
