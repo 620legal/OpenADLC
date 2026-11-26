@@ -15,6 +15,7 @@ import {
   timeline,
   topicLabel,
   topicsOf,
+  couldNotFinish,
 } from './thread';
 
 const NOW = '2026-09-24T10:53:00.000Z';
@@ -185,6 +186,9 @@ describe('the task pinned at the top', () => {
     const done = { ...REVIEWING, state: 'done', startedAt: minutesAgo(130), endedAt: minutesAgo(120) };
     expect(pinnedTask({ task: null, lastTask: done }, [PULL], NOW)).toMatchObject({ current: false, did: 'Reviewed', when: '2 hours ago' });
     expect(pinnedTask({ task: null, lastTask: { ...done, state: 'failed' } }, [PULL], NOW)?.did).toBe('Could not finish');
+    // Held on its account's usage limit: neutral, and started again by the bridge.
+    expect(pinnedTask({ task: null, lastTask: { ...done, state: 'held' } }, [PULL], NOW)?.did).toBe('Held on its model account’s usage limit on');
+    expect(couldNotFinish({ ...done, state: 'held' })).toBe(false);
     // A build that ended without opening its pull request is not finished.
     expect(pinnedTask({ task: null, lastTask: { ...done, kind: 'implement', endedWithoutPullRequest: true } }, [PULL], NOW)?.did).toBe('No pull request for');
     expect(pinnedTask({ task: null, lastTask: null }, [], NOW)).toBeNull();

@@ -16,6 +16,8 @@ import {
   readPick,
   CREW_LAYOUT_KEY,
   storedCrewLayout,
+  needsAttention,
+  recentResults,
 } from './crew';
 
 const NOW = '2026-09-24T12:00:00.000Z';
@@ -104,6 +106,13 @@ describe('what a bot is doing', () => {
     const failed = member({ name: 'x', lastTask: summary({ kind: 'implement', state: 'failed', endedAt: minutesAgo(3) }) });
     expect(nowLine(failed, NOW)).toBe('Could not finish #16 3 min ago');
     expect(nowLine(member({ name: 'y' }), NOW)).toBe('Nothing yet');
+  });
+
+  it('says a task held on its model account’s usage limit neutrally, never as a failure', () => {
+    const held = member({ name: 'x', lastTask: summary({ kind: 'implement', state: 'held', endedAt: minutesAgo(3) }) });
+    expect(nowLine(held, NOW)).toBe('Held on its model account’s usage limit on #16 3 min ago');
+    expect(needsAttention(held)).toBe(false);
+    expect(recentResults({ ...held, recent: undefined })).toEqual([]);
   });
 
   it('says of a bot with no account that it cannot work, and of the automation bot what it does', () => {

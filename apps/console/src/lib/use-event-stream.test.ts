@@ -17,17 +17,17 @@ class FakeEventSource {
   static readonly CLOSED = 2;
   readyState = FakeEventSource.CONNECTING;
   closed = false;
-  private listeners = new Map<string, (() => void)[]>();
+  private listeners = new Map<string, ((event: { data?: string }) => void)[]>();
   constructor(readonly url: string) {
     FakeEventSource.made.push(this);
   }
-  addEventListener(type: string, listener: () => void): void {
+  addEventListener(type: string, listener: (event: { data?: string }) => void): void {
     this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]);
   }
   /** An event, with the readyState the browser would have set by then. */
-  emit(type: string, readyState?: number): void {
+  emit(type: string, readyState?: number, data?: string): void {
     if (readyState !== undefined) this.readyState = readyState;
-    for (const listener of this.listeners.get(type) ?? []) listener();
+    for (const listener of this.listeners.get(type) ?? []) listener({ data });
   }
   close(): void {
     this.closed = true;
@@ -38,16 +38,20 @@ class FakeEventSource {
 let root: Root;
 let said: string[];
 
-function Probe({ url }: { url: string }) {
-  useEventStream(url, {
-    onOpen: () => said.push('open'),
-    onChanged: () => said.push('changed'),
-    onDown: () => said.push('down'),
-  });
+function Probe({ url, event }: { url: string; event?: string }) {
+  useEventStream(
+    url,
+    {
+      onOpen: () => said.push('open'),
+      onChanged: (data) => said.push(data === undefined ? 'changed' : `changed:${data}`),
+      onDown: () => said.push('down'),
+    },
+    event,
+  );
   return null;
 }
 
-const draw = (url = '/api/thread/builder/stream') => act(() => root.render(createElement(Probe, { url })));
+const draw = (url = '/api/thread/builder/stream', event?: string) => act(() => root.render(createElement(Probe, { url, event })));
 const latest = () => FakeEventSource.made[FakeEventSource.made.length - 1]!;
 
 beforeEach(() => {
@@ -126,5 +130,28 @@ describe('a stream that ends', () => {
     await act(async () => vi.advanceTimersByTimeAsync(RECONNECT_MAX_MS));
     expect(FakeEventSource.made).toHaveLength(2);
     expect(FakeEventSource.made.every((one) => one.closed)).toBe(true);
+  });
+});
+
+describe('the message a stream listens for', () => {
+  it('is changed unless told otherwise, as a thread and a work item send it', () => {
+    draw();
+    latest().emit('changed', FakeEventSource.OPEN);
+    latest().emit('board', FakeEventSource.OPEN, '{"id":"x"}');
+    expect(said).toEqual(['changed']);
+  });
+
+  it('is the name it is given, with each message’s data handed on', () => {
+    draw('/api/board/events/stream', 'board');
+    latest().emit('board', FakeEventSource.OPEN, '{"id":"task.started:t1"}');
+    latest().emit('changed', FakeEventSource.OPEN);
+    expect(said).toEqual(['changed:{"id":"task.started:t1"}']);
+  });
+
+  it('reads again on its timer, with no data, where there is no EventSource', async () => {
+    vi.stubGlobal('EventSource', undefined);
+    draw('/api/board/events/stream', 'board');
+    await act(async () => vi.advanceTimersByTimeAsync(5_000));
+    expect(said).toEqual(['changed']);
   });
 });

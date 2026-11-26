@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import type { InsightSummary, InsightsView } from '@/lib/api';
+import type { ImplementInputWeek, InsightSummary, InsightsView } from '@/lib/api';
 import { cn } from '@/lib/cn';
 import { stageOf } from '@/lib/stages';
 
@@ -139,8 +139,70 @@ export function InsightsBody({ insights, repos, repo }: { insights: InsightsView
           </dl>
         </section>
       </div>
+
+      {/* A bridge older than the field sends none: the section shows empty, not a crash. */}
+      <ImplementInput weeks={summary.implementInput ?? []} />
     </div>
   );
+}
+
+/**
+ * Input tokens per completed implement task, week by week: whether a change to
+ * what sessions are given (the project map, #380) changed how much they read.
+ * A table, not a chart: the three figures are read as numbers and compared
+ * with the runbook's query.
+ */
+function ImplementInput({ weeks }: { weeks: readonly ImplementInputWeek[] }) {
+  return (
+    <section aria-label="Input tokens per implement task" className="rounded-lg border border-edge bg-panel/40 p-4">
+      <h2 className="text-[11px] uppercase tracking-wider text-muted">Input tokens per implement task</h2>
+      <table className="mt-2 w-full text-[12.5px]">
+        <thead>
+          <tr className="text-left text-[11px] text-dim">
+            <th className="py-0.5 font-normal">Week of</th>
+            <th className="py-0.5 font-normal">Tasks</th>
+            <th className="py-0.5 text-right font-normal">p25 · median · p75</th>
+          </tr>
+        </thead>
+        <tbody>
+          {[...weeks].reverse().map((week) => (
+            <tr key={week.weekStart} data-week={week.weekStart.slice(0, 10)}>
+              <td className="py-0.5 tabular-nums text-soft">{week.weekStart.slice(0, 10)}</td>
+              <td className="py-0.5 tabular-nums text-soft">
+                {week.tasks}
+                {runMix(week)}
+              </td>
+              <td className="py-0.5 text-right tabular-nums text-body">
+                {week.median === null || week.p25 === null || week.p75 === null ? (
+                  <span className="text-dim">{week.tasks === 0 ? '—' : 'fewer than 5 tasks'}</span>
+                ) : (
+                  `${kTokens(week.p25)} · ${kTokens(week.median)} · ${kTokens(week.p75)}`
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="mt-2 text-[11.5px] text-dim">
+        Completed implement tasks, by the UTC week they started; input includes cached tokens. Before/after a change:
+        docs/runbooks/compare-implement-input-tokens.md.
+      </p>
+    </section>
+  );
+}
+
+/** The billed, subscription and mixed counts, shown only when a week has more than one kind. */
+function runMix(week: ImplementInputWeek): string {
+  const kinds = (['billed', 'subscription', 'mixed'] as const).filter((kind) => week.byRun[kind] > 0);
+  if (kinds.length < 2) return '';
+  return ` (${kinds.map((kind) => `${week.byRun[kind]} ${kind}`).join(', ')})`;
+}
+
+/** A token count in thousands, as the table shows it: "1.2k", "350k", "2,140k". */
+export function kTokens(tokens: number): string {
+  const thousands = tokens / 1000;
+  if (thousands < 10) return `${Math.round(thousands * 10) / 10}k`;
+  return `${Math.round(thousands).toLocaleString('en-US')}k`;
 }
 
 /**

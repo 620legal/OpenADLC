@@ -258,3 +258,22 @@ describe('a start GitHub did not answer for', () => {
     expect(explainFailure(REASON, { bot: 'the builder' }).action).not.toMatchObject({ kind: 'open_page' });
   });
 });
+
+describe('a task held on its model account’s usage limit', () => {
+  const HELD =
+    "held on model account acct-1: You've hit your org's monthly spend limit · ask your admin to raise it at https://claude.ai/admin-settings/usage · your weekly limit resets 11am (UTC)";
+
+  it('is said as held, not failed, names the limit, and offers the link to raise it', () => {
+    const words = explainFailure(HELD, { bot: 'the builder', account: { label: 'Shared Claude', provider: 'anthropic', kind: 'subscription' } });
+
+    expect(words.sentence).toBe('Held: the Anthropic subscription “Shared Claude” is at its spend limit. It starts again by itself once the account works.');
+    expect(words.action).toEqual({ kind: 'open_url', label: 'Raise the limit', url: 'https://claude.ai/admin-settings/usage' });
+    expect(words.sentence).not.toMatch(/try again|fail/i);
+  });
+
+  it('offers nothing to press when the message linked nowhere it can show', () => {
+    const words = explainFailure("held on model account acct-1: You've hit your org's monthly spend limit at https://example.com/x", { bot: 'the builder' });
+    expect(words.sentence).toBe('Held: its model account is at its spend limit. It starts again by itself once the account works.');
+    expect(words.action).toBeNull();
+  });
+});

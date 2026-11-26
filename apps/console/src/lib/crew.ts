@@ -401,6 +401,8 @@ export function nowLine(bot: CrewMember, now: string): string {
     const tail = when ? ` ${when}` : '';
     if (last.state === 'failed') return `Could not finish ${what}${tail}`;
     if (last.state === 'stopped') return `Stopped work on ${what}${tail}`;
+    // Not a failure: the bridge starts it again once the account works (ADR 0096).
+    if (last.state === 'held') return `Held on its model account’s usage limit on ${what}${tail}`;
     return `${DID[last.kind] ?? 'Finished'} ${what}${tail}`;
   }
   return 'Nothing yet';
@@ -531,7 +533,8 @@ export const OUTCOME: Record<SeatOutcome, { mark: string; words: string; tone: s
 export function recentResults(bot: CrewMember, count = 3): SeatResult[] {
   if (bot.recent) return bot.recent.slice(0, count);
   const last = bot.lastTask;
-  if (!last || last.state === 'running' || last.state === 'queued' || last.state === 'paused') return [];
+  // A held task is not a result: it is started again once its account works.
+  if (!last || last.state === 'running' || last.state === 'queued' || last.state === 'paused' || last.state === 'held') return [];
   const outcome: SeatOutcome = last.state === 'failed' ? 'failed' : last.state === 'stopped' ? 'stopped' : 'done';
   // Named by its issue: a review's subject is its pull request, and "#31" beside the issue it links to said the wrong number.
   const ref = last.issue ? `${last.issue.repo}#${last.issue.number}` : last.subjectRef;

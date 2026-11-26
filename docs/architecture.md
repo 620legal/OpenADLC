@@ -104,16 +104,29 @@ dot says when the board was last read, by the browser's clock, from a whole
 read or an activity answer: "Live · 4s ago", and "Not updated" once more than a
 refresh and five seconds (20 s) have passed.
 
-Outside the console, `openadlc watch` reads a stream of board events
-(`GET /v1/board/events`, `board-events.ts`): a task started, a question asked,
-a pull request held, a merge. Nothing emits them. One poller for the install,
-running only while someone watches, reads them every two seconds from the
-tables they happen in (`tasks.started_at`, `gates.created_at`, `stage_moves`
-into Merged, the merge line's holds, `pull.held` audit rows). It starts from the
-database's now and reads ten seconds back each time, sending each event once.
-`openadlc ls` reads `GET /v1/board/tasks`, the tasks queued, running or paused,
-each timed the way the card is
+`openadlc watch` and the console's activity button read a stream of board
+events (`GET /v1/board/events`, `board-events.ts`): a task started, a question
+asked, a task stopped at its cost cap, a pull request a bot opened, the lead's
+approval, a pull request held, a merge, a release published. Nothing emits
+them. One poller for the install, running only while someone watches, reads
+them every two seconds from the tables they happen in (`tasks.started_at`,
+`gates.created_at`, `stage_moves` into Merged, the merge line's holds,
+`pull.held` audit rows, GitHub's `pull_request.opened` and
+`pull_request_review.submitted` deliveries in `events`, `release_runs`). It
+starts from the database's now and reads ten seconds back each time, sending
+each event once. `openadlc ls` reads `GET /v1/board/tasks`, the tasks queued,
+running or paused, each timed the way the card is
 ([ADR 0021](adr/0021-board-events-are-read-from-the-tables-they-happen-in.md)).
+
+`GET /v1/board/events/history` reads the same tables, through the same
+derivation, a page at a time back 30 days, newest first, filtered by
+repository and bot. It is what the activity button's panel and the Activity
+page (`/activity`) list; the stream only tells the button that something new
+happened. The two types read from GitHub's deliveries reach back only as far as
+`OPENADLC_EVENT_RETENTION_DAYS`. What a browser has seen is kept in its own
+localStorage (`openadlc.activity.seen`), and a browser that has seen nothing
+starts at zero
+([ADR 0081](adr/0081-board-event-history-is-a-read-of-the-tables-events-happen-in.md)).
 The console's side panel reads `GET /v1/board/panel`, the tasks running or
 paused with their state and spend, and those that ended in the last day (see
 [the crew panel](#the-crew-panel-beside-every-page)).
@@ -620,7 +633,15 @@ asks you on the card, and the work waits for your answer. In detail:
    audit row with the reason. Nothing in the crew picks it up, so Needs you
    shows a `triage_failed` card (`parked:<repo>#<n>`) with that reason and what
    to do, in any stage, until the label comes off, the issue closes or it is
-   labelled `openadlc:ignore`. Otherwise the dispatcher **leases** the
+   labelled `openadlc:ignore`. A builder whose model account is at its usage
+   or spend limit is passed over. The hold is the health row
+   `model-limit:<accountId>`, read like the `bot-sign-in`, `bot-access` and
+   `hostd` blockers, and under scripted engines too. A task that ends on the
+   limit ends `held` (`tasks.state`, beside `queued`, `running`, `paused`,
+   `stopped`, `done` and `failed`). It is never counted toward parking an
+   issue, and the recovery starts it again once a check of the account passes
+   (docs/adr/0096-a-model-accounts-usage-limit-is-a-health-row-and-its-tasks-end-held.md).
+   Otherwise the dispatcher **leases** the
    issue to that builder — the issue, the bot, the declared paths, an expiry —
    and the bridge opens an `implement` task. hostd clones the repository's
    mirror for the task, on a branch
@@ -1479,7 +1500,8 @@ task's session, rather than waiting for the role's next task
   typing in a field, while a dialog is open, or with a modifier held
   (`lib/keys.ts`).
 - **Navigation.** `PAGES` (`lib/header.ts`) is the one list of the console's
-  pages: Board, Needs you, Crew, Costs, Insights, Security, Releases, Settings. The
+  pages: Board, Needs you, Crew, Costs, Insights, Security, Releases, Map,
+  Activity, Settings. The
   header, the phone's bar (`BottomNav`), More and the command palette all
   read it, and `navFor(role)` decides which a person may see. The bars show
   only the pages this browser pinned, in the order they were pinned, then

@@ -49,6 +49,8 @@ export const ROUTE_ROLES: Readonly<Record<string, Role>> = {
   'GET /v1/board/panel': 'user',
   // What the crew is doing as it happens, and the tasks live now (`openadlc watch`, `openadlc ls`).
   'GET /v1/board/events': 'user',
+  // The same events, thirty days of them a page at a time: the console's bell and Activity page (docs/adr/0081).
+  'GET /v1/board/events/history': 'user',
   'GET /v1/board/tasks': 'user',
   'GET /v1/bots': 'user',
   'GET /v1/bots/:name': 'user',

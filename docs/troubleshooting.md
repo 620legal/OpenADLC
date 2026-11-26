@@ -116,6 +116,7 @@ role alone before it has one (`botInWords`, `packages/shared/src/bot-words.ts`).
 | `signing-key` | 15 min | `<bot>` has no signing key on its GitHub account · `<login>` has a signing key OpenADLC did not register (a warning) | Reconnect the bot once the app has “SSH signing keys”; blocking only where a branch requires signed commits · the card offers **Revoke** (deletes it from the account as the bot, where its sign-in may) and **Dismiss** (it is somebody's on purpose; the check stops counting it, with an undo on the card), both an admin's; or remove it by hand on the account's SSH and GPG keys page |
 | `commit-email` | 60 min | `<login>`’s own email address is on commit `<sha>` in `<repo>` (a warning, saying when GitHub wrote it) | Signed in as that account, open github.com/settings/emails: if Keep my email addresses private is not ticked, tick it and Block command line pushes that expose my email. Commits already written keep their address, so **Dismiss** the card whether it was ticked or not; it clears by itself once GitHub writes a newer commit for the account with its noreply address, and comes back only for a newer one that still carries the address. If one written after the box was ticked does, make the account’s primary email an address that is fine to publish |
 | `model-account` | 30 min | The xAI subscription is signed out | [A model account is signed out](#a-model-account-is-signed-out-or-refused) |
+| `model-limit` | 5 min (it checks the account at its reset time, or every 15 min) | The Anthropic subscription is at its spend limit | Raise the limit, then Verify the account; the held work starts again by itself. [A model account hit its usage limit](#a-model-account-hit-its-usage-limit) |
 | `repo-rules` | 60 min | Nothing the crew builds can land in `<repo>` | Apply the rules on the walkthrough's last step, or `openadlc github apply` |
 | `repo-config` | 30 min, and when a pull request merged into a default branch changes one of the files it reads | `<owner/repo>`’s AGENTS.md doesn’t say who approves its human-review paths yet — line N still has the template’s `@owner` · `<login>` is named as a reviewer in `<repo>`’s AGENTS.md, but there is no such GitHub account · … but `<login>` is an organization, not a person · … but cannot review: `<login>` is not a collaborator on `<repo>` (or has triage or read there) · `<login>` is one of this install’s people (OPENADLC_HUMANS), but there is no such GitHub account (a warning) | [A named reviewer does not exist or cannot review](#a-named-reviewer-does-not-exist-or-cannot-review) |
 | `repo-owner` | 15 min | Nothing builds in `<repo>`: no bot owns it | Set its `owner` in config/repos.yaml to a seat (`builder`) and run `openadlc seed`; a repository not listed there gets the builder when it is added again in Settings → Repositories |
@@ -853,6 +854,47 @@ account says which models it offers.
   signed out after two asks is signed out, and needs **Sign in again**.
 - **A key: refused.** The check lists what the key can call, with the key. A 401
   is the provider refusing it; replace it.
+
+## A model account hit its usage limit
+
+**What you see.** A `model-limit` card: for example, "The Anthropic
+subscription “Shared Claude” is at its spend limit".
+- **What the card says.** It names the bots that think with the account, gives
+  the reset time when the provider's message gave one, and has a **Raise the
+  limit** button. The button opens the link from the message, such as Claude's
+  admin usage settings, or the model accounts step when the message had no
+  link on a provider's own site.
+- **What the tasks say.** A task that ran into the limit ends **held**, not
+  failed. Its thread says it starts again by itself once the account works.
+- **What does not happen.** No failure card goes up for a held task, and its
+  issue is never parked `needs-triage` because of one (ADR 0096).
+
+**What waits.**
+- **Nothing more starts on the account.** The dispatcher leases nothing more to
+  a seat that thinks with it. A review, design or triage on it is refused, or
+  recorded to start later. Its reason names the account: "… thinks with … which
+  is at its usage limit".
+- **Other accounts go on.** Seats that think with another account keep
+  working.
+- **One card per account.** However many tasks run into the limit, the account
+  has one card.
+
+**How it clears.** OpenADLC checks the account by sending one short prompt with
+the credential a session would get.
+- **When it checks.** At the reset time, when the message gave one. Otherwise,
+  or once that time has passed, every 15 minutes.
+- **When it passes.** The card clears, and the held work starts again by
+  itself, no more per seat than its tasks at once. A held task whose seat now
+  thinks with a working account starts without waiting for the old account.
+- **A reset time alone never clears it.** One message can name a weekly limit
+  that resets beside a monthly spend limit that does not.
+- **To clear it at once.** Raise the limit, then press **check again**
+  (Verify) on the account in **Settings → AI models**. A Verify that passes
+  after the hold began clears the card within seconds.
+- **To drop held work.** Stop the task from its card; it is not started again.
+
+A per-minute rate limit (a bare 429 or `rate_limit_error`) is not a hold: the
+task fails, and is counted, as any other failure.
 
 ## Codex fails with "bwrap: No permissions to create a new namespace"
 
@@ -1779,6 +1821,13 @@ repository or all of them, over the last 7 or 30 days:
 - **Builds at once**: the most at one moment, and the average while any ran. A
   maximum of 1 with work waiting is a repository whose `concurrency`, or whose
   files, keep it to one build.
+- **Input tokens per implement task**, by the UTC week a task started, for
+  the current week and the 11 before it whatever the period: the number of
+  completed implement tasks (billed, subscription and mixed apart when more
+  than one kind ran) and their p25, median and p75 input tokens, cache reads
+  and writes included. A week under 5 tasks shows its count and no figure. To
+  compare the weeks before and after one change, run
+  [the runbook's query](runbooks/compare-implement-input-tokens.md).
 
 Waiting and conflicts are read from the `overlap.*` and `conflict.*` events the
 dispatcher and the merge line write; an install older than them shows none.

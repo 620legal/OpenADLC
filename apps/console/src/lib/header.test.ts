@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AttentionItem } from './api';
 import { headerData, navFor, PAGES, pinnedNav, spendLevel, unpinnedNav } from './header';
+import { NAV_PIN_DEFAULTS } from './nav-pins';
 
 const header = (budget: { spentUsd: number; capUsd: number; state: string }) =>
   headerData({ repos: [], crew: [], budget, needsYou: 0 });
@@ -94,6 +95,7 @@ describe('the console’s pages', () => {
       'Security /security',
       'Releases /releases',
       'Map /map',
+      'Activity /activity',
       'Settings /settings',
     ]);
     expect(PAGES.find((item) => item.page === 'board')?.href('api')).toBe('/?board=1&repo=api');
@@ -101,7 +103,7 @@ describe('the console’s pages', () => {
 
   it('are all there for everyone signed in, Settings too: a user’s Settings is Notifications (ADR 0053)', () => {
     for (const role of ['admin', 'user'] as const) {
-      expect(navFor(role).map((item) => item.page), role).toEqual(['board', 'needs-you', 'crew', 'costs', 'insights', 'security', 'releases', 'map', 'settings']);
+      expect(navFor(role).map((item) => item.page), role).toEqual(['board', 'needs-you', 'crew', 'costs', 'insights', 'security', 'releases', 'map', 'activity', 'settings']);
       expect(navFor(role)).toBe(PAGES);
     }
     expect(navFor('user').find((item) => item.page === 'settings')?.href('all')).toBe('/settings');
@@ -127,6 +129,14 @@ describe('the console’s pages', () => {
     expect(map?.href('all')).toBe('/map');
     expect(map?.href('')).toBe('/map');
   });
+
+  it('has Activity after Map, for everyone, and not pinned by default (#374)', () => {
+    const pages = navFor('user').map((item) => item.page);
+    expect(pages.indexOf('activity')).toBe(pages.indexOf('map') + 1);
+    expect(navFor('user').find((item) => item.page === 'activity')).toMatchObject({ label: 'Activity' });
+    expect(navFor('admin').find((item) => item.page === 'activity')?.href('api')).toBe('/activity');
+    expect(NAV_PIN_DEFAULTS).not.toContain('activity');
+  });
 });
 
 describe('the pinned pages and the rest', () => {
@@ -135,7 +145,7 @@ describe('the pinned pages and the rest', () => {
   it('shows the pinned pages in the order they were pinned, and the rest in the list’s order', () => {
     const pins = ['releases', 'board', 'costs'] as const;
     expect(pages(pinnedNav(PAGES, pins))).toEqual(['releases', 'board', 'costs']);
-    expect(pages(unpinnedNav(PAGES, pins))).toEqual(['needs-you', 'crew', 'insights', 'security', 'map', 'settings']);
+    expect(pages(unpinnedNav(PAGES, pins))).toEqual(['needs-you', 'crew', 'insights', 'security', 'map', 'activity', 'settings']);
   });
 
   it('shows nothing but More when nothing is pinned', () => {

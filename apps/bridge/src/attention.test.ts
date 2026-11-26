@@ -3572,6 +3572,28 @@ describe('a failure on a spend limit', () => {
   });
 });
 
+describe('a task held on its model account’s usage limit (ADR 0096)', () => {
+  const HELD = "held on model account acct-1: You've hit your org's monthly spend limit";
+  const onAccount = BOTS.map((bot) => (bot.id === 'bot-second' || bot.id === 'bot-lead' ? { ...bot, modelAccountId: 'acct-1' } : bot));
+  const run = async (tasks: TaskFacts[]) => {
+    const { attentionItems } = await load();
+    return attentionItems({ now: NOW, gates: [], tasks, bots: onAccount, repos: REPOS, issues: ISSUES, requests: [], stallEvents: [] });
+  };
+  const held = (overrides: Partial<TaskFacts> = {}) =>
+    task({ botId: 'bot-second', kind: 'review', subjectRef: 'openadlc-testbed#29', state: 'held', startedAt: minutesAgo(60), endedAt: minutesAgo(59), exitReason: HELD, ...overrides });
+
+  it('puts up no failure card: the account’s health card stands for it', async () => {
+    expect((await run([held()])).filter((item) => item.kind === 'task_failed')).toEqual([]);
+  });
+
+  it('does not read as the account working again, so an earlier limit failure keeps its card', async () => {
+    const LIMIT = 'engine exited 1: You’ve hit your org’s monthly spend limit. Raise it in the console.';
+    const earlier = task({ botId: 'bot-second', kind: 'review', subjectRef: 'openadlc-testbed#29', state: 'failed', startedAt: minutesAgo(600), endedAt: minutesAgo(590), exitReason: LIMIT });
+    const items = await run([earlier, held({ botId: 'bot-lead', subjectRef: 'openadlc-testbed#31' })]);
+    expect(items.find((item) => item.kind === 'task_failed')?.headline ?? '').not.toMatch(/has worked since/);
+  });
+});
+
 describe('dismissing a failed task’s card', () => {
   const failed = () =>
     task({ id: 'task-dismissed', botId: 'bot-builder', kind: 'implement', subjectRef: 'openadlc-testbed#16', state: 'failed', endedAt: minutesAgo(30), exitReason: 'model gone' });

@@ -31,6 +31,19 @@ export interface HotFile {
   waitedMs: number;
 }
 
+/** One UTC week of completed implement tasks, by the week they started in. */
+export interface ImplementInputWeek {
+  /** Monday 00:00 UTC, ISO. */
+  weekStart: string;
+  tasks: number;
+  /** Tasks whose ledger rows were all billed, all on a subscription, or some of each; they add up to `tasks`. */
+  byRun: { billed: number; subscription: number; mixed: number };
+  /** Input tokens per task, as Postgres `round(percentile_cont(p))`; null under `MIN_WEEK_TASKS` tasks. */
+  p25: number | null;
+  median: number | null;
+  p75: number | null;
+}
+
 export interface InsightSummary {
   /** Issues merged in the window. */
   merged: number;
@@ -53,6 +66,12 @@ export interface InsightSummary {
   sendBacks: Record<string, number>;
   /** Builds running at once: the most, and the average while any ran. */
   parallel: { max: number; average: number };
+  /**
+   * Input tokens per completed implement task, for the current UTC week and
+   * the 11 before it, oldest first: whatever the window, since a change to
+   * what sessions are given shows only across weeks (docs/adr/0094).
+   */
+  implementInput: ImplementInputWeek[];
 }
 
 export interface Insights {
@@ -65,6 +84,11 @@ export interface Insights {
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const WEEK_MS = 7 * DAY_MS;
+/** The weeks of input tokens per implement task Insights shows, the current one included. */
+export const IMPLEMENT_INPUT_WEEKS = 12;
+/** Under this many tasks a week's percentiles say more about one task than about the week. */
+export const MIN_WEEK_TASKS = 5;
 const FULL_REVIEWED: ReadonlySet<string> = new Set(Object.values(FULL_REVIEW_WHY));
 
 export function median(values: readonly number[]): number | null {
@@ -72,6 +96,60 @@ export function median(values: readonly number[]): number | null {
   const sorted = [...values].sort((a, b) => a - b);
   const middle = Math.floor(sorted.length / 2);
   return sorted.length % 2 === 1 ? sorted[middle]! : Math.round((sorted[middle - 1]! + sorted[middle]!) / 2);
+}
+
+/**
+ * The value at fraction `p` of `values`, interpolated between the two nearest
+ * as Postgres `percentile_cont` does, and rounded as `round(…::numeric)`
+ * rounds a non-negative count: the figure the runbook's query gives, so the
+ * page and a person's psql agree (docs/runbooks/compare-implement-input-tokens.md).
+ */
+export function percentile(values: readonly number[], p: number): number | null {
+  if (values.length === 0) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const at = p * (sorted.length - 1);
+  const below = Math.floor(at);
+  const above = Math.ceil(at);
+  return Math.round(sorted[below]! + (sorted[above]! - sorted[below]!) * (at - below));
+}
+
+/** Monday 00:00 UTC of the week `at` falls in. */
+export function utcWeekStart(at: number): number {
+  const day = new Date(at);
+  const midnight = Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate());
+  // getUTCDay is 0 on Sunday: a Sunday is the seventh day of the week before.
+  return midnight - ((day.getUTCDay() + 6) % 7) * DAY_MS;
+}
+
+/** The last `IMPLEMENT_INPUT_WEEKS` UTC weeks up to `now`'s, each with its tasks' input tokens. */
+export function implementInputWeeks(tasks: readonly InsightData['implementTasks'][number][], now: number): ImplementInputWeek[] {
+  const current = utcWeekStart(now);
+  const first = current - (IMPLEMENT_INPUT_WEEKS - 1) * WEEK_MS;
+  const weeks = Array.from({ length: IMPLEMENT_INPUT_WEEKS }, (_, index) => ({
+    start: first + index * WEEK_MS,
+    tokens: [] as number[],
+    byRun: { billed: 0, subscription: 0, mixed: 0 },
+  }));
+  for (const task of tasks) {
+    const started = Date.parse(task.startedAt);
+    if (!Number.isFinite(started) || started < first || started > now) continue;
+    // A session gets its context when it starts, so a task counts in the week it started.
+    const week = weeks[Math.floor((started - first) / WEEK_MS)];
+    if (!week) continue;
+    week.tokens.push(task.tokensIn);
+    week.byRun[task.billed] += 1;
+  }
+  return weeks.map((week) => {
+    const enough = week.tokens.length >= MIN_WEEK_TASKS;
+    return {
+      weekStart: new Date(week.start).toISOString(),
+      tasks: week.tokens.length,
+      byRun: week.byRun,
+      p25: enough ? percentile(week.tokens, 0.25) : null,
+      median: enough ? percentile(week.tokens, 0.5) : null,
+      p75: enough ? percentile(week.tokens, 0.75) : null,
+    };
+  });
 }
 
 interface Payload {
@@ -225,6 +303,7 @@ function summarise(data: InsightData, options: { since: number; now: number; rep
     conflicts,
     sendBacks,
     parallel: parallelBuilds(mine(data.builds), since, now),
+    implementInput: implementInputWeeks(mine(data.implementTasks), now),
   };
 }
 

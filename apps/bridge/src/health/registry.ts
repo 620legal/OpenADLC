@@ -166,6 +166,39 @@ export class HealthRegistry {
     return next;
   }
 
+  /**
+   * Writes a failing row from an event rather than a check run: a task ended
+   * on its model account's usage limit, which no check could have seen coming
+   * (`model-limit`). On the chain, after any run already going, so the run's
+   * rows cannot be written over it; through `nextRow`, so it is a row like any
+   * other, and through `tell`, so a person hears of it as of any other.
+   *
+   * A raise on a row already failing is the same hold: its `failingSince` and
+   * `facts.since` stand, and the rest of what it says is the newest. One row
+   * id per subject is what keeps a second hold from ever existing.
+   */
+  raise(checkId: string, result: Extract<CheckResult, { ok: false }>): Promise<HealthRow> {
+    if (!this.knows(checkId)) return Promise.reject(new Error(`no health check is registered as ${checkId}, so nothing can be raised on it`));
+    const next = this.chain.then(() => this.raiseNow(checkId, result));
+    this.chain = next.catch(() => undefined);
+    return next;
+  }
+
+  private async raiseNow(checkId: string, result: Extract<CheckResult, { ok: false }>): Promise<HealthRow> {
+    const now = this.now();
+    const id = rowId(checkId, result.subject);
+    const previous = (await this.store.list()).find((row) => row.id === id) ?? null;
+    const since = previous?.state === 'failing' ? previous.facts.since : undefined;
+    const facts = since === undefined ? result.facts : { ...result.facts, since };
+    const next = nextRow(previous, checkId, { ...result, ...(facts ? { facts } : {}) }, now);
+    await this.store.save(next.row);
+    if (next.transition === 'new') this.say(`${checkId}: ${next.row.title}`);
+    const after = await this.current();
+    this.failingChecks = new Set(after.filter((row) => row.state === 'failing').map((row) => row.checkId));
+    await this.tell(after, [{ row: next.row, previous, transition: next.transition }], now);
+    return next.row;
+  }
+
   /** What every check this registry runs last said, as it is kept. */
   rows(): Promise<HealthRow[]> {
     return this.current();

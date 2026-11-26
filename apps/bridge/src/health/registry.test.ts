@@ -472,3 +472,65 @@ describe('the rows of a check no longer registered', () => {
     expect(rows.has('old-check')).toBe(false);
   });
 });
+
+describe('a row raised by an event', () => {
+  const LIMITED = (words: string, since: string): Extract<CheckResult, { ok: false }> => ({
+    subject: 'acct-1',
+    ok: false,
+    severity: 'blocking',
+    title: 'Shared Claude is at its spend limit',
+    detail: 'It starts again by itself once the account works.',
+    action: { label: 'Raise the limit', url: 'https://claude.ai/admin-settings/usage' },
+    facts: { accountId: 'acct-1', words, since, lastCheckedAt: since },
+  });
+
+  it('is written through nextRow as a failing row, and a second raise keeps when it began', async () => {
+    const limit = scripted('model-limit');
+    limit.answer = [];
+    const { subject, rows, advance } = registry([limit]);
+
+    await subject.raise('model-limit', LIMITED('first', START.toISOString()));
+    expect(rows.get('model-limit:acct-1')).toMatchObject({ state: 'failing', failingSince: START.toISOString(), facts: { words: 'first' } });
+
+    advance(3);
+    const later = new Date(START.getTime() + 3 * 60_000).toISOString();
+    await subject.raise('model-limit', LIMITED('second', later));
+    expect([...rows.keys()].filter((id) => id.startsWith('model-limit'))).toEqual(['model-limit:acct-1']);
+    expect(rows.get('model-limit:acct-1')).toMatchObject({
+      state: 'failing',
+      failingSince: START.toISOString(),
+      facts: { words: 'second', since: START.toISOString(), lastCheckedAt: later },
+    });
+  });
+
+  it('is told like any blocking failure once it has lasted', async () => {
+    const limit = scripted('model-limit');
+    const { subject, sent, advance } = registry([limit]);
+    await subject.raise('model-limit', LIMITED('first', START.toISOString()));
+    expect(sent).toEqual([]);
+    advance(6);
+    await subject.raise('model-limit', LIMITED('again', START.toISOString()));
+    expect(sent.map((notice) => notice.event)).toEqual(['check_failing']);
+  });
+
+  it('refuses a check the registry does not run', async () => {
+    const { subject, rows } = registry([scripted('webhook')]);
+    await expect(subject.raise('model-limit', LIMITED('x', START.toISOString()))).rejects.toThrow(/no health check is registered as model-limit/);
+    expect(rows.size).toBe(0);
+  });
+
+  it('waits for a run already going, so the run cannot write over it', async () => {
+    const limit = scripted('model-limit');
+    const { subject, rows } = registry([limit]);
+    let answer!: () => void;
+    // A run that read no row for the account, and answers once the raise has been asked for.
+    limit.run = () => new Promise<CheckResult[]>((resolve) => (answer = () => resolve([])));
+    const running = subject.run({ force: true });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const raised = subject.raise('model-limit', LIMITED('first', START.toISOString()));
+    answer();
+    await running;
+    await raised;
+    expect(rows.get('model-limit:acct-1')?.state).toBe('failing');
+  });
+});

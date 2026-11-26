@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { holdFor, type HealthFacts } from './hold.js';
+import { bots } from '@openadlc/db';
+import { holdFor, limitHold, type HealthFacts } from './hold.js';
 
 /**
  * A build is not handed to a bot that could not land it: one GitHub will not
@@ -14,6 +15,34 @@ const signingKey = (state: string, requires: Record<string, boolean | null>) => 
   id: 'signing-key:bot-builder',
   state,
   facts: { botId: 'bot-builder', requiresSignatures: requires },
+});
+
+/** The row the bridge raises when a task on the account ends on its usage limit (ADR 0096). */
+const limited = (accountId: string, state = 'failing'): HealthFacts => ({
+  id: `model-limit:${accountId}`,
+  state,
+  facts: { accountId, accountName: 'the Anthropic subscription “Shared Claude”', kind: 'spend', resetsAt: '2026-11-26T11:00:00.000Z' },
+});
+
+describe('a builder whose model account is at its usage limit', () => {
+  const ON_SHARED = { ...BUILDER, modelAccountId: 'acct-shared' };
+
+  it('is held back, and the decision names the account, the limit and its reset', () => {
+    expect(holdFor(ON_SHARED, 'openadlc-testbed', [limited('acct-shared')])).toBe(
+      'openadlc-atlas-janedoe thinks with the Anthropic subscription “Shared Claude”, which is at its spend limit ' +
+        '(it says it resets 2026-11-26 11:00 UTC); nothing is leased to it until it works again',
+    );
+  });
+
+  it('is held back with scripted engines too: the limit is the engine’s, not GitHub’s', () => {
+    expect(holdFor(ON_SHARED, 'openadlc-testbed', [limited('acct-shared')], { scripted: true })).toMatch(/at its spend limit/);
+  });
+
+  it('is not, once the row passes, or for a builder on another account or none', () => {
+    expect(holdFor(ON_SHARED, 'openadlc-testbed', [limited('acct-shared', 'ok')])).toBeNull();
+    expect(holdFor({ ...BUILDER, modelAccountId: 'acct-other' }, 'openadlc-testbed', [limited('acct-shared')])).toBeNull();
+    expect(limitHold({ name: 'x', modelAccountId: null }, [limited('acct-shared')])).toBeNull();
+  });
 });
 
 describe('whether a builder is held back', () => {
@@ -156,6 +185,28 @@ describe('the dispatcher, with a builder GitHub would refuse', () => {
     world.health = [signingKey('ok', { 'openadlc-testbed': true })];
     const decisions = await run();
     expect(decisions).toEqual([expect.objectContaining({ issue: 1, bot: 'openadlc-atlas-janedoe', action: 'leased' })]);
+  });
+
+  it('passes over a builder on a limited account and leases to one on another account in the same pass', async () => {
+    const seat = (id: string, name: string, slot: string, modelAccountId: string) => ({ id, name, slot, role: 'implement', engine: 'claude', githubLogin: name, modelAccountId });
+    const owner = seat('bot-builder', 'openadlc-atlas-janedoe', 'builder', 'acct-shared');
+    const second = seat('bot-builder-2', 'openadlc-orion-janedoe', 'builder-2', 'acct-own');
+    vi.mocked(bots.getBotById).mockResolvedValue(owner as never);
+    vi.mocked(bots.listBots).mockResolvedValue([owner, second] as never);
+    world.health = [limited('acct-shared')];
+    try {
+      const decisions = await run();
+      expect(decisions).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ bot: 'openadlc-atlas-janedoe', action: 'skipped', reason: expect.stringMatching(/at its spend limit/) }),
+          expect.objectContaining({ issue: 1, bot: 'openadlc-orion-janedoe', action: 'leased' }),
+        ]),
+      );
+      expect(decisions.some((decision) => decision.action === 'leased' && decision.bot === 'openadlc-atlas-janedoe')).toBe(false);
+    } finally {
+      vi.mocked(bots.getBotById).mockReset().mockImplementation((async () => ({ id: 'bot-builder', name: 'openadlc-atlas-janedoe', slot: 'builder', role: 'implement', engine: 'claude' })) as never);
+      vi.mocked(bots.listBots).mockReset().mockImplementation((async () => [{ id: 'bot-builder', name: 'openadlc-atlas-janedoe', slot: 'builder', role: 'implement', engine: 'claude' }]) as never);
+    }
   });
 
   it('holds nobody back when the engines are scripted, since nothing is pushed to GitHub', () => {

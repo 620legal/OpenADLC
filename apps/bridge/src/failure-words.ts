@@ -3,6 +3,8 @@ import { PERMISSION_NAMES } from '@openadlc/shared';
 import { ACCOUNTS_STEP, RECONNECT, accountInWords, accountTrouble, atStart, stepHref, stepNamed } from './health/words.js';
 import { NO_PULL_REQUEST, NOTHING_PUSHED } from './build-left.js';
 import { NO_REVIEW, NOT_POSTED } from './review-left.js';
+import { limitInWords } from './health/checks/model-limit.js';
+import { HELD_ON, limitLink, usageLimit } from './usage-limit.js';
 
 /**
  * Why a task stopped, as the person who has to do something about it reads it.
@@ -116,6 +118,16 @@ export function explainFailure(reason: string | null | undefined, context: Failu
   const bot = context.bot;
   const account = context.account ?? null;
   const detailOf = (sentence: string): string | null => (sentence === raw ? null : raw);
+
+  // Held on its model account's usage limit (ADR 0096): not a failure, and
+  // nothing for a person to try again. The account's card says what to do.
+  if (raw.startsWith(HELD_ON)) {
+    const kind = usageLimit(raw, account?.provider ?? 'anthropic', context.now ?? new Date())?.kind;
+    const who = account ? accountInWords(account) : 'its model account';
+    const url = limitLink(raw);
+    const sentence = `Held: ${who} is at its ${limitInWords(kind)}. It starts again by itself once the account works.`;
+    return { sentence, action: url ? { kind: 'open_url', label: 'Raise the limit', url } : null, raw };
+  }
 
   // A review task that ended with no review on the pull request. What the bot
   // said is why, and comes first: its own words can name a 401 or a sign-in

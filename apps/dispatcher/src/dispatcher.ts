@@ -4,6 +4,8 @@ import { DEFAULT_PATH_POLICY, deliveryRulesFrom, dependencyIsSatisfied, dependen
 import { overlapKind, pathsOverlap } from './overlap.js';
 
 export { overlapKind, pathMatches } from './overlap.js';
+// The bridge's tests read a pass's hold with it (ADR 0096).
+export { holdFor, limitHold, type HealthFacts } from './hold.js';
 import { holdFor, type HealthFacts } from './hold.js';
 import { builderPool, builderSlots, combinedTasks, missingBuildersReason, ownerCannotBuild } from './pool.js';
 

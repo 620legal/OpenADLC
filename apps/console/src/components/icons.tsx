@@ -151,6 +151,17 @@ export const MapIcon = (props: Props) => (
   </Icon>
 );
 
+/**
+ * Activity: a pulse line, for what the crew has been doing. Not a bell: the
+ * header's bell is already the alerts menu beside it. Drawn here, not taken
+ * from an icon set.
+ */
+export const ActivityIcon = (props: Props) => (
+  <Icon {...props}>
+    <path d="M2 12h4l3-8 6 16 3-8h4" />
+  </Icon>
+);
+
 /** Insights: bars of different heights, for how fast work moves. */
 export const InsightsIcon = (props: Props) => (
   <Icon {...props}>

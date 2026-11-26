@@ -76,7 +76,9 @@ export function leaseCheck(reader: LeaseReader, idleMs = IDLE_LEASE_MS): HealthC
         // the same issue out twice. Only work that ended without finishing —
         // or never started — leaves a lease holding nothing.
         const newest = own[0];
-        if (newest && newest.state !== 'failed' && newest.state !== 'stopped') {
+        // A build held on its model account's usage limit ended without
+        // finishing too: the recovery leases again when it starts it.
+        if (newest && newest.state !== 'failed' && newest.state !== 'stopped' && newest.state !== 'held') {
           results.push({ subject, ok: true });
           continue;
         }

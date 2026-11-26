@@ -715,9 +715,10 @@ async function main(): Promise<void> {
     settingUp,
     consoleUrl: config.consoleUrl,
     botNames,
-    // What was held on a seat's sign-in, its place in a repository or the host
-    // goes on when that passes: failed tasks are run again once, reviews the
-    // gates wait on are started, and the dispatcher looks again.
+    // What was held on a seat's sign-in, its place in a repository, the host
+    // or its model account's usage limit (`model-limit`, ADR 0096) goes on
+    // when that passes: failed and held tasks are run again, reviews the gates
+    // wait on are started, and the dispatcher looks again.
     onFixed: async (ids) => {
       // A repository's configuration put right — a reviewer invited, a name
       // corrected — is a gate that can pass now: the gates are worked out

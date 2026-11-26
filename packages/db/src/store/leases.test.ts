@@ -575,7 +575,16 @@ describe('an issue’s attempts without a pull request', () => {
     vi.mocked(query).mockResolvedValueOnce([{ count: '0' }]);
     await attemptsWithoutPullRequest('repo-1', 78);
     const text = String(vi.mocked(query).mock.calls[0]?.[0]).replace(/\s+/g, ' ');
-    expect(text).toContain("t.started_at is not null and t.state <> 'stopped')");
+    expect(text).toContain("t.started_at is not null and t.state not in ('stopped', 'held'))");
+  });
+
+  it('leave out a build held on its model account’s usage limit, so three held leases park nothing', async () => {
+    vi.mocked(query).mockResolvedValueOnce([{ count: '0' }]);
+    await attemptsWithoutPullRequest('repo-1', 78);
+    const text = String(vi.mocked(query).mock.calls[0]?.[0]).replace(/\s+/g, ' ');
+    // A failed build is still counted: only stopped and held are left out.
+    expect(text).toMatch(/t\.state not in \('stopped', 'held'\)/);
+    expect(text).not.toMatch(/'failed'/);
   });
 
   it('count only leases taken since the issue was last sent to triage, so putting start:now back gives it fresh ones', async () => {
