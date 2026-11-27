@@ -160,6 +160,48 @@ export function pinnedNav(pages: readonly NavPage[], pins: readonly Page[]): Nav
   return shown;
 }
 
+/**
+ * Which pinned links the wide header's row draws, and which go to the top of
+ * More, by index into the pins (ADR 0101). The row used to scroll sideways
+ * (ADR 0080), and once the header's right side grew it held 152px of 288px of
+ * links behind a scrollbar macOS drew into the header.
+ *
+ * `shown` is the longest run from the first pin whose widths, and `gap`
+ * between each, fit in `available`. The current page (`current`, -1 when it
+ * is not pinned) is kept in the row whenever it fits on its own, beside as
+ * many pins from the first as still fit; when it does not, More says the
+ * person is inside it. `moved` is every other index; both are in pinned
+ * order. Nothing measured (`available` not a finite number) shows every pin,
+ * as the server draws them; a measured row with no room (`available <= 0`)
+ * shows none, rather than all of them cut off.
+ */
+export function fitPinned(
+  widths: readonly number[],
+  available: number,
+  gap: number,
+  current: number,
+): { shown: number[]; moved: number[] } {
+  const all = widths.map((_, index) => index);
+  if (!Number.isFinite(available)) return { shown: all, moved: [] };
+  // How many from the first fit, with `extra` already taken from the row.
+  const prefix = (extra: number, limit: number): number => {
+    let used = extra;
+    let count = 0;
+    while (count < limit) {
+      const next = used + (count > 0 || extra > 0 ? gap : 0) + widths[count]!;
+      if (next > available) break;
+      used = next;
+      count += 1;
+    }
+    return count;
+  };
+  let shown = all.slice(0, prefix(0, widths.length));
+  if (current >= shown.length && current < widths.length && widths[current]! <= available) {
+    shown = [...all.slice(0, prefix(widths[current]!, current)), current];
+  }
+  return { shown, moved: all.filter((index) => !shown.includes(index)) };
+}
+
 /** The pages under More that are not pinned, in `PAGES` order. */
 export function unpinnedNav(pages: readonly NavPage[], pins: readonly Page[]): NavPage[] {
   return pages.filter((one) => !pins.includes(one.page));

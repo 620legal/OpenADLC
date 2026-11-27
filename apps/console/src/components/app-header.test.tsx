@@ -57,6 +57,9 @@ describe('the header', () => {
         `Releases /releases${page === 'releases' ? ' *' : ''}`,
       ]);
       expect(html).toMatch(/<\/div><div class="relative"><button type="button" aria-expanded="false"[^>]*>More<svg/);
+      // Nothing is measured on the server, so every pin is drawn and none is moved into More (ADR 0101).
+      expect(html).not.toContain('data-moved');
+      expect(html).toMatch(/<div aria-hidden="true" data-pinned-measure="true"[^>]*>(<span [^>]*>[^<]+<\/span>){4}<\/div>/);
     }
   });
 

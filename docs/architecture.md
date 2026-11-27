@@ -1635,6 +1635,15 @@ task's session, rather than waiting for the role's next task
   follow it. The palette lists every page, pinned or not, and the Needs you
   chip stays at the right of the header whatever is pinned
   ([ADR 0080](adr/0080-the-consoles-navigation-is-pinned-per-browser-from-one-list-of-pages.md)).
+  In the wide header the pinned row never scrolls. The pinned pages that do
+  not fit beside the right side move to the top of More, in pinned order,
+  still pinned (`data-moved`), and come back as the room returns. The current
+  page stays in the row while it fits on its own, and More is marked as
+  current when it does not. The fit is `fitPinned` (`lib/header.ts`) over
+  widths read from an `aria-hidden` copy of the row, measured again when the
+  nav's width changes and never stored; the server draws every pin. The
+  phone's bar still scrolls its cells
+  ([ADR 0101](adr/0101-pinned-links-that-do-not-fit-the-wide-header-move-into-more.md)).
 - **The board reads the issues it can show**, numbered or not: those not in
   Done, and those in Done whose row changed in the week Done shows
   (`boardIssues`, indexed by migration 0151), and of the tasks only theirs

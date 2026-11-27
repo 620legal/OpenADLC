@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AttentionItem } from './api';
-import { COSTS_HREF, headerData, navFor, PAGES, pinnedNav, spendChip, spendLevel, unpinnedNav } from './header';
+import { COSTS_HREF, fitPinned, headerData, navFor, PAGES, pinnedNav, spendChip, spendLevel, unpinnedNav } from './header';
 import { NAV_PIN_DEFAULTS } from './nav-pins';
 
 const header = (budget: { spentUsd: number; capUsd: number; state: string }) =>
@@ -197,5 +197,59 @@ describe('the pinned pages and the rest', () => {
 
   it('draws a page once, whatever the pins repeat', () => {
     expect(pages(pinnedNav(PAGES, ['crew', 'crew']))).toEqual(['crew']);
+  });
+});
+
+describe('which pinned links fit the wide header’s row (ADR 0101)', () => {
+  // Four 72px links with 2px between them need 294px.
+  const FOUR = [72, 72, 72, 72];
+
+  it('shows every link when they all fit', () => {
+    expect(fitPinned(FOUR, 320, 2, 0)).toEqual({ shown: [0, 1, 2, 3], moved: [] });
+  });
+
+  it('moves every link when none fits', () => {
+    expect(fitPinned(FOUR, 40, 2, -1)).toEqual({ shown: [], moved: [0, 1, 2, 3] });
+  });
+
+  it('keeps a link that fits exactly', () => {
+    expect(fitPinned(FOUR, 294, 2, -1)).toEqual({ shown: [0, 1, 2, 3], moved: [] });
+    expect(fitPinned(FOUR, 293, 2, -1)).toEqual({ shown: [0, 1, 2], moved: [3] });
+    expect(fitPinned(FOUR, 146, 2, -1)).toEqual({ shown: [0, 1], moved: [2, 3] });
+  });
+
+  it('moves the links past the first that do not fit, in pinned order', () => {
+    expect(fitPinned(FOUR, 152, 2, 0)).toEqual({ shown: [0, 1], moved: [2, 3] });
+  });
+
+  it('keeps the current page in the row when it fits on its own, beside as many from the first as still fit', () => {
+    expect(fitPinned(FOUR, 152, 2, 3)).toEqual({ shown: [0, 3], moved: [1, 2] });
+    expect(fitPinned(FOUR, 80, 2, 3)).toEqual({ shown: [3], moved: [0, 1, 2] });
+    expect(fitPinned([40, 40, 120], 150, 2, 2)).toEqual({ shown: [2], moved: [0, 1] });
+  });
+
+  it('keeps the plain run from the first when the current page does not fit on its own', () => {
+    expect(fitPinned([40, 40, 200], 120, 2, 2)).toEqual({ shown: [0, 1], moved: [2] });
+  });
+
+  it('shows every link when nothing has been measured, and none when a measured row has no room', () => {
+    expect(fitPinned(FOUR, Number.NaN, 2, 1)).toEqual({ shown: [0, 1, 2, 3], moved: [] });
+    expect(fitPinned(FOUR, Number.POSITIVE_INFINITY, 2, 1)).toEqual({ shown: [0, 1, 2, 3], moved: [] });
+    expect(fitPinned(FOUR, 0, 2, 1)).toEqual({ shown: [], moved: [0, 1, 2, 3] });
+    expect(fitPinned(FOUR, -30, 2, -1)).toEqual({ shown: [], moved: [0, 1, 2, 3] });
+  });
+
+  it('puts every pin in exactly one of the two lists, each in pinned order, and never more in the row than fits', () => {
+    const widths = [30, 90, 50, 70, 40, 60];
+    for (let available = 1; available <= 400; available += 7) {
+      for (let current = -1; current < widths.length; current += 1) {
+        const { shown, moved } = fitPinned(widths, available, 2, current);
+        expect([...shown, ...moved].sort((a, b) => a - b)).toEqual([0, 1, 2, 3, 4, 5]);
+        expect(shown).toEqual([...shown].sort((a, b) => a - b));
+        expect(moved).toEqual([...moved].sort((a, b) => a - b));
+        const used = shown.reduce((sum, index) => sum + widths[index]!, 0) + Math.max(0, shown.length - 1) * 2;
+        expect(used).toBeLessThanOrEqual(available);
+      }
+    }
   });
 });
