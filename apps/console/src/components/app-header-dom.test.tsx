@@ -77,9 +77,9 @@ describe('the header from 768px up', () => {
     // The badge, the button and the links keep their width; what is left goes to the repository.
     const [where, nav, right] = [...wide.children];
     expect(nav?.tagName).toBe('NAV');
-    // Seven pins scroll inside their row rather than push the right side off; More stays outside it.
-    expect(classes(nav)).toContain('min-w-0');
-    expect(classes(nav?.querySelector('[data-pinned]'))).toEqual(expect.arrayContaining(['min-w-0', 'overflow-x-auto']));
+    // The nav takes what is left; pins that do not fit move into More, which stays outside the row (ADR 0101).
+    expect(classes(nav)).toEqual(expect.arrayContaining(['min-w-0', 'flex-1']));
+    expect(classes(nav?.querySelector('[data-pinned]'))).toEqual(expect.arrayContaining(['min-w-0', 'overflow-hidden']));
     expect(nav?.lastElementChild?.querySelector('button')?.textContent).toBe('More');
     expect(classes(right)).toEqual(expect.arrayContaining(['ml-auto', 'shrink-0']));
     expect(right?.textContent).toContain('3 need you · 10 system');
@@ -258,6 +258,155 @@ describe('the pinned navigation', () => {
     expect(link.getAttribute('aria-current')).toBe('page');
     const chip = [...container.querySelectorAll('[data-wide-header] a')].find((one) => one.textContent === '3 need you · 10 system');
     expect(chip?.getAttribute('href')).toBe('/needs-you');
+  });
+});
+
+describe('pinned links that do not fit the wide header (ADR 0101)', () => {
+  /**
+   * happy-dom lays nothing out, so the widths a browser would give are
+   * stubbed by selector: each pinned link and its measured copy 72px, More
+   * 60px, and the nav `navWidth`. The row is as wide as its links, or as what
+   * the nav has left beside More when that is less, and its content is its
+   * links: so `scrollWidth` passes `clientWidth` exactly when a link is cut
+   * off. At 1488px with the crew panel open the row had 152px for 288px of
+   * links (#418).
+   */
+  const LINK = 72;
+  const MORE = 60;
+  const GAP = 2;
+  let navWidth = 0;
+  const saved = new Map<string, PropertyDescriptor | undefined>();
+  const content = (row: Element) => {
+    const count = row.querySelectorAll(':scope > a').length;
+    return count * LINK + Math.max(0, count - 1) * GAP;
+  };
+  const wideOnly = (element: Element) => element.closest('[data-wide-header]') !== null;
+  const STUBS: Record<string, (this: HTMLElement) => number> = {
+    offsetWidth() {
+      if (!wideOnly(this)) return 0;
+      if (this.matches('[data-pinned-measure] > span, [data-pinned] > a')) return LINK;
+      if (this.parentElement?.tagName === 'NAV' && this === this.parentElement.lastElementChild) return MORE;
+      return 0;
+    },
+    clientWidth() {
+      if (!wideOnly(this)) return 0;
+      if (this.tagName === 'NAV') return navWidth;
+      if (this.matches('[data-pinned]')) return Math.min(content(this), Math.max(0, navWidth - MORE - GAP));
+      return 0;
+    },
+    scrollWidth() {
+      if (!wideOnly(this)) return 0;
+      if (this.matches('[data-pinned]')) return content(this);
+      return 0;
+    },
+  };
+
+  beforeEach(() => {
+    for (const [name, get] of Object.entries(STUBS)) {
+      saved.set(name, Object.getOwnPropertyDescriptor(HTMLElement.prototype, name));
+      Object.defineProperty(HTMLElement.prototype, name, { configurable: true, get });
+    }
+  });
+  afterEach(() => {
+    for (const [name, descriptor] of saved) {
+      if (descriptor) Object.defineProperty(HTMLElement.prototype, name, descriptor);
+      else delete (HTMLElement.prototype as unknown as Record<string, unknown>)[name];
+    }
+    saved.clear();
+  });
+
+  async function draw(page: 'crew' | 'costs' | 'releases', width: number): Promise<void> {
+    navWidth = width;
+    act(() => root.unmount());
+    root = createRoot(container);
+    await act(async () =>
+      root.render(
+        <>
+          <AppHeader page={page} repo="all" data={DATA} />
+          <BottomNav page={page} repo="all" />
+        </>,
+      ),
+    );
+  }
+  async function widen(width: number): Promise<void> {
+    navWidth = width;
+    await act(async () => window.dispatchEvent(new Event('resize')));
+  }
+  /** The nav's width that leaves `row` pixels for the links beside More. */
+  const leaving = (row: number) => row + MORE + GAP;
+  const wideNav = () => container.querySelector('[data-wide-header] nav')!;
+  const bar = () => [...container.querySelectorAll('nav')].find((one) => classes(one).includes('md:hidden'))!;
+  const row = (nav: Element = wideNav()) => nav.querySelector<HTMLElement>('[data-pinned]')!;
+  const inRow = (nav: Element = wideNav()) => [...row(nav).querySelectorAll('a')].map((link) => link.textContent);
+  const more = (nav: Element = wideNav()) => [...nav.querySelectorAll('button')].find((one) => one.textContent === 'More')!;
+  const panel = (nav: Element = wideNav()) => document.getElementById(more(nav).getAttribute('aria-controls')!)!;
+  const listed = (nav: Element = wideNav()) => [...panel(nav).querySelectorAll('li')].map((one) => one.querySelector('a')!.textContent);
+  const movedRows = (nav: Element = wideNav()) =>
+    [...panel(nav).querySelectorAll('li[data-moved]')].map((one) => one.querySelector('a')!.textContent);
+
+  it('draws only the links that fit, with nothing to scroll, and lists the rest first in More in pinned order', async () => {
+    await draw('costs', leaving(152));
+    expect(row().scrollWidth).toBe(row().clientWidth);
+    expect(inRow()).toEqual(['Board', 'Needs you']);
+    expect(movedRows()).toEqual(['Crew', 'Releases']);
+    expect(listed().slice(0, 2)).toEqual(['Crew', 'Releases']);
+    // Moved, still pinned: its toggle unpins it.
+    expect(panel().querySelector('li[data-moved] button[aria-label="Unpin Crew"]')?.getAttribute('aria-pressed')).toBe('true');
+    // The rest follow in PAGES order, each once.
+    expect(listed()).toEqual(['Crew', 'Releases', 'Board', 'Needs you', 'Costs', 'Insights', 'Security', 'Map', 'Activity', 'Routines', 'Settings']);
+  });
+
+  it('no longer scrolls the row', async () => {
+    await draw('costs', leaving(152));
+    expect(classes(row())).toContain('overflow-hidden');
+    expect(classes(row())).not.toContain('overflow-x-auto');
+    expect(classes(wideNav())).toEqual(expect.arrayContaining(['flex-1', 'min-w-0']));
+    // The measured copy is not something a keyboard or a screen reader reaches.
+    const copy = wideNav().querySelector('[data-pinned-measure]')!;
+    expect(copy.getAttribute('aria-hidden')).toBe('true');
+    expect(copy.querySelectorAll('a, button')).toHaveLength(0);
+  });
+
+  it('keeps the current page in the row, beside as many from the first as fit', async () => {
+    await draw('releases', leaving(152));
+    expect(inRow()).toEqual(['Board', 'Releases']);
+    expect(row().querySelector('a[aria-current="page"]')?.textContent).toBe('Releases');
+    expect(movedRows()).toEqual(['Needs you', 'Crew']);
+    expect(classes(more())).not.toContain('bg-well');
+  });
+
+  it('marks More as where the person is when their pinned page had to move into it', async () => {
+    await draw('releases', leaving(40));
+    expect(inRow()).toEqual([]);
+    expect(movedRows()).toEqual(['Board', 'Needs you', 'Crew', 'Releases']);
+    expect(classes(more())).toEqual(expect.arrayContaining(['bg-well', 'font-medium']));
+    expect(panel().querySelector('li[data-moved] a[aria-current="page"]')?.textContent).toBe('Releases');
+  });
+
+  it('brings the links back out of More as the window widens', async () => {
+    await draw('crew', leaving(152));
+    expect(inRow()).toEqual(['Board', 'Crew']);
+    await widen(leaving(320));
+    expect(inRow()).toEqual(['Board', 'Needs you', 'Crew', 'Releases']);
+    expect(movedRows()).toEqual([]);
+    await widen(leaving(80));
+    expect(inRow()).toEqual(['Crew']);
+  });
+
+  it('puts every pinned page in the row or in More, once, at every width', async () => {
+    await draw('costs', leaving(152));
+    for (const width of [0, 40, 72, 146, 152, 220, 293, 294, 400]) {
+      await widen(leaving(width));
+      expect(row().scrollWidth).toBe(row().clientWidth);
+      expect([...inRow(), ...movedRows()].sort()).toEqual(['Board', 'Crew', 'Needs you', 'Releases']);
+    }
+  });
+
+  it('leaves the phone’s bar to scroll its cells, with nothing moved into its More', async () => {
+    await draw('costs', leaving(40));
+    expect(classes(row(bar()))).toContain('overflow-x-auto');
+    expect(inRow(bar())).toEqual(['Board', 'Needs you', 'Crew', 'Releases']);
+    expect(movedRows(bar())).toEqual([]);
   });
 });
 

@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { createContext, useContext, useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { CommandPalette } from '@/components/command-palette';
 import { IntakeDialog } from '@/components/intake-dialog';
 import { KeysHelp } from '@/components/keys-help';
@@ -31,7 +31,7 @@ import { labelIn } from '@/lib/bot-label';
 import { cn } from '@/lib/cn';
 import { crewLine, needsYouLine } from '@/lib/crew';
 import type { Brand, Role } from '@/lib/api';
-import { boardHref, COSTS_HREF, navFor, pinnedNav, spendChip, type HeaderData, type NavPage, type Page } from '@/lib/header';
+import { boardHref, COSTS_HREF, fitPinned, navFor, pinnedNav, spendChip, type HeaderData, type NavPage, type Page } from '@/lib/header';
 import { NAV_PIN_DEFAULTS, onPinsChange, pin, storedPins, unpin } from '@/lib/nav-pins';
 import type { RepoColorMap } from '@/lib/repo-colors';
 import { consoleName } from '@/lib/needs-you-alerts';
@@ -110,6 +110,61 @@ function usePins(): readonly Page[] {
   return pins;
 }
 
+/** The space between the wide header's pinned links, and before More: `gap-0.5`. */
+const PINNED_GAP = 2;
+/** A wide pinned link's box, shared by the link and its measured copy. */
+const PINNED_BOX = 'flex h-8 shrink-0 items-center rounded-md px-2 text-[13px] lg:px-2.5 xl:px-3';
+
+/**
+ * Which of the wide header's pinned links fit its row, as indices into `nav`;
+ * null until measured, when every one is drawn, as the server draws them.
+ *
+ * The nav takes what the brand and the right side leave (`flex-1`), so its
+ * width never depends on which links it draws and moving one cannot change
+ * the space it was moved for. Each link's width is read from an
+ * `aria-hidden` copy (`[data-pinned-measure]`) that always holds all of them,
+ * since a link not drawn has no width to read. It is read again when the
+ * pins or the page change, and when the nav's width does: a `ResizeObserver`
+ * sees the crew panel open and the right side grow, which a window's
+ * `resize` alone does not.
+ */
+function usePinnedFit(
+  navRef: RefObject<HTMLElement | null>,
+  measureRef: RefObject<HTMLDivElement | null>,
+  moreRef: RefObject<HTMLDivElement | null>,
+  key: string,
+  current: number,
+): readonly number[] | null {
+  const [fit, setFit] = useState<{ key: string; shown: readonly number[] } | null>(null);
+  useLayoutEffect(() => {
+    const measure = () => {
+      const nav = navRef.current;
+      const copy = measureRef.current;
+      // Not laid out: the wide header is hidden on a phone, and a test's DOM has no layout.
+      if (!nav || !copy || nav.clientWidth === 0) return;
+      const widths = [...copy.children].map((one) => (one as HTMLElement).offsetWidth);
+      const available = nav.clientWidth - (moreRef.current?.offsetWidth ?? 0) - PINNED_GAP;
+      const { shown } = fitPinned(widths, available, PINNED_GAP, current);
+      setFit((was) => (was && was.key === key && same(was.shown, shown) ? was : { key, shown }));
+    };
+    measure();
+    window.addEventListener('resize', measure);
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure);
+    // More is bolder, and wider, when the page is inside it.
+    for (const one of [navRef.current, moreRef.current]) if (one) observer?.observe(one);
+    return () => {
+      window.removeEventListener('resize', measure);
+      observer?.disconnect();
+    };
+  }, [navRef, measureRef, moreRef, key, current]);
+  // A fit read for other pins says nothing about these.
+  return fit && fit.key === key ? fit.shown : null;
+}
+
+function same(a: readonly number[], b: readonly number[]): boolean {
+  return a.length === b.length && a.every((one, index) => one === b[index]);
+}
+
 /**
  * Every page this person may see (`navFor`), each with its pin, behind a
  * button named More, with a search box over them. Built like the repository
@@ -119,23 +174,31 @@ function usePins(): readonly Page[] {
  * open, to pin several in a row; following a link closes it.
  *
  * The wide header opens it below its button; the phone's bar opens it above.
+ * The wide header's pinned links that did not fit its row (`moved`) head the
+ * list, in pinned order, still pinned (ADR 0101).
  */
 function MoreMenu({
   pages,
   pins,
   page,
   repo,
+  moved = [],
+  rootRef,
   compact = false,
 }: {
   pages: readonly NavPage[];
   pins: readonly Page[];
   page: Page;
   repo: string;
+  moved?: readonly NavPage[];
+  /** Its outer box, for the wide header to measure. */
+  rootRef?: RefObject<HTMLDivElement | null>;
   compact?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
-  const root = useRef<HTMLDivElement>(null);
+  const ownRoot = useRef<HTMLDivElement>(null);
+  const root = rootRef ?? ownRoot;
   const button = useRef<HTMLButtonElement>(null);
   const search = useRef<HTMLInputElement>(null);
   const refocusTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -173,9 +236,11 @@ function MoreMenu({
   useEffect(() => () => clearTimeout(refocusTimer.current), []);
 
   const q = query.trim().toLowerCase();
-  const found = q ? pages.filter((one) => one.label.toLowerCase().includes(q)) : pages;
-  // Where the person is, when that page is not in the bar beside it.
-  const here = pages.some((one) => one.page === page) && !pins.includes(page);
+  const listed = moved.length ? [...moved, ...pages.filter((one) => !moved.includes(one))] : pages;
+  const found = q ? listed.filter((one) => one.label.toLowerCase().includes(q)) : listed;
+  // Where the person is, when that page is not in the bar beside it: not
+  // pinned, or pinned and moved here for want of room.
+  const here = pages.some((one) => one.page === page) && (!pins.includes(page) || moved.some((one) => one.page === page));
 
   return (
     <div ref={root} className={cn('relative', compact && 'flex w-16 shrink-0')}>
@@ -227,7 +292,7 @@ function MoreMenu({
               const pinned = pins.includes(one.page);
               const current = one.page === page;
               return (
-                <li key={one.page} className="flex items-center gap-1">
+                <li key={one.page} data-moved={moved.includes(one) ? '' : undefined} className="flex items-center gap-1">
                   <Link
                     href={one.href(repo)}
                     aria-current={current ? 'page' : undefined}
@@ -291,6 +356,18 @@ export function AppHeader({ page, repo = 'all', data }: { page: Page; repo?: str
   const pages = navFor(useRole());
   const pins = usePins();
   const nav = pinnedNav(pages, pins);
+  const navRef = useRef<HTMLElement>(null);
+  const measureRef = useRef<HTMLDivElement>(null);
+  const moreRef = useRef<HTMLDivElement>(null);
+  const fit = usePinnedFit(
+    navRef,
+    measureRef,
+    moreRef,
+    nav.map((item) => item.page).join(' '),
+    nav.findIndex((item) => item.page === page),
+  );
+  const inRow = fit ? nav.filter((_, index) => fit.includes(index)) : nav;
+  const moved = fit ? nav.filter((_, index) => !fit.includes(index)) : [];
 
   return (
     <>
@@ -302,16 +379,34 @@ export function AppHeader({ page, repo = 'all', data }: { page: Page; repo?: str
           <RepoSwitcher repos={data.repos} colors={data.repoColors} current={repo} />
         </div>
 
-        {/* The pinned links scroll inside their row rather than push the right side off at 768px; More sits outside it, so its list is not clipped. */}
-        <nav aria-label="Console" className="flex min-w-0 items-center gap-0.5">
-          <div data-pinned className="flex min-w-0 items-center gap-0.5 overflow-x-auto">
+        {/*
+          The pinned links that do not fit beside the right side move to the top of More, and come back as the room does (ADR 0101).
+          The row used to scroll (ADR 0080); once the right side grew it hid Releases behind a scrollbar that made the header taller.
+          More sits outside the row, so its list is not clipped.
+        */}
+        <nav ref={navRef} aria-label="Console" className="relative flex min-w-0 flex-1 items-center gap-0.5">
+          {/* Every pinned link's width, read here because a link not drawn in the row has none. Spans, so nothing in it is focused or read aloud. */}
+          <div
+            ref={measureRef}
+            aria-hidden
+            data-pinned-measure
+            className="pointer-events-none invisible absolute left-0 top-0 flex w-0 gap-0.5 overflow-hidden"
+          >
             {nav.map((item) => (
+              <span key={item.page} className={cn(PINNED_BOX, 'font-medium')}>
+                {item.label}
+              </span>
+            ))}
+          </div>
+          <div data-pinned className="flex min-w-0 items-center gap-0.5 overflow-hidden">
+            {inRow.map((item) => (
               <Link
                 key={item.page}
                 href={item.href(repo)}
                 aria-current={item.page === page ? 'page' : undefined}
                 className={cn(
-                  'flex h-8 shrink-0 items-center rounded-md px-2 text-[13px] transition-colors lg:px-2.5 xl:px-3',
+                  PINNED_BOX,
+                  'transition-colors',
                   item.page === page ? 'bg-well font-medium text-body' : 'text-muted hover:text-body',
                 )}
               >
@@ -319,7 +414,7 @@ export function AppHeader({ page, repo = 'all', data }: { page: Page; repo?: str
               </Link>
             ))}
           </div>
-          <MoreMenu pages={pages} pins={pins} page={page} repo={repo} />
+          <MoreMenu pages={pages} pins={pins} page={page} repo={repo} moved={moved} rootRef={moreRef} />
         </nav>
 
         <div className="ml-auto flex shrink-0 items-center gap-2.5 lg:gap-3 xl:gap-[18px]">
